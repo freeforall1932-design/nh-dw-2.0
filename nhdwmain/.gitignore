@@ -1,0 +1,71 @@
+```
+# Build artifacts
+dist/
+build/
+*.js
+*.css
+*.map
+
+# Compressed files
+*.zip
+
+# Metadata
+_metadata/
+
+# Source maps and temporary build files
+*.js.LICENSE.txt
+
+# Dependencies (if any get added)
+node_modules/
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python cache (if Python components exist)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Coverage reports
+coverage/
+htmlcov/
+*.coverage
+
+# Testing
+.nyc_output/
+coverage/lcov-report/
+
+# Bower
+bower_components/
+
+# Grunt
+.grunt/
+grunt-cache/
+
+# Node
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Temporary files
+*.bak
+*.tmp
+*.temp
+```
