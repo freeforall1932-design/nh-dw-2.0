@@ -1,5 +1,3 @@
-Here is a clean, summarized, and properly formatted version of your README, ready to be copied into a `README.md` file:
-
 ***
 
 # 🚀 NHentai Downloader v3.0.0
