@@ -1,0 +1,42 @@
+{
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "contact.nhentaidownloader@zirk.eu"
+    }
+  },
+  "name": "NHentai Downloader",
+  "version": "2.2.0",
+  "description": "A chrome extension to download doujinshi from NHentai",
+  "icons": {
+    "64": "Icon.png"
+  },
+  "browser_action": {
+    "default_popup": "index.html"
+  },
+  "permissions": [
+    "downloads",
+    "tabs",
+    "https://nhentai.net/*",
+    "https://i1.nhentai.net/*",
+    "https://i2.nhentai.net/*",
+    "https://i3.nhentai.net/*",
+    "https://i4.nhentai.net/*",
+    "storage"
+  ],
+  "author": "Xwilarg",
+  "background": {
+    "scripts": ["js/background.js"]
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "content_scripts": [{
+    "matches": [
+      "https://nhentai.net/*"
+    ],
+    "css" : ["css/content.css"],
+    "js": ["js/content.js"]
+  }],
+  "manifest_version": 2
+}

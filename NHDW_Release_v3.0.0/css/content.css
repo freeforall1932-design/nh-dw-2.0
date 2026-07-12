@@ -1,0 +1,100 @@
+/* NHentai Downloader - Content Script Styles */
+
+/* Main Download Button on Gallery Page */
+#nhdw-download-btn {
+  display: inline-block;
+  margin: 10px 0;
+  padding: 10px 20px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+}
+
+#nhdw-download-btn:hover {
+  background-color: #45a049;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+}
+
+#nhdw-download-btn:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+#nhdw-download-btn:active {
+  transform: translateY(0);
+}
+
+/* Quick Download Button on Search Results */
+.nhdw-quick-dl {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background-color: rgba(76, 175, 80, 0.9);
+  color: white;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-size: 16px;
+  opacity: 0;
+  transition: opacity 0.3s ease, background-color 0.3s ease;
+  z-index: 10;
+}
+
+.gallery:hover .nhdw-quick-dl,
+.thumb-container:hover .nhdw-quick-dl {
+  opacity: 1;
+}
+
+.nhdw-quick-dl:hover {
+  background-color: rgba(76, 175, 80, 1);
+  transform: scale(1.1);
+}
+
+/* Dark mode compatibility */
+@media (prefers-color-scheme: dark) {
+  #nhdw-download-btn {
+    background-color: #2e7d32;
+  }
+  
+  #nhdw-download-btn:hover {
+    background-color: #1b5e20;
+  }
+  
+  .nhdw-quick-dl {
+    background-color: rgba(46, 125, 50, 0.9);
+  }
+  
+  .nhdw-quick-dl:hover {
+    background-color: rgba(46, 125, 50, 1);
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  #nhdw-download-btn {
+    padding: 8px 16px;
+    font-size: 13px;
+    width: 100%;
+    text-align: center;
+  }
+  
+  .nhdw-quick-dl {
+    opacity: 1; /* Always show on mobile */
+    width: 25px;
+    height: 25px;
+    font-size: 14px;
+  }
+}
