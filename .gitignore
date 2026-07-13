@@ -7,33 +7,67 @@ dist/
 build/
 target/
 
-# TypeScript/JavaScript build output
-*.js.map
-*.tsbuildinfo
+# Logs
+*.log
 
-# Environment variables
+# Environment
 .env
 .env.local
 *.env.*
 
-# IDE files
+# Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Logs
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
 *.log
+.git/modules/
+*.sublime-workspace
+.pytest_cache/
+.mypy_cache/
 
-# Temporary files
-*.tmp
+# Node.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+node_modules/
+jspm_packages/
+web_modules/
+libpeerconnection.log
+.svn/
+.hg/
+.git/
 
-# Package lock files (already in source control but often changed)
-package-lock.json
+# TypeScript
+*.tsbuildinfo
+*.bak
 
-# Minified JavaScript (build output)
-js/*.min.js
+# Webpack
+webpack-stats.json
 
-# Webpack output
-webpack.config.js
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
 ```
