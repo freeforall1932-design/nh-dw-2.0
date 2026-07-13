@@ -23,9 +23,9 @@ chrome.tabs.onActivated.addListener(function() {
 
 function setIcon(url: string) {
     if (url.startsWith("https://nhentai.net"))
-        chrome.browserAction.setIcon({path: "Icon.png"});
+        chrome.action.setIcon({path: "Icon.png"});
     else
-        chrome.browserAction.setIcon({path: "Icon-grey.png"});
+        chrome.action.setIcon({path: "Icon-grey.png"});
 }
 
 module background
@@ -92,14 +92,54 @@ module background
 
         for (let i = 0; i < length; i++) {
             let key = allKeys[i];
-            const resp = await fetch(parsing.GetUrl(key));
-            if (resp.ok)
+            
+            // gallery-dl inspired: Add rate limiting between requests to avoid bans
+            if (i > 0) {
+                const delay = 500; // 500ms between gallery requests
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+            
+            // gallery-dl inspired: Retry logic for API fetches
+            const maxRetries = 3;
+            let resp: Response | null = null;
+            let lastError: Error | null = null;
+            
+            for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                try {
+                    if (attempt > 1) {
+                        const backoffDelay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+                        await new Promise(resolve => setTimeout(resolve, backoffDelay));
+                    }
+                    
+                    resp = await fetch(parsing.GetUrl(key));
+                    if (resp.ok) break;
+                    
+                    throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+                } catch (error: any) {
+                    lastError = error;
+                    console.warn(`[Background] Gallery ${key} attempt ${attempt} failed:`, error.message);
+                    
+                    if (attempt === maxRetries) {
+                        errorCallback(`Can't download ${key} after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`);
+                        resp = null;
+                    }
+                }
+            }
+            
+            if (resp && resp.ok)
             {
                 const json = await parsing.GetJsonAsync(resp);
 
-                let title = utils.getDownloadName(downloadName, json.title.pretty === "" ?
-                    json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
-                    json.title.english, json.title.japanese, key, json.tags);
+                // gallery-dl inspired: Enhanced title formatting with fallback hierarchy
+                let title = utils.getDownloadName(downloadName, 
+                    json.title.pretty === "" ?
+                    json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : 
+                    json.title.pretty,
+                    json.title.english, 
+                    json.title.japanese, 
+                    key, 
+                    json.tags);
+                    
                 if (duplicateBehaviour == "remove") {
                     let c = 2;
                     let tmp = title;
@@ -112,7 +152,8 @@ module background
                 }
                 let zipName = null;
                 if (downloadSeparately) {
-                    zipName = title;
+                    // gallery-dl inspired: Include gallery ID in folder name for organization
+                    zipName = `${key}_${title}`;
                 } else if (downloadAtEnd && i == length - 1) {
                     zipName = finalName;
                 }
@@ -124,10 +165,6 @@ module background
                 // OR downloadAtEnd is true (can be false if downloading many pages) AND we are at the doujin of the current list
 
                 await currentDownloader.startAsync();
-            }
-            else
-            {
-                errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
             }
         }
     }
@@ -157,11 +194,10 @@ module background
         });
 
         let zip = new JSZip();
-        const originalPagesLength = pagesArr.length;
-        const pagesCopy = [...pagesArr]; // Create a copy to iterate over safely
-        
+        let originalPagesLength = pagesArr.length;
+        let pagesCopy = [...pagesArr]; // Create a copy to iterate over
         for (let i = 0; i < originalPagesLength; i++) {
-            let curr = pagesCopy[i]; // Use the correct page number from the copy
+            let curr = pagesCopy[i];
             let m = /page=([0-9]+)/.exec(url)
             if (m !== null) {
                 url = url.replace(m[0], "page=" + curr);
