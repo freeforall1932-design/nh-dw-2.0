@@ -1,0 +1,58 @@
+{
+  "name": "NHentai Downloader",
+  "version": "3.0.0",
+  "description": "A chrome extension to download doujinshi from NHentai - Updated for Manifest V3",
+  "icons": {
+    "64": "Icon.png",
+    "128": "Icon.png"
+  },
+  "action": {
+    "default_popup": "index.html",
+    "default_title": "NHentai Downloader",
+    "default_icon": {
+      "64": "Icon.png",
+      "128": "Icon.png"
+    }
+  },
+  "permissions": [
+    "downloads",
+    "tabs",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "https://nhentai.net/*",
+    "https://i.nhentai.net/*",
+    "https://i1.nhentai.net/*",
+    "https://i2.nhentai.net/*",
+    "https://i3.nhentai.net/*",
+    "https://i4.nhentai.net/*"
+  ],
+  "background": {
+    "service_worker": "js/background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": false
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://nhentai.net/*"
+      ],
+      "css": ["css/content.css"],
+      "js": ["js/content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "js/jszip/dist/jszip.min.js",
+        "js/FileSaver.js/dist/FileSaver.min.js"
+      ],
+      "matches": ["https://nhentai.net/*"]
+    }
+  ],
+  "manifest_version": 3
+}
