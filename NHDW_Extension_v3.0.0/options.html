@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+    <body>
+        <h3>Global behaviour</h3>
+        Download format:
+        <select id="useZip">
+            <option value="zip">ZIP</option>
+            <option value="cbz">CBZ</option>
+            <option value="raw">Raw (not recommanded)</option>
+        </select>
+        <br/>
+        Display checkboxs on NHentai:
+        <input id="displayCheckbox" type="checkbox"/>
+        <br/>
+        Dark mode:
+        <input id="darkMode" type="checkbox"/>
+        <br/><hr/>
+        <h3>Multiple download</h3>
+        Behaviour on duplicate:
+        <select id="duplicateBehaviour">
+            <option value="rename">Rename</option>
+            <option value="ignore">Ignore</option>
+        </select>
+        <br/>
+        Download each file separately:
+        <input id="downloadSeparately" type="checkbox"/>
+        <br/><hr/>
+        <h3>Advanced behaviour</h3>
+        Use HTML to get API info:
+        <input id="htmlParsing" type="checkbox"/>
+        <br/><small>It is recommanded to use this if NHentai API is down</small>
+        <br/>
+        Maximum concurrent downloads (higher = faster, but may cause errors):
+        <select id="maxConcurrentDownloads">
+            <option value="1">1 (Slowest, most reliable)</option>
+            <option value="3">3 (Default)</option>
+            <option value="5">5 (Fast)</option>
+            <option value="10">10 (Very fast)</option>
+            <option value="15">15 (Fastest, may cause errors)</option>
+        </select>
+        <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
+        <br/><hr/>
+        <h3>Name template</h3>
+        <input id="downloadName" type="text"/>
+        <br/><br/>
+        <b>Template explanations:</b><br/>
+        <b>{pretty}:</b> Pretty title<br/>
+        <b>{japanese}:</b> Japanese title<br/>
+        <b>{english}:</b> English title<br/>
+        <b>{id}:</b> 6 digits ID<br/>
+        <b>{group}:</b> Group who made the doujin<br/>
+        <b>{artist}:</b> Artist of the doujin<br/>
+        <b>{character}:</b> Characters present<br/>
+        <b>{language}:</b> Language<br/>
+        Replace spaces by underscores:
+        <input id="replaceSpaces" type="checkbox"/>
+    </body>
+    <script src="js/options.js"></script>
+</html>
