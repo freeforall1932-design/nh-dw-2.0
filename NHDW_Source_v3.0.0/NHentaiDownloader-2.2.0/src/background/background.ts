@@ -157,11 +157,10 @@ module background
         });
 
         let zip = new JSZip();
-        const originalPagesLength = pagesArr.length;
-        const pagesCopy = [...pagesArr]; // Create a copy to iterate over safely
-        
-        for (let i = 0; i < originalPagesLength; i++) {
-            let curr = pagesCopy[i]; // Use the correct page number from the copy
+        for (let i = 0; i < pagesArr.length; i++) {
+            let curr = pagesArr[i];
+            curr = pagesArr[0];
+            pagesArr.splice(0, 1);
             let m = /page=([0-9]+)/.exec(url)
             if (m !== null) {
                 url = url.replace(m[0], "page=" + curr);
@@ -190,7 +189,7 @@ module background
                         allDoujinshis[match[1]] = tmpName;
                     }
                 } while (match);
-                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == originalPagesLength - 1);
+                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1);
             }
         }
     }
