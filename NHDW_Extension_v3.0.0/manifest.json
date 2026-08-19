@@ -13,7 +13,8 @@
     "downloads",
     "tabs",
     "storage",
-    "alarms"
+    "alarms",
+    "scripting"
   ],
   "host_permissions": [
     "https://nhentai.net/*",

@@ -2,6 +2,49 @@ import AParsing from "../parsing/AParsing";
 import { utils } from "../utils/utils";
 import { message } from "./message"
 
+// Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
+// one place so it works from the popup and uses the current tab explicitly.
+function executeActiveTabScript(file: string): void {
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        const tabId = tabs[0] && tabs[0].id;
+        if (tabId === undefined) {
+            return;
+        }
+        // @ts-ignore Older @types/chrome versions do not contain the MV3 scripting API.
+        chrome.scripting.executeScript({ target: { tabId: tabId }, files: [file] });
+    });
+}
+
+// Extract metadata from the already-open gallery page. This is the useful part of
+// gallery-dl's browser workflow: use the page's solved session instead of making
+// a second API request from the extension origin.
+async function getGalleryFromActiveTab(): Promise<any | null> {
+    return new Promise((resolve) => {
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            const tabId = tabs[0] && tabs[0].id;
+            if (tabId === undefined) {
+                resolve(null);
+                return;
+            }
+            // @ts-ignore Older @types/chrome versions do not contain the MV3 scripting API.
+            chrome.scripting.executeScript(<any>{
+                target: { tabId: tabId },
+                world: "MAIN",
+                func: () => {
+                    const pageGallery = (window as any)._gallery;
+                    return pageGallery || null;
+                }
+            }, (results: any[]) => {
+                if (chrome.runtime.lastError || !results || !results[0]) {
+                    resolve(null);
+                } else {
+                    resolve(results[0].result || null);
+                }
+            });
+        });
+    });
+}
+
 // Add message listener for progress updates and error messages
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
@@ -68,10 +111,7 @@ export default class Popup
         if (match !== null) {
             await self.#doujinshiPreviewAsync(match[1]);
         } else if (self.url.startsWith("https://nhentai.net")) {
-            // @ts-ignore
-            chrome.tabs.executeScript(null, {
-                file: "js/getHtml.js" // Get the HTML of the page
-            });
+            executeActiveTabScript("js/getHtml.js");
         } else {
             document.getElementById('action')!.innerHTML =  message.invalidPage();
         }
@@ -79,15 +119,35 @@ export default class Popup
 
     // Display popup for a doujinshi
     async #doujinshiPreviewAsync(id: string) {
-        const resp = await fetch(this.parsing!.GetUrl(id));
-        if (resp.status == 403) {
-            document.getElementById('action')!.innerHTML = message.invalidPage();
-        } else if (!resp.ok) {
-            document.getElementById('action')!.innerHTML = message.errorOther(resp.status, resp.statusText);
-        } else {
-            let json = await this.parsing!.GetJsonAsync(resp);
-            let self = this;
-            chrome.storage.sync.get({
+        let json: any | null = null;
+        let status = 0;
+        let statusText = "";
+        try {
+            const resp = await fetch(this.parsing!.GetUrl(id));
+            status = resp.status;
+            statusText = resp.statusText;
+            if (resp.ok) {
+                json = await this.parsing!.GetJsonAsync(resp);
+            }
+        } catch (error) {
+            statusText = String(error);
+        }
+
+        // API/HTML requests can be challenged by Cloudflare. The active tab has
+        // already passed any browser challenge, so use its gallery object as a
+        // metadata fallback rather than pretending the extension bypasses CF.
+        if (json === null) {
+            json = await getGalleryFromActiveTab();
+        }
+        if (json === null) {
+            document.getElementById('action')!.innerHTML = status === 403 || status === 503
+                ? "NHentai/Cloudflare blocked the metadata request. Open the gallery in this tab, complete any challenge, then try again."
+                : message.errorOther(status, statusText);
+            return;
+        }
+
+        let self = this;
+        chrome.storage.sync.get({
                 useZip: "zip",
                 downloadName: "{pretty}",
                 replaceSpaces: true
@@ -121,7 +181,6 @@ export default class Popup
                     }
                 }, 0);
             });
-        }
     }
     //#endregion "single download"
 
@@ -224,10 +283,7 @@ export default class Popup
                         chrome.storage.local.set({
                             allIds: storageAllIds
                         });
-                        // @ts-ignore
-                        chrome.tabs.executeScript(null, {
-                            file: "js/updateContent.js" // Update the checkboxs of the page
-                        });
+                        executeActiveTabScript("js/updateContent.js");
                     });
                 });
             }
@@ -245,10 +301,7 @@ export default class Popup
                     chrome.storage.local.set({
                         allIds: []
                     });
-                    // @ts-ignore
-                    chrome.tabs.executeScript(null, {
-                        file: "js/updateContent.js" // Update the checkboxs of the page
-                    });
+                    executeActiveTabScript("js/updateContent.js");
                 });
             }
         }, 0);
@@ -357,10 +410,7 @@ export default class Popup
                                 allIds: self.#saveIdInLocalStorage(id, elemsLocal.allIds, checked)
                             });
                         });
-                        // @ts-ignore
-                        chrome.tabs.executeScript(null, {
-                            file: "js/updateContent.js" // Update the checkboxs of the page
-                        });
+                        executeActiveTabScript("js/updateContent.js");
                     });
 
                     chrome.storage.local.get({
