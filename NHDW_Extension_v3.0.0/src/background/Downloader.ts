@@ -45,7 +45,11 @@ export default class Downloader
                     maxConcurrentDownloads: "3"
                 }, function(elems) {
                     self.useZip = elems.useZip;
-                    self.maxConcurrentDownloads = parseInt(elems.maxConcurrentDownloads);
+                    const configuredConcurrency = parseInt(elems.maxConcurrentDownloads, 10);
+                    // Protect the batching loop from corrupt/old sync settings.
+                    self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
+                        ? configuredConcurrency
+                        : 3;
                     if (self.useZip === "raw") {
                         self.currentProgress = 100;
                         try {

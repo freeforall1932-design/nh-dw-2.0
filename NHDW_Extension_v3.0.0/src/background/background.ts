@@ -74,7 +74,7 @@ module background
             resolve(
                 chrome.storage.sync.get({
                     downloadName: "{pretty}",
-                    duplicateBehaviour: "remove",
+                    duplicateBehaviour: "rename",
                     replaceSpaces: true,
                     downloadSeparately: false,
                     maxConcurrentDownloads: "3"
@@ -100,7 +100,10 @@ module background
                 let title = utils.getDownloadName(downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, key, json.tags);
-                if (duplicateBehaviour == "remove") {
+                if (names.includes(title)) {
+                    if (duplicateBehaviour === "ignore") {
+                        continue;
+                    }
                     let c = 2;
                     let tmp = title;
                     while (names.includes(tmp)) {
@@ -108,8 +111,8 @@ module background
                         c++;
                     }
                     title = tmp;
-                    names.push(title);
                 }
+                names.push(title);
                 let zipName = null;
                 if (downloadSeparately) {
                     zipName = title;
