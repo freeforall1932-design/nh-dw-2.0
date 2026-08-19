@@ -212,34 +212,45 @@ export default class Downloader
 
         let filename = this.#getNumberWithZeros(currPage + 1) + format; // Final file name
 
-        let imageserverID = Math.floor(Math.random() * 4) + 1; // Pick a random image server ID 1-4
-        let imageserverURL = `https://i${imageserverID}.nhentai.net/galleries/`; // Image server from which to download from
+        // Try the canonical CDN first, then the numbered mirrors. This is
+        // similar to gallery-dl's extractor fallback strategy and avoids making
+        // one random mirror failure abort an otherwise valid gallery.
+        const imageUrls = [
+            `https://i.nhentai.net/galleries/${this.#mediaId}/${filenameParsing}`,
+            ...[1, 2, 3, 4].map(server =>
+                `https://i${server}.nhentai.net/galleries/${this.#mediaId}/${filenameParsing}`)
+        ];
 
         if (this.useZip !== "raw") { // ZIP (or equivalent) format
-            const resp = await fetch(imageserverURL  + this.#mediaId + '/' + filenameParsing);
-            if (resp.ok)
-            {
-                let blob = await resp.blob();
-                await new Promise((resolve, reject) => {
-                    var reader = new FileReader();
-                    reader.onload = () => {
-                        resolve(this.#zip.file(this.path + '/' + filename, reader.result as null));
-                    };
-                    reader.onerror = reject;
-                    reader.readAsArrayBuffer(blob);
-                });
+            let lastStatus = "unknown error";
+            for (const imageUrl of imageUrls) {
+                const resp = await fetch(imageUrl);
+                if (resp.ok) {
+                    const blob = await resp.blob();
+                    await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            resolve(this.#zip.file(this.path + '/' + filename, reader.result as null));
+                        };
+                        reader.onerror = reject;
+                        reader.readAsArrayBuffer(blob);
+                    });
+                    return;
+                }
+                lastStatus = resp.status + ": " + resp.statusText;
             }
-            else
-            {
-                throw "Failed to fetch doujinshi page (status " + resp.status + ": " + resp.statusText + "), if the error persist please report it.";
-            }
-        } else { // We don't need to update progress here because it go too fast anyway (since it just need to launch download)
+            throw "Failed to fetch original image from all image servers (" + lastStatus + ").";
+        } else { // We don't need to update progress here because it goes too fast anyway
+            // Raw mode cannot inspect the response before Chrome starts the
+            // download. Use the canonical original-image URL and report startup
+            // errors through the downloads API callback.
+            const imageUrl = imageUrls[0];
             chrome.downloads.download({
-                url: imageserverURL + this.#mediaId + '/' + filenameParsing,
+                url: imageUrl,
                 filename: this.path.replace(/[\\\\\\/:"*?<>|]/g, '') + "-" + filename
             }, function(downloadId) {
                 if (downloadId === undefined) {
-                    throw "Failed to download doujinshi page (" + chrome.runtime.lastError + "), if the error persist please report it.";
+                    throw "Failed to download original image (" + chrome.runtime.lastError + ").";
                 }
             });
         }

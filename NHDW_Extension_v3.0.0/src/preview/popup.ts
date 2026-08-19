@@ -15,6 +15,36 @@ function executeActiveTabScript(file: string): void {
     });
 }
 
+// Extract metadata from the already-open gallery page. This is the useful part of
+// gallery-dl's browser workflow: use the page's solved session instead of making
+// a second API request from the extension origin.
+async function getGalleryFromActiveTab(): Promise<any | null> {
+    return new Promise((resolve) => {
+        chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            const tabId = tabs[0] && tabs[0].id;
+            if (tabId === undefined) {
+                resolve(null);
+                return;
+            }
+            // @ts-ignore Older @types/chrome versions do not contain the MV3 scripting API.
+            chrome.scripting.executeScript(<any>{
+                target: { tabId: tabId },
+                world: "MAIN",
+                func: () => {
+                    const pageGallery = (window as any)._gallery;
+                    return pageGallery || null;
+                }
+            }, (results: any[]) => {
+                if (chrome.runtime.lastError || !results || !results[0]) {
+                    resolve(null);
+                } else {
+                    resolve(results[0].result || null);
+                }
+            });
+        });
+    });
+}
+
 // Add message listener for progress updates and error messages
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
@@ -89,15 +119,35 @@ export default class Popup
 
     // Display popup for a doujinshi
     async #doujinshiPreviewAsync(id: string) {
-        const resp = await fetch(this.parsing!.GetUrl(id));
-        if (resp.status == 403) {
-            document.getElementById('action')!.innerHTML = message.invalidPage();
-        } else if (!resp.ok) {
-            document.getElementById('action')!.innerHTML = message.errorOther(resp.status, resp.statusText);
-        } else {
-            let json = await this.parsing!.GetJsonAsync(resp);
-            let self = this;
-            chrome.storage.sync.get({
+        let json: any | null = null;
+        let status = 0;
+        let statusText = "";
+        try {
+            const resp = await fetch(this.parsing!.GetUrl(id));
+            status = resp.status;
+            statusText = resp.statusText;
+            if (resp.ok) {
+                json = await this.parsing!.GetJsonAsync(resp);
+            }
+        } catch (error) {
+            statusText = String(error);
+        }
+
+        // API/HTML requests can be challenged by Cloudflare. The active tab has
+        // already passed any browser challenge, so use its gallery object as a
+        // metadata fallback rather than pretending the extension bypasses CF.
+        if (json === null) {
+            json = await getGalleryFromActiveTab();
+        }
+        if (json === null) {
+            document.getElementById('action')!.innerHTML = status === 403 || status === 503
+                ? "NHentai/Cloudflare blocked the metadata request. Open the gallery in this tab, complete any challenge, then try again."
+                : message.errorOther(status, statusText);
+            return;
+        }
+
+        let self = this;
+        chrome.storage.sync.get({
                 useZip: "zip",
                 downloadName: "{pretty}",
                 replaceSpaces: true
@@ -131,7 +181,6 @@ export default class Popup
                     }
                 }, 0);
             });
-        }
     }
     //#endregion "single download"
 
