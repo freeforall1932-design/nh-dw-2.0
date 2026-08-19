@@ -2,6 +2,19 @@ import AParsing from "../parsing/AParsing";
 import { utils } from "../utils/utils";
 import { message } from "./message"
 
+// Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
+// one place so it works from the popup and uses the current tab explicitly.
+function executeActiveTabScript(file: string): void {
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        const tabId = tabs[0] && tabs[0].id;
+        if (tabId === undefined) {
+            return;
+        }
+        // @ts-ignore Older @types/chrome versions do not contain the MV3 scripting API.
+        chrome.scripting.executeScript({ target: { tabId: tabId }, files: [file] });
+    });
+}
+
 // Add message listener for progress updates and error messages
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
@@ -68,10 +81,7 @@ export default class Popup
         if (match !== null) {
             await self.#doujinshiPreviewAsync(match[1]);
         } else if (self.url.startsWith("https://nhentai.net")) {
-            // @ts-ignore
-            chrome.tabs.executeScript(null, {
-                file: "js/getHtml.js" // Get the HTML of the page
-            });
+            executeActiveTabScript("js/getHtml.js");
         } else {
             document.getElementById('action')!.innerHTML =  message.invalidPage();
         }
@@ -224,10 +234,7 @@ export default class Popup
                         chrome.storage.local.set({
                             allIds: storageAllIds
                         });
-                        // @ts-ignore
-                        chrome.tabs.executeScript(null, {
-                            file: "js/updateContent.js" // Update the checkboxs of the page
-                        });
+                        executeActiveTabScript("js/updateContent.js");
                     });
                 });
             }
@@ -245,10 +252,7 @@ export default class Popup
                     chrome.storage.local.set({
                         allIds: []
                     });
-                    // @ts-ignore
-                    chrome.tabs.executeScript(null, {
-                        file: "js/updateContent.js" // Update the checkboxs of the page
-                    });
+                    executeActiveTabScript("js/updateContent.js");
                 });
             }
         }, 0);
@@ -357,10 +361,7 @@ export default class Popup
                                 allIds: self.#saveIdInLocalStorage(id, elemsLocal.allIds, checked)
                             });
                         });
-                        // @ts-ignore
-                        chrome.tabs.executeScript(null, {
-                            file: "js/updateContent.js" // Update the checkboxs of the page
-                        });
+                        executeActiveTabScript("js/updateContent.js");
                     });
 
                     chrome.storage.local.get({

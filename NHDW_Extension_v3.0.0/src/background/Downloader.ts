@@ -1,4 +1,3 @@
-var fileSaver = require("file-saver");
 var JSZip = require("jszip");
 
 export default class Downloader
@@ -129,9 +128,9 @@ export default class Downloader
                                     self.updateProgress(elem.percent, elem.currentFile == null ? self.path : elem.currentFile, true);
                                 } catch (e) { } // Dead object
                             })
-                                .then(function (content: any) { // Zipping done
+                                .then(async function (content: any) { // Zipping done
+                                    await self.#downloadBlob(content, self.downloadName + "." + self.useZip);
                                     self.currentProgress = 100;
-                                    fileSaver.saveAs(content, self.downloadName + "." + self.useZip);
                                     try {
                                         self.updateProgress(100, null, true); // Notify popup that we are done
                                     } catch (e) { } // Dead object
@@ -150,6 +149,28 @@ export default class Downloader
             this.#errorCallback(error);
             throw error;
         }
+    }
+
+    // Service workers cannot use FileSaver's DOM-based saveAs implementation.
+    // Convert the generated archive to a data URL and hand it to the Downloads API.
+    // (Using chrome.downloads also avoids the download silently doing nothing.)
+    async #downloadBlob(content: Blob, filename: string): Promise<void> {
+        const bytes = new Uint8Array(await content.arrayBuffer());
+        let binary = "";
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+        }
+        const url = "data:application/zip;base64," + btoa(binary);
+        await new Promise<void>((resolve, reject) => {
+            chrome.downloads.download({ url: url, filename: filename }, function(downloadId) {
+                if (downloadId === undefined) {
+                    reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
+                } else {
+                    resolve();
+                }
+            });
+        });
     }
 
     // Number to string but ensure there are always 3 digits
