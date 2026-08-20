@@ -2,6 +2,7 @@ export interface GallerySource {
     matchesUrl(url: string): boolean;
     getGalleryId(url: string): string | null;
     getGalleryUrl(id: string): string;
+    getGalleryPageUrl?(id: string): string;
     getApiUrl(id: string): string;
     getImageUrls(mediaId: string, filename: string): string[];
 }
@@ -18,6 +19,10 @@ export const clearnetSource: GallerySource = {
     },
 
     getGalleryUrl(id: string): string {
+        return "https://nhentai.net/g/" + encodeURIComponent(id) + "/";
+    },
+
+    getGalleryPageUrl(id: string): string {
         return "https://nhentai.net/g/" + encodeURIComponent(id) + "/1/";
     },
 

@@ -103,7 +103,7 @@ describe('GallerySource', () => {
     it('keeps clearnet URL and image-host logic in one adapter', () => {
         assert.strictEqual(clearnetSource.matchesUrl('https://nhentai.net/search/?q=test'), true);
         assert.strictEqual(clearnetSource.getGalleryId('https://nhentai.net/g/123456/1/'), '123456');
-        assert.strictEqual(clearnetSource.getGalleryUrl('123456'), 'https://nhentai.net/g/123456/1/');
+        assert.strictEqual(clearnetSource.getGalleryUrl('123456'), 'https://nhentai.net/g/123456/');
         assert.strictEqual(clearnetSource.getApiUrl('123456'), 'https://nhentai.net/api/gallery/123456');
         assert.deepStrictEqual(clearnetSource.getImageUrls('987654', '1.jpg'), [
             'https://i.nhentai.net/galleries/987654/1.jpg',
@@ -112,6 +112,11 @@ describe('GallerySource', () => {
             'https://i3.nhentai.net/galleries/987654/1.jpg',
             'https://i4.nhentai.net/galleries/987654/1.jpg'
         ]);
+        // New helper for the reading page still exists for compatibility
+        const pageUrl = typeof clearnetSource.getGalleryPageUrl === 'function'
+            ? clearnetSource.getGalleryPageUrl('123456')
+            : 'https://nhentai.net/g/123456/1/';
+        assert.strictEqual(pageUrl, 'https://nhentai.net/g/123456/1/');
     });
 
     it('does not match lookalike hosts', () => {
@@ -124,7 +129,8 @@ describe('HtmlParsing', () => {
     const parsing = new HtmlParsing();
 
     it('builds the gallery page URL for a gallery id', () => {
-        assert.strictEqual(parsing.GetUrl('123456'), 'https://nhentai.net/g/123456/1/');
+        // HtmlParsing now uses the main gallery page (more reliable after Cloudflare)
+        assert.strictEqual(parsing.GetUrl('123456'), 'https://nhentai.net/g/123456/');
     });
 
     it('extracts the window._gallery object from a page (\\u0022 escapes + unicode)', async () => {

@@ -5,8 +5,10 @@ import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
 import { utils, classifyError } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
+import { clearnetSource } from "../sources/GallerySource";
+import { extractGalleryFromHtml, looksLikeGallery } from "../parsing/GalleryEmbed";
 import { executeInTab } from "../preview/activeTabGallery";
-import { fetchImageInPage, fetchUrlInPage } from "./tabImageFetch";
+import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 var JSZip = require("jszip");
 
 chrome.tabs.onUpdated.addListener(function
@@ -100,6 +102,55 @@ chrome.tabs.query({
     if (tabs && tabs[0])
         setIcon(tabs[0].url);
 });
+
+function tryParseGalleryText(text: string): any | null {
+    if (!text) return null;
+    const trimmed = String(text).trim();
+    if (trimmed.startsWith("{")) {
+        try {
+            const j = JSON.parse(trimmed);
+            if (looksLikeGallery(j)) return j;
+        } catch (_) {}
+    }
+    const fromHtml = extractGalleryFromHtml(text);
+    if (looksLikeGallery(fromHtml)) return fromHtml;
+    return null;
+}
+
+async function getGalleryViaTab(tabId: number, galleryId: string, parsing: AParsing): Promise<any | null> {
+    const urlsToTry: string[] = [];
+    // API URL (parsing dependent)
+    try {
+        urlsToTry.push(parsing.GetUrl(galleryId));
+    } catch (_) {}
+    // Clearnet direct API
+    urlsToTry.push(clearnetSource.getApiUrl(galleryId));
+    // Gallery pages (main + /1/)
+    urlsToTry.push(clearnetSource.getGalleryUrl(galleryId));
+    urlsToTry.push("https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/1/");
+
+    // Deduplicate
+    const seen = new Set<string>();
+    for (const url of urlsToTry) {
+        if (seen.has(url)) continue;
+        seen.add(url);
+        try {
+            const via = await fetchUrlFromTab(tabId, url);
+            if (via && via.ok && via.text) {
+                const parsed = tryParseGalleryText(via.text);
+                if (parsed) return parsed;
+                // Also try JSON directly if content-type is json
+                try {
+                    const j = JSON.parse(via.text);
+                    if (looksLikeGallery(j)) return j;
+                } catch (_) {}
+            }
+        } catch (_) {
+            // continue to next URL
+        }
+    }
+    return null;
+}
 
 module background
 {
@@ -257,14 +308,32 @@ module background
                 galleryName: allDoujinshis[key],
                 stage: "Downloading"
             });
-            const resp: any = galleryMetadata[key]
-                ? { ok: true, status: 200, statusText: "resolved in browser" }
-                : await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+
+            // 1. Already-resolved via selectedGalleryResolver
+            // 2. Try via the user's open tab (reuses Cloudflare clearance, tries API + gallery pages)
+            // 3. Fall back to extension-origin fetch (likely 403)
+            let jsonFromTab: any | null = null;
+            if (!galleryMetadata[key] && typeof sourceTabId === "number") {
+                jsonFromTab = await getGalleryViaTab(sourceTabId, key, parsing);
+            }
+            let json: any | null = galleryMetadata[key] || jsonFromTab || null;
+            let resp: any = null;
+            if (json) {
+                resp = { ok: true, status: 200, statusText: "resolved via tab" };
+            } else {
+                try {
+                    resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+                } catch (e) {
+                    resp = { ok: false, status: 0, statusText: String(e), headers: { get: () => null } };
+                }
+            }
+
             if (resp.ok)
             {
-                let json: any;
                 try {
-                    json = galleryMetadata[key] || await parsing.GetJsonAsync(resp);
+                    if (!json) {
+                        json = await parsing.GetJsonAsync(resp);
+                    }
                 } catch (error) {
                     // Metadata parse failure (e.g. a Cloudflare HTML page).
                     countFailure(error);
@@ -391,14 +460,32 @@ module background
             } else {
                 url += "?page=" + curr
             }
-            const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
-            if (resp.ok)
+
+            // Try to reuse the user's tab session for listing pages as well.
+            let pageText: string | null = null;
+            if (typeof sourceTabId === "number") {
+                try {
+                    const viaTab = await fetchUrlFromTab(sourceTabId, url);
+                    if (viaTab && viaTab.ok && viaTab.text) {
+                        pageText = viaTab.text;
+                    }
+                } catch (_) {}
+            }
+            if (pageText === null) {
+                try {
+                    const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+                    if (resp.ok) {
+                        pageText = await resp.text();
+                    }
+                } catch (_) {}
+            }
+
+            if (pageText !== null)
             {
-                const text = await resp.text();
                 // Anchor-scoped card parsing (see CardParsing.ts): each gallery ID
                 // is matched against its own caption so titles with quotes,
                 // entities, or extra markup cannot be mispaired with ids.
-                const cards = parseGalleryCardsFromHtml(text);
+                const cards = parseGalleryCardsFromHtml(pageText);
                 allDoujinshis = {};
                 for (const card of cards) {
                     let tmpName;

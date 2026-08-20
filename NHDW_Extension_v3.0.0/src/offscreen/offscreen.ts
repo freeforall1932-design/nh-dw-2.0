@@ -4,6 +4,7 @@ import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "../background/Downloader";
 import { utils, classifyError } from "../utils/utils";
+import { extractGalleryFromHtml, looksLikeGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
 var JSZip = require("jszip");
 
@@ -175,6 +176,38 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
         .catch(() => { scheduleIdleClose(); });
 }
 
+function tryParseGalleryText(text: string): any | null {
+    if (!text) return null;
+    const trimmed = String(text).trim();
+    if (trimmed.startsWith("{")) {
+        try {
+            const j = JSON.parse(trimmed);
+            if (looksLikeGallery(j)) return j;
+        } catch (_) {}
+    }
+    const fromHtml = extractGalleryFromHtml(text);
+    if (looksLikeGallery(fromHtml)) return fromHtml;
+    return null;
+}
+
+async function getGalleryViaTab(tabId: number, galleryId: string): Promise<any | null> {
+    const urls = [
+        "https://nhentai.net/api/gallery/" + encodeURIComponent(galleryId),
+        "https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/",
+        "https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/1/"
+    ];
+    for (const url of urls) {
+        try {
+            const via = await fetchUrlFromTab(tabId, url);
+            if (via && via.ok && via.text) {
+                const parsed = tryParseGalleryText(via.text);
+                if (parsed) return parsed;
+            }
+        } catch (_) {}
+    }
+    return null;
+}
+
 async function downloadAllDoujinshisAsync(
     zip: typeof JSZip,
     allDoujinshis: Record<string, string>,
@@ -216,48 +249,67 @@ async function downloadAllDoujinshisAsync(
             galleryName: allDoujinshis[key],
             stage: "Downloading"
         });
+
+        let jsonViaTab: any | null = null;
         let resp: any = null;
         if (galleryMetadata[key]) {
             resp = { ok: true, status: 200, statusText: "resolved in browser" };
         } else {
-            // The batch was started from the user's own nhentai tab (the
-            // homepage or a gallery). Fetching the metadata through that tab's
-            // session reuses any completed Cloudflare clearance, while the
-            // extension-origin request below is what Cloudflare 403s. This is
-            // not a bypass — if the tab never cleared the challenge, it has
-            // no clearance to reuse and the fallback simply fails like before.
-            let viaTab: TabUrlResult | null = null;
+            // Try via the user's tab session first (API + gallery pages)
             if (typeof sourceTabId === "number") {
-                viaTab = await fetchUrlFromTab(sourceTabId, parsing.GetUrl(key));
+                jsonViaTab = await getGalleryViaTab(sourceTabId, key);
+                if (jsonViaTab) {
+                    resp = { ok: true, status: 200, statusText: "resolved via tab" };
+                }
             }
-            if (viaTab && viaTab.ok && viaTab.text !== null) {
-                const tabText = viaTab.text;
-                const tabStatus = viaTab.status;
-                const tabStatusText = viaTab.statusText;
-                const tabContentType = viaTab.contentType;
-                // Adapter so both parsers (API JSON / embedded page HTML) can
-                // consume the tab's text through their usual GetJsonAsync.
-                resp = {
-                    ok: true,
-                    status: tabStatus,
-                    statusText: tabStatusText,
-                    headers: { get: (name: string) => (String(name).toLowerCase() === "content-type" ? tabContentType : null) },
-                    text: () => Promise.resolve(tabText)
-                };
-            } else {
-                resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+            if (!resp) {
+                // Fallback to extension-origin fetch (often 403)
+                let viaTab: TabUrlResult | null = null;
+                if (typeof sourceTabId === "number") {
+                    viaTab = await fetchUrlFromTab(sourceTabId, parsing.GetUrl(key));
+                }
+                if (viaTab && viaTab.ok && viaTab.text !== null) {
+                    const tabText = viaTab.text;
+                    const tabStatus = viaTab.status;
+                    const tabStatusText = viaTab.statusText;
+                    const tabContentType = viaTab.contentType;
+                    resp = {
+                        ok: true,
+                        status: tabStatus,
+                        statusText: tabStatusText,
+                        headers: { get: (name: string) => (String(name).toLowerCase() === "content-type" ? tabContentType : null) },
+                        text: () => Promise.resolve(tabText)
+                    };
+                } else {
+                    resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+                }
             }
         }
+
         if (resp.ok)
         {
             let json: any;
             try {
-                json = galleryMetadata[key] || await parsing.GetJsonAsync(resp);
+                if (galleryMetadata[key]) {
+                    json = galleryMetadata[key];
+                } else if (jsonViaTab) {
+                    json = jsonViaTab;
+                } else {
+                    json = await parsing.GetJsonAsync(resp);
+                    // If parsing is ApiParsing but we actually fetched a gallery page via tab fallback,
+                    // try HTML parsing as second chance.
+                    if (!looksLikeGallery(json) && resp.text) {
+                        try {
+                            const t = typeof resp.text === "function" ? await resp.text() : "";
+                            const htmlParsed = extractGalleryFromHtml(t);
+                            if (looksLikeGallery(htmlParsed)) json = htmlParsed;
+                        } catch (_) {}
+                    }
+                }
             } catch (error) {
-                // Metadata parse failure (e.g. a Cloudflare HTML page).
                 countFailure(error);
                 errorCallback("Can't download " + key + " (" + String(error) + ").");
-                continue; // Keep going with the remaining galleries.
+                continue;
             }
 
             let title = utils.getDownloadName(downloadName, json.title.pretty === "" ?
@@ -269,9 +321,6 @@ async function downloadAllDoujinshisAsync(
                 }
                 let tmp = title;
                 while (names.includes(tmp)) {
-                    // Use the gallery ID (key) as the disambiguator so the
-                    // resulting name is deterministic and traceable back to
-                    // the source gallery instead of depending on iteration order.
                     tmp = title + " (" + key + ")";
                 }
                 title = tmp;
@@ -284,32 +333,23 @@ async function downloadAllDoujinshisAsync(
                 zipName = finalName;
             }
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
-            downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
+            downloadSeparately ? new JSZip() : zip,
             zipName, jobAbortController ? jobAbortController.signal : null, undefined,
             { useZip: options.useZip, maxConcurrentDownloads: options.maxConcurrentDownloads });
             currentDownloader.saveUrl = saveViaServiceWorker;
             if (typeof sourceTabId === "number") {
                 currentDownloader.sourceTabId = sourceTabId;
             }
-            // We download the ZIP file in the following cases:
-            // downloadSeparately is true (set in extension options)
-            // OR downloadAtEnd is true (can be false if downloading many pages) AND we are at the doujin of the current list
 
             try {
                 await currentDownloader.startAsync();
                 succeeded++;
             } catch (error) {
-                // The Downloader already surfaced its own failure through
-                // errorCallback (and intentionally stays silent on abort).
-                // Keep going with the remaining galleries; the summary at
-                // the end reports the total count of successes/failures.
                 countFailure(error);
             }
         }
         else
         {
-            // Distinguish Cloudflare blocks from other HTTP errors so the
-            // user knows to open the gallery and complete any challenge.
             const isCf = resp.status === 503 || resp.status === 403;
             const ct = (resp.headers.get("content-type") || "").toLowerCase();
             const isHtml = ct.includes("html");
@@ -322,7 +362,6 @@ async function downloadAllDoujinshisAsync(
         }
     }
 
-    // End-of-batch summary (not sent when the job was cancelled).
     if (!jobWasAborted()) {
         chrome.runtime.sendMessage({
             from: "offscreen",
@@ -362,9 +401,6 @@ async function downloadAllPagesAsync(
 
     let zip = new JSZip();
     for (let i = 0; i < pagesArr.length; i++) {
-        // Take the page at the current index. Do not mutate pagesArr here:
-        // splicing while iterating made the "last page" check below wrong and
-        // the final ZIP was never downloaded.
         let curr = pagesArr[i];
         let m = /page=([0-9]+)/.exec(url)
         if (m !== null) {
@@ -374,32 +410,21 @@ async function downloadAllPagesAsync(
         } else {
             url += "?page=" + curr
         }
-        // The listing page is fetched through the user's tab first (its
-        // session already cleared any Cloudflare challenge for the site);
-        // the extension-origin fetch is the fallback.
         let pageText: string | null = null;
-        let pageFailedStatus = 0;
         if (typeof sourceTabId === "number") {
             const viaTab = await fetchUrlFromTab(sourceTabId, url);
             if (viaTab && viaTab.ok && viaTab.text !== null) {
                 pageText = viaTab.text;
-            } else if (viaTab && viaTab.status > 0) {
-                pageFailedStatus = viaTab.status;
             }
         }
         if (pageText === null) {
             const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
             if (resp.ok) {
                 pageText = await resp.text();
-            } else if (pageFailedStatus === 0) {
-                pageFailedStatus = resp.status;
             }
         }
         if (pageText !== null)
         {
-            // Anchor-scoped card parsing (see CardParsing.ts): each gallery ID
-            // is matched against its own caption so titles with quotes,
-            // entities, or extra markup cannot be mispaired with ids.
             const cards = parseGalleryCardsFromHtml(pageText);
             allDoujinshis = {};
             for (const card of cards) {
@@ -431,8 +456,6 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
 }
 
 function goBack() {
-    // Abort any in-flight fetch, then let the download loop notice and unwind.
-    // The service worker clears the job marker when it relays this command.
     abortJob();
     if (!isDownloadFinished()) {
         currentDownloader!.isAwaitingAbort = true;
@@ -461,8 +484,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         goBack();
         sendResponse({ result: "success" });
     } else if (request.action === "getProgress") {
-        // The popup asked the service worker for the latest progress; the
-        // service worker turns this response into an updateProgress message.
         sendResponse(Object.assign({ result: "success" },
             latestProgress === null
                 ? { progress: undefined, doujinshiName: null, isZipping: false, retry: null }
