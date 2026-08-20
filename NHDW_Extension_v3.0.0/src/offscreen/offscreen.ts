@@ -130,7 +130,8 @@ async function downloadAllDoujinshisAsync(
     zip: typeof JSZip,
     allDoujinshis: Record<string, string>,
     finalName: string,
-    downloadAtEnd: boolean
+    downloadAtEnd: boolean,
+    galleryMetadata: Record<string, any> = {}
 ) {
     let downloadName: string = "";
     let duplicateBehaviour: string = "";
@@ -178,12 +179,14 @@ async function downloadAllDoujinshisAsync(
             galleryName: allDoujinshis[key],
             stage: "Downloading"
         });
-        const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+        const resp: any = galleryMetadata[key]
+            ? { ok: true, status: 200, statusText: "resolved in browser" }
+            : await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
         if (resp.ok)
         {
             let json: any;
             try {
-                json = await parsing.GetJsonAsync(resp);
+                json = galleryMetadata[key] || await parsing.GetJsonAsync(resp);
             } catch (error) {
                 // Metadata parse failure (e.g. a Cloudflare HTML page).
                 countFailure(error);
@@ -261,11 +264,11 @@ async function downloadAllDoujinshisAsync(
     }
 }
 
-function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string) {
+function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}) {
     cancelIdleTimer();
     beginJob();
     let zip = new JSZip();
-    downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true)
+    downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata)
         .then(() => { clearJobMarker(); scheduleIdleClose(); })
         .catch(function(error) {
             clearJobMarker();
@@ -367,7 +370,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         downloadDoujinshi(request.json, request.path, request.name);
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllDoujinshis") {
-        downloadAllDoujinshis(request.allDoujinshis, request.finalName);
+        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {});
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllPages") {
         downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url);

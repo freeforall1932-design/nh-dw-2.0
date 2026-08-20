@@ -1,6 +1,8 @@
 import AParsing from "../parsing/AParsing";
 import { utils, classifyError } from "../utils/utils";
 import { message } from "./message"
+import { resolveSelectedGalleries } from "./selectedGalleryResolver"
+import { getSourceForUrl } from "../sources"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
@@ -201,10 +203,11 @@ export default class Popup
     async updatePreviewAsync(newUrl: string) {
         let self = Popup.getInstance();
         self.url = newUrl;
-        let match = /https:\/\/nhentai.net\/g\/([0-9]+)\/([/0-9a-z]+)?/.exec(self.url)
-        if (match !== null) {
-            await self.#doujinshiPreviewAsync(match[1]);
-        } else if (self.url.startsWith("https://nhentai.net")) {
+        const source = getSourceForUrl(self.url);
+        const galleryId = source ? source.getGalleryId(self.url) : null;
+        if (galleryId !== null) {
+            await self.#doujinshiPreviewAsync(galleryId);
+        } else if (source !== null) {
             executeActiveTabScript("js/getGalleries.js");
         } else {
             document.getElementById('action')!.innerHTML =  message.invalidPage();
@@ -392,7 +395,7 @@ export default class Popup
         setTimeout(() => {
             const downloadButton = document.getElementById('button');
             if (downloadButton) {
-                downloadButton.addEventListener('click', function() {
+                downloadButton.addEventListener('click', async function() {
                     let allDoujinshis : Record<string, string> = {};
                     allIds.forEach(function(id) {
                         let elem = document.getElementById(id) as HTMLInputElement;
@@ -404,10 +407,13 @@ export default class Popup
                         const pathElement = document.getElementById('path') as HTMLInputElement;
                         if (pathElement) {
                             let finalName = pathElement.value;
+                            document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
+                            const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis));
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
                             chrome.runtime.sendMessage({
                                 action: "downloadAllDoujinshis",
                                 allDoujinshis: allDoujinshis,
+                                galleryMetadata: galleryMetadata,
                                 finalName: finalName
                             });
                             self.updateProgress(0, finalName, false);
@@ -440,7 +446,7 @@ export default class Popup
             setTimeout(() => {
                 const buttonAll = document.getElementById('buttonAll');
                 if (buttonAll) {
-                    buttonAll.addEventListener('click', function() {
+                    buttonAll.addEventListener('click', async function() {
                         let allDoujinshis : Record<string, string> = {};
                         allIds.forEach(function(id) {
                             let elem = (document.getElementById(id) as HTMLInputElement);
@@ -461,10 +467,13 @@ export default class Popup
                                 const pathElement = document.getElementById('path') as HTMLInputElement;
                                 if (pathElement) {
                                     let finalName = pathElement.value;
+                                    document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
+                                    const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis));
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
                                     chrome.runtime.sendMessage({
                                         action: "downloadAllPages",
                                         allDoujinshis: allDoujinshis,
+                                        galleryMetadata: galleryMetadata,
                                         pages: pages,
                                         finalName: finalName,
                                         url: self.url

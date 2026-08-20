@@ -1,9 +1,16 @@
 import AParsing from "./AParsing";
+import { GallerySource, clearnetSource } from "../sources/GallerySource";
 
 export default class HtmlParsing implements AParsing
 {
+    private readonly source: GallerySource;
+
+    constructor(source: GallerySource = clearnetSource) {
+        this.source = source;
+    }
+
     GetUrl(id: string): string {
-        return "https://nhentai.net/g/" + id + "/1/";
+        return this.source.getGalleryUrl(id);
     }
 
     GetJsonAsync(response: Response): Promise<any> {

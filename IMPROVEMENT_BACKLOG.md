@@ -66,7 +66,10 @@ give the user actionable guidance. The `isCloudflareResponse()` utility is expor
 reuse. Covered by 6 new fixture tests in `test/parsing.test.js`. Retry backoff is now implemented: the
 Downloader retries page image fetches with exponential backoff (base 200ms, growing to ~3.2s at the last
 retry) so repeated failures don't hammer the server. The `retryBackoffMs` property is configurable.
-Covered by a test in `test/downloader.test.js`.
+API metadata parsing also checks response bodies for common Cloudflare challenge markers
+such as `cf-challenge`, `cf_chl_`, `Just a moment...`, and `Checking your browser`, including
+200 responses with misleading or missing content types. Covered by fixture tests in
+`test/parsing.test.js`.
 
 ### 3. Make original-image validation explicit
 
@@ -168,6 +171,8 @@ one error per failing gallery, and sends `batchProgress` for all three.
 
 ### 7. Resolve selected galleries through the active browser context
 
+**Progress:** complete for the resolver and offline coverage. The popup resolves selected IDs through one bounded temporary tab at a time, extracts `window._gallery` in the main world, closes each tab, and passes successful metadata through the worker/offscreen pipeline. API fallback remains available when a gallery cannot be resolved. `test/resolver.test.js` verifies sequential tab usage, cleanup, and already-complete tabs; real Chrome/Brave confirmation remains covered by item 10.
+
 For selected result-page IDs, use a controlled resolver instead of depending only on the API:
 
 1. Open one temporary gallery tab at a time, or use a small bounded queue.
@@ -183,6 +188,8 @@ Do not open dozens of tabs, and do not claim that this bypasses Cloudflare.
 ## Priority 3: optional Tor/onion source
 
 ### 8. Add configurable source adapters
+
+**Progress:** complete for the supported clearnet source. The `GallerySource` interface and source registry centralize host matching, gallery/API URLs, and image CDN fallback URLs. `ApiParsing`, `HtmlParsing`, `Downloader`, the popup, the temporary-tab resolver, and the service-worker icon path use the adapter; parsers and the downloader accept an injectable source. Onion support is intentionally dropped under item 9.
 
 Create a source abstraction so clearnet and onion URLs are not scattered throughout the code:
 
@@ -200,16 +207,17 @@ Implement the clearnet source first. Add an onion source only after the exact on
 
 **Acceptance criteria:** changing source configuration does not require changing downloader logic.
 
-### 9. Add optional onion-site support
+### 9. Add optional onion-site support — dropped
 
-- Allow the user to configure an onion base URL.
-- Match the onion hostname only when explicitly configured.
-- Use active-page extraction for onion pages.
-- Do not assume normal Chrome or Brave tabs can reach `.onion` addresses without Tor routing.
-- Do not attempt to start Tor or change the browser proxy automatically.
-- Verify whether the onion site serves original images itself or redirects to clearnet image hosts.
+Onion support is intentionally not being implemented. The extension cannot assume that the
+user's browser is configured for Tor, and the onion hostname/availability and page-to-image
+behavior cannot be reliably verified in this environment. The extension will continue to
+support the normal clearnet source only; no unpredictable onion URL handling or misleading
+Tor compatibility claim will be added.
 
-**Acceptance criteria:** the feature works only when the browser is already configured to reach the onion site, and it fails clearly when the onion service is unavailable.
+The existing downloader's zero-padded names (for example, `001.webp`) are an intentional
+naming convention. If another source were ever added later, preserving source names such as
+`1.webp` would be a separate adapter decision.
 
 ## Priority 4: Chromium and Brave compatibility
 

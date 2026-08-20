@@ -8,6 +8,8 @@
     "include": [
         "src/parsing/**/*.ts",
         "src/utils/**/*.ts",
-        "src/background/Downloader.ts"
+        "src/background/Downloader.ts",
+        "src/preview/selectedGalleryResolver.ts",
+        "src/sources/**/*.ts"
     ]
 }
