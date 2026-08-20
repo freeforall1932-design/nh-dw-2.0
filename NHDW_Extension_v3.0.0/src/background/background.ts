@@ -4,6 +4,7 @@ import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
 import { utils, classifyError } from "../utils/utils";
+import { getSourceForUrl } from "../sources";
 var JSZip = require("jszip");
 
 chrome.tabs.onUpdated.addListener(function
@@ -23,7 +24,7 @@ chrome.tabs.onActivated.addListener(function() {
 });
 
 function setIcon(url: string) {
-    if (url.startsWith("https://nhentai.net"))
+    if (getSourceForUrl(url) !== null)
         chrome.action.setIcon({path: "Icon.png"});
     else
         chrome.action.setIcon({path: "Icon-grey.png"});
@@ -113,10 +114,10 @@ module background
             .catch(function(error) { clearJobMarker(); throw error; });
     }
 
-    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function) {
+    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}) {
         beginJob();
         let zip = new JSZip();
-        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true)
+        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata)
             .then(() => clearJobMarker())
             .catch(function(error) {
                 clearJobMarker();
@@ -132,7 +133,8 @@ module background
         finalName: string,
         errorCallback: Function,
         progressCallback: Function,
-        downloadAtEnd: boolean
+        downloadAtEnd: boolean,
+        galleryMetadata: Record<string, any> = {}
     ) {
         let downloadName: string = "";
         let duplicateBehaviour: string = "";
@@ -178,12 +180,14 @@ module background
                 galleryName: allDoujinshis[key],
                 stage: "Downloading"
             });
-            const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+            const resp: any = galleryMetadata[key]
+                ? { ok: true, status: 200, statusText: "resolved in browser" }
+                : await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
             if (resp.ok)
             {
                 let json: any;
                 try {
-                    json = await parsing.GetJsonAsync(resp);
+                    json = galleryMetadata[key] || await parsing.GetJsonAsync(resp);
                 } catch (error) {
                     // Metadata parse failure (e.g. a Cloudflare HTML page).
                     countFailure(error);
@@ -514,7 +518,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
             });
         } else if (request.action === "downloadAllDoujinshis") {
-            askOffscreen({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, finalName: request.finalName }, (response) => {
+            askOffscreen({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName }, (response) => {
                 if (response && response.result === "started") {
                     sendResponse({ result: "started" });
                 } else {
@@ -590,7 +594,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     isZipping: isZipping,
                 retry: retry
                 });
-            }
+            },
+            request.galleryMetadata || {}
         );
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllPages") {

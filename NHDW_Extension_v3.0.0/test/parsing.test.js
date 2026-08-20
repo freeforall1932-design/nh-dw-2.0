@@ -4,10 +4,11 @@
 
 const assert = require('assert');
 const ApiParsing = require('../build/test/parsing/ApiParsing.js').default;
-const { isCloudflareResponse } = require('../build/test/parsing/ApiParsing.js');
+const { isCloudflareResponse, isCloudflareBody } = require('../build/test/parsing/ApiParsing.js');
 const HtmlParsing = require('../build/test/parsing/HtmlParsing.js').default;
 const { parseGalleryCardsFromHtml, extractFirstLine } = require('../build/test/parsing/CardParsing.js');
 const { utils, classifyError } = require('../build/test/utils/utils.js');
+const { clearnetSource } = require('../build/test/sources/GallerySource.js');
 
 describe('ApiParsing', () => {
     const parsing = new ApiParsing();
@@ -38,11 +39,34 @@ describe('ApiParsing', () => {
         );
     });
 
+    it('treats a 403 response as Cloudflare even with a JSON content type', async () => {
+        await assert.rejects(
+            parsing.GetJsonAsync(new Response('{"error":"blocked"}', { status: 403, headers: { 'Content-Type': 'application/json' } })),
+            (error) => /Cloudflare blocked/.test(error.message)
+        );
+    });
+
     it('rejects a 200 Cloudflare HTML challenge with a clear message', async () => {
         const html = '<html><body>cf-challenge</body></html>';
         await assert.rejects(
             parsing.GetJsonAsync(new Response(html, { status: 200, headers: { 'Content-Type': 'text/html' } })),
-            (error) => /Unexpected response type/.test(error.message)
+            (error) => /Cloudflare blocked/.test(error.message)
+        );
+    });
+
+    it('detects Cloudflare body markers without relying on status or content type', async () => {
+        const html = '<html><title>Just a moment...</title><body>Checking your browser</body></html>';
+        assert.strictEqual(isCloudflareBody(html), true);
+        await assert.rejects(
+            parsing.GetJsonAsync(new Response(html, { status: 200, headers: { 'Content-Type': 'application/json' } })),
+            (error) => /Cloudflare blocked/.test(error.message)
+        );
+    });
+
+    it('rejects malformed non-Cloudflare API bodies clearly', async () => {
+        await assert.rejects(
+            parsing.GetJsonAsync(new Response('not json', { status: 200, headers: { 'Content-Type': 'application/json' } })),
+            (error) => /Invalid JSON response/.test(error.message)
         );
     });
 });
@@ -71,6 +95,27 @@ describe('isCloudflareResponse', () => {
     it('does not flag a 404 with JSON content-type', () => {
         const resp = new Response('{"error":"not found"}', { status: 404, headers: { 'Content-Type': 'application/json' } });
         assert.strictEqual(isCloudflareResponse(resp), false);
+    });
+});
+
+describe('GallerySource', () => {
+    it('keeps clearnet URL and image-host logic in one adapter', () => {
+        assert.strictEqual(clearnetSource.matchesUrl('https://nhentai.net/search/?q=test'), true);
+        assert.strictEqual(clearnetSource.getGalleryId('https://nhentai.net/g/123456/1/'), '123456');
+        assert.strictEqual(clearnetSource.getGalleryUrl('123456'), 'https://nhentai.net/g/123456/1/');
+        assert.strictEqual(clearnetSource.getApiUrl('123456'), 'https://nhentai.net/api/gallery/123456');
+        assert.deepStrictEqual(clearnetSource.getImageUrls('987654', '1.jpg'), [
+            'https://i.nhentai.net/galleries/987654/1.jpg',
+            'https://i1.nhentai.net/galleries/987654/1.jpg',
+            'https://i2.nhentai.net/galleries/987654/1.jpg',
+            'https://i3.nhentai.net/galleries/987654/1.jpg',
+            'https://i4.nhentai.net/galleries/987654/1.jpg'
+        ]);
+    });
+
+    it('does not match lookalike hosts', () => {
+        assert.strictEqual(clearnetSource.matchesUrl('https://nhentai.net.evil.example/'), false);
+        assert.strictEqual(clearnetSource.getGalleryId('https://nhentai.net.evil.example/g/123/'), null);
     });
 });
 

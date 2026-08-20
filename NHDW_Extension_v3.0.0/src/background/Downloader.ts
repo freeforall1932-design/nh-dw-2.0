@@ -1,8 +1,9 @@
 var JSZip = require("jszip");
+import { GallerySource, clearnetSource } from "../sources/GallerySource";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null)
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource)
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -12,6 +13,7 @@ export default class Downloader
         this.#zip = zip;
         this.downloadName = downloadName;
         this.#abortSignal = signal;
+        this.#source = source;
 
         // @ts-ignore
         if (typeof browser !== "undefined") { // Firefox
@@ -269,11 +271,7 @@ export default class Downloader
         // Try the canonical CDN first, then the numbered mirrors. This is
         // similar to gallery-dl's extractor fallback strategy and avoids making
         // one random mirror failure abort an otherwise valid gallery.
-        const imageUrls = [
-            `https://i.nhentai.net/galleries/${this.#mediaId}/${filenameParsing}`,
-            ...[1, 2, 3, 4].map(server =>
-                `https://i${server}.nhentai.net/galleries/${this.#mediaId}/${filenameParsing}`)
-        ];
+        const imageUrls = this.#source.getImageUrls(String(this.#mediaId), filenameParsing);
 
         if (this.useZip !== "raw") { // ZIP (or equivalent) format
             let lastStatus = "unknown error";
@@ -347,6 +345,7 @@ export default class Downloader
     #json: any; // JSON containing all data
     #zip: typeof JSZip; // ZIP data that will be downloaded at the end
     #abortSignal: AbortSignal | null; // Cancels in-flight image fetches when the user aborts
+    #source: GallerySource;
     downloadName: string | null; // Name of the ZIP, null if should not download
     path: string; // Save path
     progressCallback: Function; // Function to call when progress is made
