@@ -1,1 +1,0 @@
-chrome.runtime.sendMessage({action:"getHtml",source:function(e){let t="",n=document.firstChild;for(;n;)t+=n.outerHTML,n=n.nextSibling;return t}()});
