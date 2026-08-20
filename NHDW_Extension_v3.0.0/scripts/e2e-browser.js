@@ -497,9 +497,7 @@ function ldEnv(nss) {
         child.kill();
         process.exit(2);
     }
-    const browserProduct = (async () => {
-        try { const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); return v.Browser || "Chromium"; } catch (_) { return "Chromium"; }
-    })();
+    const browserProduct = devtoolsVersion.Browser || "Chromium";
 
     const listTargets = async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json());
     const attachTarget = async (info) => {
@@ -869,7 +867,7 @@ async function runExtensionTests(ctx) {
     // ------------------------------------------------------------------
     // summary
     // ------------------------------------------------------------------
-    const product = await browserProduct;
+    const product = browserProduct;
     console.log("\nResults (" + product + "):");
     let failed = 0;
     for (const r of results) {
