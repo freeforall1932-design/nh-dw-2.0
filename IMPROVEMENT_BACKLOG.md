@@ -246,6 +246,13 @@ The richer reporting (per-gallery success/failure summary, distinct failure kind
 - Add gallery ID to the default filename when titles are empty or duplicated.
 - Test Unicode titles and reserved Windows filename characters.
 
+**Progress:** partial. `utils.cleanName` now prefixes Windows reserved device names
+(`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) with an underscore and falls back to
+`"untitled"` when a title sanitizes down to an empty string, so Chrome never receives
+a reserved or empty download filename. Covered by three new tests in `test/parsing.test.js`
+(reserved names, empty fallback, Unicode preservation). Still open: using the gallery ID
+as the fallback/collision disambiguator (needs call-site changes in popup/background/offscreen).
+
 ### 15. Add cancellation that stops active work
 
 - Abort outstanding `fetch` calls with `AbortController`.
