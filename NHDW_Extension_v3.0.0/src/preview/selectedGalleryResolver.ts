@@ -1,14 +1,10 @@
 import { clearnetSource } from "../sources/GallerySource";
+import { looksLikeGallery } from "../parsing/GalleryEmbed";
+import { readGalleryFromTab } from "./activeTabGallery";
 
 // Resolve selected galleries through short-lived browser tabs so metadata can
 // be read with the user's normal page session. Resolution is deliberately
 // sequential: at most one temporary tab exists at a time.
-
-function looksLikeGallery(value: any): boolean {
-    return value !== null && typeof value === "object"
-        && value.title !== undefined && value.images !== undefined
-        && Array.isArray(value.images.pages);
-}
 
 function waitForTabLoad(tabId: number): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -50,15 +46,7 @@ async function resolveOne(id: string): Promise<any | null> {
             });
         });
         await waitForTabLoad(tab.id!);
-        const results: any[] = await new Promise((resolve) => {
-            // @ts-ignore Older @types/chrome do not include scripting/world.
-            chrome.scripting.executeScript(<any>{
-                target: { tabId: tab!.id! },
-                world: "MAIN",
-                func: () => (window as any)._gallery || null
-            }, (value: any[]) => resolve(value || []));
-        });
-        const gallery = results[0] && results[0].result;
+        const gallery = await readGalleryFromTab(tab.id!, id);
         return looksLikeGallery(gallery) ? gallery : null;
     } catch (_) {
         return null;

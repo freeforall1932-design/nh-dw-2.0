@@ -19,16 +19,85 @@ chrome.tabs.onActivated.addListener(function() {
         active: true,
         currentWindow: true
     }, function (tabs) {
-        setIcon(tabs[0].url!);
+        if (tabs && tabs[0])
+            setIcon(tabs[0].url);
     });
 });
 
-function setIcon(url: string) {
-    if (getSourceForUrl(url) !== null)
-        chrome.action.setIcon({path: "Icon.png"});
-    else
-        chrome.action.setIcon({path: "Icon-grey.png"});
+// MV3 service workers live under js/, so a relative path like "Icon.png" is
+// fetched as js/Icon.png and chrome.action.setIcon rejects with
+// "Failed to set icon 'Icon.png': Failed to fetch". Root-relative paths
+// resolve against the extension origin instead.
+const ICON_COLOR = "/Icon.png";
+const ICON_GREY = "/Icon-grey.png";
+
+function setIcon(url: string | undefined) {
+    const iconPath = url && getSourceForUrl(url) !== null ? ICON_COLOR : ICON_GREY;
+    applyActionIcon(iconPath);
 }
+
+const iconImageDataCache: Record<string, ImageData> = {};
+
+async function loadIconImageData(iconPath: string): Promise<ImageData | null> {
+    if (iconImageDataCache[iconPath]) {
+        return iconImageDataCache[iconPath];
+    }
+    const createImageBitmapFn = (globalThis as any).createImageBitmap;
+    const OffscreenCanvasCtor = (globalThis as any).OffscreenCanvas;
+    if (typeof fetch !== "function" || typeof createImageBitmapFn !== "function" || typeof OffscreenCanvasCtor !== "function") {
+        return null;
+    }
+    try {
+        const url = chrome.runtime.getURL(iconPath.replace(/^\//, ""));
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            return null;
+        }
+        const bitmap = await createImageBitmapFn(await resp.blob());
+        const canvas = new OffscreenCanvasCtor(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+            return null;
+        }
+        ctx.drawImage(bitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+        iconImageDataCache[iconPath] = imageData;
+        return imageData;
+    } catch (_) {
+        return null;
+    }
+}
+
+function applyActionIcon(iconPath: string) {
+    const swallow = (result: any) => {
+        if (result && typeof result.catch === "function") {
+            result.catch(() => { /* toolbar icon updates are best-effort */ });
+        }
+    };
+    try {
+        const result: any = chrome.action.setIcon({ path: iconPath });
+        if (result && typeof result.catch === "function") {
+            result.catch(() => {
+                loadIconImageData(iconPath).then((imageData) => {
+                    if (!imageData) {
+                        return;
+                    }
+                    try {
+                        swallow(chrome.action.setIcon({ imageData: imageData } as any));
+                    } catch (_) { /* ignore */ }
+                }).catch(() => {});
+            });
+        }
+    } catch (_) { /* chrome.action may be missing in tests */ }
+}
+
+chrome.tabs.query({
+    active: true,
+    currentWindow: true
+}, function (tabs) {
+    if (tabs && tabs[0])
+        setIcon(tabs[0].url);
+});
 
 module background
 {

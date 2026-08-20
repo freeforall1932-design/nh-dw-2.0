@@ -1,5 +1,6 @@
 import AParsing from "./AParsing";
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
+import { extractGalleryFromHtml } from "./GalleryEmbed";
 
 export default class HtmlParsing implements AParsing
 {
@@ -16,13 +17,11 @@ export default class HtmlParsing implements AParsing
     GetJsonAsync(response: Response): Promise<any> {
         return response.text().then((value: string) =>
         {
-            return JSON.parse(
-                value.split("window._gallery = JSON.parse(\"")[1].split("\");")[0].replace(/\\u[\dA-F]{4}/gi,
-                    function (match) {
-                         return String.fromCharCode(parseInt(match.replace(/\\u/g, ''), 16));
-                    }
-                )
-            );
+            const json = extractGalleryFromHtml(value);
+            if (json === null) {
+                throw new Error("Unknown page format: window._gallery was not found.");
+            }
+            return json;
         });
     }
 }

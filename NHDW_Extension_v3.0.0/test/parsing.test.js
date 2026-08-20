@@ -7,6 +7,7 @@ const ApiParsing = require('../build/test/parsing/ApiParsing.js').default;
 const { isCloudflareResponse, isCloudflareBody } = require('../build/test/parsing/ApiParsing.js');
 const HtmlParsing = require('../build/test/parsing/HtmlParsing.js').default;
 const { parseGalleryCardsFromHtml, extractFirstLine } = require('../build/test/parsing/CardParsing.js');
+const { extractGalleryFromHtml, looksLikeGallery } = require('../build/test/parsing/GalleryEmbed.js');
 const { utils, classifyError } = require('../build/test/utils/utils.js');
 const { clearnetSource } = require('../build/test/sources/GallerySource.js');
 
@@ -144,8 +145,36 @@ describe('HtmlParsing', () => {
     it('rejects a page without the window._gallery marker', async () => {
         await assert.rejects(
             parsing.GetJsonAsync(new Response('<html><body>no gallery here</body></html>', { status: 200 })),
-            (error) => error instanceof TypeError
+            (error) => /Unknown page format/.test(error.message)
         );
+    });
+});
+
+describe('GalleryEmbed', () => {
+    const gallery = {
+        id: 123456,
+        media_id: '987654',
+        title: { english: 'Test Gallery', japanese: '', pretty: 'Test Gallery' },
+        images: { pages: [{ t: 'j' }, { t: 'p' }] },
+        tags: []
+    };
+
+    it('looksLikeGallery requires title, pages, and media_id', () => {
+        assert.strictEqual(looksLikeGallery(gallery), true);
+        assert.strictEqual(looksLikeGallery(null), false);
+        assert.strictEqual(looksLikeGallery({ title: {}, images: { pages: [] } }), false);
+        assert.strictEqual(looksLikeGallery({ media_id: '1', title: {}, images: {} }), false);
+    });
+
+    it('extracts window._gallery JSON.parse embeds with \\u0022 escapes', () => {
+        const embed = String.raw`{\u0022id\u0022:123456,\u0022media_id\u0022:\u0022987654\u0022,\u0022title\u0022:{\u0022english\u0022:\u0022Test Gallery\u0022,\u0022japanese\u0022:\u0022\u0022,\u0022pretty\u0022:\u0022Test Gallery\u0022},\u0022images\u0022:{\u0022pages\u0022:[{\u0022t\u0022:\u0022j\u0022},{\u0022t\u0022:\u0022p\u0022}]},\u0022tags\u0022:[]}`;
+        const html = '<html><body><script>window._gallery = JSON.parse("' + embed + '");</script></body></html>';
+        assert.deepStrictEqual(extractGalleryFromHtml(html), gallery);
+    });
+
+    it('returns null for Cloudflare challenge HTML without a gallery embed', () => {
+        const html = '<html><title>Just a moment...</title><body>cf-challenge</body></html>';
+        assert.strictEqual(extractGalleryFromHtml(html), null);
     });
 });
 

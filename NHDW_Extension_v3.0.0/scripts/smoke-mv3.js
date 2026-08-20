@@ -21,14 +21,34 @@ const code = fs.readFileSync(bundlePath, "utf8");
 
 let onMessageHandler = null;
 let messageListenerRegistered = false;
+let onUpdatedListener = null;
+let onActivatedListener = null;
+const setIconCalls = [];
+
+process.on("unhandledRejection", (reason) => {
+    console.error("FAIL: unhandled rejection (toolbar setIcon must catch Failed to fetch): " +
+        (reason && reason.message ? reason.message : reason));
+    process.exit(1);
+});
 
 const chromeStub = {
     tabs: {
-        onUpdated: { addListener() {} },
-        onActivated: { addListener() {} },
+        onUpdated: { addListener(fn) { onUpdatedListener = fn; } },
+        onActivated: { addListener(fn) { onActivatedListener = fn; } },
         query(_query, cb) { cb([{ url: "https://nhentai.net/g/1/" }]); }
     },
-    action: { setIcon() {} },
+    action: {
+        // Mirror Chromium MV3: relative icon paths 404 against js/background.js
+        // and the returned promise rejects. The worker must use root-relative
+        // paths and catch the rejection so it never surfaces as uncaught.
+        setIcon(details) {
+            setIconCalls.push(details);
+            const p = typeof details.path === "string"
+                ? details.path
+                : (details.path && (details.path["64"] || details.path[64] || Object.values(details.path)[0]));
+            return Promise.reject(new Error("Failed to set icon '" + p + "': Failed to fetch"));
+        }
+    },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
@@ -41,7 +61,8 @@ const chromeStub = {
             }
         },
         sendMessage() {},
-        lastError: null
+        lastError: null,
+        getURL(p) { return "chrome-extension://testid/" + String(p).replace(/^\//, ""); }
     },
     downloads: { download() {} }
 };
@@ -77,23 +98,65 @@ if (!messageListenerRegistered) {
     process.exit(1);
 }
 
-// Simulate the popup's first message: isDownloadFinished.
-const request = offscreenMode
-    ? { target: "offscreen", action: "isDownloadFinished" }
-    : { action: "isDownloadFinished" };
+function iconPath(details) {
+    if (!details) return undefined;
+    if (typeof details.path === "string") return details.path;
+    return details.path && (details.path["64"] || details.path[64] || Object.values(details.path)[0]);
+}
 
-const answered = onMessageHandler(request, {}, (result) => {
-    if (!result || result.result !== true) {
-        console.error("FAIL: isDownloadFinished answered: " + JSON.stringify(result));
+function assertRootRelativeIcon(details, expected, label) {
+    const p = iconPath(details);
+    if (p !== expected) {
+        console.error("FAIL: " + label + " — expected setIcon path " + JSON.stringify(expected) + ", got " + JSON.stringify(p));
         process.exit(1);
     }
-    console.log("PASS: listener registered and isDownloadFinished answered " + JSON.stringify(result));
-    console.log("PASS: " + path.basename(bundlePath) + (offscreenMode ? " works as an offscreen document." : " is safe to run as an MV3 service worker."));
-    process.exit(0);
-});
-
-// The listener must send a response synchronously for this action.
-if (answered === undefined && !offscreenMode) {
-    console.error("FAIL: listener returned nothing for isDownloadFinished (sendResponse not called).");
-    process.exit(1);
+    if (!String(p).startsWith("/")) {
+        console.error("FAIL: " + label + " — icon path must be root-relative so the MV3 worker does not fetch js/" + p);
+        process.exit(1);
+    }
 }
+
+if (!offscreenMode) {
+    if (setIconCalls.length < 1) {
+        console.error("FAIL: service worker did not set the toolbar icon for the active tab on startup.");
+        process.exit(1);
+    }
+    assertRootRelativeIcon(setIconCalls[setIconCalls.length - 1], "/Icon.png", "startup icon for nhentai.net");
+    if (typeof onUpdatedListener !== "function") {
+        console.error("FAIL: chrome.tabs.onUpdated listener was never registered.");
+        process.exit(1);
+    }
+    onUpdatedListener(1, { url: "https://example.com/" }, {});
+    assertRootRelativeIcon(setIconCalls[setIconCalls.length - 1], "/Icon-grey.png", "icon off nhentai.net");
+    onUpdatedListener(1, { url: "https://nhentai.net/g/123/" }, {});
+    assertRootRelativeIcon(setIconCalls[setIconCalls.length - 1], "/Icon.png", "icon on a gallery page");
+    if (typeof onActivatedListener === "function") {
+        onActivatedListener({ tabId: 1 });
+        assertRootRelativeIcon(setIconCalls[setIconCalls.length - 1], "/Icon.png", "icon after tab activation");
+    }
+    console.log("PASS: setIcon uses root-relative /Icon.png and /Icon-grey.png and swallows fetch failures.");
+}
+
+// Give setIcon's rejected promises a tick to surface as unhandledRejection if
+// the worker forgot to catch them, then prove the message listener still answers.
+setTimeout(() => {
+    const request = offscreenMode
+        ? { target: "offscreen", action: "isDownloadFinished" }
+        : { action: "isDownloadFinished" };
+
+    const answered = onMessageHandler(request, {}, (result) => {
+        if (!result || result.result !== true) {
+            console.error("FAIL: isDownloadFinished answered: " + JSON.stringify(result));
+            process.exit(1);
+        }
+        console.log("PASS: listener registered and isDownloadFinished answered " + JSON.stringify(result));
+        console.log("PASS: " + path.basename(bundlePath) + (offscreenMode ? " works as an offscreen document." : " is safe to run as an MV3 service worker."));
+        process.exit(0);
+    });
+
+    // The listener must send a response synchronously for this action.
+    if (answered === undefined && !offscreenMode) {
+        console.error("FAIL: listener returned nothing for isDownloadFinished (sendResponse not called).");
+        process.exit(1);
+    }
+}, 30);
