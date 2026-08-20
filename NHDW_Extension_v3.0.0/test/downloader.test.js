@@ -297,6 +297,81 @@ describe('Downloader (raw mode)', () => {
     });
 });
 
+describe('Downloader (folder mode)', () => {
+    let chrome;
+    let fetchStub;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip');
+        fetchStub = makeFetchStub();
+        globalThis.chrome = chrome;
+        globalThis.fetch = fetchStub;
+        globalThis.URL = undefined; // Node has no createObjectURL -> data-URL branch
+        globalThis.FileReader = FileReaderStub;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    it('saves one image file per page into the gallery folder and never zips', async () => {
+        const saved = [];
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/FolderTest', () => {}, () => {}, 'FolderTest', new JSZip(), 'Downloads/FolderTest', null, undefined, { useZip: 'folder', maxConcurrentDownloads: 3 });
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        downloader.saveUrl = (url, filename) => {
+            saved.push({ url, filename });
+            return Promise.resolve();
+        };
+        await downloader.startAsync();
+
+        assert.strictEqual(chrome.downloads.calls.length, 0, 'folder mode must not use chrome.downloads directly');
+        assert.strictEqual(saved.length, 3, 'one save per page');
+        assert.deepStrictEqual(saved.map((s) => s.filename), [
+            'Downloads/FolderTest/001.jpg',
+            'Downloads/FolderTest/002.png',
+            'Downloads/FolderTest/003.jpg'
+        ]);
+        for (const s of saved) {
+            assert.ok(/^data:/.test(s.url) || /^blob:/.test(s.url), 'expected a data/blob URL, got ' + s.url.slice(0, 40));
+        }
+        assert.ok(downloader.isDone(), 'folder mode must report completion');
+    });
+
+    it('uses constructor settings and never reads chrome.storage', async () => {
+        let storageReads = 0;
+        chrome.storage.sync.get = (defaults, cb) => {
+            storageReads++;
+            cb(Object.assign({}, defaults));
+        };
+        const saved = [];
+        // downloadName null = mid-batch gallery (no final archive of its own).
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/FolderTest2', () => {}, () => {}, 'FolderTest2', new JSZip(), null, null, undefined, { useZip: 'folder' });
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        downloader.saveUrl = (url, filename) => {
+            saved.push(filename);
+            return Promise.resolve();
+        };
+        await downloader.startAsync();
+        assert.strictEqual(storageReads, 0, 'constructor settings must skip chrome.storage');
+        assert.strictEqual(saved.length, 3);
+        assert.strictEqual(chrome.downloads.calls.length, 0);
+    });
+
+    it('fails the gallery when a folder save is rejected', async () => {
+        let error = null;
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/FolderFail', (e) => { error = e; }, () => {}, 'FolderFail', new JSZip(), 'Downloads/FolderFail', null, undefined, { useZip: 'folder', maxConcurrentDownloads: 1 });
+        downloader.retryBackoffMs = 0;
+        downloader.saveUrl = () => Promise.reject(new Error('disk full (fixture)'));
+        await assert.rejects(downloader.startAsync());
+        assert.ok(error !== null && /Failed to save image to 001\.jpg/.test(String(error)));
+    });
+});
+
 describe('Downloader (abort/cancellation)', () => {
     let chrome;
 

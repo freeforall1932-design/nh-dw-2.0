@@ -1,10 +1,18 @@
 // End-to-end offscreen document test: load the built js/offscreen.js in a
 // window-less-but-DOM-stubbed VM context (like an offscreen document) and
 // drive a downloadDoujinshi command through the full pipeline:
-// metadata -> image fetch (mocked CDN) -> JSZip -> object URL -> downloads.
+// metadata -> image fetch (mocked CDN) -> JSZip -> object URL -> save relay.
 //
-// This proves the large-gallery fix: the ZIP is delivered via a real object
-// URL (URL.createObjectURL), never through the base64 data URL round-trip.
+// This harness mirrors REAL Chrome: per the Chrome docs, "The runtime API is
+// the only extensions API supported by offscreen documents", so the chrome
+// stub here has NO chrome.storage, NO chrome.downloads and NO
+// chrome.scripting — the service worker (simulated in the sendMessage stub)
+// performs chrome.downloads.download (saveDownload), chrome.scripting
+// injections (fetchInTab / fetchUrlInTab), and owns the job marker.
+//
+// This proves the large-gallery fix (ZIP delivered via a real object URL,
+// never the base64 round-trip) AND the offscreen API-surface fix (the bundle
+// must not touch forbidden APIs at all).
 //
 // Usage:  node scripts/e2e-offscreen.js [path/to/js/offscreen.js]
 // Exit code 0 = object-URL pipeline works end to end.
@@ -17,41 +25,76 @@ const JSZip = require("jszip");
 const bundlePath = process.argv[2] || path.join(__dirname, "..", "js", "offscreen.js");
 const code = fs.readFileSync(bundlePath, "utf8");
 
-// --- chrome stub ---------------------------------------------------------
+// --- chrome stub (offscreen document: chrome.runtime ONLY) ------------------
 let onMessageHandler = null;
 const sentMessages = [];
-const downloads = [];
+const downloads = [];                 // what the (simulated) worker downloaded
+const tabFetches = [];                 // fetchInTab / fetchUrlInTab relays
 
-const sessionStore = {};   // chrome.storage.session stub
+// Options exactly as the service worker relays them (it reads
+// chrome.storage.sync on the document's behalf).
+const relayedOptions = {
+    useZip: "zip",
+    downloadName: "{pretty}",
+    duplicateBehaviour: "rename",
+    replaceSpaces: true,
+    downloadSeparately: false,
+    maxConcurrentDownloads: "3",
+    htmlParsing: false
+};
 
-const chromeStub = {
+const chromeCore = {
     tabs: { onUpdated: { addListener() {} }, onActivated: { addListener() {} }, query() {} },
     action: { setIcon() {} },
-    storage: {
-        sync: { get(defaults, cb) { cb(Object.assign({}, defaults, { useZip: "zip", maxConcurrentDownloads: "3" })); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
-        session: {
-            get(key, cb) {
-                cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore));
-            },
-            set(items, cb) { Object.assign(sessionStore, items); if (cb) cb(); },
-            remove(key, cb) { delete sessionStore[key]; if (cb) cb(); }
-        }
-    },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
-        sendMessage(msg) { sentMessages.push(msg); },
+        sendMessage(msg, cb) {
+            sentMessages.push(msg);
+            if (!msg || msg.from !== "offscreen") return;
+            if (msg.action === "saveDownload") {
+                // The service worker calls chrome.downloads.download here.
+                downloads.push({ url: msg.url, filename: msg.filename });
+                if (cb) setTimeout(() => cb({ result: 7 }), 0);
+            } else if (msg.action === "fetchInTab") {
+                // The service worker injects fetchImageInPage into the tab.
+                tabFetches.push({ kind: "image", url: msg.url, world: msg.world });
+                const bytes = tabImageBytesFor(msg.url);
+                const resp = bytes
+                    ? { ok: true, status: 200, statusText: "OK", contentType: "image/jpeg", b64: Buffer.from(bytes).toString("base64"), error: null }
+                    : { ok: false, status: 404, statusText: "Not Found", contentType: null, b64: null, error: null };
+                if (cb) setTimeout(() => cb(resp), 0);
+            } else if (msg.action === "fetchUrlInTab") {
+                // The service worker injects fetchUrlInPage into the tab.
+                tabFetches.push({ kind: "url", url: msg.url });
+                const text = tabUrlTextFor(msg.url);
+                const resp = text !== null
+                    ? { ok: true, status: 200, statusText: "OK", contentType: "application/json", text: text, error: null }
+                    : { ok: false, status: 404, statusText: "Not Found", contentType: null, text: null, error: null };
+                if (cb) setTimeout(() => cb(resp), 0);
+            }
+            // updateProgress/downloadError/batchProgress/batchSummary/
+            // offscreenIdle are fire-and-forget; the real worker answers none
+            // of them (its listener returns false).
+        },
         lastError: null
-    },
-    downloads: {
-        download(opts, cb) {
-            downloads.push(opts);
-            if (cb) cb(1); // success, downloadId = 1
-        }
     }
 };
 
-// --- object URL stub (the reason the offscreen document exists) -----------
+// Count accesses to APIs that must NOT exist in an offscreen document. The
+// bundle may CHECK for chrome.scripting (it falls back to relaying), but it
+// must never use chrome.storage or chrome.downloads.
+const forbidden = { storage: 0, downloads: 0, scripting: 0 };
+const chromeStub = new Proxy(chromeCore, {
+    get(target, prop) {
+        if (prop === "storage" || prop === "downloads" || prop === "scripting") {
+            forbidden[prop]++;
+            return undefined; // exactly like real Chrome offscreen documents
+        }
+        return target[prop];
+    }
+});
+
+// --- object URL stub (the reason the offscreen document exists) -------------
 const objectBlobs = {};   // blobUrl -> Blob
 const revokedUrls = [];
 let blobCounter = 0;
@@ -67,7 +110,7 @@ const URLStub = {
     }
 };
 
-// --- fetch stub: nhentai API + image CDN ----------------------------------
+// --- fetch stub: nhentai API + image CDN ------------------------------------
 const GALLERY_ID = 123456;
 const MEDIA_ID = 987654;
 const GALLERY_ID2 = 654321;
@@ -103,6 +146,15 @@ const pageBytes = [
 let failImages = false;
 const failMediaIds = new Set();
 
+function imageBytesFor(url) {
+    const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(String(url));
+    if (!imgMatch) return null;
+    const mediaId = imgMatch[1];
+    const pageNo = parseInt(imgMatch[2], 10);
+    if (failImages || failMediaIds.has(mediaId)) return null;
+    return pageBytes[(pageNo - 1) % pageBytes.length];
+}
+
 function fetchStub(url) {
     const u = String(url);
     const apiMatch = /\/api\/gallery\/([0-9]+)/.exec(u);
@@ -112,17 +164,30 @@ function fetchStub(url) {
     }
     const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(u);
     if (imgMatch) {
-        const mediaId = imgMatch[1];
-        const pageNo = parseInt(imgMatch[2], 10);
-        if (failImages || failMediaIds.has(mediaId)) {
+        if (failImages || failMediaIds.has(imgMatch[1])) {
             return Promise.resolve(new Response("nope", { status: 404 }));
         }
-        return Promise.resolve(new Response(pageBytes[(pageNo - 1) % pageBytes.length], { status: 200 }));
+        return Promise.resolve(new Response(pageBytes[(parseInt(imgMatch[2], 10) - 1) % pageBytes.length], { status: 200 }));
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
 }
 
-// --- sandbox (single VM realm; document defined like an offscreen page) ---
+// The simulated tab's view of the world (what chrome.scripting injections in
+// the real worker would fetch with the tab's session).
+function tabImageBytesFor(url) {
+    return imageBytesFor(url);
+}
+
+function tabUrlTextFor(url) {
+    const apiMatch = /\/api\/gallery\/([0-9]+)/.exec(String(url));
+    if (apiMatch) {
+        const gallery = galleryById[apiMatch[1]];
+        return gallery ? JSON.stringify(gallery) : null;
+    }
+    return null;
+}
+
+// --- sandbox (single VM realm; document defined like an offscreen page) -----
 const sandbox = {
     chrome: chromeStub,
     console,
@@ -133,6 +198,8 @@ const sandbox = {
     Blob,   // jszip needs a Blob constructor for generateAsync({type:"blob"})
     URL: URLStub,
     AbortController,
+    btoa: (s) => Buffer.from(s, "binary").toString("base64"),
+    atob: (s) => Buffer.from(s, "base64").toString("binary"),
     document: {} // offscreen documents have a DOM; Downloader then zips without web workers
     // NOTE: do not inject host Uint8Array/ArrayBuffer/Promise built-ins; they
     // would shadow the VM's own intrinsics and break instanceof checks.
@@ -191,7 +258,8 @@ function askOffscreen(message) {
     try {
         vm.runInContext(code, vmCtx, { filename: bundlePath });
     } catch (err) {
-        fail("bundle threw while loading: " + err.name + ": " + err.message);
+        fail("bundle threw while loading: " + err.name + ": " + err.message +
+            " (an offscreen document without chrome.storage must still load)");
     }
     if (!onMessageHandler) fail("onMessage listener was never registered");
 
@@ -201,18 +269,18 @@ function askOffscreen(message) {
         fail("isDownloadFinished should be true while idle, got " + JSON.stringify(idleAnswer));
     }
 
-    // Start a download the way the service worker would relay it.
+    // Start a download the way the service worker would relay it (with the
+    // options the worker read from chrome.storage.sync on the document's
+    // behalf — the document itself has no storage access).
     const startAnswer = await askOffscreen({
         action: "downloadDoujinshi",
         json: galleryJson,
         path: "Downloads/Test",
-        name: "Test"
+        name: "Test",
+        options: relayedOptions
     });
     if (!startAnswer || startAnswer.result !== "started") {
         fail("downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(startAnswer));
-    }
-    if (!sessionStore.downloadJob || sessionStore.downloadJob.active !== true) {
-        fail("job marker must be active while the offscreen job runs, got " + JSON.stringify(sessionStore.downloadJob));
     }
 
     // During the download, isDownloadFinished must be false and progress must flow.
@@ -226,7 +294,7 @@ function askOffscreen(message) {
         fail("getProgress did not answer success, got " + JSON.stringify(progressAnswer));
     }
 
-    // Wait for the ZIP to reach chrome.downloads.
+    // Wait for the ZIP to reach the download manager (via the save relay).
     await waitFor(() => downloads.length === 1, "no download reached chrome.downloads");
     const download = downloads[0];
 
@@ -266,10 +334,6 @@ function askOffscreen(message) {
         }
     }
 
-    // The download is done: the job marker must be cleared.
-    await waitFor(() => sessionStore.downloadJob === undefined,
-        "job marker must be cleared after the offscreen job completes");
-
     // goBack must succeed and the finished flag must be true.
     const goBackAnswer = await askOffscreen({ action: "goBack" });
     if (!goBackAnswer || goBackAnswer.result !== "success") {
@@ -283,6 +347,42 @@ function askOffscreen(message) {
     console.log("PASS: ZIP (" + buf.length + " bytes) delivered via object URL " + download.url);
     console.log("PASS: entries: " + names.join(", ") + "; " + progressMessages.length + " progress broadcasts");
 
+    // ---- Tab-first image fetches must be relayed to the service worker ----
+    // With a sourceTabId, the document cannot use chrome.scripting itself; it
+    // must ask the worker to inject the fetch into the tab (ISOLATED first,
+    // then MAIN on failure), and must NOT fall back to an extension fetch.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    tabFetches.length = 0;
+    const tabStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/TabTest",
+        name: "TabTest",
+        tabId: 42,
+        options: relayedOptions
+    });
+    if (!tabStart || tabStart.result !== "started") {
+        fail("tab downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(tabStart));
+    }
+    await waitFor(() => downloads.length === 1, "tab download did not reach chrome.downloads");
+    const tabImageFetches = tabFetches.filter((t) => t.kind === "image");
+    if (tabImageFetches.length === 0) {
+        fail("tab image fetches were not relayed to the service worker (fetchInTab)");
+    }
+    if (tabImageFetches[0].world !== "ISOLATED") {
+        fail("the first tab image fetch relay must use the ISOLATED world, got " + tabImageFetches[0].world);
+    }
+    const tabDownload = downloads[0];
+    if (tabDownload.filename !== "Downloads/TabTest.zip") {
+        fail("unexpected tab download filename: " + tabDownload.filename);
+    }
+    const tabZip = await JSZip.loadAsync(Buffer.from(await objectBlobs[tabDownload.url].arrayBuffer()));
+    if (Object.keys(tabZip.files).filter((n) => !tabZip.files[n].dir).length !== 3) {
+        fail("tab-fetched ZIP must contain 3 pages, got " + JSON.stringify(Object.keys(tabZip.files)));
+    }
+    console.log("PASS: tab image fetches relayed to the worker (ISOLATED first) and the ZIP is complete");
+
     // ---- Batch download with a failing gallery must report exactly once ----
     // Regression guard: the Downloader surfaces a gallery failure through
     // errorCallback and then re-throws; the batch loop must swallow that
@@ -294,7 +394,8 @@ function askOffscreen(message) {
     const batchStart = await askOffscreen({
         action: "downloadAllDoujinshis",
         allDoujinshis: { [GALLERY_ID]: "Test" },
-        finalName: "Downloads/Batch"
+        finalName: "Downloads/Batch",
+        options: relayedOptions
     });
     if (!batchStart || batchStart.result !== "started") {
         fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(batchStart));
@@ -333,7 +434,8 @@ function askOffscreen(message) {
     const mixedStart = await askOffscreen({
         action: "downloadAllDoujinshis",
         allDoujinshis: { "1": "Missing", [GALLERY_ID]: "Test" },
-        finalName: "Downloads/Mixed"
+        finalName: "Downloads/Mixed",
+        options: relayedOptions
     });
     if (!mixedStart || mixedStart.result !== "started") {
         fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(mixedStart));
@@ -357,19 +459,51 @@ function askOffscreen(message) {
     }
     console.log("PASS: batch continues after a gallery failure and reports 1/1/2");
 
+    // ---- Batch metadata for unresolved ids reuses the user tab's session ---
+    // Without galleryMetadata and WITH a sourceTabId, the document must fetch
+    // the gallery API through the tab (fetchUrlInTab relay) instead of the
+    // extension-origin fetch that Cloudflare 403s.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    tabFetches.length = 0;
+    const tabMetaStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "Test" },
+        finalName: "Downloads/TabMeta",
+        tabId: 42,
+        options: relayedOptions
+    });
+    if (!tabMetaStart || tabMetaStart.result !== "started") {
+        fail("tab metadata batch did not answer {result:'started'}, got " + JSON.stringify(tabMetaStart));
+    }
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "no batchSummary was sent for the tab-metadata batch"
+    );
+    const tabMetaSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!tabMetaSummary || tabMetaSummary.succeeded !== 1 || tabMetaSummary.failed !== 0) {
+        fail("tab metadata batch must succeed 1/1, got " + JSON.stringify(tabMetaSummary));
+    }
+    const tabUrlFetches = tabFetches.filter((t) => t.kind === "url" && /\/api\/gallery\//.test(t.url));
+    if (tabUrlFetches.length === 0) {
+        fail("unresolved batch metadata was not fetched through the user tab (fetchUrlInTab)");
+    }
+    console.log("PASS: unresolved batch metadata fetched through the user tab's session");
+
     // ---- Three-gallery queue with mixed failures ----------------------------
     // Same queue guarantees as the worker suite: per-gallery progress, the loop
     // continues past a metadata failure AND an image failure, the last gallery
     // still emits the single final ZIP, and the summary carries per-kind counts.
     sentMessages.length = 0;
     downloads.length = 0;
-    failImages = false;
+    tabFetches.length = 0;
     failMediaIds.clear();
     failMediaIds.add(String(MEDIA_ID));
     const queueStart = await askOffscreen({
         action: "downloadAllDoujinshis",
         allDoujinshis: { "1": "Missing", [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
-        finalName: "Downloads/Queue"
+        finalName: "Downloads/Queue",
+        options: relayedOptions
     });
     if (!queueStart || queueStart.result !== "started") {
         fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(queueStart));
@@ -397,6 +531,14 @@ function askOffscreen(message) {
         fail("batchProgress must be sent for all 3 queued galleries");
     }
     console.log("PASS: three-gallery queue continues past metadata+image failures and reports 1/2/3");
+
+    // ---- The document must have stayed inside its API surface --------------
+    if (forbidden.storage !== 0 || forbidden.downloads !== 0) {
+        fail("offscreen document touched forbidden APIs: storage=" + forbidden.storage +
+            " downloads=" + forbidden.downloads +
+            " (only chrome.runtime is available in offscreen documents)");
+    }
+    console.log("PASS: offscreen document used chrome.runtime only (no storage/downloads access)");
 
     console.log("PASS: offscreen document pipeline works with no base64 round-trip.");
     process.exit(0);

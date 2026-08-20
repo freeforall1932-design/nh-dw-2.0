@@ -8,7 +8,7 @@ A Chrome extension for batch downloading full-size image archives directly from 
 * **Batch Download:** Grabs all full-size images from a gallery (not just thumbnails).
 * **Seamless Integration:** Injects selection checkboxes directly onto nhentai.net listing pages.
 * **Smart Scraping:** Automatically converts thumbnail URLs to high-quality, full-size images.
-* **Client-Side Zipping:** Creates `.zip` archives locally without relying on external servers.
+* **Client-Side Zipping:** Creates `.zip` archives locally without relying on external servers — or, if you prefer the old-school layout, **one folder of images per gallery** (Options → *Download format: Images in a folder*).
 * **Large-gallery safe:** the finished archive is handed to Chrome through an MV3 *offscreen document* (real object URL), so huge galleries no longer go through a memory-hungry base64 round-trip in the service worker.
 * **Manifest V3 Compliant:** Fully updated for the latest Chrome extension requirements.
 
@@ -31,7 +31,7 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
 1. Navigate to a gallery page (e.g., `https://nhentai.net/g/123456/`).
 2. Click the extension icon. The popup shows the detected title and page count.
 3. Optionally edit the save name/path, then click **Download**.
-4. The extension fetches the full-size images, zips them locally, and hands the archive to Chrome's download manager (`[Title].zip`, or `.cbz` if configured).
+4. The extension fetches the full-size images, zips them locally, and hands the archive to Chrome's download manager (`[Title].zip`, `.cbz`, or a `[Title]/` folder of images if configured in Options).
 
 ### Search / category pages (batch)
 1. On a search, tag, artist, or category page, each thumbnail caption gets an
@@ -45,7 +45,9 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
 > **Note:** nhentai.net sits behind Cloudflare. If a request is challenged,
 > open the **gallery page itself**, complete any challenge, and retry. Metadata
 > is read from the open tab (`window._gallery`). ZIP pages are fetched through
-> that tab when possible, then from the extension origin. This is **not** a
+> that tab when possible, then from the extension origin. Batch metadata and
+> listing pages are also requested through your open nhentai tab's session
+> before falling back to the extension origin. This is **not** a
 > Cloudflare bypass — a “Just a moment…” interstitial has no gallery JSON and
 > cannot supply image bytes. If the popup shows the gallery but the ZIP fails
 > with an image error, keep the gallery tab open and try again.
@@ -61,7 +63,8 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
 | **Extension icon missing** | Click the "Puzzle Piece" icon in the Chrome toolbar and pin "NHentai Downloader". |
 
 ## 📝 Version History
-* **v3.0.0:** Complete rewrite for Manifest V3. Fixed service worker errors, added batch downloading, integrated JSZip locally, and removed deprecated APIs.
+* **v3.0.0 (current):** Manifest V3 rewrite. Tab-first gallery metadata and tab-first image fetches (your open gallery tab is used for both), offscreen-document downloads that only ever use the APIs Chrome actually exposes there (object URLs in the document, `chrome.downloads` in the service worker), folder-of-images output option, CDN mirror fallback, and a real-browser e2e suite.
+* **v3.0.0 (initial):** Complete rewrite for Manifest V3. Fixed service worker errors, added batch downloading, integrated JSZip locally, and removed deprecated APIs.
 * **v2.2.0:** *(Deprecated)* Original source code base.
 
 ## 🧪 Development: building and testing
