@@ -10,7 +10,7 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Use `chrome.downloads` instead of DOM-based `FileSaver` in the service worker
 - [x] Validate and default the concurrent-download setting
 - [x] Correct duplicate-title behavior (`rename` and `ignore`)
-- [x] Add active-gallery metadata fallback from the open page
+- [x] Add active-gallery metadata fallback from the open page (tab-first `window._gallery` / script embeds; API last)
 - [x] Add original-image CDN fallback between the canonical and numbered image hosts
 - [x] Remove legacy `window.*` background assignments that crashed the MV3 service worker before `chrome.runtime.onMessage.addListener` could register (every message from the popup got no response)
 - [x] Ship the webpack-built popup (`index.html` + `js/preview.js`) in `NHDW_Release_v3.0.0`; delete the hand-written `js/popup.js` that messaged a nonexistent content-script listener
@@ -54,10 +54,12 @@ stubs and zero network access. The live check is opt-in: `npm run test:live`.
 
 **Acceptance criteria:** a blocked request produces a useful error and never creates a corrupt image entry.
 
-**Progress:** mostly done. Single-gallery metadata now retries through the active nhentai tab's page context
-(`credentials: "include"`, same-origin `/api/gallery/<id>`, then embedded `window._gallery` HTML parsing)
-so a browser session that can read the gallery can usually supply metadata even when Cloudflare blocks the
-extension-origin API request. Extension/offscreen image and batch metadata fetches also request credentials
+**Progress:** mostly done. Single-gallery metadata now reads the already-open gallery tab first
+(`window._gallery` / `window.gallery`, then `_gallery` JSON already in page `<script>` tags via
+`GalleryEmbed` / `activeTabGallery`). Same-origin `/api/gallery/<id>` and the extension-origin API
+are last resorts, so a loaded gallery tab does not 403 before the popup can show Download. This is
+not a Cloudflare bypass: a challenge interstitial still has no gallery JSON. Image fetches from
+`i*.nhentai.net` in the offscreen/worker path can still be 403'd independently. Extension/offscreen image and batch metadata fetches also request credentials
 and have Cloudflare-aware error messages. The `ApiParsing.GetJsonAsync` method now detects HTML content-type
 before attempting `response.json()` and produces a clear "Cloudflare blocked" message for 403/503 responses
 and an "Unexpected response type" message for 200 HTML pages. The batch download loops in both background.ts
@@ -238,9 +240,8 @@ Record browser version, operating system, page type, and result.
 **Progress:** the manual test is automated as `scripts/e2e-browser.js` (`npm run test:browser`):
 it loads `NHDW_Release_v3.0.0` in a real Chromium-family browser over the DevTools Protocol
 and verifies the service worker, popup, content scripts, offscreen-document ZIP pipeline, and
-the ZIP on disk (nhentai.net is simulated locally, see the script header). A ready-to-run CI
-workflow for real Google Chrome + real Brave on GitHub-hosted runners is included in
-`SESSION_HANDOFF.md` (copy it to `.github/workflows/e2e-browser.yml` to enable).
+the ZIP on disk (nhentai.net is simulated locally, see the script header). A GitHub Actions workflow for real Google Chrome + real Brave is at
+`.github/workflows/e2e-browser.yml`.
 
 Environment note (why it is still `[~]` rather than `[x]`): the development sandbox could not
 execute the suite itself —
