@@ -4,7 +4,7 @@ import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource)
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -15,6 +15,7 @@ export default class Downloader
         this.downloadName = downloadName;
         this.#abortSignal = signal;
         this.#source = source;
+        this.#settings = settings;
 
         // @ts-ignore
         if (typeof browser !== "undefined") { // Firefox
@@ -43,28 +44,55 @@ export default class Downloader
 
     async startAsync() {
         let self = this;
-        await new Promise((resolve, _reject) => {
-            resolve(
-                chrome.storage.sync.get({
-                    useZip: "zip",
-                    maxConcurrentDownloads: "3"
-                }, function(elems) {
-                    self.useZip = elems.useZip;
-                    const configuredConcurrency = parseInt(elems.maxConcurrentDownloads, 10);
-                    // Protect the batching loop from corrupt/old sync settings.
-                    self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
-                        ? configuredConcurrency
-                        : 3;
-                    if (self.useZip === "raw") {
-                        self.currentProgress = 100;
-                        try {
-                            self.updateProgress(100, self.#doujinshiName, false);
-                        } catch (e) { } // Dead object
-                    }
-                    self.#zip.folder(self.path);
-                })
-            );
-        });
+        const applySettings = (useZipRaw: string, maxConcurrentDownloads: number | string) => {
+            // Whitelist: a corrupt or legacy value (or undefined from a broken
+            // storage read) must fall back to "zip" — an unknown value would
+            // otherwise be fetched into the ZIP but never saved (the final
+            // step only archives for zip/cbz), silently "succeeding".
+            self.useZip = (useZipRaw === "zip" || useZipRaw === "cbz" || useZipRaw === "folder" || useZipRaw === "raw")
+                ? useZipRaw
+                : "zip";
+            const configuredConcurrency = parseInt(maxConcurrentDownloads as any, 10);
+            // Protect the batching loop from corrupt/old sync settings.
+            self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
+                ? configuredConcurrency
+                : 3;
+            if (self.useZip === "raw") {
+                self.currentProgress = 100;
+                try {
+                    self.updateProgress(100, self.#doujinshiName, false);
+                } catch (e) { } // Dead object
+            }
+            // Folder mode never assembles an archive, so it must not create
+            // (or fill) the zip folder either.
+            if (self.useZip === "zip" || self.useZip === "cbz") {
+                self.#zip.folder(self.path);
+            }
+        };
+        // Callers in contexts without chrome.storage (offscreen documents only
+        // expose chrome.runtime) pass the options relayed by the service
+        // worker; otherwise fall back to reading chrome.storage.sync.
+        if (this.#settings && (this.#settings.useZip !== undefined || this.#settings.maxConcurrentDownloads !== undefined)) {
+            applySettings(this.#settings.useZip || "zip", this.#settings.maxConcurrentDownloads || "3");
+        } else {
+            try {
+                await new Promise((resolve, _reject) => {
+                    resolve(
+                        chrome.storage.sync.get({
+                            useZip: "zip",
+                            maxConcurrentDownloads: "3"
+                        }, function (elems) {
+                            applySettings(elems.useZip, elems.maxConcurrentDownloads);
+                        })
+                    );
+                });
+            } catch (_) {
+                // chrome.storage is unavailable in this context; the caller
+                // should have relayed settings. Safe defaults keep the job
+                // running instead of silently dying before it registers.
+                applySettings("zip", "3");
+            }
+        }
         await self.#downloadAsync();
     }
 
@@ -133,7 +161,7 @@ export default class Downloader
             // For multiple download, we want to skip the "zipping" part
             if (this.downloadName !== null) {
                 // Zipping
-                if (this.useZip !== "raw") { // Raw download doesn't need zipping
+                if (this.useZip === "zip" || this.useZip === "cbz") {
                     this.updateProgress(0, "in progress...", true);
 
                     let self = this;
@@ -168,6 +196,9 @@ export default class Downloader
                         );
                     });
                 } else {
+                    // "raw" and "folder" never assemble an archive: raw hands
+                    // the CDN URLs to the download manager directly, and folder
+                    // already saved one file per page while fetching.
                     this.currentProgress = 100;
                     this.updateProgress(100, null, true); // Notify popup that we are done
                 }
@@ -197,40 +228,53 @@ export default class Downloader
     // round-trip and lets large galleries download without service-worker OOM.
     // Service workers have no URL.createObjectURL, so there we fall back to a
     // base64 data URL handed to the Downloads API.
-    // (Using chrome.downloads also avoids the download silently doing nothing.)
-    async #downloadBlob(content: Blob, filename: string): Promise<void> {
-        let url: string;
-        let revokeObjectUrl: (() => void) | null = null;
+    async #urlForBlob(content: Blob): Promise<{ url: string; revoke: (() => void) | null }> {
         if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
-            url = URL.createObjectURL(content);
-            revokeObjectUrl = () => URL.revokeObjectURL(url);
-        } else {
-            const bytes = new Uint8Array(await content.arrayBuffer());
-            let binary = "";
-            const chunkSize = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
-            }
-            url = "data:application/zip;base64," + btoa(binary);
+            const url = URL.createObjectURL(content);
+            return { url: url, revoke: () => URL.revokeObjectURL(url) };
         }
-        try {
-            await new Promise<void>((resolve, reject) => {
-                chrome.downloads.download({ url: url, filename: filename }, function(downloadId) {
-                    if (downloadId === undefined) {
-                        reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
-                    } else {
-                        resolve();
-                    }
-                });
+        const bytes = new Uint8Array(await content.arrayBuffer());
+        let binary = "";
+        const chunkSize = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+        }
+        const mime = content.type && content.type.length > 0 ? content.type : "application/octet-stream";
+        return { url: "data:" + mime + ";base64," + btoa(binary), revoke: null };
+    }
+
+    // Hand a URL to the browser's download manager. In the service worker
+    // fallback that is chrome.downloads directly; in the offscreen document
+    // chrome.downloads is not exposed (only chrome.runtime is), so the caller
+    // sets saveUrl to a relay that asks the service worker to download.
+    async #saveArtifact(url: string, filename: string): Promise<void> {
+        if (this.saveUrl !== null) {
+            await this.saveUrl(url, filename);
+            return;
+        }
+        await new Promise<void>((resolve, reject) => {
+            chrome.downloads.download({ url: url, filename: filename }, function(downloadId) {
+                if (downloadId === undefined) {
+                    reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
+                } else {
+                    resolve();
+                }
             });
+        });
+    }
+
+    async #downloadBlob(content: Blob, filename: string): Promise<void> {
+        const { url, revoke } = await this.#urlForBlob(content);
+        try {
+            await this.#saveArtifact(url, filename);
         } catch (error) {
-            if (revokeObjectUrl !== null) revokeObjectUrl();
+            if (revoke !== null) revoke();
             throw error;
         }
         // Keep the object URL alive while Chrome's download manager reads the
         // blob, then release it.
-        if (revokeObjectUrl !== null) {
-            setTimeout(revokeObjectUrl, this.revokeObjectUrlDelayMs);
+        if (revoke !== null) {
+            setTimeout(revoke, this.revokeObjectUrlDelayMs);
         }
     }
 
@@ -297,6 +341,23 @@ export default class Downloader
                         lastStatus = "response too small (" + loaded.blob.size + " bytes)";
                         continue;
                     }
+                    if (this.useZip === "folder") {
+                        // Old-school output: no archive at all — one image
+                        // file per page, directly inside the gallery folder in
+                        // the browser's download directory (the download
+                        // manager creates the subfolder from the filename).
+                        const { url, revoke } = await this.#urlForBlob(loaded.blob as Blob);
+                        try {
+                            await this.#saveArtifact(url, this.path + "/" + filename);
+                        } catch (error) {
+                            if (revoke !== null) revoke();
+                            throw "Failed to save image to " + filename + " (" + error + ").";
+                        }
+                        if (revoke !== null) {
+                            setTimeout(revoke, this.revokeObjectUrlDelayMs);
+                        }
+                        return;
+                    }
                     await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = () => {
@@ -313,22 +374,14 @@ export default class Downloader
         } else { // We don't need to update progress here because it goes too fast anyway
             // Raw mode cannot inspect the response before Chrome starts the
             // download. Use the canonical original-image URL and report startup
-            // errors through the downloads API callback.
+            // errors through the downloads API callback (routed through
+            // #saveArtifact so the offscreen document can relay to the worker).
             const imageUrl = imageUrls[0];
-            await new Promise<void>((resolve, reject) => {
-                chrome.downloads.download({
-                    url: imageUrl,
-                    // Keep "/" so the configured folder structure is preserved;
-                    // strip only characters Chrome rejects in download filenames.
-                    filename: this.path.replace(/[\\:*?"<>|]/g, '') + "-" + filename
-                }, function(downloadId) {
-                    if (downloadId === undefined) {
-                        reject("Failed to download original image (" + chrome.runtime.lastError + ").");
-                    } else {
-                        resolve();
-                    }
-                });
-            });
+            try {
+                await this.#saveArtifact(imageUrl, this.path.replace(/[\\:*?"<>|]/g, '') + "-" + filename);
+            } catch (error) {
+                throw "Failed to download original image (" + error + ").";
+            }
         }
     }
 
@@ -406,6 +459,12 @@ export default class Downloader
     isAwaitingAbort: boolean = false;
     // When set, ZIP image fetches run in this tab's page context first.
     sourceTabId: number | null = null;
+    // When set, artifacts (zip blobs, folder-mode images, raw CDN URLs) are
+    // saved through this function instead of chrome.downloads. The offscreen
+    // document sets it to a relay, because chrome.downloads is not exposed in
+    // offscreen documents (only chrome.runtime is).
+    saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string };
 
     // Progress info
     #progressPercent: number;

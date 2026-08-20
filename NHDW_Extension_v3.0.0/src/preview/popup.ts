@@ -175,6 +175,8 @@ export default class Popup
                     extension = ".zip";
                 else if (elems.useZip == "cbz")
                     extension = ".cbz";
+                else if (elems.useZip == "folder")
+                    extension = " (images folder)";
 
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
@@ -204,7 +206,6 @@ export default class Popup
     }
     //#endregion "single download"
 
-    //#region "multiple download"
     //#region "multiple download"
     // Receives structured gallery cards extracted from the live DOM by
     // js/getGalleries.js (id from the card's own cover link, title from the
@@ -244,9 +245,10 @@ export default class Popup
         else name = parts[parts.length - 1];
         name = name.replace("q=", ""); // Artifact when doing a search
 
-        // Appends the extension (none is raw download)
+        // Appends the extension (none is raw download; folder mode produces
+        // one images folder per gallery instead of a single archive)
         let extension = "";
-        if (useZip != "raw")
+        if (useZip != "raw" && useZip != "folder")
         {
             extension = "." + useZip;
         }

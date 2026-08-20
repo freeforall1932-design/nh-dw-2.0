@@ -4,6 +4,7 @@ import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "../background/Downloader";
 import { utils, classifyError } from "../utils/utils";
+import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
 var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
@@ -17,9 +18,20 @@ var JSZip = require("jszip");
 // The service worker relays commands with {target: "offscreen", action: ...}
 // and forwards answers back; progress and errors are broadcast from here with
 // the same updateProgress/downloadError messages the popup already listens to.
+//
+// API surface: per the Chrome docs, "The runtime API is the only extensions
+// API supported by offscreen documents". This file must therefore NEVER touch
+// chrome.storage, chrome.downloads, or chrome.scripting directly — settings
+// arrive in the relayed message (`options`, read by the worker from
+// chrome.storage), finished artifacts are saved by the worker (saveDownload),
+// and tab injections are performed by the worker (fetchInTab / fetchUrlInTab,
+// see tabImageFetch.ts). Doing otherwise crashes the document at load time
+// (TypeError: Cannot read properties of undefined) before the message
+// listener below registers, and every download then fails with
+// "Could not establish connection. Receiving end does not exist."
 
 let currentDownloader: Downloader | null = null;
-let parsing: AParsing;
+let parsing: AParsing = new ApiParsing();
 
 // One AbortController per download job. All metadata and image fetches share
 // this signal so that `goBack` can abort in-flight requests, not merely flag
@@ -28,7 +40,6 @@ let jobAbortController: AbortController | null = null;
 
 function beginJob(): AbortSignal {
     jobAbortController = new AbortController();
-    writeJobMarker(true);
     return jobAbortController.signal;
 }
 
@@ -42,33 +53,65 @@ function jobWasAborted(): boolean {
     return jobAbortController !== null && jobAbortController.signal.aborted;
 }
 
-// ---- active-job marker (chrome.storage.session) --------------------------
-// Same key the service worker uses (and clears via clearJobMarker), so a
-// restarted service worker or a reopened popup can detect a download that was
-// interrupted when this document died unexpectedly. Session storage survives
-// worker restarts, not browser restarts — exactly the lifetime we need.
-function writeJobMarker(active: boolean) {
-    try {
-        (chrome.storage as any).session.set({ downloadJob: { active: active, startedAt: Date.now() } });
-    } catch (_) { /* storage.session unavailable — best effort */ }
+// The active-job marker lives in the service worker's chrome.storage.session
+// (offscreen documents have no chrome.storage). The worker sets it when it
+// relays a download command and clears it on goBack / offscreenIdle.
+
+// Pick the metadata parser for this job from the options the service worker
+// relayed (it read chrome.storage.sync on our behalf).
+function applyParserOptions(options: any) {
+    parsing = (options && options.htmlParsing) ? new HtmlParsing() : new ApiParsing();
 }
 
-function clearJobMarker() {
-    try {
-        (chrome.storage as any).session.remove("downloadJob");
-    } catch (_) { /* best effort */ }
+// Ask the service worker to hand a URL to the download manager. The URL is
+// either a blob: object URL created here (zip/folder mode) or the original
+// CDN URL (raw mode). Blob URLs are extension-origin, so the worker can
+// download them even though it cannot create object URLs itself.
+function saveViaServiceWorker(url: string, filename: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+        let settled = false;
+        const finish = (error: string | null) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            if (error === null) {
+                resolve();
+            } else {
+                reject(new Error(error));
+            }
+        };
+        try {
+            const result: any = chrome.runtime.sendMessage(
+                { from: "offscreen", action: "saveDownload", url: url, filename: filename },
+                (response: any) => {
+                    if (chrome.runtime.lastError || !response) {
+                        finish(String(chrome.runtime.lastError || "Unable to save the file (worker unreachable)"));
+                        return;
+                    }
+                    if (response.result === false) {
+                        finish(String(response.error || "Unable to save the file"));
+                        return;
+                    }
+                    finish(null);
+                }
+            );
+            if (result && typeof result.then === "function") {
+                result.then((response: any) => {
+                    if (!response) {
+                        finish("Unable to save the file (worker unreachable)");
+                    } else if (response.result === false) {
+                        finish(String(response.error || "Unable to save the file"));
+                    } else {
+                        finish(null);
+                    }
+                }).catch((error: any) => finish(String(error)));
+            }
+        } catch (error) {
+            finish(String(error));
+        }
+    });
 }
-
-chrome.storage.sync.get({
-    htmlParsing: false,
-    maxConcurrentDownloads: "3"
-}, function(elems) {
-    if (elems.htmlParsing) {
-        parsing = new HtmlParsing();
-    } else {
-        parsing = new ApiParsing();
-    }
-});
 
 // ---- idle handling -------------------------------------------------------
 // After the last job finishes, tell the service worker to close this document
@@ -116,17 +159,20 @@ function isDownloadFinished(): boolean {
     return currentDownloader == null || currentDownloader.isDone();
 }
 
-function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId?: number | null) {
+function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
+    applyParserOptions(options);
     const signal = beginJob();
     let zip = new JSZip();
-    currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
+    currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
+        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined });
+    currentDownloader.saveUrl = saveViaServiceWorker;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
     }
     currentDownloader.startAsync()
-        .then(() => { clearJobMarker(); scheduleIdleClose(); })
-        .catch(() => { clearJobMarker(); scheduleIdleClose(); });
+        .then(() => { scheduleIdleClose(); })
+        .catch(() => { scheduleIdleClose(); });
 }
 
 async function downloadAllDoujinshisAsync(
@@ -135,28 +181,15 @@ async function downloadAllDoujinshisAsync(
     finalName: string,
     downloadAtEnd: boolean,
     galleryMetadata: Record<string, any> = {},
-    sourceTabId?: number | null
+    sourceTabId?: number | null,
+    options: any = {}
 ) {
-    let downloadName: string = "";
-    let duplicateBehaviour: string = "";
-    let replaceSpaces: boolean = false;
-    let downloadSeparately: boolean = false;
-    await new Promise((resolve, _reject) => {
-        resolve(
-            chrome.storage.sync.get({
-                downloadName: "{pretty}",
-                duplicateBehaviour: "rename",
-                replaceSpaces: true,
-                downloadSeparately: false,
-                maxConcurrentDownloads: "3"
-            }, function(elems) {
-                downloadName = elems.downloadName;
-                duplicateBehaviour = elems.duplicateBehaviour;
-                replaceSpaces = elems.replaceSpaces;
-                downloadSeparately = elems.downloadSeparately;
-            })
-        );
-    });
+    // The service worker read these from chrome.storage.sync and relayed them
+    // (offscreen documents have no chrome.storage of their own).
+    let downloadName: string = options.downloadName || "{pretty}";
+    let duplicateBehaviour: string = options.duplicateBehaviour || "rename";
+    let replaceSpaces: boolean = options.replaceSpaces !== undefined ? options.replaceSpaces : true;
+    let downloadSeparately: boolean = !!options.downloadSeparately;
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;
     let allKeys = Object.keys(allDoujinshis);
@@ -183,9 +216,38 @@ async function downloadAllDoujinshisAsync(
             galleryName: allDoujinshis[key],
             stage: "Downloading"
         });
-        const resp: any = galleryMetadata[key]
-            ? { ok: true, status: 200, statusText: "resolved in browser" }
-            : await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+        let resp: any = null;
+        if (galleryMetadata[key]) {
+            resp = { ok: true, status: 200, statusText: "resolved in browser" };
+        } else {
+            // The batch was started from the user's own nhentai tab (the
+            // homepage or a gallery). Fetching the metadata through that tab's
+            // session reuses any completed Cloudflare clearance, while the
+            // extension-origin request below is what Cloudflare 403s. This is
+            // not a bypass — if the tab never cleared the challenge, it has
+            // no clearance to reuse and the fallback simply fails like before.
+            let viaTab: TabUrlResult | null = null;
+            if (typeof sourceTabId === "number") {
+                viaTab = await fetchUrlFromTab(sourceTabId, parsing.GetUrl(key));
+            }
+            if (viaTab && viaTab.ok && viaTab.text !== null) {
+                const tabText = viaTab.text;
+                const tabStatus = viaTab.status;
+                const tabStatusText = viaTab.statusText;
+                const tabContentType = viaTab.contentType;
+                // Adapter so both parsers (API JSON / embedded page HTML) can
+                // consume the tab's text through their usual GetJsonAsync.
+                resp = {
+                    ok: true,
+                    status: tabStatus,
+                    statusText: tabStatusText,
+                    headers: { get: (name: string) => (String(name).toLowerCase() === "content-type" ? tabContentType : null) },
+                    text: () => Promise.resolve(tabText)
+                };
+            } else {
+                resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+            }
+        }
         if (resp.ok)
         {
             let json: any;
@@ -223,7 +285,9 @@ async function downloadAllDoujinshisAsync(
             }
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
-            zipName, jobAbortController ? jobAbortController.signal : null);
+            zipName, jobAbortController ? jobAbortController.signal : null, undefined,
+            { useZip: options.useZip, maxConcurrentDownloads: options.maxConcurrentDownloads });
+            currentDownloader.saveUrl = saveViaServiceWorker;
             if (typeof sourceTabId === "number") {
                 currentDownloader.sourceTabId = sourceTabId;
             }
@@ -271,14 +335,14 @@ async function downloadAllDoujinshisAsync(
     }
 }
 
-function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null) {
+function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
+    applyParserOptions(options);
     beginJob();
     let zip = new JSZip();
-    downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata, sourceTabId)
-        .then(() => { clearJobMarker(); scheduleIdleClose(); })
+    downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata, sourceTabId, options || {})
+        .then(() => { scheduleIdleClose(); })
         .catch(function(error) {
-            clearJobMarker();
             if (!jobWasAborted()) {
                 errorCallback(String(error));
             }
@@ -291,19 +355,10 @@ async function downloadAllPagesAsync(
     pagesArr: Array<number>,
     path: string,
     url: string,
-    sourceTabId?: number | null
+    sourceTabId?: number | null,
+    options: any = {}
 ) {
-    let downloadName: string = "";
-    await new Promise((resolve, _reject) => {
-        resolve(
-            chrome.storage.sync.get({
-                downloadName: "{pretty}",
-                maxConcurrentDownloads: "3"
-            }, function(elems) {
-                downloadName = elems.downloadName;
-            })
-        );
-    });
+    let downloadName: string = options.downloadName || "{pretty}";
 
     let zip = new JSZip();
     for (let i = 0; i < pagesArr.length; i++) {
@@ -319,14 +374,33 @@ async function downloadAllPagesAsync(
         } else {
             url += "?page=" + curr
         }
-        const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
-        if (resp.ok)
+        // The listing page is fetched through the user's tab first (its
+        // session already cleared any Cloudflare challenge for the site);
+        // the extension-origin fetch is the fallback.
+        let pageText: string | null = null;
+        let pageFailedStatus = 0;
+        if (typeof sourceTabId === "number") {
+            const viaTab = await fetchUrlFromTab(sourceTabId, url);
+            if (viaTab && viaTab.ok && viaTab.text !== null) {
+                pageText = viaTab.text;
+            } else if (viaTab && viaTab.status > 0) {
+                pageFailedStatus = viaTab.status;
+            }
+        }
+        if (pageText === null) {
+            const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+            if (resp.ok) {
+                pageText = await resp.text();
+            } else if (pageFailedStatus === 0) {
+                pageFailedStatus = resp.status;
+            }
+        }
+        if (pageText !== null)
         {
-            const text = await resp.text();
             // Anchor-scoped card parsing (see CardParsing.ts): each gallery ID
             // is matched against its own caption so titles with quotes,
             // entities, or extra markup cannot be mispaired with ids.
-            const cards = parseGalleryCardsFromHtml(text);
+            const cards = parseGalleryCardsFromHtml(pageText);
             allDoujinshis = {};
             for (const card of cards) {
                 let tmpName;
@@ -337,18 +411,18 @@ async function downloadAllPagesAsync(
                 }
                 allDoujinshis[card.id] = tmpName;
             }
-            await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1, {}, sourceTabId);
+            await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1, {}, sourceTabId, options);
         }
     }
 }
 
-function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string, sourceTabId?: number | null) {
+function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
+    applyParserOptions(options);
     beginJob();
-    downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId)
-        .then(() => { clearJobMarker(); scheduleIdleClose(); })
+    downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId, options || {})
+        .then(() => { scheduleIdleClose(); })
         .catch(function(error) {
-            clearJobMarker();
             if (!jobWasAborted()) {
                 errorCallback(String(error));
             }
@@ -358,8 +432,8 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
 
 function goBack() {
     // Abort any in-flight fetch, then let the download loop notice and unwind.
+    // The service worker clears the job marker when it relays this command.
     abortJob();
-    clearJobMarker();
     if (!isDownloadFinished()) {
         currentDownloader!.isAwaitingAbort = true;
         currentDownloader!.currentProgress = 100;
@@ -375,13 +449,13 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.action === "isDownloadFinished") {
         sendResponse({ result: isDownloadFinished() });
     } else if (request.action === "downloadDoujinshi") {
-        downloadDoujinshi(request.json, request.path, request.name, request.tabId);
+        downloadDoujinshi(request.json, request.path, request.name, request.tabId, request.options);
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllDoujinshis") {
-        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId);
+        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId, request.options);
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllPages") {
-        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId);
+        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId, request.options);
         sendResponse({ result: "started" });
     } else if (request.action === "goBack") {
         goBack();

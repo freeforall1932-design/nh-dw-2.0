@@ -5,6 +5,8 @@ import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
 import { utils, classifyError } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
+import { executeInTab } from "../preview/activeTabGallery";
+import { fetchImageInPage, fetchUrlInPage } from "./tabImageFetch";
 var JSZip = require("jszip");
 
 chrome.tabs.onUpdated.addListener(function
@@ -110,7 +112,7 @@ module background
 
     function beginJob(): AbortSignal {
         jobAbortController = new AbortController();
-        writeJobMarker(true);
+        setJobMarker(true);
         return jobAbortController.signal;
     }
 
@@ -129,10 +131,12 @@ module background
     // marker in session-scoped storage lets a restarted worker (or the popup)
     // detect that a previous download was interrupted instead of silently
     // forgetting it. Session storage survives worker restarts (but not browser
-    // restarts), which is exactly the lifetime we need. The offscreen document
-    // writes/clears the same key when it runs the job.
+    // restarts), which is exactly the lifetime we need. The worker owns this
+    // marker: offscreen documents have no chrome.storage, so the worker sets
+    // it when it relays a download command and clears it on goBack, when the
+    // offscreen document reports idle (job over), and on fallback completion.
 
-    function writeJobMarker(active: boolean) {
+    export function setJobMarker(active: boolean) {
         try {
             (chrome.storage as any).session.set({ downloadJob: { active: active, startedAt: Date.now() } });
         } catch (_) { /* storage.session unavailable (older Chrome) — best effort */ }
@@ -516,10 +520,32 @@ function closeOffscreenDocument() {
     }
 }
 
+function sendToOffscreen(message: any, callback: (response: any) => void) {
+    chrome.runtime.sendMessage(Object.assign({ target: "offscreen" }, message), callback);
+}
+
 function askOffscreen(message: any, callback?: (response: any) => void) {
     ensureOffscreenDocument()
         .then(() => {
-            chrome.runtime.sendMessage(Object.assign({ target: "offscreen" }, message), (response) => {
+            sendToOffscreen(Object.assign({}, message), (response) => {
+                // "Receiving end does not exist": the document exists but its
+                // listener never registered (the bundle crashed before
+                // addListener). Recreate the document once and retry instead
+                // of failing the whole job.
+                const lastError = chrome.runtime.lastError;
+                if (lastError && /Receiving end does not exist/.test(String(lastError.message))) {
+                    closeOffscreenDocument();
+                    setTimeout(() => {
+                        ensureOffscreenDocument()
+                            .then(() => sendToOffscreen(Object.assign({}, message), (response2) => {
+                                if (callback) callback(response2);
+                            }))
+                            .catch((error) => {
+                                if (callback) callback({ result: false, error: String(error) });
+                            });
+                    }, 250);
+                    return;
+                }
                 if (callback) {
                     callback(response);
                 }
@@ -536,17 +562,87 @@ function relayDownloadError(error: string) {
     chrome.runtime.sendMessage({ action: "downloadError", error: error });
 }
 
-// Messages from the offscreen document back to the service worker.
-// updateProgress/downloadError broadcasts also reach the popup directly, so
-// the service worker must NOT act on them (acting would ping-pong forever).
-function handleOffscreenMessage(request: any): boolean {
-    if (request.action === "offscreenIdle") {
-        closeOffscreenDocument();
+// Settings the offscreen document needs but cannot read itself (no
+// chrome.storage there). The worker reads chrome.storage.sync and relays them
+// in every download command.
+const DOWNLOAD_OPTION_DEFAULTS = {
+    useZip: "zip",
+    downloadName: "{pretty}",
+    duplicateBehaviour: "rename",
+    replaceSpaces: true,
+    downloadSeparately: false,
+    maxConcurrentDownloads: "3",
+    htmlParsing: false
+};
+
+function readDownloadOptions(callback: (options: any) => void) {
+    try {
+        chrome.storage.sync.get(DOWNLOAD_OPTION_DEFAULTS, (elems: any) => {
+            callback(elems);
+        });
+    } catch (_) {
+        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS));
     }
-    return true;
 }
 
-// Add message listeners for Firefox private mode compatibility
+// Messages from the offscreen document back to the service worker.
+// Returns true ONLY when sendResponse will be called asynchronously —
+// keeping the channel open for fire-and-forget broadcasts made Chrome log
+// "A listener indicated an asynchronous response by returning true, but the
+// message channel closed before a response was received" for every progress
+// tick. Broadcasts (updateProgress/downloadError/batchProgress/batchSummary)
+// also reach the popup directly, so the worker must NOT relay them back.
+function handleOffscreenMessage(request: any, sendResponse: (response: any) => void): boolean {
+    if (request.action === "saveDownload") {
+        // The offscreen document assembles blobs and exposes them through
+        // object URLs, but it cannot call chrome.downloads itself (only
+        // chrome.runtime is available there). The worker performs the actual
+        // download; blob: URLs are extension-origin so this works. Raw mode
+        // relays the original CDN URL instead.
+        try {
+            chrome.downloads.download({ url: request.url, filename: request.filename }, (downloadId: number) => {
+                if (downloadId === undefined) {
+                    sendResponse({ result: false, error: String(chrome.runtime.lastError || "Unable to start download") });
+                } else {
+                    sendResponse({ result: downloadId });
+                }
+            });
+        } catch (error) {
+            sendResponse({ result: false, error: String(error) });
+        }
+        return true;
+    }
+    if (request.action === "fetchInTab") {
+        // The offscreen document cannot call chrome.scripting; the worker
+        // injects the image fetch into the gallery tab (see tabImageFetch.ts).
+        executeInTab(request.tabId, fetchImageInPage, [request.url], request.world === "MAIN" ? "MAIN" : "ISOLATED")
+            .then((result: any) => sendResponse(result));
+        return true;
+    }
+    if (request.action === "fetchUrlInTab") {
+        // Same idea for page text (gallery API / listing pages), so the batch
+        // can reuse the user tab's Cloudflare clearance for unresolved ids.
+        executeInTab(request.tabId, fetchUrlInPage, [request.url], "MAIN")
+            .then((result: any) => sendResponse(result));
+        return true;
+    }
+    if (request.action === "offscreenIdle") {
+        // The job is over (or the document went idle after one): clear the
+        // marker so a future "interrupted download" notice is accurate, then
+        // close the document so it does not linger.
+        background.clearJobMarker();
+        closeOffscreenDocument();
+        return false;
+    }
+    return false;
+}
+
+// Add message listeners for Firefox private mode compatibility.
+// A listener may return true (keep the message channel open for an async
+// response) ONLY on branches that will actually call sendResponse; every
+// other message must return false or Chrome logs "A listener indicated an
+// asynchronous response by returning true, but the message channel closed
+// before a response was received" once the sender goes away.
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!request) {
         return false;
@@ -555,10 +651,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Popup dismisses the "previous download was interrupted" notice.
         background.clearJobMarker();
         sendResponse({ result: "success" });
-        return true;
+        return false;
     }
     if (request.from === "offscreen") {
-        return handleOffscreenMessage(request);
+        return handleOffscreenMessage(request, sendResponse);
     }
     if (USE_OFFSCREEN) {
         // Downloads run in the offscreen document; relay the commands.
@@ -574,7 +670,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     return;
                 }
                 chrome.runtime.sendMessage({ target: "offscreen", action: "isDownloadFinished" }, (response) => {
-                    const result = !!(response && response.result);
+                    // The document may be mid-close: treat "no receiving end"
+                    // as "nothing is downloading" instead of assuming busy.
+                    const noReceiver = !!(chrome.runtime.lastError && /Receiving end does not exist/.test(String(chrome.runtime.lastError.message)));
+                    const result = !!(response && response.result) && !noReceiver;
                     if (!result) {
                         // A download is actively running; not interrupted.
                         sendResponse({ result: false });
@@ -585,35 +684,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     });
                 });
             });
-        } else if (request.action === "downloadDoujinshi") {
-            askOffscreen({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId }, (response) => {
-                if (response && response.result === "started") {
-                    sendResponse({ result: "started" });
-                } else {
-                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
-                    sendResponse({ result: "error" });
-                }
+            return true;
+        }
+        // The worker owns the job marker for offscreen jobs (the document has
+        // no chrome.storage): set it before the relay, and the offscreenIdle
+        // / goBack handlers clear it when the job is over.
+        const startRelayedJob = (relayedMessage: any) => {
+            readDownloadOptions((options) => {
+                background.setJobMarker(true);
+                // options: the offscreen document cannot read chrome.storage,
+                // so the worker relays the download settings with the command.
+                askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
+                    if (response && response.result === "started") {
+                        sendResponse({ result: "started" });
+                    } else {
+                        background.clearJobMarker();
+                        relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                        sendResponse({ result: "error" });
+                    }
+                });
             });
+            return true;
+        };
+        if (request.action === "downloadDoujinshi") {
+            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId });
         } else if (request.action === "downloadAllDoujinshis") {
-            askOffscreen({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId }, (response) => {
-                if (response && response.result === "started") {
-                    sendResponse({ result: "started" });
-                } else {
-                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
-                    sendResponse({ result: "error" });
-                }
-            });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId });
         } else if (request.action === "downloadAllPages") {
-            askOffscreen({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId }, (response) => {
-                if (response && response.result === "started") {
-                    sendResponse({ result: "started" });
-                } else {
-                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
-                    sendResponse({ result: "error" });
-                }
-            });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId });
         } else if (request.action === "goBack") {
+            background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
+            return true;
         } else if (request.action === "updateProgress") {
             askOffscreen({ action: "getProgress" }, (response) => {
                 if (response && typeof response.progress === "number") {
@@ -626,8 +728,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
                 sendResponse({ result: "success" });
             });
+            return true;
         }
-        return true; // Required for async response
+        // Other actions (e.g. getGalleries from the content script) are
+        // handled by the popup itself; do not keep the channel open.
+        return false;
     }
 
     // Fallback path for browsers without chrome.offscreen: the downloads run
@@ -637,6 +742,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         background.jobInterrupted().then((interrupted) => {
             sendResponse({ result: done, interrupted: done && interrupted });
         });
+        return true; // Answered asynchronously.
     } else if (request.action === "downloadDoujinshi") {
         background.downloadDoujinshi(
             request.json,
@@ -715,5 +821,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         sendResponse({ result: "success" });
     }
-    return true; // Required for async response
+    // Other actions (e.g. getGalleries from the content script) are handled
+    // by the popup itself; do not keep the channel open.
+    return false;
 });

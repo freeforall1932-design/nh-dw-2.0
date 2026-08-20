@@ -25,6 +25,11 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`, plus a ready-to-run CI workflow for real Chrome and Brave included in `SESSION_HANDOFF.md`) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10).
 - [x] Replace the search-page regex flow with DOM extraction: `js/getGalleries.js` extracts gallery cards + pagination from the live DOM (id from each card's own cover link, title from the caption inside the same link), the popup consumes structured cards, and the network path (`downloadAllPagesAsync`) uses the shared `parseGalleryCardsFromHtml` parser (see item 5).
 - [x] Selected-gallery queue: unique-by-construction `Record<id, title>`, per-gallery progress, continue-after-failure, and a final summary with per-kind failure counts (see item 6).
+- [x] Fix the offscreen document for the API surface Chrome actually exposes there (only `chrome.runtime`): the document no longer touches `chrome.storage` / `chrome.downloads` / `chrome.scripting` (the old code crashed at load in real Chrome with `Cannot read properties of undefined (reading 'sync')` before its message listener registered, so every download failed with "Could not establish connection"). Settings are relayed in the download command, artifacts are saved by the service worker (`saveDownload`), and tab injections run in the worker (`fetchInTab` / `fetchUrlInTab`). Proven by `scripts/e2e-offscreen.js`, which now runs with no storage/downloads/scripting on the chrome stub at all.
+- [x] Folder-of-images output option (Options → *Images in a folder (no zip)*): one file per page into `Downloads/<Title>/`, no archive. Same tab-first fetch + mirror fallback + validation as ZIP mode.
+- [x] Stop the service worker from keeping message channels open for fire-and-forget messages (the "A listener indicated an asynchronous response by returning true, but the message channel closed" console noise): the listener now returns true only on branches that actually answer.
+- [x] Batch metadata for unresolved gallery ids and listing-page fetches in `downloadAllPages` now go through the user's open nhentai tab session (via the worker relay) before falling back to the extension origin.
+- [x] Narrow `web_accessible_resources` to the two toolbar icons on `https://nhentai.net/*` (was `*` on `<all_urls>`, exposing every bundled file to any page); guarded by a manifest test.
 
 ## Priority 1: reliability and correctness
 
@@ -78,7 +83,16 @@ fetches with exponential backoff (base 200ms, growing to ~3.2s at the last retry
 failures don't hammer the server. The `retryBackoffMs` property is configurable. API metadata
 parsing also checks response bodies for common Cloudflare challenge markers such as `cf-challenge`,
 `cf_chl_`, `Just a moment...`, and `Checking your browser`, including 200 responses with misleading
-or missing content types.
+or missing content types. IMPORTANT REAL-BROWSER FINDING (2026-08-20): the offscreen document
+crashed at load in real Chrome because it called `chrome.storage.sync.get` at module top level —
+per the Chrome docs only `chrome.runtime` is supported in offscreen documents, so the message
+listener never registered and every download failed ("Could not establish connection. Receiving
+end does not exist."). Fixed by moving settings reads to the service worker (relayed in the
+download command), saving artifacts through the worker (`saveDownload` → `chrome.downloads`), and
+performing tab injections in the worker (`fetchInTab` / `fetchUrlInTab`). The same fix lets batch
+metadata and listing pages reuse the user tab's Cloudflare clearance. The sandbox harnesses had
+hidden this by stubbing `chrome.storage` / `chrome.downloads` in the offscreen context;
+`scripts/e2e-offscreen.js` now deliberately provides neither.
 
 ### 3. Make original-image validation explicit
 

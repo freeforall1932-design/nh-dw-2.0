@@ -9,7 +9,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 
 ## Features
 
-- **Single download** — Open a gallery page, click the extension icon, choose a filename, and download as ZIP, CBZ, or raw images.
+- **Single download** — Open a gallery page, click the extension icon, choose a filename, and download as ZIP, CBZ, a **folder of images** (no zip), or raw images.
 - **Batch download** — On search, tag, artist, category, or favorites pages, check the boxes injected next to each gallery card and download them all at once.
 - **Multi-page download** — From listing pages with pagination, download galleries across several pages in one operation.
 - **Name templates** — Customise filenames with placeholders: `{pretty}`, `{english}`, `{japanese}`, `{id}`, `{artist}`, `{group}`, `{character}`, `{language}`.
@@ -34,8 +34,8 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 2. **Metadata** — Gallery info is fetched from `nhentai.net/api/gallery/<id>` or, if Cloudflare blocks the request, from the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
 4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin against the canonical CDN (`i.nhentai.net`) with automatic fallback through numbered mirrors (`i1`–`i4`). HTML challenge responses are rejected so they never end up inside a ZIP.
-5. **ZIP creation** — For ZIP/CBZ formats, pages are collected in memory and archived via JSZip. In supported browsers an **offscreen document** creates a real object URL for the ZIP (no base64 memory blow-up) and survives service-worker idle timeouts.
-6. **Raw mode** — Each gallery page is downloaded individually through the browser's own download manager.
+5. **Archive / folder output** — For ZIP/CBZ formats, pages are collected in memory and archived via JSZip. In *folder* mode no archive is built at all: each page is saved as its own file into a `Downloads/<Title>/` folder in the browser's download directory. In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts.
+6. **Saving** — The offscreen document only uses the APIs Chrome actually exposes there (`chrome.runtime`); finished objects are saved by the **service worker** via `chrome.downloads` (raw mode hands the original CDN URL to the same download manager).
 
 ---
 
@@ -45,6 +45,7 @@ nhentai uses Cloudflare, which may challenge requests that appear automated. The
 
 - Retrieving metadata from the **active browser tab** (`window._gallery` / embedded JSON) instead of hitting `/api/gallery` from the extension origin first.
 - Fetching ZIP pages through that **same open tab** when possible, then falling back to an extension-origin CDN request.
+- Requesting batch metadata and listing pages through the **open nhentai tab's session** (which carries any completed challenge clearance) before falling back to the extension origin.
 - Offering an **HTML parsing** option (Settings → Advanced → Use HTML to get API info) that extracts gallery data from the rendered page.
 - Falling back through CDN mirrors when an image server returns a non-image response, and never adding HTML or tiny bodies to the ZIP.
 

@@ -15,6 +15,8 @@ const code = fs.readFileSync(bundlePath, "utf8");
 let onMessageHandler = null;
 const relays = [];            // messages sent to the offscreen document
 const broadcasts = [];        // messages sent to the popup
+const downloadCalls = [];     // chrome.downloads.download calls by the worker
+const executeScriptCalls = [];
 let createDocumentCalls = 0;
 let closeDocumentCalls = 0;
 let hasDocumentResult = false;
@@ -28,7 +30,24 @@ const chromeStub = {
     action: { setIcon() {} },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
+        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
+        session: { get(_key, cb) { cb({}); }, set() {}, remove() {} }
+    },
+    scripting: {
+        // The worker performs tab injections on behalf of the offscreen
+        // document (fetchInTab / fetchUrlInTab relays).
+        executeScript(details, cb) {
+            executeScriptCalls.push(details);
+            if (cb) {
+                setTimeout(() => cb([{
+                    result: {
+                        ok: true, status: 200, statusText: "OK",
+                        contentType: "image/jpeg", b64: "AAA=", error: null,
+                        text: null
+                    }
+                }]), 0);
+            }
+        }
     },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
@@ -54,7 +73,12 @@ const chromeStub = {
         },
         lastError: null
     },
-    downloads: { download() {} },
+    downloads: {
+        download(opts, cb) {
+            downloadCalls.push(opts);
+            if (cb) cb(7);
+        }
+    },
     offscreen: {
         hasDocument(cb) { cb(hasDocumentResult); },
         createDocument(opts, cb) {
@@ -106,7 +130,9 @@ function sendToBackground(message) {
     }
     console.log("PASS: isDownloadFinished answers true without an offscreen document");
 
-    // 2. downloadDoujinshi: create the document and relay the command.
+    // 2. downloadDoujinshi: create the document and relay the command,
+    //    including the options the worker read from chrome.storage.sync
+    //    (the offscreen document cannot read storage itself).
     const startAnswer = await sendToBackground({
         action: "downloadDoujinshi",
         json: { id: 123456 },
@@ -124,7 +150,10 @@ function sendToBackground(message) {
     if (!relay || relay.target !== "offscreen" || relay.json.id !== 123456 || relay.path !== "Downloads/Test" || relay.tabId !== 42) {
         fail("downloadDoujinshi was not relayed correctly: " + JSON.stringify(relay));
     }
-    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the command");
+    if (!relay.options || typeof relay.options.useZip !== "string" || relay.options.maxConcurrentDownloads === undefined) {
+        fail("downloadDoujinshi relay must carry the worker-read options: " + JSON.stringify(relay.options));
+    }
+    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the command with options");
 
     // 3. updateProgress: relay getProgress and broadcast the answer to the popup.
     const progressAnswer = await sendToBackground({ action: "updateProgress" });
@@ -157,14 +186,66 @@ function sendToBackground(message) {
     console.log("PASS: offscreenIdle closes the offscreen document");
 
     // 6. Progress broadcasts from the offscreen document must not loop back
-    //    into the relay (they are consumed, not re-sent).
+    //    into the relay (they are consumed, not re-sent) and must not keep
+    //    the message channel open (returning true made Chrome log
+    //    "A listener indicated an asynchronous response by returning true,
+    //    but the message channel closed before a response was received").
     const relaysBefore = relays.length;
-    onMessageHandler({ from: "offscreen", action: "updateProgress", progress: 7 }, {}, () => {});
+    const broadcastKeptOpen = onMessageHandler({ from: "offscreen", action: "updateProgress", progress: 7 }, {}, () => {});
     await new Promise((r) => setTimeout(r, 20));
     if (relays.length !== relaysBefore) {
         fail("an offscreen progress broadcast was wrongly relayed back, creating a loop");
     }
-    console.log("PASS: offscreen progress broadcasts do not loop back through the service worker");
+    if (broadcastKeptOpen === true) {
+        fail("a fire-and-forget offscreen broadcast must not keep the message channel open");
+    }
+    console.log("PASS: offscreen progress broadcasts do not loop back and do not keep the channel open");
+
+    // 7. Unknown popup actions (e.g. getGalleries, handled by the popup
+    //    itself) must not keep the channel open either.
+    const getGalleriesKeptOpen = onMessageHandler({ action: "getGalleries", galleries: [] }, {}, () => {});
+    if (getGalleriesKeptOpen === true) {
+        fail("getGalleries must not be treated as an async-replied worker action");
+    }
+    console.log("PASS: unhandled actions return false (no 'message channel closed' noise)");
+
+    // 8. saveDownload: the offscreen document cannot call chrome.downloads,
+    //    so the worker performs the download on its behalf and answers.
+    const saveAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "saveDownload", url: "blob:chrome-extension://x/abc", filename: "Downloads/Test/001.jpg" }, {}, resolve);
+    });
+    if (!saveAnswer || saveAnswer.result !== 7) {
+        fail("saveDownload answered " + JSON.stringify(saveAnswer));
+    }
+    if (downloadCalls.length !== 1 || downloadCalls[0].url !== "blob:chrome-extension://x/abc" || downloadCalls[0].filename !== "Downloads/Test/001.jpg") {
+        fail("saveDownload was not handed to chrome.downloads.download: " + JSON.stringify(downloadCalls));
+    }
+    console.log("PASS: saveDownload relays the object URL to chrome.downloads.download");
+
+    // 9. fetchInTab: the worker injects the image fetch into the tab
+    //    (chrome.scripting is not available in the offscreen document).
+    const tabImageAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "fetchInTab", tabId: 42, url: "https://i.nhentai.net/galleries/987654/1.jpg", world: "ISOLATED" }, {}, resolve);
+    });
+    if (!tabImageAnswer || tabImageAnswer.ok !== true || !tabImageAnswer.b64) {
+        fail("fetchInTab answered " + JSON.stringify(tabImageAnswer));
+    }
+    if (executeScriptCalls.length < 1 || executeScriptCalls[0].world !== "ISOLATED" || !executeScriptCalls[0].target || executeScriptCalls[0].target.tabId !== 42) {
+        fail("fetchInTab was not injected through chrome.scripting.executeScript: " + JSON.stringify(executeScriptCalls));
+    }
+    console.log("PASS: fetchInTab injects the image fetch into the tab via the worker");
+
+    // 10. fetchUrlInTab: page text (gallery API / listings) through the tab.
+    const tabUrlAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "fetchUrlInTab", tabId: 42, url: "https://nhentai.net/api/gallery/123456" }, {}, resolve);
+    });
+    if (!tabUrlAnswer || tabUrlAnswer.ok !== true) {
+        fail("fetchUrlInTab answered " + JSON.stringify(tabUrlAnswer));
+    }
+    if (executeScriptCalls.length < 2 || executeScriptCalls[executeScriptCalls.length - 1].world !== "MAIN") {
+        fail("fetchUrlInTab must inject in the MAIN world: " + JSON.stringify(executeScriptCalls));
+    }
+    console.log("PASS: fetchUrlInTab relays page-text fetches to the tab");
 
     console.log("PASS: service worker relay behaves correctly.");
     process.exit(0);

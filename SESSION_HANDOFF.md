@@ -1,98 +1,202 @@
-# Session Handoff — nh-dw-2.0 / NHentai Downloader
+# Session handoff — nh-dw-2.0 / NHentai Downloader
 
-Written 2026-08-20 after tab-first image fetches.
+Written 2026-08-20 after the offscreen API-surface fix + folder output mode.
+Previous work landed via PR #12 (tab-first image fetches) — now on `main` (`c6530af`).
 
-## Current branch
+- Repo checkout: /home/user/nh-dw-2.0
+- Session branch (this session; never switch/push any other branch): `arena/01a01f4d-nh-dw-2-0`
+- Baseline: `main` at `c6530af` (PR #12 merged) == `fad5476`.
+- **Open PR: https://github.com/freeforall1932-design/nh-dw-2.0/pull/14**
+  ("Fix offscreen document API surface; add folder output mode"). Do NOT open
+  a second PR — push follow-ups to the session branch and the PR updates.
+- This session's commits (oldest first):
+  - `fd34186` Salvage local fixes from nh-dw-2.0-main-fixed.zip
+  - `120279d` Fix offscreen document API surface; add folder output mode; tab-session batch
+  - `7b56877` Normalize useZip to a whitelist; handoff for fresh sessions
+    (pre-merge review: useZip whitelist in Downloader so a corrupt/legacy
+    value can never make a download silently save nothing; regression test)
 
-- Branch: `arena/01a01ed3-nh-dw-2-0` (this session; previous work landed via PR #11)
-- Release bundles in `NHDW_Release_v3.0.0/js/` are synchronized with the webpack output.
-- Onion / Tor support remains intentionally dropped.
+## How to pick up (this sandbox often looks like a fresh clone of main)
 
-## What this session actually fixed
+  git fetch origin '+refs/heads/arena/01a01f4d-nh-dw-2-0:refs/remotes/origin/arena/01a01f4d-nh-dw-2-0'
+  git reset --hard origin/arena/01a01f4d-nh-dw-2-0
+  # confirm the work is present (verify by content, not a tip hash - the doc
+  # commit moves with every handoff edit). Expect, at minimum, these on the tip:
+  #   git log --oneline | grep -q 120279d        # the main fix commit
+  #   grep -q saveDownload  NHDW_Extension_v3.0.0/js/offscreen.js
+  #   grep -q "Whitelist"   NHDW_Extension_v3.0.0/src/background/Downloader.ts
+  cd NHDW_Extension_v3.0.0
+  npm ci                 # funding/audit noise is OK; NEVER npm audit fix --force
+  npm run build
+  npm test               # 76 passing, 1 pending (live API)
+  npm run test:smoke
+  npm run test:e2e
+  # after source edits: copy webpack js/*.js into NHDW_Release_v3.0.0/js/
+  # and confirm `diff -rq NHDW_Extension_v3.0.0/js NHDW_Release_v3.0.0/js` is empty
+  Commit + push ONLY to arena/01a01f4d-nh-dw-2-0 (git push origin arena/01a01f4d-nh-dw-2-0).
 
-### Image fetches: extension-origin `i*.nhentai.net` after metadata succeeded
+## CI status (as of this writing, run on the PR)
 
-**Cause:** ZIP pages were always `fetch`'d from the offscreen document / service worker (chrome-extension origin). Cloudflare can 403 those even when the open gallery tab already has `window._gallery`.
+- Offline suites (fixtures + window-less VM bundles): **PASS**
+- End-to-end in real Google Chrome / real Brave: **FAIL at browser launch**
+  (~15–22s: Chrome `Runtime.enable` timeout shape / Brave SIGTRAP, no DevTools
+  port — the runner/environment issue tracked as backlog #10 since the
+  previous session; the `fad5476` harness hardening did not cure it on CI).
+  Do not "fix" the extension code for this — reproduce locally with
+  `npm run test:browser` first.
 
-**Fix (in the tree now):**
+## The bug found this session (real-browser report from the user)
 
-- `src/background/tabImageFetch.ts`: isolated-world `fetch` first (host_permissions, skips page CORS), then MAIN world, then extension origin. Host allowlist only (`i` / `i1`–`i4`.nhentai.net galleries). Injected function is a Promise chain (no async/await) so webpack/es6 helpers are not serialized into the tab.
-- `Downloader.sourceTabId`: try the tab first; tab HTTP errors skip the extension origin for that URL; CORS / injection failures fall through to `fetch`.
-- Popup sends the active `tabId` on `downloadDoujinshi` / batch / multi-page; the worker relays it to offscreen.
-- Blocked image runs after successful metadata say so: “Gallery metadata was read; keep the gallery tab open after any browser challenge and try again.” HTML / tiny bodies are still rejected.
-- Fixture CORS headers on the local image CDN so a real-browser run can exercise the tab path.
+Symptoms on a real machine (Chrome, reload unpacked `NHDW_Release_v3.0.0`):
 
-This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”, there is no gallery JSON and no image bytes. CDN CORS can still force the extension-origin fallback, which Cloudflare may still 403.
+- Homepage scan + selection worked; clicking Download opened temporary tabs (the
+  selected-gallery resolver) and then NOTHING downloaded.
+- Console: `Uncaught TypeError: Cannot read properties of undefined (reading 'sync')`
+  at offscreen.js module load; `Uncaught (in promise) Error: Could not establish
+  connection. Receiving end does not exist.` in background.js; repeated
+  `Unchecked runtime.lastError: A listener indicated an asynchronous response by
+  returning true, but the message channel closed before a response was received`.
 
-## Verification completed (this sandbox)
+Root cause (confirmed against the Chrome docs): **"The runtime API is the only
+extensions API supported by offscreen documents."** The offscreen bundle called
+`chrome.storage.sync.get` at module top level (offscreen.ts) → `chrome.storage`
+is undefined in a real offscreen document → module crashed BEFORE
+`chrome.runtime.onMessage.addListener` registered → every relayed download died
+with "Receiving end does not exist". The sandbox harnesses never caught it
+because `scripts/e2e-offscreen.js` (and the downloader tests) stubbed
+`chrome.storage` / `chrome.downloads` in the offscreen context.
+`chrome.scripting` (tab injections) and `chrome.downloads` (zip save, raw mode)
+are equally unavailable in offscreen documents.
 
-- Webpack build: passed
-- TypeScript test build: passed
-- Mocha (full `npm test`): 71 passing (1 pending live API)
-- MV3 smoke: passed
-- Window-less e2e (`test:e2e`): passed
-- Source and release `js/*.js` synchronized
+Secondary bug: the worker's `onMessage` listener returned `true` for
+fire-and-forget messages (offscreen progress broadcasts, `getGalleries` from the
+content script) without ever answering → the "message channel closed" noise.
 
-## Setbacks (do not treat as new extension bugs without checking)
+## What this session changed (all committed on the session branch)
 
-1. **No Chrome/Brave in this sandbox.** `npm run test:browser` exits at `No browser found`. That is a harness limit, not a regression.
-2. **No live nhentai from this network.** Cannot confirm a real Cloudflare clearance cookie, real `/api/gallery` 403, real `window._gallery`, or real `i*.nhentai.net` CORS against production.
-3. **Tab image fetch can CORS-fail.** MAIN-world `fetch` of `i*.nhentai.net` needs CORS. If the CDN does not allow `https://nhentai.net`, the code falls back to extension-origin fetch (same as before for that URL).
-4. **Image 403 can still happen** after metadata succeeds if both the tab path and the extension path are blocked. The new error copy is the product change in that case.
-5. **`npm ci` audit/funding output is informational.** Do not run `npm audit fix --force`.
-6. **CI workflow file already exists** at `.github/workflows/e2e-browser.yml`. Running it still needs GitHub-hosted Chrome/Brave.
+1. **Offscreen document uses only `chrome.runtime`** (`src/offscreen/offscreen.ts`):
+   - No `chrome.storage` anywhere: download options (`useZip`, `downloadName`,
+     `duplicateBehaviour`, `replaceSpaces`, `downloadSeparately`,
+     `maxConcurrentDownloads`, `htmlParsing`) arrive in the relayed command —
+     the service worker reads `chrome.storage.sync` and attaches `options`.
+   - Artifacts are saved by the worker: offscreen sends
+     `{from:"offscreen", action:"saveDownload", url, filename}` → worker calls
+     `chrome.downloads.download` (blob: URLs are extension-origin, so this
+     works; raw mode relays the CDN URL the same way).
+   - Tab injections run in the worker: `fetchInTab` (image bytes, ISOLATED then
+     MAIN) and `fetchUrlInTab` (page text, MAIN) — see `tabImageFetch.ts`
+     (`scriptingAvailable()` picks direct vs relay; new `fetchUrlInPage`,
+     `fetchUrlFromTab`, exported `fetchImageInPage` — all self-contained
+     Promise chains, no async/await).
+   - The active-job marker is owned by the worker (`setJobMarker`): set when a
+     download is relayed, cleared on goBack / offscreenIdle / fallback finish.
+2. **`Downloader`** (`src/background/Downloader.ts`):
+   - New constructor `settings` arg (`{useZip, maxConcurrentDownloads}`) — when
+     present the class never touches `chrome.storage` (storage read remains the
+     fallback for the worker path and tests; now wrapped so an unavailable
+     storage cannot silently kill a job).
+   - New `saveUrl` hook: when set (offscreen → worker relay), zip blobs,
+     folder-mode images and raw CDN URLs all go through it instead of
+     `chrome.downloads` directly.
+   - **Folder mode** (`useZip === "folder"`): no archive — each validated page
+     is saved as `Downloads/<Title>/NNN.ext` through the same tab-first fetch +
+     mirror fallback + content-type/size validation. Save failure surfaces as
+     "Failed to save image to NNN.ext (…)" (classified as `image`).
+3. **Worker** (`src/background/background.ts`):
+   - `saveDownload` / `fetchInTab` / `fetchUrlInTab` handlers; `offscreenIdle`
+     clears the job marker before closing the document.
+   - `askOffscreen` retries once (close + recreate the document) when the
+     response is "Receiving end does not exist".
+   - Listener returns `true` ONLY on branches that answer (kills the
+     lastError noise); unknown actions (e.g. `getGalleries`) return `false`.
+   - `isDownloadFinished` treats "no receiving end" as "not downloading".
+4. **Batch via the user's tab session**: unresolved batch metadata and
+   `downloadAllPages` listing fetches go through the open nhentai tab first
+   (`fetchUrlFromTab`) before the extension-origin fallback — reuses any
+   completed Cloudflare clearance. Not a bypass: a challenged tab has nothing
+   to reuse and the fallback fails as before.
+5. **Folder output option**: Options → Download format → "Images in a folder
+   (no zip)"; popup shows "(images folder)" for single downloads and no archive
+   suffix for batch. `options.html` + `popup.ts`.
+6. **Salvaged from the user's `nh-dw-2.0-main-fixed.zip`** (its PR #11-era
+   local fixes, verified identical to `d24d735` otherwise):
+   - `web_accessible_resources` narrowed from `*` / `<all_urls>` to
+     `["Icon.png","Icon-grey.png"]` / `https://nhentai.net/*` (source + release
+     manifests; nothing else needs WAR — the only `getURL` use is the
+     icon in the worker). Guarded by a new manifest test.
+   - `scripts/smoke-mv3.js`: `chrome.storage.session` mock (the worker's
+     job marker uses it).
+   - `popup.ts`: duplicate `//#region "multiple download"` removed.
+7. **Honest harnesses**: `scripts/e2e-offscreen.js` now runs with a Proxy-backed
+   chrome stub that has NO storage/downloads/scripting (exactly like real
+   Chrome) and fails if the bundle touches storage or downloads; it simulates
+   the worker side (saveDownload → downloads, fetchInTab/fetchUrlInTab → tab
+   fetch) and adds tab-first image + tab-metadata test cases.
+   `scripts/e2e-relay.js` asserts the options relay, saveDownload,
+   fetchInTab (ISOLATED world), fetchUrlInTab (MAIN world), and that
+   broadcasts / unknown actions do not keep the channel open.
 
-## What to review
+## Verification done (sandbox, all offline)
 
-| Area | Files |
-| --- | --- |
-| Tab image fetch | `NHDW_Extension_v3.0.0/src/background/tabImageFetch.ts` |
-| Downloader tab-first + error copy | `src/background/Downloader.ts` (`sourceTabId`, `#loadImage`) |
-| tabId plumbing | `src/preview/popup.ts`, `src/background/background.ts`, `src/offscreen/offscreen.ts` |
-| Tests | `test/downloader.test.js` (tab image fetch), `test/parsing.test.js` (classifyError), `scripts/e2e-relay.js` |
+- webpack build OK
+- `npm test`: 76 passing (75 at PR open + 1 corrupt-settings regression test),
+  1 pending (live API, opt-in RUN_LIVE_TESTS=1)
+- `npm run test:smoke` OK (worker + offscreen)
+- `npm run test:e2e` OK (worker, offscreen with no storage/downloads/scripting,
+  relay incl. save/fetch relays, content)
+- Release `js/*` copied and diff-identical to source build
+- `test:browser`: no Chrome/Brave in this sandbox ("No browser found" is the
+  harness, not a regression)
+- CI on the PR: offline suites PASS; browser jobs fail at launch (see above)
 
-Review questions:
+## What is left
 
-- Is MAIN-world fetch the right first hop given CDN CORS, or should ISOLATED-world (host_permissions, no CORS) be tried first?
-- Does `executeInTab` + a minified Promise-chain `func` still run in a real SW/offscreen document?
-- Raw mode still uses `chrome.downloads.download(cdnUrl)` and does not go through the tab.
+- **Real-machine re-test** (the user has a working browser; the previous
+  session's must-dos now collapse into one pass after reloading unpacked):
+  1. Toolbar icon OK, no console errors on load.
+  2. Homepage: select 2+ galleries → Download. Expect: resolver temp tabs open
+     and close, then ONE progress run and the ZIP (or folder) landing in
+     Downloads. No "Could not establish connection".
+  3. Single gallery tab (fully loaded, not a CF interstitial) → Download.
+  4. Options → folder mode → single + batch download → `Downloads/<Title>/`
+     folders filled with the images.
+  5. `cd NHDW_Extension_v3.0.0 && npm run test:browser` (sudo for :443 fixture).
+- CI: the e2e-browser workflow runs offline suites + real Chrome/Brave; the
+  previous session's Chrome `Runtime.enable` timeout / Brave SIGTRAP were being
+  re-checked — confirm on the new commits.
 
-## What is left (next session)
+## DO NOT
 
-### Must do on a real machine (item 10)
+- npm audit fix --force
+- Onion / Tor routing (item 9, intentionally DROPPED; a Chrome MV3 extension
+  cannot route through Tor, and the user's `.onion` URL only resolves in a Tor
+  browser, which cannot run this extension)
+- Claim the extension bypasses Cloudflare
+- Treat sandbox test:browser "No browser found" as a new bug
+- Switch/push any branch other than `arena/01a01f4d-nh-dw-2-0`
+- Delete/rename repo root or .git
 
-Reload unpacked `NHDW_Release_v3.0.0`, then:
+## KEY FILES
 
-1. Open a **fully loaded** gallery (`/g/<id>/`, not the CF interstitial). Open the popup, Download. Confirm ZIP pages are requested from the tab (page origin) when CORS allows, without a first-hop extension-origin `/api/gallery` 403.
-2. If images still 403, confirm the popup says metadata was read / keep the gallery tab open — not a generic failure.
-3. From `NHDW_Extension_v3.0.0`: `npm ci && npm run test:browser` with a real Chrome or Brave binary (`sudo` if the HTTPS fixture should bind 443).
+- `NHDW_Extension_v3.0.0/src/offscreen/offscreen.ts` (runtime-only offscreen)
+- `NHDW_Extension_v3.0.0/src/background/tabImageFetch.ts` (direct/relay tab fetch)
+- `NHDW_Extension_v3.0.0/src/background/Downloader.ts` (settings, saveUrl, folder)
+- `NHDW_Extension_v3.0.0/src/background/background.ts` (save/fetch relays, options, marker, returns)
+- `NHDW_Extension_v3.0.0/src/preview/popup.ts` (tabId + folder display)
+- `NHDW_Extension_v3.0.0/src/preview/selectedGalleryResolver.ts` (temp tabs for batch metadata)
+- `NHDW_Extension_v3.0.0/src/utils/utils.ts` (classifyError incl. "failed to save image")
+- `NHDW_Extension_v3.0.0/options.html` (folder option)
+- `NHDW_Extension_v3.0.0/test/downloader.test.js` (folder-mode block)
+- `NHDW_Extension_v3.0.0/test/manifest.test.js` (WAR guard)
+- `NHDW_Extension_v3.0.0/scripts/e2e-offscreen.js` (no storage/downloads/scripting)
+- `NHDW_Extension_v3.0.0/scripts/e2e-relay.js` (options + save/fetch relays + returns)
+- `NHDW_Extension_v3.0.0/scripts/smoke-mv3.js` (session mock)
+- `NHDW_Release_v3.0.0/js/*` must match webpack output
 
-### Backlog items still open or partial
+## Layout
 
-- **#10** Chrome/Brave/Tor matrix — harness exists, real run still pending (`[~]`).
-- **#2** Cloudflare — metadata and images are now tab-first; live CF confirmation is #10.
-- **#7** Resolver — offline tests cover script-tag parse; real CF confirmation is #10.
-- **#11 / #15** Lifecycle and cancel — code done, want a real-browser check.
-- **#9** Onion — dropped, do not revive.
-
-### Do not do
-
-- `npm audit fix --force`
-- Onion / Tor routing
-- Claiming the extension bypasses Cloudflare
-- Treating sandbox `test:browser` failure as a new bug without reading the reported stage
-
-## How to pick up
-
-```bash
-cd NHDW_Extension_v3.0.0
-npm ci          # funding/audit noise is OK
-npm run build
-npm test
-npm run test:smoke
-npm run test:e2e
-# on a machine with Chrome/Brave:
-npm run test:browser
-```
-
-After source edits, copy webpack `js/*.js` into `NHDW_Release_v3.0.0/js/` before asking anyone to load unpacked.
+- `NHDW_Extension_v3.0.0/` — TypeScript source, webpack → js/, tests, scripts
+- `NHDW_Release_v3.0.0/` — unpacked load folder (js must stay in sync)
+- `NHDW_Source_v3.0.0/` — older snapshot, do not treat as current
+- `nh-dw-2.0-main-fixed.zip` — the user's PR #11-era local snapshot (kept for
+  reference; everything salvageable from it has been ported)
