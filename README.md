@@ -71,7 +71,28 @@ npm test           # fixture tests: parsers, filename utils, Downloader URL/ZIP/
 npm run test:smoke # load built bundles in a window-less VM (MV3 worker / offscreen document)
 npm run test:e2e   # full download pipelines against chrome/fetch stubs, zero network access
 npm run test:live  # opt-in live check against the real nhentai API
+npm run test:browser  # REAL browser end-to-end: loads NHDW_Release_v3.0.0 in actual
+                      # Chrome/Brave/Chromium and downloads a ZIP through the real
+                      # extension (service worker, offscreen document, chrome.downloads)
 ```
 
 The test suite runs entirely offline (mocked `chrome`, `fetch`, `URL.createObjectURL`);
 the single live API check is opt-in via `npm run test:live`.
+
+### Real-browser end-to-end test
+
+`npm run test:browser` (or `sudo node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0`)
+launches a real Chromium-family browser with the packed extension loaded and drives it over
+the DevTools Protocol: service worker startup, popup rendering, content scripts on
+nhentai-style pages, the offscreen-document ZIP pipeline, and the produced ZIP on disk are
+all verified. nhentai.net itself is simulated locally (HTTPS fixture + `--host-resolver-rules`),
+so no real nhentai account or Cloudflare clearance is needed.
+
+* Browser selection: `--browser /path/to/chrome` (or `BROWSER_BIN`), works with Google Chrome,
+  Chromium, and Brave. Must be an extension-capable build (serverless builds such as
+  `@sparticuz/chromium` have extensions compiled out and will fail the first check).
+* Run with elevated privileges so the script can bind its local nhentai fixture to port 443
+  (otherwise the content-script and real-fetch sections are skipped with a hint).
+* CI: `scripts/ci/e2e-browser.yml` runs the offline suites plus the browser suite in real
+  Google Chrome and real Brave on GitHub-hosted runners. Copy it to
+  `.github/workflows/e2e-browser.yml` to enable it (see the file header).

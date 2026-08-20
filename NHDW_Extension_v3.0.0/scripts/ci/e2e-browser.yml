@@ -1,0 +1,108 @@
+# Real-browser end-to-end tests for the NHentai Downloader extension.
+#
+# NOTE: this file lives outside .github/workflows because the sandboxed push
+# token that maintains this repository cannot write workflow files (GitHub
+# Apps need the `workflows` permission). To enable CI, copy this file into
+# the repository root as `.github/workflows/e2e-browser.yml` and push with an
+# account that has write access:
+#
+#   mkdir -p ../../.github/workflows
+#   cp e2e-browser.yml ../../.github/workflows/e2e-browser.yml
+#
+# Runs the packed NHDW_Release_v3.0.0 folder inside a REAL Google Chrome and a
+# REAL Brave browser (the automated stand-in for the backlog's manual Chrome /
+# Brave end-to-end download test): service worker startup, extension popup,
+# content scripts on nhentai-style pages, the offscreen-document ZIP pipeline,
+# chrome.downloads, and the produced ZIP are all exercised over the DevTools
+# Protocol. nhentai.net itself is simulated locally by scripts/e2e-browser.js
+# (the real site is Cloudflare-gated from CI), everything else is the real
+# extension code.
+#
+# Also runs the offline unit/VM test suites.
+
+name: browser-e2e
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'NHDW_Release_v3.0.0/**'
+      - 'NHDW_Extension_v3.0.0/scripts/**'
+      - 'NHDW_Extension_v3.0.0/test/**'
+      - 'NHDW_Extension_v3.0.0/src/**'
+      - '.github/workflows/e2e-browser.yml'
+
+jobs:
+  unit:
+    name: Offline suites (fixtures + window-less VM bundles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Build (webpack)
+        run: npm run build
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Fixture tests
+        run: npm test
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Window-less VM smoke tests
+        run: npm run test:smoke
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Window-less VM e2e pipelines
+        run: npm run test:e2e
+        working-directory: NHDW_Extension_v3.0.0
+
+  e2e-chrome:
+    name: End-to-end in real Google Chrome
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Run the extension in real Chrome
+        run: |
+          CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium)"
+          "$CHROME_BIN" --version
+          sudo -E env "PATH=$PATH" node scripts/e2e-browser.js \
+            --extension ../NHDW_Release_v3.0.0 \
+            --browser "$CHROME_BIN"
+        working-directory: NHDW_Extension_v3.0.0
+
+  e2e-brave:
+    name: End-to-end in real Brave
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Install Brave
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libnss3 libasound2t64 libatk-bridge2.0-0 \
+            libcups2 libgtk-3-0 libxkbcommon0 libgbm1 libxss1 unzip || true
+          RELEASE=$(curl -s https://api.github.com/repos/brave/brave-browser/releases/latest)
+          ASSET=$(echo "$RELEASE" | python3 -c "import sys,json;print([a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if 'linux-amd64' in a['name']][0])")
+          echo "Brave asset: $ASSET"
+          curl -sL "$ASSET" -o /tmp/brave.zip
+          unzip -q /tmp/brave.zip -d /tmp/brave
+          echo "BRAVE_BIN=$(find /tmp/brave -type f -name brave | head -1)" >> "$GITHUB_ENV"
+      - name: Run the extension in real Brave
+        run: |
+          "$BRAVE_BIN" --version
+          sudo -E env "PATH=$PATH" node scripts/e2e-browser.js \
+            --extension ../NHDW_Release_v3.0.0 \
+            --browser "$BRAVE_BIN"
+        working-directory: NHDW_Extension_v3.0.0

@@ -11,7 +11,8 @@
     "test": "npm run build:test && mocha test/test.js test/parsing.test.js test/downloader.test.js --timeout 15000",
     "test:smoke": "node scripts/smoke-mv3.js && node scripts/smoke-mv3.js js/offscreen.js --offscreen",
     "test:e2e": "node scripts/e2e-worker.js && node scripts/e2e-offscreen.js && node scripts/e2e-relay.js",
-    "test:live": "RUN_LIVE_TESTS=1 mocha test/test.js --timeout 30000"
+    "test:live": "RUN_LIVE_TESTS=1 mocha test/test.js --timeout 30000",
+    "test:browser": "node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0"
   },
   "repository": {
     "type": "git",

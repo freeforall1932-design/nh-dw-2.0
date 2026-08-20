@@ -21,7 +21,7 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
 - [x] Replace the base64 ZIP download path: downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts` + `offscreen.html`) that delivers the archive through a real `URL.createObjectURL`; the in-worker base64 path remains only as a fallback for browsers without `chrome.offscreen`. The service worker relays commands (`scripts/e2e-relay.js` verifies relay, idle-close, and no message loops).
 - [x] Replace the live-only API test with deterministic fixture tests: `test/parsing.test.js` (API/HTML parsers incl. `\u0022` embeds, malformed/Cloudflare HTML rejection, filename utils) and `test/downloader.test.js` (image URL order and CDN fallback, ZIP entry names and original-page bytes, raw mode, object-URL delivery). The live nhentai check is opt-in behind `RUN_LIVE_TESTS=1` (`npm run test:live`).
-- [ ] Complete a manual Chrome and Brave end-to-end download test
+- [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`, plus a CI workflow at `scripts/ci/e2e-browser.yml` for real Chrome and Brave on GitHub-hosted runners) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10).
 
 ## Priority 1: reliability and correctness
 
@@ -165,6 +165,29 @@ Test the unpacked release on:
 Record browser version, operating system, page type, and result.
 
 **Acceptance criteria:** supported environments are documented, and unsupported Tor/private-window combinations show a clear limitation rather than an unexplained failure.
+
+**Progress:** the manual test is automated as `scripts/e2e-browser.js` (`npm run test:browser`):
+it loads `NHDW_Release_v3.0.0` in a real Chromium-family browser over the DevTools Protocol
+and verifies the service worker, popup, content scripts, offscreen-document ZIP pipeline, and
+the ZIP on disk (nhentai.net is simulated locally, see the script header). A CI workflow for
+real Google Chrome + real Brave on GitHub-hosted runners ships at
+`scripts/ci/e2e-browser.yml` (copy to `.github/workflows/` to enable).
+
+Environment note (why it is still `[~]` rather than `[x]`): the development sandbox could not
+execute the suite itself —
+1. its network egress is limited to the npm registry and github.com (nhentai.net, Debian
+   mirrors, storage.googleapis.com, and GitHub release assets are all unreachable), and
+2. the only browser binary obtainable through those channels, `@sparticuz/chromium`, is a
+   serverless build with extension support compiled out (verified: even a minimal MV3 test
+   extension produces no service worker target), and
+3. the sandbox's GitHub token lacks the `workflows` permission, so the CI workflow file
+   cannot be pushed from here.
+
+What was verified in the sandbox: the harness's riskiest plumbing — the local HTTPS
+nhentai.net fixture, `--host-resolver-rules` remapping, and the certificate bypass — works in
+headless Chromium (the browser loaded the fixture page at `https://nhentai.net/`). To close
+this item, run `npm run test:browser` on a machine with Chrome and/or Brave installed
+(prefixed with `sudo` so the fixture can bind port 443), or enable the CI workflow.
 
 ### 11. Verify MV3 lifecycle behavior
 
