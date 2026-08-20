@@ -52,6 +52,12 @@ stubs and zero network access. The live check is opt-in: `npm run test:live`.
 
 **Acceptance criteria:** a blocked request produces a useful error and never creates a corrupt image entry.
 
+**Progress:** partial. Single-gallery metadata now retries through the active nhentai tab's page context
+(`credentials: "include"`, same-origin `/api/gallery/<id>`, then embedded `window._gallery` HTML parsing)
+so a browser session that can read the gallery can usually supply metadata even when Cloudflare blocks the
+extension-origin API request. Extension/offscreen image and batch metadata fetches also request credentials.
+Still open: targeted Cloudflare detection/backoff for all metadata layers and batch/gallery-list resolution.
+
 ### 3. Make original-image validation explicit
 
 - Confirm that every downloaded response has an image content type.

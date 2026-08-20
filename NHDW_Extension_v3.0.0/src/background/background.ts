@@ -92,7 +92,7 @@ module background
 
         for (let i = 0; i < length; i++) {
             let key = allKeys[i];
-            const resp = await fetch(parsing.GetUrl(key));
+            const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store" });
             if (resp.ok)
             {
                 const json = await parsing.GetJsonAsync(resp);
@@ -173,7 +173,7 @@ module background
             } else {
                 url += "?page=" + curr
             }
-            const resp = await fetch(url);
+            const resp = await fetch(url, { credentials: "include", cache: "no-store" });
             if (resp.ok)
             {
                 const text = await resp.text();

@@ -15,10 +15,11 @@ function executeActiveTabScript(file: string): void {
     });
 }
 
-// Extract metadata from the already-open gallery page. This is the useful part of
-// gallery-dl's browser workflow: use the page's solved session instead of making
-// a second API request from the extension origin.
-async function getGalleryFromActiveTab(): Promise<any | null> {
+// Extract metadata from the already-open gallery page. This is the useful part
+// of gallery-dl's browser workflow: use the page's solved session (cookies,
+// Cloudflare clearance, same-origin fetches) instead of relying only on an
+// extension-origin request that Cloudflare may classify as bot-like.
+async function getGalleryFromActiveTab(id: string): Promise<any | null> {
     return new Promise((resolve) => {
         chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
             const tabId = tabs[0] && tabs[0].id;
@@ -30,9 +31,70 @@ async function getGalleryFromActiveTab(): Promise<any | null> {
             chrome.scripting.executeScript(<any>{
                 target: { tabId: tabId },
                 world: "MAIN",
-                func: () => {
+                args: [id],
+                func: async (galleryId: string) => {
+                    const looksLikeGallery = (value: any) => {
+                        return value !== null
+                            && typeof value === "object"
+                            && value.title !== undefined
+                            && value.images !== undefined
+                            && value.images.pages !== undefined;
+                    };
+                    const parseEmbeddedGallery = (html: string) => {
+                        const match = /window\._gallery\s*=\s*JSON\.parse\("([\s\S]*?)"\);/.exec(html);
+                        if (match === null) {
+                            return null;
+                        }
+                        const unescaped = match[1].replace(/\\u[\dA-F]{4}/gi, function(part) {
+                            return String.fromCharCode(parseInt(part.replace(/\\u/g, ''), 16));
+                        });
+                        return JSON.parse(unescaped);
+                    };
+                    const fetchWithTimeout = async (url: string) => {
+                        const controller = new AbortController();
+                        const timeout = setTimeout(() => controller.abort(), 10000);
+                        try {
+                            return await fetch(url, {
+                                credentials: "include",
+                                cache: "no-store",
+                                signal: controller.signal
+                            });
+                        } finally {
+                            clearTimeout(timeout);
+                        }
+                    };
+
                     const pageGallery = (window as any)._gallery;
-                    return pageGallery || null;
+                    if (looksLikeGallery(pageGallery)) {
+                        return pageGallery;
+                    }
+
+                    // Same-origin API request from the actual nhentai tab. This
+                    // carries the browser's cookies / cf_clearance if present,
+                    // unlike the extension page's own fetch.
+                    try {
+                        const apiResp = await fetchWithTimeout("/api/gallery/" + galleryId);
+                        const contentType = apiResp.headers.get("content-type") || "";
+                        if (apiResp.ok && contentType.toLowerCase().includes("json")) {
+                            const json = await apiResp.json();
+                            if (looksLikeGallery(json)) {
+                                return json;
+                            }
+                        }
+                    } catch (_) { /* fall through to page HTML */ }
+
+                    // Last metadata fallback: re-read the current gallery HTML
+                    // from the page context and parse the embedded _gallery blob.
+                    try {
+                        const pageResp = await fetchWithTimeout(location.href);
+                        if (pageResp.ok) {
+                            const json = parseEmbeddedGallery(await pageResp.text());
+                            if (looksLikeGallery(json)) {
+                                return json;
+                            }
+                        }
+                    } catch (_) { /* give the popup's normal error path a chance */ }
+                    return null;
                 }
             }, (results: any[]) => {
                 if (chrome.runtime.lastError || !results || !results[0]) {
@@ -123,7 +185,7 @@ export default class Popup
         let status = 0;
         let statusText = "";
         try {
-            const resp = await fetch(this.parsing!.GetUrl(id));
+            const resp = await fetch(this.parsing!.GetUrl(id), { credentials: "include", cache: "no-store" });
             status = resp.status;
             statusText = resp.statusText;
             if (resp.ok) {
@@ -137,7 +199,7 @@ export default class Popup
         // already passed any browser challenge, so use its gallery object as a
         // metadata fallback rather than pretending the extension bypasses CF.
         if (json === null) {
-            json = await getGalleryFromActiveTab();
+            json = await getGalleryFromActiveTab(id);
         }
         if (json === null) {
             document.getElementById('action')!.innerHTML = status === 403 || status === 503
