@@ -40,6 +40,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const https = require("https");
+const net = require("net");
 const { spawn, spawnSync } = require("child_process");
 
 // ---------------------------------------------------------------------------
@@ -148,6 +149,21 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function whichCommand(name) {
     const r = spawnSync("which", [name], { encoding: "utf8" });
     return r.status === 0 ? r.stdout.trim() : null;
+}
+
+function getFreePort() {
+    return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.on("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+            const port = address && typeof address === "object" ? address.port : null;
+            server.close(() => {
+                if (port) resolve(port);
+                else reject(new Error("Unable to allocate a debugging port"));
+            });
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +383,7 @@ function ldEnv(nss) {
 
     // --- launch ------------------------------------------------------------
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-profile-"));
+    const debugPort = await getFreePort();
     const xvfbRun = (!FORCE_HEADLESS && !process.env.DISPLAY) ? whichCommand("xvfb-run") : null;
     const useXvfb = !!xvfbRun;
     const useHeadless = FORCE_HEADLESS || (!FORCE_HEADED && !process.env.DISPLAY && !useXvfb);
@@ -377,7 +394,7 @@ function ldEnv(nss) {
         "--disable-dev-shm-usage",
         "--no-first-run",
         "--no-default-browser-check",
-        "--remote-debugging-port=0",
+        "--remote-debugging-port=" + debugPort,
         "--remote-allow-origins=*",
         "--user-data-dir=" + profile,
         "--disable-extensions-except=" + path.resolve(EXTENSION_DIR),
@@ -390,24 +407,31 @@ function ldEnv(nss) {
     const launchCmd = useXvfb ? xvfbRun : bin;
     const launchArgs = useXvfb ? ["-a", bin, ...args] : args;
     console.log("  launch mode: " + (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")));
-    const child = spawn(launchCmd, launchArgs, { env: ldEnv(nss), stdio: ["ignore", "ignore", "pipe"] });
+    console.log("  DevTools port: " + debugPort);
+    const child = spawn(launchCmd, launchArgs, { env: ldEnv(nss), stdio: ["ignore", "pipe", "pipe"] });
     let chromeLog = "";
+    let childExit = null;
+    child.stdout.on("data", (d) => { chromeLog += d.toString(); });
     child.stderr.on("data", (d) => { chromeLog += d.toString(); });
-    const exited = new Promise((resolve) => child.on("exit", resolve));
+    const exited = new Promise((resolve) => child.on("exit", (code, signal) => {
+        childExit = { code, signal };
+        resolve(childExit);
+    }));
 
-    // Wait for the DevTools port.
-    const portFile = path.join(profile, "DevToolsActivePort");
-    let port = null;
-    for (let i = 0; i < 100 && !port; i++) {
-        if (fs.existsSync(portFile)) {
-            const [p] = fs.readFileSync(portFile, "utf8").split("\n");
-            port = parseInt(p, 10);
-            if (!Number.isFinite(port)) port = null;
-        }
-        if (!port) await sleep(100);
+    // Wait for the DevTools endpoint. A fixed high port is more reliable than
+    // DevToolsActivePort under headed/Xvfb launches on CI runners.
+    let port = debugPort;
+    let devtoolsVersion = null;
+    for (let i = 0; i < 600 && !devtoolsVersion && !childExit; i++) {
+        try {
+            const resp = await fetch(`http://127.0.0.1:${port}/json/version`);
+            if (resp.ok) devtoolsVersion = await resp.json();
+        } catch (_) { /* not listening yet */ }
+        if (!devtoolsVersion) await sleep(100);
     }
-    if (!port) {
-        const message = "browser did not open a DevTools port.\n" + chromeLog.slice(-2000);
+    if (!devtoolsVersion) {
+        const exitDetail = childExit ? `browser process exited with code ${childExit.code}, signal ${childExit.signal}` : "browser process is still running";
+        const message = "browser did not open a DevTools port (" + exitDetail + ").\n" + chromeLog.slice(-3000);
         console.error("FATAL: " + message);
         githubError("browser did not open DevTools", message);
         child.kill();
@@ -417,8 +441,7 @@ function ldEnv(nss) {
     const targetsBySession = new Map();
     let browser;
     try {
-        const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-        browser = new CDP(version.webSocketDebuggerUrl);
+        browser = new CDP(devtoolsVersion.webSocketDebuggerUrl);
         browser.on((msg) => {
             if ((msg.method === "Runtime.exceptionThrown" || msg.method === "Runtime.consoleAPICalled") && msg.sessionId) {
                 const t = targetsBySession.get(msg.sessionId);
