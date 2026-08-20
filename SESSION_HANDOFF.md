@@ -20,7 +20,11 @@ Previous work landed via PR #12 (tab-first image fetches) — now on `main` (`c6
 
   git fetch origin '+refs/heads/arena/01a01f4d-nh-dw-2-0:refs/remotes/origin/arena/01a01f4d-nh-dw-2-0'
   git reset --hard origin/arena/01a01f4d-nh-dw-2-0
-  # confirm HEAD is 7b56877 and js/offscreen.js contains "saveDownload"
+  # confirm the work is present (verify by content, not a tip hash - the doc
+  # commit moves with every handoff edit). Expect, at minimum, these on the tip:
+  #   git log --oneline | grep -q 120279d        # the main fix commit
+  #   grep -q saveDownload  NHDW_Extension_v3.0.0/js/offscreen.js
+  #   grep -q "Whitelist"   NHDW_Extension_v3.0.0/src/background/Downloader.ts
   cd NHDW_Extension_v3.0.0
   npm ci                 # funding/audit noise is OK; NEVER npm audit fix --force
   npm run build
