@@ -6,6 +6,40 @@ Previous work landed via PR #12 (tab-first image fetches) — now on `main` (`c6
 - Repo checkout: /home/user/nh-dw-2.0
 - Session branch (this session; never switch/push any other branch): `arena/01a01f4d-nh-dw-2-0`
 - Baseline: `main` at `c6530af` (PR #12 merged) == `fad5476`.
+- **Open PR: https://github.com/freeforall1932-design/nh-dw-2.0/pull/14**
+  ("Fix offscreen document API surface; add folder output mode"). Do NOT open
+  a second PR — push follow-ups to the session branch and the PR updates.
+- This session's commits (oldest first):
+  - `fd34186` Salvage local fixes from nh-dw-2.0-main-fixed.zip
+  - `120279d` Fix offscreen document API surface; add folder output mode; tab-session batch
+  - (+ a follow-up commit from the pre-merge review: useZip whitelist
+    normalization in Downloader so a corrupt/legacy value can never make a
+    download silently save nothing; regression test added)
+
+## How to pick up (this sandbox often looks like a fresh clone of main)
+
+  git fetch origin '+refs/heads/arena/01a01f4d-nh-dw-2-0:refs/remotes/origin/arena/01a01f4d-nh-dw-2-0'
+  git reset --hard origin/arena/01a01f4d-nh-dw-2-0
+  # confirm HEAD is the follow-up commit and js/offscreen.js contains "saveDownload"
+  cd NHDW_Extension_v3.0.0
+  npm ci                 # funding/audit noise is OK; NEVER npm audit fix --force
+  npm run build
+  npm test               # 76 passing, 1 pending (live API)
+  npm run test:smoke
+  npm run test:e2e
+  # after source edits: copy webpack js/*.js into NHDW_Release_v3.0.0/js/
+  # and confirm `diff -rq NHDW_Extension_v3.0.0/js NHDW_Release_v3.0.0/js` is empty
+  Commit + push ONLY to arena/01a01f4d-nh-dw-2-0 (git push origin arena/01a01f4d-nh-dw-2-0).
+
+## CI status (as of this writing, run on the PR)
+
+- Offline suites (fixtures + window-less VM bundles): **PASS**
+- End-to-end in real Google Chrome / real Brave: **FAIL at browser launch**
+  (~15–22s: Chrome `Runtime.enable` timeout shape / Brave SIGTRAP, no DevTools
+  port — the runner/environment issue tracked as backlog #10 since the
+  previous session; the `fad5476` harness hardening did not cure it on CI).
+  Do not "fix" the extension code for this — reproduce locally with
+  `npm run test:browser` first.
 
 ## The bug found this session (real-browser report from the user)
 
@@ -101,13 +135,15 @@ content script) without ever answering → the "message channel closed" noise.
 ## Verification done (sandbox, all offline)
 
 - webpack build OK
-- `npm test`: 75 passing, 1 pending (live API, opt-in RUN_LIVE_TESTS=1)
+- `npm test`: 76 passing (75 at PR open + 1 corrupt-settings regression test),
+  1 pending (live API, opt-in RUN_LIVE_TESTS=1)
 - `npm run test:smoke` OK (worker + offscreen)
 - `npm run test:e2e` OK (worker, offscreen with no storage/downloads/scripting,
   relay incl. save/fetch relays, content)
 - Release `js/*` copied and diff-identical to source build
 - `test:browser`: no Chrome/Brave in this sandbox ("No browser found" is the
   harness, not a regression)
+- CI on the PR: offline suites PASS; browser jobs fail at launch (see above)
 
 ## What is left
 

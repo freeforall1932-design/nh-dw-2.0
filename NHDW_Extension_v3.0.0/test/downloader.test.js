@@ -372,6 +372,41 @@ describe('Downloader (folder mode)', () => {
     });
 });
 
+describe('Downloader (corrupt settings)', () => {
+    let chrome;
+    let fetchStub;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip', '3');
+        // Corrupt the stored value: an unknown format string.
+        chrome.storage.sync.get = (defaults, cb) => {
+            cb(Object.assign({}, defaults, { useZip: '7z (corrupt)' }));
+        };
+        fetchStub = makeFetchStub();
+        globalThis.chrome = chrome;
+        globalThis.fetch = fetchStub;
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    it('falls back to zip for an unknown useZip value and still saves the archive', async () => {
+        // Regression guard: an unknown value must behave like "zip" (pages
+        // fetched AND archive delivered), not like an invisible no-op.
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/Corrupt', () => {}, () => {}, 'Corrupt', new JSZip(), 'Downloads/Corrupt');
+        downloader.revokeObjectUrlDelayMs = 10;
+        await downloader.startAsync();
+        assert.strictEqual(chrome.downloads.calls.length, 1, 'the archive must still be saved');
+        assert.strictEqual(chrome.downloads.calls[0].filename, 'Downloads/Corrupt.zip');
+    });
+});
+
 describe('Downloader (abort/cancellation)', () => {
     let chrome;
 

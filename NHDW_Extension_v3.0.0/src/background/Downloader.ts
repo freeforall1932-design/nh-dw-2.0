@@ -44,8 +44,14 @@ export default class Downloader
 
     async startAsync() {
         let self = this;
-        const applySettings = (useZip: string, maxConcurrentDownloads: number | string) => {
-            self.useZip = useZip;
+        const applySettings = (useZipRaw: string, maxConcurrentDownloads: number | string) => {
+            // Whitelist: a corrupt or legacy value (or undefined from a broken
+            // storage read) must fall back to "zip" — an unknown value would
+            // otherwise be fetched into the ZIP but never saved (the final
+            // step only archives for zip/cbz), silently "succeeding".
+            self.useZip = (useZipRaw === "zip" || useZipRaw === "cbz" || useZipRaw === "folder" || useZipRaw === "raw")
+                ? useZipRaw
+                : "zip";
             const configuredConcurrency = parseInt(maxConcurrentDownloads as any, 10);
             // Protect the batching loop from corrupt/old sync settings.
             self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
