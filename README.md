@@ -69,7 +69,8 @@ npm install        # once
 npm run build      # webpack -> js/*.js (background, content, offscreen, popup, options...)
 npm test           # fixture tests: parsers, filename utils, Downloader URL/ZIP/raw/object-URL logic
 npm run test:smoke # load built bundles in a window-less VM (MV3 worker / offscreen document)
-npm run test:e2e   # full download pipelines against chrome/fetch stubs, zero network access
+npm run test:e2e   # full pipelines against chrome/fetch/DOM stubs (worker, offscreen,
+                   # service-worker relay, content script injection), zero network access
 npm run test:live  # opt-in live check against the real nhentai API
 npm run test:browser  # REAL browser end-to-end: loads NHDW_Release_v3.0.0 in actual
                       # Chrome/Brave/Chromium and downloads a ZIP through the real

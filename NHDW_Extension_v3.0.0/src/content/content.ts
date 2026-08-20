@@ -29,8 +29,11 @@ chrome.storage.sync.get({
 
         // Extract each gallery ID from its own caption card instead of running a
         // document-wide regex matched by index against the live DOM collection.
+        // On nhentai the caption sits INSIDE the gallery link
+        // (<a class="cover" href="/g/123/"><div class="caption">...), so the
+        // link is found with closest() (ancestor walk), not querySelector().
         for (let i = 0; i < captions.length; i++) {
-            const link = captions[i].querySelector('a[href*="/g/"]');
+            const link = captions[i].closest('a[href*="/g/"]');
             if (link === null) continue;
             const match = /\/g\/([0-9]+)\//.exec(link.getAttribute("href") || "");
             if (match === null) continue;

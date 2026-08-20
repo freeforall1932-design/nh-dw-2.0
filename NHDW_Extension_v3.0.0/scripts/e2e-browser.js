@@ -173,13 +173,30 @@ window.fetch = function(input, init) {
 `;
 
 // Local nhentai.net fixtures served over HTTPS with a test certificate.
+// The listing markup mirrors the real nhentai card structure: the caption div
+// sits INSIDE the gallery cover link.
 const LISTING_HTML = `<!DOCTYPE html>
 <html><head><title>nhentai listing fixture</title></head>
 <body>
 <div class="container index-container">
-  <div class="gallery"><a href="/g/111111/"><div class="caption">Gallery One</div></a></div>
-  <div class="gallery"><a href="/g/222222/"><div class="caption">Gallery Two</div></a></div>
-  <div class="gallery"><a href="/g/333333/"><div class="caption">Gallery Three</div></a></div>
+  <div class="gallery">
+    <a href="/g/111111/" class="cover" style="padding:0 0 140% 0">
+      <img class="lazyload" data-src="https://t.nhentai.net/galleries/1/1t.jpg" width="300" height="424">
+      <div class="caption">Gallery One</div>
+    </a>
+  </div>
+  <div class="gallery">
+    <a href="/g/222222/" class="cover" style="padding:0 0 140% 0">
+      <img class="lazyload" data-src="https://t.nhentai.net/galleries/2/1t.jpg" width="300" height="424">
+      <div class="caption">Gallery Two</div>
+    </a>
+  </div>
+  <div class="gallery">
+    <a href="/g/333333/" class="cover" style="padding:0 0 140% 0">
+      <img class="lazyload" data-src="https://t.nhentai.net/galleries/3/1t.jpg" width="300" height="424">
+      <div class="caption">Gallery Three</div>
+    </a>
+  </div>
 </div>
 </body></html>`;
 

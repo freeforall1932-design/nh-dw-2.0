@@ -10,9 +10,10 @@ chrome.storage.sync.get({
         if (captions.length === 0) return; // Nothing to re-check on a single-gallery page
 
         // Walk each caption card and update the matching checkbox by gallery ID,
-        // scoped to the card's own link instead of a document-wide regex.
+        // scoped to the card's own gallery link. The caption sits INSIDE the
+        // link on nhentai, so the link is found with closest(), not querySelector().
         for (let i = 0; i < captions.length; i++) {
-            const link = captions[i].querySelector('a[href*="/g/"]');
+            const link = captions[i].closest('a[href*="/g/"]');
             if (link === null) continue;
             const match = /\/g\/([0-9]+)\//.exec(link.getAttribute("href") || "");
             if (match === null) continue;
