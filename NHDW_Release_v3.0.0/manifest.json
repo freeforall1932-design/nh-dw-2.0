@@ -7,7 +7,11 @@
     "128": "Icon.png"
   },
   "action": {
-    "default_popup": "index.html"
+    "default_popup": "index.html",
+    "default_icon": {
+      "64": "Icon.png",
+      "128": "Icon.png"
+    }
   },
   "permissions": [
     "downloads",

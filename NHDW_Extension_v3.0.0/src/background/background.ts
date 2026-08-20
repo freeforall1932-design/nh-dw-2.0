@@ -19,16 +19,39 @@ chrome.tabs.onActivated.addListener(function() {
         active: true,
         currentWindow: true
     }, function (tabs) {
-        setIcon(tabs[0].url!);
+        if (tabs && tabs[0])
+            setIcon(tabs[0].url);
     });
 });
 
-function setIcon(url: string) {
-    if (getSourceForUrl(url) !== null)
-        chrome.action.setIcon({path: "Icon.png"});
-    else
-        chrome.action.setIcon({path: "Icon-grey.png"});
+// MV3 service workers live under js/, so a relative path like "Icon.png" is
+// fetched as js/Icon.png and chrome.action.setIcon rejects with
+// "Failed to set icon 'Icon.png': Failed to fetch". Root-relative paths
+// resolve against the extension origin instead.
+const ICON_COLOR = "/Icon.png";
+const ICON_GREY = "/Icon-grey.png";
+
+function setIcon(url: string | undefined) {
+    const iconPath = url && getSourceForUrl(url) !== null ? ICON_COLOR : ICON_GREY;
+    applyActionIcon(iconPath);
 }
+
+function applyActionIcon(iconPath: string) {
+    try {
+        const result: any = chrome.action.setIcon({ path: iconPath });
+        if (result && typeof result.catch === "function") {
+            result.catch(() => { /* toolbar icon updates are best-effort */ });
+        }
+    } catch (_) { /* chrome.action may be missing in tests */ }
+}
+
+chrome.tabs.query({
+    active: true,
+    currentWindow: true
+}, function (tabs) {
+    if (tabs && tabs[0])
+        setIcon(tabs[0].url);
+});
 
 module background
 {

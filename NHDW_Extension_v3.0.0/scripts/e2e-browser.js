@@ -946,6 +946,25 @@ async function runExtensionTests(ctx) {
                 ok("service worker evaluates cleanly", "no uncaught errors after reload");
             }
 
+            // Relative Icon.png paths resolve against js/background.js and
+            // chrome.action.setIcon rejects with "Failed to set icon ... Failed to fetch".
+            stage("toolbar icon setIcon");
+            {
+                const liveSwInfo = (await listTargets()).find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://")) || swInfo;
+                const liveSw = await attachTarget(liveSwInfo);
+                const iconTabUrl = fixtureServer ? "https://nhentai.net/" : "about:blank";
+                const iconTab = await browser.send("Target.createTarget", { url: iconTabUrl });
+                await sleep(800);
+                const describe = (e) => String((e && e.exception && (e.exception.description || e.exception.value)) || e.text || JSON.stringify(e));
+                const iconErrors = liveSw.exceptions.filter((e) => /Failed to set icon/i.test(describe(e)));
+                if (iconErrors.length > 0) {
+                    fail("setIcon fetches toolbar icons", iconErrors.map(describe).join("; "));
+                } else {
+                    ok("setIcon fetches toolbar icons", "no Failed to set icon after opening " + iconTabUrl);
+                }
+                await browser.send("Target.closeTarget", { targetId: iconTab.targetId }).catch(() => {});
+            }
+
             await runExtensionTests({ browser, listTargets, attachTarget, extensionExceptions, extensionId });
         }
 
