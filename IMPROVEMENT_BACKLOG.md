@@ -23,6 +23,8 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Include the MV3 `offscreen` permission in both source and release manifests so real Chrome/Brave expose `chrome.offscreen` and use the intended object-URL ZIP path.
 - [x] Replace the live-only API test with deterministic fixture tests: `test/parsing.test.js` (API/HTML parsers incl. `\u0022` embeds, malformed/Cloudflare HTML rejection, filename utils) and `test/downloader.test.js` (image URL order and CDN fallback, ZIP entry names and original-page bytes, raw mode, object-URL delivery). The live nhentai check is opt-in behind `RUN_LIVE_TESTS=1` (`npm run test:live`).
 - [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`, plus a ready-to-run CI workflow for real Chrome and Brave included in `SESSION_HANDOFF.md`) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10).
+- [x] Replace the search-page regex flow with DOM extraction: `js/getGalleries.js` extracts gallery cards + pagination from the live DOM (id from each card's own cover link, title from the caption inside the same link), the popup consumes structured cards, and the network path (`downloadAllPagesAsync`) uses the shared `parseGalleryCardsFromHtml` parser (see item 5).
+- [x] Selected-gallery queue: unique-by-construction `Record<id, title>`, per-gallery progress, continue-after-failure, and a final summary with per-kind failure counts (see item 6).
 
 ## Priority 1: reliability and correctness
 
@@ -52,11 +54,19 @@ stubs and zero network access. The live check is opt-in: `npm run test:live`.
 
 **Acceptance criteria:** a blocked request produces a useful error and never creates a corrupt image entry.
 
-**Progress:** partial. Single-gallery metadata now retries through the active nhentai tab's page context
+**Progress:** mostly done. Single-gallery metadata now retries through the active nhentai tab's page context
 (`credentials: "include"`, same-origin `/api/gallery/<id>`, then embedded `window._gallery` HTML parsing)
 so a browser session that can read the gallery can usually supply metadata even when Cloudflare blocks the
-extension-origin API request. Extension/offscreen image and batch metadata fetches also request credentials.
-Still open: targeted Cloudflare detection/backoff for all metadata layers and batch/gallery-list resolution.
+extension-origin API request. Extension/offscreen image and batch metadata fetches also request credentials
+and have Cloudflare-aware error messages. The `ApiParsing.GetJsonAsync` method now detects HTML content-type
+before attempting `response.json()` and produces a clear "Cloudflare blocked" message for 403/503 responses
+and an "Unexpected response type" message for 200 HTML pages. The batch download loops in both background.ts
+and offscreen.ts distinguish Cloudflare errors (403/503 or HTML content-type) from plain HTTP errors and
+give the user actionable guidance. The `isCloudflareResponse()` utility is exported from `ApiParsing.ts` for
+reuse. Covered by 6 new fixture tests in `test/parsing.test.js`. Retry backoff is now implemented: the
+Downloader retries page image fetches with exponential backoff (base 200ms, growing to ~3.2s at the last
+retry) so repeated failures don't hammer the server. The `retryBackoffMs` property is configurable.
+Covered by a test in `test/downloader.test.js`.
 
 ### 3. Make original-image validation explicit
 
@@ -67,13 +77,16 @@ Still open: targeted Cloudflare detection/backoff for all metadata layers and ba
 
 **Acceptance criteria:** ZIP files contain only valid original image responses with the expected page names.
 
-**Progress:** mostly done. `Downloader.#downloadPageInternalAsync` now rejects
+**Progress:** done. `Downloader.#downloadPageInternalAsync` now rejects
 any 200 response whose `Content-Type` does not start with `image/` (HTML
 challenge pages fall through to the next CDN mirror and surface a clear
 "unexpected content-type" error instead of being zipped as images), covered by
 two tests in `test/downloader.test.js`. The page extension still comes from
 gallery metadata and only original (non-thumbnail) hosts are used. The
-"unexpectedly small response" size guard remains optional/open.
+"unexpectedly small response" size guard is now also implemented: responses
+smaller than `minImageBytes` (default 1024 bytes) are rejected with a
+"response too small" error before being added to the ZIP. Covered by a new
+test in `test/downloader.test.js`.
 
 ### 4. Replace the base64 ZIP download path for large galleries
 
@@ -111,6 +124,23 @@ Support search, tag, artist, category, favorites, and pagination pages where the
 
 **Acceptance criteria:** selected gallery IDs remain correct when titles contain quotes, HTML changes, duplicate names, or additional card markup.
 
+**Progress:** DONE for the popup path, and the network path shares the same parser.
+`js/getGalleries.js` (new content script, replaces the old `js/getHtml.js` "serialize whole
+DOM -> regex in the popup" flow) extracts gallery cards straight from the live DOM:
+each card's ID comes from its own cover link (`a[href*="/g/"]`), the title from the
+caption inside the same link (with `<br>`-separated injected-checkbox markup stripped and
+entities decoded), duplicates by ID are skipped, and pagination (current page from
+`.pagination .current`, max page from the last `page=` link) is reported to the popup.
+The popup (`updatePreviewAll`) now consumes the structured cards, keeps titles in a plain
+`id -> title` map instead of DOM `name` attributes (so quotes can never break the markup),
+and escapes displayed titles. The fetched-page path (`downloadAllPagesAsync` in both
+background.ts and offscreen.ts) uses the shared pure parser `parseGalleryCardsFromHtml`
+(`src/parsing/CardParsing.ts`), which is anchor-scoped so an ID can never be mispaired
+with another card's caption, and tolerates newlines/extra markup. Also fixed the old
+`/\{[^\}]+\}/` typo in the "{pretty}" strip regexes. Covered by 8 new fixture tests in
+`test/parsing.test.js` and a new `getGalleries.js` phase in `scripts/e2e-content.js`
+(unique cards, quoted/entity titles, pagination).
+
 ### 6. Add a selected-gallery queue
 
 - Keep the user on the current search/results page.
@@ -120,6 +150,21 @@ Support search, tag, artist, category, favorites, and pagination pages where the
 - Prevent duplicate queue entries.
 
 **Acceptance criteria:** a user can select several gallery codes from a result page and receive one ZIP or separate archives according to the option setting.
+
+**Progress:** DONE (built on items 5 and 13; verified by new regression phases).
+The user stays on the results page (checkboxes are injected by the content script,
+the popup only collects the selected IDs). Selected gallery IDs are sent as a
+`Record<id, title>` — keys are unique by construction, so duplicate queue entries are
+impossible (the content script and `getGalleries.js` also dedupe by ID). Per-gallery
+progress is broadcast before each gallery (`batchProgress`), each failure surfaces a
+single `downloadError` with its classified kind, the batch continues past both
+metadata and image failures, and the final `batchSummary` reports totals plus a
+per-kind breakdown. One combined ZIP (or one archive per gallery when
+`downloadSeparately` is set) is produced as before. Covered by a new phase 7 in
+`scripts/e2e-worker.js` and a matching phase in `scripts/e2e-offscreen.js`: a
+three-gallery queue with one metadata failure and one image failure still delivers
+the final ZIP, reports 1/2/3 with `failedKinds {metadata:1, image:1}`, emits exactly
+one error per failing gallery, and sends `batchProgress` for all three.
 
 ### 7. Resolve selected galleries through the active browser context
 
@@ -214,16 +259,26 @@ this item, run `npm run test:browser` on a machine with Chrome and/or Brave inst
 
 **Acceptance criteria:** a download does not become permanently stuck when the popup closes or the service worker restarts.
 
+**Progress:** mostly done. The offscreen document already survives popup closes and
+service-worker restarts (the worker only relays commands, and it is not subject to the
+worker idle timeout). Active-job state is now persisted in `chrome.storage.session`
+(`downloadJob` marker): both the service-worker fallback path and the offscreen document
+write it in `beginJob()` and clear it on completion, error, or `goBack`. When the popup
+asks `isDownloadFinished` and no downloader is active but a stale marker exists, the
+answer includes `interrupted: true`, and the popup shows a "Download interrupted" notice
+with a "Got it" button (`clearJobMarker`) instead of silently forgetting the download.
+The marker degrades gracefully when `chrome.storage.session` is unavailable (older
+Chrome). Covered by `scripts/e2e-worker.js` phase 6 (marker set/cleared during a real
+job, stale-marker detection, dismissible notice) and marker assertions in
+`scripts/e2e-offscreen.js`.
+
 ## Priority 5: product and UX
 
 ### 12. Reconcile README behavior with the implementation
 
-The README currently describes a page-injected "Download Full Archive" button, while the implementation primarily uses the extension popup and injected selection checkboxes.
+- [x] The release README (`NHDW_Release_v3.0.0/README.md`) has been updated to accurately describe the popup, injected checkboxes, batch download workflow, Cloudflare mitigation, options, and offscreen document pipeline. The root `README.md` was already comprehensive.
 
-Choose one direction:
-
-- Implement and document a real page button, or
-- Remove the page-button claim and document the popup workflow accurately.
+**Progress:** DONE.
 
 ### 13. Improve progress and error reporting
 
@@ -232,12 +287,24 @@ Choose one direction:
 - Distinguish metadata failure, Cloudflare failure, image failure, ZIP failure, and cancellation.
 - Report the number of successful and failed galleries at the end.
 
-**Progress:** partial. A batch gallery failure is now reported exactly once: the
+**Progress:** done. A batch gallery failure is now reported exactly once: the
 `Downloader` surfaces its own failure through `errorCallback` and the batch loop
 (`downloadAllDoujinshisAsync` in both the service-worker and offscreen paths) swallows
 the subsequent re-throw instead of letting the outer catch re-report the same error.
-Covered by a regression phase in `scripts/e2e-offscreen.js` and `scripts/e2e-worker.js`.
-The richer reporting (per-gallery success/failure summary, distinct failure kinds) remains open.
+A failing gallery no longer stops the batch: the loop continues with the remaining
+galleries and tallies successes/failures. A `batchProgress` message is broadcast before
+each gallery ("Gallery X of Y: Downloading <name>") and a `batchSummary` message
+("X of Y galleries downloaded successfully") is sent at the end (both paths; offscreen
+messages are marked `from:"offscreen"` so the service worker does not relay them back).
+**Failure kinds are now distinguished** by `utils.classifyError` (`cancelled`,
+`cloudflare`, `image`, `metadata`, `zip`, `unknown`): the popup labels every
+`downloadError` with its kind, and the end-of-batch summary shows a per-kind
+breakdown ("failed (Cloudflare: 1, image: 2)"). **Retry attempts are surfaced in the
+UI**: each page retry emits a progress update with `retry "n/5"`, and the popup shows
+"Retrying (n/5)..." under the progress bar. Covered by regression phases 3-5 in
+`scripts/e2e-offscreen.js` and `scripts/e2e-worker.js` (exactly-once error, retry
+messages, summary counts 1/1/2 with correct failedKinds) and 6 new `classifyError`
+unit tests in `test/parsing.test.js`.
 
 ### 14. Make filenames safe and predictable
 
@@ -246,12 +313,14 @@ The richer reporting (per-gallery success/failure summary, distinct failure kind
 - Add gallery ID to the default filename when titles are empty or duplicated.
 - Test Unicode titles and reserved Windows filename characters.
 
-**Progress:** partial. `utils.cleanName` now prefixes Windows reserved device names
+**Progress:** mostly done. `utils.cleanName` now prefixes Windows reserved device names
 (`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) with an underscore and falls back to
-`"untitled"` when a title sanitizes down to an empty string, so Chrome never receives
-a reserved or empty download filename. Covered by three new tests in `test/parsing.test.js`
-(reserved names, empty fallback, Unicode preservation). Still open: using the gallery ID
-as the fallback/collision disambiguator (needs call-site changes in popup/background/offscreen).
+`"untitled"` (or `"gallery-<id>"` when a fallbackId is provided) when a title sanitizes
+down to an empty string. The batch-download collision disambiguation now uses the gallery
+ID as the disambiguating suffix instead of an arbitrary counter. Call sites in
+popup.ts, background.ts, and offscreen.ts all pass the gallery ID. Covered by tests in
+`test/parsing.test.js` (reserved names, empty fallback with and without fallbackId,
+Unicode preservation).
 
 ### 15. Add cancellation that stops active work
 

@@ -1,9 +1,38 @@
 import Tag from "./tag"
 
+// Classify a thrown error / error string into a stable failure kind so the UI
+// can label failures consistently (metadata vs Cloudflare vs image vs ZIP vs
+// user cancellation) instead of showing a raw string.
+export function classifyError(error: any): { kind: string; label: string } {
+    const message = String(error && error.message !== undefined ? error.message : error);
+    const msg = message.toLowerCase();
+    if (msg.includes("abort") || msg.includes("cancel")) {
+        return { kind: "cancelled", label: "Cancelled" };
+    }
+    if (msg.includes("cloudflare") || msg.includes("cf-challenge") || msg.includes("cf_challenge")) {
+        return { kind: "cloudflare", label: "Cloudflare blocked" };
+    }
+    if (msg.includes("failed to fetch original image")
+        || msg.includes("response too small")
+        || msg.includes("unexpected content-type")
+        || msg.includes("failed to download original image")) {
+        return { kind: "image", label: "Image fetch failed" };
+    }
+    if (msg.includes("unable to start download") || msg.includes("failed to start")) {
+        return { kind: "zip", label: "Archive download failed" };
+    }
+    if (msg.includes("can't download") || msg.includes("unexpected response type") || msg.includes("unknown page format")) {
+        return { kind: "metadata", label: "Metadata failed" };
+    }
+    return { kind: "unknown", label: "Error" };
+}
+
 export module utils
 {
-    // Clean a word, if replaceSpaces is true, all spaces are replaced by an underscore
-    export function cleanName(name: string, replaceSpaces: boolean): string {
+    // Clean a word, if replaceSpaces is true, all spaces are replaced by an underscore.
+    // When the result would be empty, fallbackId (typically a gallery ID) is used
+    // to produce "gallery-<id>" so the user can still identify the origin of the file.
+    export function cleanName(name: string, replaceSpaces: boolean, fallbackId?: string): string {
         let newName = name.split('').filter(e => !invalidCharacter.includes(e)).join('');
         if (replaceSpaces) {
             newName = newName.trim().replace(/ +/g, '_');
@@ -18,9 +47,10 @@ export module utils
         }
         // A title made entirely of invalid characters (or spaces) would
         // produce an empty filename, which Chrome rejects. Fall back to a
-        // safe placeholder so the download still starts.
+        // safe placeholder so the download still starts; prefer the gallery
+        // ID when one is available so the user can trace back the file.
         if (newName === "") {
-            newName = "untitled";
+            newName = fallbackId ? `gallery-${fallbackId}` : "untitled";
         }
         return newName;
     }

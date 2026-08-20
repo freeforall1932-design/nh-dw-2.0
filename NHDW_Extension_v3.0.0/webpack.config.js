@@ -16,7 +16,7 @@ module.exports = {
     content: './src/content/content.ts',
     updateContent: './src/content/updateContent.ts',
     preview: './src/preview/preview.ts',
-    getHtml: './src/preview/getHtml.ts',
+    getGalleries: './src/preview/getGalleries.ts',
     options: './src/options/options.ts',
     offscreen: './src/offscreen/offscreen.ts'
   },
@@ -25,6 +25,7 @@ module.exports = {
   },
   output: {
     filename: '[name].js',
-    path: path.resolve(__dirname, 'js')
+    path: path.resolve(__dirname, 'js'),
+    clean: true
   },
 };

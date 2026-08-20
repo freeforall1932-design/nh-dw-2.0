@@ -1,6 +1,7 @@
 import Popup from "./popup"
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
+import { message } from "./message";
 
 let popup = Popup.getInstance();
 
@@ -36,6 +37,23 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                     chrome.runtime.sendMessage({ action: "updateProgress" });
                     return;
                 }
+                if (response.interrupted) {
+                    // A previous download died with the service worker /
+                    // offscreen document. Tell the user instead of silently
+                    // forgetting it, and let them dismiss the notice.
+                    document.getElementById('action')!.innerHTML = message.downloadInterrupted();
+                    setTimeout(() => {
+                        const buttonDismiss = document.getElementById('buttonDismiss');
+                        if (buttonDismiss) {
+                            buttonDismiss.addEventListener('click', function() {
+                                chrome.runtime.sendMessage({ action: "clearJobMarker" }, function() {
+                                    popup.updatePreviewAsync(popup.url);
+                                });
+                            });
+                        }
+                    }, 0);
+                    return;
+                }
                 popup.updatePreviewAsync(currUrl);
             });
             return; // Early return as we're handling the async response above
@@ -45,13 +63,20 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
 
 // Display popup for many doujinshis
 chrome.runtime.onMessage.addListener(function(request, _) {
-    if (request.action == "getHtml") {
+    if (request.action == "getGalleries") {
         chrome.storage.sync.get({
             useZip: "zip",
             downloadName: "{pretty}",
             replaceSpaces: true
         }, function(elems) {
-            popup.updatePreviewAll(request.source, elems.downloadName, elems.useZip, elems.replaceSpaces)
+            popup.updatePreviewAll(
+                request.galleries || [],
+                request.currentPage || 0,
+                request.maxPage || 0,
+                elems.downloadName,
+                elems.useZip,
+                elems.replaceSpaces
+            );
         });
     }
 });

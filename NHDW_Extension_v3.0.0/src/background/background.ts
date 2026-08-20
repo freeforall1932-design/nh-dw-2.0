@@ -1,8 +1,9 @@
 import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
+import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
-import { utils } from "../utils/utils";
+import { utils, classifyError } from "../utils/utils";
 var JSZip = require("jszip");
 
 chrome.tabs.onUpdated.addListener(function
@@ -39,6 +40,7 @@ module background
 
     function beginJob(): AbortSignal {
         jobAbortController = new AbortController();
+        writeJobMarker(true);
         return jobAbortController.signal;
     }
 
@@ -50,6 +52,38 @@ module background
 
     function jobWasAborted(): boolean {
         return jobAbortController !== null && jobAbortController.signal.aborted;
+    }
+
+    // ---- active-job marker (chrome.storage.session) ------------------------
+    // MV3 service workers can be suspended/restarted at any time. A small
+    // marker in session-scoped storage lets a restarted worker (or the popup)
+    // detect that a previous download was interrupted instead of silently
+    // forgetting it. Session storage survives worker restarts (but not browser
+    // restarts), which is exactly the lifetime we need. The offscreen document
+    // writes/clears the same key when it runs the job.
+
+    function writeJobMarker(active: boolean) {
+        try {
+            (chrome.storage as any).session.set({ downloadJob: { active: active, startedAt: Date.now() } });
+        } catch (_) { /* storage.session unavailable (older Chrome) — best effort */ }
+    }
+
+    export function clearJobMarker() {
+        try {
+            (chrome.storage as any).session.remove("downloadJob");
+        } catch (_) { /* best effort */ }
+    }
+
+    export function jobInterrupted(): Promise<boolean> {
+        return new Promise((resolve) => {
+            try {
+                (chrome.storage as any).session.get("downloadJob", (elems: any) => {
+                    resolve(!!(elems && elems.downloadJob && elems.downloadJob.active));
+                });
+            } catch (_) {
+                resolve(false);
+            }
+        });
     }
 
     chrome.storage.sync.get({
@@ -71,14 +105,21 @@ module background
         const signal = beginJob();
         let zip = new JSZip();
         currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
-        currentDownloader.startAsync();
+        // Clear the job marker when the download finishes (success or error) and
+        // keep re-throwing so a failure still surfaces as a worker rejection (the
+        // popup has already been told via errorCallback).
+        currentDownloader.startAsync()
+            .then(() => clearJobMarker())
+            .catch(function(error) { clearJobMarker(); throw error; });
     }
 
     export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function) {
         beginJob();
         let zip = new JSZip();
         downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true)
+            .then(() => clearJobMarker())
             .catch(function(error) {
+                clearJobMarker();
                 if (!jobWasAborted()) {
                     errorCallback(String(error));
                 }
@@ -116,13 +157,39 @@ module background
         let names: Array<string> = [];
         let length = Object.keys(allDoujinshis).length;
         let allKeys = Object.keys(allDoujinshis);
+        // Per-gallery tally for the end-of-batch summary.
+        let succeeded = 0;
+        let failed = 0;
+        const failedKinds: Record<string, number> = {};
+
+        function countFailure(error: any) {
+            failed++;
+            const { kind } = classifyError(error);
+            failedKinds[kind] = (failedKinds[kind] || 0) + 1;
+        }
 
         for (let i = 0; i < length; i++) {
             let key = allKeys[i];
+            // Tell the popup which gallery the batch is working on.
+            chrome.runtime.sendMessage({
+                action: "batchProgress",
+                current: i + 1,
+                total: length,
+                galleryName: allDoujinshis[key],
+                stage: "Downloading"
+            });
             const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
             if (resp.ok)
             {
-                const json = await parsing.GetJsonAsync(resp);
+                let json: any;
+                try {
+                    json = await parsing.GetJsonAsync(resp);
+                } catch (error) {
+                    // Metadata parse failure (e.g. a Cloudflare HTML page).
+                    countFailure(error);
+                    errorCallback("Can't download " + key + " (" + String(error) + ").");
+                    continue; // Keep going with the remaining galleries.
+                }
 
                 let title = utils.getDownloadName(downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
@@ -131,11 +198,12 @@ module background
                     if (duplicateBehaviour === "ignore") {
                         continue;
                     }
-                    let c = 2;
                     let tmp = title;
                     while (names.includes(tmp)) {
-                        tmp = title + " (" + c + ")";
-                        c++;
+                        // Use the gallery ID (key) as the disambiguator so the
+                        // resulting name is deterministic and traceable back to
+                        // the source gallery instead of depending on iteration order.
+                        tmp = title + " (" + key + ")";
                     }
                     title = tmp;
                 }
@@ -146,7 +214,7 @@ module background
                 } else if (downloadAtEnd && i == length - 1) {
                     zipName = finalName;
                 }
-                currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces), errorCallback, progressCallback, allDoujinshis[key],
+                currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
                 downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
                 zipName, jobAbortController ? jobAbortController.signal : null);
                 // We download the ZIP file in the following cases:
@@ -155,25 +223,49 @@ module background
 
                 try {
                     await currentDownloader.startAsync();
-                } catch (_) {
+                    succeeded++;
+                } catch (error) {
                     // The Downloader already surfaced its own failure through
                     // errorCallback (and intentionally stays silent on abort).
-                    // Stop the batch here without re-throwing so the outer catch
-                    // does not report the same failure a second time.
-                    return;
+                    // Keep going with the remaining galleries; the summary at
+                    // the end reports the total count of successes/failures.
+                    countFailure(error);
                 }
             }
             else
             {
-                errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
+                // Distinguish Cloudflare blocks from other HTTP errors so the
+                // user knows to open the gallery and complete any challenge.
+                const isCf = resp.status === 503 || resp.status === 403;
+                const ct = (resp.headers.get("content-type") || "").toLowerCase();
+                const isHtml = ct.includes("html");
+                if (isCf || isHtml) {
+                    errorCallback("Can't download " + key + " — Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
+                } else {
+                    errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
+                }
+                countFailure("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
             }
+        }
+
+        // End-of-batch summary (not sent when the job was cancelled).
+        if (!jobWasAborted()) {
+            chrome.runtime.sendMessage({
+                action: "batchSummary",
+                succeeded: succeeded,
+                failed: failed,
+                total: length,
+                failedKinds: failedKinds
+            });
         }
     }
 
     export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string) {
         beginJob();
         downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url)
+            .then(() => clearJobMarker())
             .catch(function(error) {
+                clearJobMarker();
                 if (!jobWasAborted()) {
                     errorCallback(String(error));
                 }
@@ -218,22 +310,20 @@ module background
             if (resp.ok)
             {
                 const text = await resp.text();
+                // Anchor-scoped card parsing (see CardParsing.ts): each gallery ID
+                // is matched against its own caption so titles with quotes,
+                // entities, or extra markup cannot be mispaired with ids.
+                const cards = parseGalleryCardsFromHtml(text);
                 allDoujinshis = {};
-                let matchs = /<a href="\/g\/([0-9]+)\/".+<div class="caption">([^<]+)((<br>)+<input [^>]+>[^<]+<br>[^<]+<br>[^<]+)?<\/div>/g
-                let match;
-                let pageHtml = text.replace(/<\/a>/g, '\n');
-                do {
-                    match = matchs.exec(pageHtml);
-                    if (match !== null) {
-                        let tmpName;
-                        if (downloadName === "{pretty}") {
-                            tmpName = match[2].replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
-                        } else {
-                            tmpName = match[2].trim();
-                        }
-                        allDoujinshis[match[1]] = tmpName;
+                for (const card of cards) {
+                    let tmpName;
+                    if (downloadName === "{pretty}") {
+                        tmpName = card.title.replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
+                    } else {
+                        tmpName = card.title.trim();
                     }
-                } while (match);
+                    allDoujinshis[card.id] = tmpName;
+                }
                 await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1);
             }
         }
@@ -242,6 +332,7 @@ module background
     export function goBack() {
         // Abort any in-flight fetch, then let the download loop notice and unwind.
         abortJob();
+        clearJobMarker();
         if (!isDownloadFinished()) {
             currentDownloader!.isAwaitingAbort = true;
             currentDownloader!.currentProgress = 100;
@@ -379,6 +470,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (!request) {
         return false;
     }
+    if (request.action === "clearJobMarker") {
+        // Popup dismisses the "previous download was interrupted" notice.
+        background.clearJobMarker();
+        sendResponse({ result: "success" });
+        return true;
+    }
     if (request.from === "offscreen") {
         return handleOffscreenMessage(request);
     }
@@ -388,11 +485,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             hasOffscreenDocument().then((hasDocument) => {
                 if (!hasDocument) {
                     // Nothing can be downloading if the document is gone.
-                    sendResponse({ result: true });
+                    // Report the interruption when a job marker survived a
+                    // worker/document restart.
+                    background.jobInterrupted().then((interrupted) => {
+                        sendResponse({ result: true, interrupted: interrupted });
+                    });
                     return;
                 }
                 chrome.runtime.sendMessage({ target: "offscreen", action: "isDownloadFinished" }, (response) => {
-                    sendResponse({ result: !!(response && response.result) });
+                    const result = !!(response && response.result);
+                    if (!result) {
+                        // A download is actively running; not interrupted.
+                        sendResponse({ result: false });
+                        return;
+                    }
+                    background.jobInterrupted().then((interrupted) => {
+                        sendResponse({ result: true, interrupted: interrupted });
+                    });
                 });
             });
         } else if (request.action === "downloadDoujinshi") {
@@ -443,7 +552,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Fallback path for browsers without chrome.offscreen: the downloads run
     // directly in this worker (base64 data URL delivery).
     if (request.action === "isDownloadFinished") {
-        sendResponse({ result: background.isDownloadFinished() });
+        const done = background.isDownloadFinished();
+        background.jobInterrupted().then((interrupted) => {
+            sendResponse({ result: done, interrupted: done && interrupted });
+        });
     } else if (request.action === "downloadDoujinshi") {
         background.downloadDoujinshi(
             request.json,
@@ -451,12 +563,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             (error: string) => {
                 chrome.runtime.sendMessage({ action: "downloadError", error: error });
             },
-            (progress: number, doujinshiName: string, isZipping: boolean) => {
+            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                 chrome.runtime.sendMessage({
                     action: "updateProgress",
                     progress: progress,
                     doujinshiName: doujinshiName,
-                    isZipping: isZipping
+                    isZipping: isZipping,
+                retry: retry
                 });
             },
             request.name
@@ -469,12 +582,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             (error: string) => {
                 chrome.runtime.sendMessage({ action: "downloadError", error: error });
             },
-            (progress: number, doujinshiName: string, isZipping: boolean) => {
+            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                 chrome.runtime.sendMessage({
                     action: "updateProgress",
                     progress: progress,
                     doujinshiName: doujinshiName,
-                    isZipping: isZipping
+                    isZipping: isZipping,
+                retry: retry
                 });
             }
         );
@@ -487,12 +601,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             (error: string) => {
                 chrome.runtime.sendMessage({ action: "downloadError", error: error });
             },
-            (progress: number, doujinshiName: string, isZipping: boolean) => {
+            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                 chrome.runtime.sendMessage({
                     action: "updateProgress",
                     progress: progress,
                     doujinshiName: doujinshiName,
-                    isZipping: isZipping
+                    isZipping: isZipping,
+                retry: retry
                 });
             },
             request.url
@@ -504,12 +619,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (request.action === "updateProgress") {
         // This is handled differently since we need to pass a callback
         // The actual progress updates will be sent via messages
-        background.updateProgress((progress: number, doujinshiName: string, isZipping: boolean) => {
+        background.updateProgress((progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
             chrome.runtime.sendMessage({
                 action: "updateProgress",
                 progress: progress,
                 doujinshiName: doujinshiName,
-                isZipping: isZipping
+                isZipping: isZipping,
+            retry: retry
             });
         });
         sendResponse({ result: "success" });

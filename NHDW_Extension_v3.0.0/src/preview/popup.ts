@@ -1,5 +1,5 @@
 import AParsing from "../parsing/AParsing";
-import { utils } from "../utils/utils";
+import { utils, classifyError } from "../utils/utils";
 import { message } from "./message"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
@@ -13,6 +13,16 @@ function executeActiveTabScript(file: string): void {
         // @ts-ignore Older @types/chrome versions do not contain the MV3 scripting API.
         chrome.scripting.executeScript({ target: { tabId: tabId }, files: [file] });
     });
+}
+
+// Escape text before embedding it in the popup's innerHTML so a gallery title
+// containing quotes or HTML cannot break the markup (or inject content).
+function escapeHtml(text: string): string {
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
 }
 
 // Extract metadata from the already-open gallery page. This is the useful part
@@ -110,9 +120,31 @@ async function getGalleryFromActiveTab(id: string): Promise<any | null> {
 // Add message listener for progress updates and error messages
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
-        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping);
+        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry);
     } else if (request.action === "downloadError") {
-        document.getElementById('action')!.innerHTML = 'An error occured while downloading the doujinshi: <b>' + request.error + '</b>';
+        // Label the failure kind (metadata / Cloudflare / image / archive /
+        // cancellation) so the user understands what went wrong at a glance.
+        const { label } = classifyError(request.error);
+        document.getElementById('action')!.innerHTML = 'An error occured: <b>' + label + '.</b> ' + escapeHtml(String(request.error));
+    } else if (request.action === "batchProgress") {
+        // Per-gallery progress while a batch download is running
+        document.getElementById('action')!.innerHTML = message.batchProgress(
+            request.current, request.total, request.galleryName, request.stage || "Downloading");
+    } else if (request.action === "batchSummary") {
+        // End-of-batch success/failure summary
+        document.getElementById('action')!.innerHTML = message.batchSummary(
+            request.succeeded, request.failed, request.total, request.failedKinds);
+        setTimeout(() => {
+            const buttonBack = document.getElementById('buttonBack');
+            if (buttonBack) {
+                buttonBack.addEventListener('click', function() {
+                    let popup = Popup.getInstance();
+                    chrome.runtime.sendMessage({ action: "goBack" }, function() {
+                        popup.updatePreviewAsync(popup.url);
+                    });
+                });
+            }
+        }, 0);
     }
     return true;
 });
@@ -131,7 +163,7 @@ export default class Popup
     //#endregion "singleton"
 
     // Update progress bar on the preview popup
-    updateProgress(progress: number, doujinshiName: string, isZipping: boolean) {
+    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string) {
         if (isZipping && progress == 100) { // File is being downloaded
             document.getElementById('action')!.innerHTML = message.downloadDone();
             // Add event listener after updating the HTML content
@@ -148,7 +180,7 @@ export default class Popup
                 }
             }, 0);
         } else { // Download in progress
-            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress);
+            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry);
             // Add event listener after updating the HTML content
             setTimeout(() => {
                 const buttonBack = document.getElementById('buttonBack');
@@ -173,7 +205,7 @@ export default class Popup
         if (match !== null) {
             await self.#doujinshiPreviewAsync(match[1]);
         } else if (self.url.startsWith("https://nhentai.net")) {
-            executeActiveTabScript("js/getHtml.js");
+            executeActiveTabScript("js/getGalleries.js");
         } else {
             document.getElementById('action')!.innerHTML =  message.invalidPage();
         }
@@ -224,7 +256,7 @@ export default class Popup
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
                 document.getElementById('action')!.innerHTML = message.downloadInfo(title, json.images.pages.length, extension);
-                (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces);
+                (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listener after updating the HTML content
                 setTimeout(() => {
@@ -247,44 +279,36 @@ export default class Popup
     //#endregion "single download"
 
     //#region "multiple download"
-    updatePreviewAll(sourceHtml: string, downloadName: string, useZip: string, replaceSpaces: boolean) {
+    //#region "multiple download"
+    // Receives structured gallery cards extracted from the live DOM by
+    // js/getGalleries.js (id from the card's own cover link, title from the
+    // caption inside the same link). No HTML serialization / regex parsing:
+    // quotes, entities, markup changes, or duplicate titles cannot break the
+    // id <-> title pairing.
+    updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, downloadName: string, useZip: string, replaceSpaces: boolean) {
         let self = Popup.getInstance();
 
-        // Get doujins on the page
-        let matchs = /<a href="\/g\/([0-9]+)\/".+<div class="caption">([^<]+)((<br>)+<input [^>]+>[^<]+<br>[^<]+<br>[^<]+)?<\/div>/g
-        let match;
-        let finalHtml = "";
-        let allIds: Array<string> = [];
-        let i = 0;
-        let pageHtml = sourceHtml.replace(/<\/a>/g, '\n');
-        do {
-            match = matchs.exec(pageHtml);
-            if (match !== null) {
-                let isChecked = false;
-                if (match[4] !== undefined ) {
-                    // For each doujin, we check if our custom checkbox is ticked
-                    var testMatch = pageHtml.match('<input id="' + match[1] + '" type="checkbox"( value="(true|false)")?>');
-                    try {
-                        isChecked = testMatch![2] === "true";
-                    } catch (_) {
-                        isChecked = false;
-                    }
-                }
-                let tmpName;
-                if (downloadName === "{pretty}") {
-                    tmpName = match[2].replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
-                } else {
-                    tmpName = match[2].trim();
-                }
-                // Then we add a checkbox on the extension (preticked or not depending of previous result)
-                finalHtml += '<input id="' + match[1] + '" name="' + tmpName + '" type="checkbox" ' + (isChecked ? "checked" : "") + '/>' + tmpName + '<br/>';
-                allIds.push(match[1]);
-                i++;
-            }
-        } while (match);
-        if (finalHtml === "") {
+        if (galleries.length === 0) {
             document.getElementById('action')!.innerHTML = message.invalidPage();
             return;
+        }
+
+        // Keep titles in a plain object keyed by gallery ID instead of the DOM
+        // name attribute: a title containing quotes or HTML can no longer break
+        // the checkbox markup or the download message.
+        const titleById: Record<string, string> = {};
+        const allIds: Array<string> = [];
+        let finalHtml = "";
+        for (const card of galleries) {
+            let tmpName;
+            if (downloadName === "{pretty}") {
+                tmpName = card.title.replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
+            } else {
+                tmpName = card.title.trim();
+            }
+            titleById[card.id] = tmpName;
+            finalHtml += '<input id="' + card.id + '" type="checkbox"/>' + escapeHtml(tmpName) + '<br/>';
+            allIds.push(card.id);
         }
 
         // Use URL for default download name
@@ -303,21 +327,17 @@ export default class Popup
 
         // Add the HTML
         let nbDownload = 0;
-        let currPage = 0;
-        let maxPage = 0;
-        let html =  '<h3>' + i + ' doujinshi' + (i > 1 ? 's' : '') + ' found</h3>' + finalHtml
+        let currPage = currentPage;
+        let html =  '<h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>' + finalHtml
         + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/><br/><br/><input type="button" id="button" value="Download"/>';
-        let lastMatch = /page=([0-9]+)" class="last">/.exec(pageHtml) // Get the number of pages
-        if (lastMatch !== null) {
-            currPage = parseInt(/page=([0-9]+)" class="page current">/.exec(pageHtml)![1]);
-            maxPage = parseInt(lastMatch[1]);
+        if (maxPage > 0 && currPage > 0) {
             nbDownload = maxPage - currPage + 1;
             html += '<br/><input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/><br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
         }
         html += '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;
         document.getElementById('action')!.innerHTML = html;
         (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(name, replaceSpaces);
-        if (lastMatch !== null) {
+        if (maxPage > 0 && currPage > 0) {
             (document.getElementById('downloadInput') as HTMLInputElement).value = currPage + "-" + maxPage;
             document.getElementById('buttonHelp')!.addEventListener('click', function() {
                 alert("Input the pages you want to download for the \"Download all\" feature\nWrite your pages separated by comma ',', you can also write range of number by separating them by a dash '-'\n"
@@ -377,7 +397,7 @@ export default class Popup
                     allIds.forEach(function(id) {
                         let elem = document.getElementById(id) as HTMLInputElement;
                         if (elem && elem.checked) {
-                            allDoujinshis[id] = elem.name;
+                            allDoujinshis[id] = titleById[id];
                         }
                     });
                     if (Object.keys(allDoujinshis).length > 0) { // There is at least one element selected, we launch download
@@ -425,7 +445,7 @@ export default class Popup
                         allIds.forEach(function(id) {
                             let elem = (document.getElementById(id) as HTMLInputElement);
                             if (elem) {
-                                allDoujinshis[id] = elem.name;
+                                allDoujinshis[id] = titleById[id];
                             }
                         });
                         let pages = self.#parseDownloadAll(maxPage);

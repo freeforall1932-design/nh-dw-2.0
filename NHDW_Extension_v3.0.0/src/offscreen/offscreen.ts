@@ -1,8 +1,9 @@
 import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
+import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "../background/Downloader";
-import { utils } from "../utils/utils";
+import { utils, classifyError } from "../utils/utils";
 var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
@@ -27,6 +28,7 @@ let jobAbortController: AbortController | null = null;
 
 function beginJob(): AbortSignal {
     jobAbortController = new AbortController();
+    writeJobMarker(true);
     return jobAbortController.signal;
 }
 
@@ -38,6 +40,23 @@ function abortJob() {
 
 function jobWasAborted(): boolean {
     return jobAbortController !== null && jobAbortController.signal.aborted;
+}
+
+// ---- active-job marker (chrome.storage.session) --------------------------
+// Same key the service worker uses (and clears via clearJobMarker), so a
+// restarted service worker or a reopened popup can detect a download that was
+// interrupted when this document died unexpectedly. Session storage survives
+// worker restarts, not browser restarts — exactly the lifetime we need.
+function writeJobMarker(active: boolean) {
+    try {
+        (chrome.storage as any).session.set({ downloadJob: { active: active, startedAt: Date.now() } });
+    } catch (_) { /* storage.session unavailable — best effort */ }
+}
+
+function clearJobMarker() {
+    try {
+        (chrome.storage as any).session.remove("downloadJob");
+    } catch (_) { /* best effort */ }
 }
 
 chrome.storage.sync.get({
@@ -75,20 +94,21 @@ function scheduleIdleClose() {
 // (re)opens mid-download.
 // All broadcasts are marked from:"offscreen" so the service worker can tell
 // them apart from popup commands (they reach the popup directly).
-let latestProgress: { progress: number; doujinshiName: string | null; isZipping: boolean } | null = null;
+let latestProgress: { progress: number; doujinshiName: string | null; isZipping: boolean; retry: string | null } | null = null;
 
 function errorCallback(error: string) {
     chrome.runtime.sendMessage({ from: "offscreen", action: "downloadError", error: error });
 }
 
-function progressCallback(progress: number, doujinshiName: string | null, isZipping: boolean) {
-    latestProgress = { progress: progress, doujinshiName: doujinshiName, isZipping: isZipping };
+function progressCallback(progress: number, doujinshiName: string | null, isZipping: boolean, retry: string | null = null) {
+    latestProgress = { progress: progress, doujinshiName: doujinshiName, isZipping: isZipping, retry: retry };
     chrome.runtime.sendMessage({
         from: "offscreen",
         action: "updateProgress",
         progress: progress,
         doujinshiName: doujinshiName,
-        isZipping: isZipping
+        isZipping: isZipping,
+        retry: retry
     });
 }
 
@@ -101,7 +121,9 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string) {
     const signal = beginJob();
     let zip = new JSZip();
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
-    currentDownloader.startAsync().then(scheduleIdleClose).catch(scheduleIdleClose);
+    currentDownloader.startAsync()
+        .then(() => { clearJobMarker(); scheduleIdleClose(); })
+        .catch(() => { clearJobMarker(); scheduleIdleClose(); });
 }
 
 async function downloadAllDoujinshisAsync(
@@ -133,13 +155,41 @@ async function downloadAllDoujinshisAsync(
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;
     let allKeys = Object.keys(allDoujinshis);
+    // Per-gallery tally for the end-of-batch summary.
+    let succeeded = 0;
+    let failed = 0;
+    const failedKinds: Record<string, number> = {};
+
+    function countFailure(error: any) {
+        failed++;
+        const { kind } = classifyError(error);
+        failedKinds[kind] = (failedKinds[kind] || 0) + 1;
+    }
 
     for (let i = 0; i < length; i++) {
         let key = allKeys[i];
+        // Tell the popup which gallery the batch is working on. Broadcast with
+        // from:"offscreen" so the service worker does not relay it back.
+        chrome.runtime.sendMessage({
+            from: "offscreen",
+            action: "batchProgress",
+            current: i + 1,
+            total: length,
+            galleryName: allDoujinshis[key],
+            stage: "Downloading"
+        });
         const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
         if (resp.ok)
         {
-            const json = await parsing.GetJsonAsync(resp);
+            let json: any;
+            try {
+                json = await parsing.GetJsonAsync(resp);
+            } catch (error) {
+                // Metadata parse failure (e.g. a Cloudflare HTML page).
+                countFailure(error);
+                errorCallback("Can't download " + key + " (" + String(error) + ").");
+                continue; // Keep going with the remaining galleries.
+            }
 
             let title = utils.getDownloadName(downloadName, json.title.pretty === "" ?
                 json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
@@ -148,11 +198,12 @@ async function downloadAllDoujinshisAsync(
                 if (duplicateBehaviour === "ignore") {
                     continue;
                 }
-                let c = 2;
                 let tmp = title;
                 while (names.includes(tmp)) {
-                    tmp = title + " (" + c + ")";
-                    c++;
+                    // Use the gallery ID (key) as the disambiguator so the
+                    // resulting name is deterministic and traceable back to
+                    // the source gallery instead of depending on iteration order.
+                    tmp = title + " (" + key + ")";
                 }
                 title = tmp;
             }
@@ -163,7 +214,7 @@ async function downloadAllDoujinshisAsync(
             } else if (downloadAtEnd && i == length - 1) {
                 zipName = finalName;
             }
-            currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces), errorCallback, progressCallback, allDoujinshis[key],
+            currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
             zipName, jobAbortController ? jobAbortController.signal : null);
             // We download the ZIP file in the following cases:
@@ -172,18 +223,41 @@ async function downloadAllDoujinshisAsync(
 
             try {
                 await currentDownloader.startAsync();
-            } catch (_) {
+                succeeded++;
+            } catch (error) {
                 // The Downloader already surfaced its own failure through
                 // errorCallback (and intentionally stays silent on abort).
-                // Stop the batch here without re-throwing so the outer catch
-                // does not report the same failure a second time.
-                return;
+                // Keep going with the remaining galleries; the summary at
+                // the end reports the total count of successes/failures.
+                countFailure(error);
             }
         }
         else
         {
-            errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
+            // Distinguish Cloudflare blocks from other HTTP errors so the
+            // user knows to open the gallery and complete any challenge.
+            const isCf = resp.status === 503 || resp.status === 403;
+            const ct = (resp.headers.get("content-type") || "").toLowerCase();
+            const isHtml = ct.includes("html");
+            if (isCf || isHtml) {
+                errorCallback("Can't download " + key + " — Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
+            } else {
+                errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
+            }
+            countFailure("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
         }
+    }
+
+    // End-of-batch summary (not sent when the job was cancelled).
+    if (!jobWasAborted()) {
+        chrome.runtime.sendMessage({
+            from: "offscreen",
+            action: "batchSummary",
+            succeeded: succeeded,
+            failed: failed,
+            total: length,
+            failedKinds: failedKinds
+        });
     }
 }
 
@@ -192,8 +266,9 @@ function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName:
     beginJob();
     let zip = new JSZip();
     downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true)
-        .then(scheduleIdleClose)
+        .then(() => { clearJobMarker(); scheduleIdleClose(); })
         .catch(function(error) {
+            clearJobMarker();
             if (!jobWasAborted()) {
                 errorCallback(String(error));
             }
@@ -237,22 +312,20 @@ async function downloadAllPagesAsync(
         if (resp.ok)
         {
             const text = await resp.text();
+            // Anchor-scoped card parsing (see CardParsing.ts): each gallery ID
+            // is matched against its own caption so titles with quotes,
+            // entities, or extra markup cannot be mispaired with ids.
+            const cards = parseGalleryCardsFromHtml(text);
             allDoujinshis = {};
-            let matchs = /<a href="\/g\/([0-9]+)\/".+<div class="caption">([^<]+)((<br>)+<input [^>]+>[^<]+<br>[^<]+<br>[^<]+)?<\/div>/g
-            let match;
-            let pageHtml = text.replace(/<\/a>/g, '\n');
-            do {
-                match = matchs.exec(pageHtml);
-                if (match !== null) {
-                    let tmpName;
-                    if (downloadName === "{pretty}") {
-                        tmpName = match[2].replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
-                    } else {
-                        tmpName = match[2].trim();
-                    }
-                    allDoujinshis[match[1]] = tmpName;
+            for (const card of cards) {
+                let tmpName;
+                if (downloadName === "{pretty}") {
+                    tmpName = card.title.replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
+                } else {
+                    tmpName = card.title.trim();
                 }
-            } while (match);
+                allDoujinshis[card.id] = tmpName;
+            }
             await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1);
         }
     }
@@ -262,8 +335,9 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
     cancelIdleTimer();
     beginJob();
     downloadAllPagesAsync(allDoujinshis, pagesArr, path, url)
-        .then(scheduleIdleClose)
+        .then(() => { clearJobMarker(); scheduleIdleClose(); })
         .catch(function(error) {
+            clearJobMarker();
             if (!jobWasAborted()) {
                 errorCallback(String(error));
             }
@@ -274,6 +348,7 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
 function goBack() {
     // Abort any in-flight fetch, then let the download loop notice and unwind.
     abortJob();
+    clearJobMarker();
     if (!isDownloadFinished()) {
         currentDownloader!.isAwaitingAbort = true;
         currentDownloader!.currentProgress = 100;
@@ -305,7 +380,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         // service worker turns this response into an updateProgress message.
         sendResponse(Object.assign({ result: "success" },
             latestProgress === null
-                ? { progress: undefined, doujinshiName: null, isZipping: false }
+                ? { progress: undefined, doujinshiName: null, isZipping: false, retry: null }
                 : latestProgress));
     }
     return false;

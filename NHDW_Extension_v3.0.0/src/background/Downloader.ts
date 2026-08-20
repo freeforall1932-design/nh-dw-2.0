@@ -23,18 +23,19 @@ export default class Downloader
         this.#mediaId = this.#json.media_id;
     }
 
-    updateProgress(progress: number, name: string | null, isZipping: boolean) {
+    updateProgress(progress: number, name: string | null, isZipping: boolean, retry: string | null = null) {
         try {
-            this.progressCallback(progress, name, isZipping);
+            this.progressCallback(progress, name, isZipping, retry);
         } catch (e) { } // Dead object
         this.#progressPercent = progress;
         this.#progressName = name;
         this.#progressZipping = isZipping;
+        this.#progressRetry = retry;
     }
 
     updateProgressLatest(updateCallback: Function) {
         this.progressCallback = updateCallback;
-        this.progressCallback(this.#progressPercent, this.#progressName, this.#progressZipping);
+        this.progressCallback(this.#progressPercent, this.#progressName, this.#progressZipping, this.#progressRetry);
     }
 
     async startAsync() {
@@ -88,6 +89,17 @@ export default class Downloader
                         if (nbTries > 0) {
                             console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
                             nbTries--;
+                            // Surface the retry in the progress UI so the user can
+                            // see the download is recovering rather than stuck.
+                            this.updateProgress(i * 100 / maxNbOfPage, this.#doujinshiName + "/" + (i + 1), false, "retry " + (5 - nbTries) + "/5");
+                            // Exponential backoff: each successive retry waits
+                            // longer so the server has time to recover and we
+                            // reduce the chance of hitting rate limits.
+                            // The first retry waits Ms, the last ~16× Ms.
+                            if (this.retryBackoffMs > 0) {
+                                const backoffDelay = this.retryBackoffMs * Math.pow(2, 5 - nbTries - 1);
+                                await new Promise(r => setTimeout(r, backoffDelay));
+                            }
                         } else {
                             throw error;
                         }
@@ -278,6 +290,15 @@ export default class Downloader
                         continue;
                     }
                     const blob = await resp.blob();
+                    // Reject suspiciously small responses that are unlikely to
+                    // be valid images (e.g. a 1x1 pixel placeholder, an empty
+                    // error page, or a "blocked" icon). The vast majority of
+                    // nhentai pages are well over 1 KB; anything below this
+                    // threshold is almost certainly not a real image.
+                    if (blob.size < this.minImageBytes) {
+                        lastStatus = "response too small (" + blob.size + " bytes)";
+                        continue;
+                    }
                     await new Promise((resolve, reject) => {
                         const reader = new FileReader();
                         reader.onload = () => {
@@ -321,6 +342,8 @@ export default class Downloader
     useZip: string; // How data must be downloaded
     maxConcurrentDownloads: number = 3; // Number of concurrent downloads
     revokeObjectUrlDelayMs: number = 60000; // How long an object URL stays alive after a successful download
+    minImageBytes: number = 1024; // Minimum acceptable image response size (bytes)
+    retryBackoffMs: number = 200; // Base delay (ms) for exponential backoff between retries (last retry waits ~3.2s)
     #json: any; // JSON containing all data
     #zip: typeof JSZip; // ZIP data that will be downloaded at the end
     #abortSignal: AbortSignal | null; // Cancels in-flight image fetches when the user aborts
@@ -338,4 +361,5 @@ export default class Downloader
     #progressPercent: number;
     #progressName: string | null;
     #progressZipping: boolean;
+    #progressRetry: string | null = null;
 }
