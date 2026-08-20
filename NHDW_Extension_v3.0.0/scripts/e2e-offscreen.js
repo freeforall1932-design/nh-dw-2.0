@@ -76,12 +76,15 @@ const pageBytes = [
     new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x06, 0x07, 0x08])
 ];
 
+let failImages = false;
+
 function fetchStub(url) {
     const u = String(url);
     if (u.includes("/api/gallery/" + GALLERY_ID)) {
         return Promise.resolve(new Response(JSON.stringify(galleryJson), { status: 200 }));
     }
     if (u.includes("nhentai.net/galleries/" + MEDIA_ID + "/")) {
+        if (failImages) return Promise.resolve(new Response("nope", { status: 404 }));
         const m = /\/([0-9]+)\.(jpg|png)$/.exec(u);
         if (m) return Promise.resolve(new Response(pageBytes[parseInt(m[1], 10) - 1], { status: 200 }));
     }
@@ -98,6 +101,7 @@ const sandbox = {
     Response,
     Blob,   // jszip needs a Blob constructor for generateAsync({type:"blob"})
     URL: URLStub,
+    AbortController,
     document: {} // offscreen documents have a DOM; Downloader then zips without web workers
     // NOTE: do not inject host Uint8Array/ArrayBuffer/Promise built-ins; they
     // would shadow the VM's own intrinsics and break instanceof checks.
@@ -240,6 +244,36 @@ function askOffscreen(message) {
 
     console.log("PASS: ZIP (" + buf.length + " bytes) delivered via object URL " + download.url);
     console.log("PASS: entries: " + names.join(", ") + "; " + progressMessages.length + " progress broadcasts");
+
+    // ---- Batch download with a failing gallery must report exactly once ----
+    // Regression guard: the Downloader surfaces a gallery failure through
+    // errorCallback and then re-throws; the batch loop must swallow that
+    // re-throw so the outer catch does not report the same failure twice.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    failImages = true;
+    const batchStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "Test" },
+        finalName: "Downloads/Batch"
+    });
+    if (!batchStart || batchStart.result !== "started") {
+        fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(batchStart));
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "downloadError").length >= 1,
+        "no downloadError was sent for the failing batch gallery"
+    );
+    const errorCount = sentMessages.filter((m) => m.action === "downloadError").length;
+    if (errorCount !== 1) {
+        fail("batch gallery failure must be reported exactly once, got " + errorCount +
+            ": " + JSON.stringify(sentMessages.filter((m) => m.action === "downloadError")));
+    }
+    if (downloads.length !== 0) {
+        fail("no ZIP must be delivered when the batch gallery fails, got " + downloads.length);
+    }
+    console.log("PASS: batch gallery failure reported exactly once (no double report)");
+
     console.log("PASS: offscreen document pipeline works with no base64 round-trip.");
     process.exit(0);
 })();
