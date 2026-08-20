@@ -286,9 +286,23 @@ function fixtureServerHandler(req, res) {
     } else if (/^\/api\/gallery\/\d+/.test(url)) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(FIXTURE_GALLERY));
+    } else if (req.method === "OPTIONS") {
+        res.writeHead(204, {
+            "Access-Control-Allow-Origin": "https://nhentai.net",
+            "Access-Control-Allow-Credentials": "true",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Max-Age": "600"
+        });
+        res.end();
     } else if (/^\/galleries\/987654\/[1-3]\.(jpg|png)$/.test(url)) {
         const m = url.match(/([1-3])\.(jpg|png)$/);
-        res.writeHead(200, { "Content-Type": "image/jpeg" });
+        res.writeHead(200, {
+            "Content-Type": "image/jpeg",
+            "Access-Control-Allow-Origin": "https://nhentai.net",
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin"
+        });
         res.end(FIXTURE_PAGE_BYTES[parseInt(m[1], 10) - 1]);
     } else {
         res.writeHead(404, { "Content-Type": "text/plain" });

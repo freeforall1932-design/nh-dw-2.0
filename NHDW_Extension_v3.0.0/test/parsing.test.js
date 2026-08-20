@@ -335,6 +335,7 @@ describe('classifyError', () => {
         assert.deepStrictEqual(classifyError('Failed to fetch original image from all image servers (response too small (10 bytes)).').kind, 'image');
         assert.deepStrictEqual(classifyError('Failed to download original image (download failed).').kind, 'image');
         assert.strictEqual(classifyError('Failed to fetch original image from all image servers (unexpected content-type "text/html").').kind, 'image');
+        assert.strictEqual(classifyError('Failed to fetch original image from all image servers (403: Forbidden). Gallery metadata was read; keep the gallery tab open after any browser challenge and try again.').kind, 'image');
     });
 
     it('classifies archive (ZIP) start failures', () => {

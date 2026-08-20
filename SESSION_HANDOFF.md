@@ -1,87 +1,61 @@
 # Session Handoff — nh-dw-2.0 / NHentai Downloader
 
-Written 2026-08-20 after icon + Cloudflare-metadata follow-up.
+Written 2026-08-20 after tab-first image fetches.
 
 ## Current branch
 
-- Branch: `arena/01a01eab-nh-dw-2-0` (this session; previous work landed via PR #10 on `arena/01a01e41-nh-dw-2-0`)
-- Commits on this branch vs `main`:
-  - `ba76a4b` Fix MV3 toolbar icons 404ing against `js/background.js`
-  - `9485d24` Read gallery metadata from the open tab before hitting the API
+- Branch: `arena/01a01ed3-nh-dw-2-0` (this session; previous work landed via PR #11)
 - Release bundles in `NHDW_Release_v3.0.0/js/` are synchronized with the webpack output.
 - Onion / Tor support remains intentionally dropped.
 
 ## What this session actually fixed
 
-### 1. Toolbar icon: `Failed to set icon 'Icon.png': Failed to fetch`
+### Image fetches: extension-origin `i*.nhentai.net` after metadata succeeded
 
-**Cause:** MV3 service worker lives at `js/background.js`. `chrome.action.setIcon({ path: "Icon.png" })` is fetched relative to that URL, so Chromium requested `js/Icon.png` (404) and the rejected promise showed as uncaught.
-
-**Fix (in the tree now):**
-- Root-relative paths `/Icon.png` and `/Icon-grey.png`
-- Catch `setIcon` rejections
-- If path-based `setIcon` still fails, load the PNG via `chrome.runtime.getURL` + `createImageBitmap` + `OffscreenCanvas` and retry with `imageData`
-- `action.default_icon` in source and release manifests
-- Set the icon on worker startup for the active tab; guard missing `tabs[0]`
-- Smoke test now rejects `setIcon` the way Chrome does, and asserts root-relative paths plus swallowed rejections
-- Browser harness has a dedicated “toolbar icon setIcon” stage
-
-**Review / reload note:** an already-loaded unpacked extension keeps the old worker until the user clicks Reload on `chrome://extensions`. Seeing the old error after this commit almost always means the unpacked folder was not reloaded.
-
-### 2. Cloudflare metadata: `/api/gallery/<id>` 403 and the popup message
-
-**Cause (the missing part after PR #10):** `#doujinshiPreviewAsync` fetched `https://nhentai.net/api/gallery/<id>` from the **extension origin first**. Cloudflare 403s that. The fallback then injected an **async** MAIN-world function that fetched `/api/gallery` again from the page (the DevTools `Failed to load resource: 403` line) and re-downloaded `location.href` instead of reading JSON already in the DOM. `window._gallery` on a fully loaded gallery tab was never the primary path.
+**Cause:** ZIP pages were always `fetch`'d from the offscreen document / service worker (chrome-extension origin). Cloudflare can 403 those even when the open gallery tab already has `window._gallery`.
 
 **Fix (in the tree now):**
-- Shared parser `src/parsing/GalleryEmbed.ts` (`looksLikeGallery`, `extractGalleryFromHtml`)
-- Shared tab reader `src/preview/activeTabGallery.ts`: sync MAIN-world read of `window._gallery` / `window.gallery`, then parse `_gallery` out of already-loaded `<script>` tags, **then** same-origin `/api/gallery` only if the DOM had no JSON
-- Popup reads the open tab **first**; extension-origin API is last resort
-- Selected-gallery resolver uses the same reader
-- Clearer popup copy: the tab must be the gallery page itself, not a Cloudflare interstitial
-- Browser fixture gallery HTML now embeds `window._gallery` so the tab-first path is testable without a patched API fetch
 
-This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”, there is no gallery JSON to read.
+- `src/background/tabImageFetch.ts`: MAIN-world `fetch` of an original-image CDN URL, returns base64 bytes. Host allowlist only (`i` / `i1`–`i4`.nhentai.net galleries). Injected function is a Promise chain (no async/await) so webpack/es6 helpers are not serialized into the tab.
+- `Downloader.sourceTabId`: try the tab first; tab HTTP errors skip the extension origin for that URL; CORS / injection failures fall through to `fetch`.
+- Popup sends the active `tabId` on `downloadDoujinshi` / batch / multi-page; the worker relays it to offscreen.
+- Blocked image runs after successful metadata say so: “Gallery metadata was read; keep the gallery tab open after any browser challenge and try again.” HTML / tiny bodies are still rejected.
+- Fixture CORS headers on the local image CDN so a real-browser run can exercise the tab path.
+
+This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”, there is no gallery JSON and no image bytes. CDN CORS can still force the extension-origin fallback, which Cloudflare may still 403.
 
 ## Verification completed (this sandbox)
 
 - Webpack build: passed
 - TypeScript test build: passed
-- Mocha (manifest + resolver + parsing + GalleryEmbed): 53 passing
-- MV3 smoke: passed (icon paths + swallowed fetch failures)
+- Mocha (full `npm test`): 71 passing (1 pending live API)
+- MV3 smoke: passed
 - Window-less e2e (`test:e2e`): passed
-- Source and release `background.js` / `preview.js` / `offscreen.js` synchronized
-
-`npm test` (full mocha including `test/downloader.test.js`) was not required for these changes; downloader image-retry fixtures are noisy by design and were already green earlier.
+- Source and release `js/*.js` synchronized
 
 ## Setbacks (do not treat as new extension bugs without checking)
 
-1. **No Chrome/Brave in this sandbox.** `npm run test:browser` exits at `No browser found`. That is a harness limit, not a regression. `@sparticuz/chromium` still has extension support compiled out.
-2. **No live nhentai from this network.** Cannot confirm a real Cloudflare clearance cookie, a real `/api/gallery` 403, or a real `window._gallery` embed against production HTML. Fixtures cover the embed format used by `HtmlParsing` (`JSON.parse("{\u0022...}")`).
-3. **Icon error persists until Reload.** Users who loaded the extension before these commits will still log `Failed to set icon 'Icon.png': Failed to fetch`.
-4. **Metadata 403 can still appear if the tab is a challenge page.** Tab-first only works after the gallery document (with `_gallery`) has loaded. The extension-origin API will still 403 if we fall through to it; that is expected.
-5. **Image downloads can still 403 after metadata succeeds.** `Downloader` fetches `i*.nhentai.net` from the offscreen document / worker. Cloudflare can block those even when the open tab has gallery JSON. That is **not** fixed in this branch. Do not promise that “open the gallery, complete the challenge” makes image fetches succeed.
-6. **`npm ci` audit/funding output is informational.** Do not run `npm audit fix --force`.
-7. **CI workflow file already exists** at `.github/workflows/e2e-browser.yml` (push + workflow_dispatch). This sandbox previously could not add workflow files; it is in the tree now. Running it still needs GitHub-hosted Chrome/Brave.
+1. **No Chrome/Brave in this sandbox.** `npm run test:browser` exits at `No browser found`. That is a harness limit, not a regression.
+2. **No live nhentai from this network.** Cannot confirm a real Cloudflare clearance cookie, real `/api/gallery` 403, real `window._gallery`, or real `i*.nhentai.net` CORS against production.
+3. **Tab image fetch can CORS-fail.** MAIN-world `fetch` of `i*.nhentai.net` needs CORS. If the CDN does not allow `https://nhentai.net`, the code falls back to extension-origin fetch (same as before for that URL).
+4. **Image 403 can still happen** after metadata succeeds if both the tab path and the extension path are blocked. The new error copy is the product change in that case.
+5. **`npm ci` audit/funding output is informational.** Do not run `npm audit fix --force`.
+6. **CI workflow file already exists** at `.github/workflows/e2e-browser.yml`. Running it still needs GitHub-hosted Chrome/Brave.
 
 ## What to review
 
-Code to read first:
-
 | Area | Files |
 | --- | --- |
-| Icon path + ImageData fallback | `NHDW_Extension_v3.0.0/src/background/background.ts` (`ICON_COLOR` / `applyActionIcon` / `loadIconImageData`) |
-| Manifest default icon | `NHDW_Extension_v3.0.0/manifest.json`, `NHDW_Release_v3.0.0/manifest.json` |
-| Tab-first metadata | `src/preview/popup.ts` (`#doujinshiPreviewAsync`), `src/preview/activeTabGallery.ts` |
-| Embed parser | `src/parsing/GalleryEmbed.ts`, `src/parsing/HtmlParsing.ts` |
-| Resolver | `src/preview/selectedGalleryResolver.ts` |
-| Tests | `scripts/smoke-mv3.js`, `test/manifest.test.js`, `test/parsing.test.js` (GalleryEmbed), `test/resolver.test.js`, `scripts/e2e-browser.js` (icon stage + `window._gallery` fixture) |
+| Tab image fetch | `NHDW_Extension_v3.0.0/src/background/tabImageFetch.ts` |
+| Downloader tab-first + error copy | `src/background/Downloader.ts` (`sourceTabId`, `#loadImage`) |
+| tabId plumbing | `src/preview/popup.ts`, `src/background/background.ts`, `src/offscreen/offscreen.ts` |
+| Tests | `test/downloader.test.js` (tab image fetch), `test/parsing.test.js` (classifyError), `scripts/e2e-relay.js` |
 
 Review questions:
 
-- Does `executeInTab` correctly handle both Promise and callback `chrome.scripting.executeScript` without double-settling?
-- Is `looksLikeGallery` too strict (`media_id` required)? Downloader needs `media_id`; a partial object should not start a download.
-- If Chromium still cannot `setIcon({ path: "/Icon.png" })`, does the ImageData fallback run in a real SW (`fetch` + `OffscreenCanvas` + `createImageBitmap`)?
-- Release JS matches source webpack output (`/Icon.png` in `background.js`; “does not contain gallery metadata” in `preview.js`).
+- Is MAIN-world fetch the right first hop given CDN CORS, or should ISOLATED-world (host_permissions, no CORS) be tried first?
+- Does `executeInTab` + a minified Promise-chain `func` still run in a real SW/offscreen document?
+- Raw mode still uses `chrome.downloads.download(cdnUrl)` and does not go through the tab.
 
 ## What is left (next session)
 
@@ -89,29 +63,14 @@ Review questions:
 
 Reload unpacked `NHDW_Release_v3.0.0`, then:
 
-1. Confirm the toolbar icon colors on `nhentai.net` and greys elsewhere with **no** `Failed to set icon` in the worker console.
-2. Open a **fully loaded** gallery (`/g/<id>/`, not the CF interstitial). Open the popup. Expect the Download button **without** an extension-origin `/api/gallery` 403 as the first request.
-3. From `NHDW_Extension_v3.0.0`:
-
-```bash
-npm ci
-npm run test:browser
-```
-
-Use a real Chrome or Brave binary. `sudo` is needed if the local HTTPS fixture should bind port 443. Sandbox “no browser / no DevTools / fixture skipped” is not an extension regression.
-
-### Likely next product gap: image fetches
-
-If metadata works but ZIP pages fail with Cloudflare / 403 / unexpected content-type:
-
-- Offscreen/worker `fetch` to `i*.nhentai.net` is still extension-origin.
-- Options to investigate (do not claim a bypass): fetch images through the gallery tab’s page context; reuse cookies already on the tab; surface a specific “images blocked, metadata was fine” error.
-- Keep rejecting HTML / tiny bodies so CF pages never land in the ZIP.
+1. Open a **fully loaded** gallery (`/g/<id>/`, not the CF interstitial). Open the popup, Download. Confirm ZIP pages are requested from the tab (page origin) when CORS allows, without a first-hop extension-origin `/api/gallery` 403.
+2. If images still 403, confirm the popup says metadata was read / keep the gallery tab open — not a generic failure.
+3. From `NHDW_Extension_v3.0.0`: `npm ci && npm run test:browser` with a real Chrome or Brave binary (`sudo` if the HTTPS fixture should bind 443).
 
 ### Backlog items still open or partial
 
 - **#10** Chrome/Brave/Tor matrix — harness exists, real run still pending (`[~]`).
-- **#2** Cloudflare — metadata path is now tab-first; image path is not.
+- **#2** Cloudflare — metadata and images are now tab-first; live CF confirmation is #10.
 - **#7** Resolver — offline tests cover script-tag parse; real CF confirmation is #10.
 - **#11 / #15** Lifecycle and cancel — code done, want a real-browser check.
 - **#9** Onion — dropped, do not revive.
@@ -129,12 +88,11 @@ If metadata works but ZIP pages fail with Cloudflare / 403 / unexpected content-
 cd NHDW_Extension_v3.0.0
 npm ci          # funding/audit noise is OK
 npm run build
+npm test
 npm run test:smoke
-npx mocha test/manifest.test.js test/resolver.test.js test/parsing.test.js --timeout 15000
+npm run test:e2e
 # on a machine with Chrome/Brave:
 npm run test:browser
 ```
 
 After source edits, copy webpack `js/*.js` into `NHDW_Release_v3.0.0/js/` before asking anyone to load unpacked.
-
-No Qwen review workflow is involved.

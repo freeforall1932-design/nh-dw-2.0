@@ -116,11 +116,14 @@ function isDownloadFinished(): boolean {
     return currentDownloader == null || currentDownloader.isDone();
 }
 
-function downloadDoujinshi(jsonTmp: any, path: string, name: string) {
+function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId?: number | null) {
     cancelIdleTimer();
     const signal = beginJob();
     let zip = new JSZip();
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
+    if (typeof sourceTabId === "number") {
+        currentDownloader.sourceTabId = sourceTabId;
+    }
     currentDownloader.startAsync()
         .then(() => { clearJobMarker(); scheduleIdleClose(); })
         .catch(() => { clearJobMarker(); scheduleIdleClose(); });
@@ -131,7 +134,8 @@ async function downloadAllDoujinshisAsync(
     allDoujinshis: Record<string, string>,
     finalName: string,
     downloadAtEnd: boolean,
-    galleryMetadata: Record<string, any> = {}
+    galleryMetadata: Record<string, any> = {},
+    sourceTabId?: number | null
 ) {
     let downloadName: string = "";
     let duplicateBehaviour: string = "";
@@ -220,6 +224,9 @@ async function downloadAllDoujinshisAsync(
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
             zipName, jobAbortController ? jobAbortController.signal : null);
+            if (typeof sourceTabId === "number") {
+                currentDownloader.sourceTabId = sourceTabId;
+            }
             // We download the ZIP file in the following cases:
             // downloadSeparately is true (set in extension options)
             // OR downloadAtEnd is true (can be false if downloading many pages) AND we are at the doujin of the current list
@@ -264,11 +271,11 @@ async function downloadAllDoujinshisAsync(
     }
 }
 
-function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}) {
+function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null) {
     cancelIdleTimer();
     beginJob();
     let zip = new JSZip();
-    downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata)
+    downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata, sourceTabId)
         .then(() => { clearJobMarker(); scheduleIdleClose(); })
         .catch(function(error) {
             clearJobMarker();
@@ -283,7 +290,8 @@ async function downloadAllPagesAsync(
     allDoujinshis: Record<string, string>,
     pagesArr: Array<number>,
     path: string,
-    url: string
+    url: string,
+    sourceTabId?: number | null
 ) {
     let downloadName: string = "";
     await new Promise((resolve, _reject) => {
@@ -329,15 +337,15 @@ async function downloadAllPagesAsync(
                 }
                 allDoujinshis[card.id] = tmpName;
             }
-            await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1);
+            await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1, {}, sourceTabId);
         }
     }
 }
 
-function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string) {
+function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string, sourceTabId?: number | null) {
     cancelIdleTimer();
     beginJob();
-    downloadAllPagesAsync(allDoujinshis, pagesArr, path, url)
+    downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId)
         .then(() => { clearJobMarker(); scheduleIdleClose(); })
         .catch(function(error) {
             clearJobMarker();
@@ -367,13 +375,13 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.action === "isDownloadFinished") {
         sendResponse({ result: isDownloadFinished() });
     } else if (request.action === "downloadDoujinshi") {
-        downloadDoujinshi(request.json, request.path, request.name);
+        downloadDoujinshi(request.json, request.path, request.name, request.tabId);
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllDoujinshis") {
-        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {});
+        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId);
         sendResponse({ result: "started" });
     } else if (request.action === "downloadAllPages") {
-        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url);
+        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId);
         sendResponse({ result: "started" });
     } else if (request.action === "goBack") {
         goBack();

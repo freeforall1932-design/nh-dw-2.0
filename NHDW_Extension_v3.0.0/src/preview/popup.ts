@@ -186,13 +186,15 @@ export default class Popup
                 setTimeout(() => {
                     const button = document.getElementById('button');
                     if (button) {
-                        button.addEventListener('click', function() {
+                        button.addEventListener('click', async function() {
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
+                            const tabId = await getActiveTabId();
                             chrome.runtime.sendMessage({
                                 action: "downloadDoujinshi",
                                 json: json,
                                 path: (document.getElementById('path') as HTMLInputElement).value,
-                                name: title
+                                name: title,
+                                tabId: tabId
                             });
                             self.updateProgress(0, title, false);
                         });
@@ -330,12 +332,14 @@ export default class Popup
                             let finalName = pathElement.value;
                             document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                             const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis));
+                            const tabId = await getActiveTabId();
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
                             chrome.runtime.sendMessage({
                                 action: "downloadAllDoujinshis",
                                 allDoujinshis: allDoujinshis,
                                 galleryMetadata: galleryMetadata,
-                                finalName: finalName
+                                finalName: finalName,
+                                tabId: tabId
                             });
                             self.updateProgress(0, finalName, false);
                         }
@@ -390,6 +394,7 @@ export default class Popup
                                     let finalName = pathElement.value;
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                                     const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis));
+                                    const tabId = await getActiveTabId();
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
                                     chrome.runtime.sendMessage({
                                         action: "downloadAllPages",
@@ -397,7 +402,8 @@ export default class Popup
                                         galleryMetadata: galleryMetadata,
                                         pages: pages,
                                         finalName: finalName,
-                                        url: self.url
+                                        url: self.url,
+                                        tabId: tabId
                                     });
                                     self.updateProgress(0, finalName, false);
                                 }

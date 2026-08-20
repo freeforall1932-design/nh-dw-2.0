@@ -33,7 +33,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 1. **Popup** — Clicking the extension icon on an nhentai page opens a popup that detects whether you are on a single gallery or a listing page.
 2. **Metadata** — Gallery info is fetched from `nhentai.net/api/gallery/<id>` or, if Cloudflare blocks the request, from the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
-4. **Download engine** — Images are fetched from the canonical CDN (`i.nhentai.net`) with automatic fallback through numbered mirrors (`i1`–`i4`). HTML challenge responses are rejected so they never end up inside a ZIP.
+4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin against the canonical CDN (`i.nhentai.net`) with automatic fallback through numbered mirrors (`i1`–`i4`). HTML challenge responses are rejected so they never end up inside a ZIP.
 5. **ZIP creation** — For ZIP/CBZ formats, pages are collected in memory and archived via JSZip. In supported browsers an **offscreen document** creates a real object URL for the ZIP (no base64 memory blow-up) and survives service-worker idle timeouts.
 6. **Raw mode** — Each gallery page is downloaded individually through the browser's own download manager.
 
@@ -43,9 +43,12 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 
 nhentai uses Cloudflare, which may challenge requests that appear automated. The extension mitigates this by:
 
-- Retrieving metadata from the **active browser tab** (which already passed any Cloudflare challenge) when the direct API call fails.
+- Retrieving metadata from the **active browser tab** (`window._gallery` / embedded JSON) instead of hitting `/api/gallery` from the extension origin first.
+- Fetching ZIP pages through that **same open tab** when possible, then falling back to an extension-origin CDN request.
 - Offering an **HTML parsing** option (Settings → Advanced → Use HTML to get API info) that extracts gallery data from the rendered page.
-- Falling back through CDN mirrors when an image server returns a non-image response.
+- Falling back through CDN mirrors when an image server returns a non-image response, and never adding HTML or tiny bodies to the ZIP.
+
+This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”, there is no gallery JSON and no image bytes to read. If metadata succeeds but images fail, keep the gallery tab open after the challenge and try again.
 
 If you still see 403 errors:
 - Make sure you are logged into nhentai in the active tab.
