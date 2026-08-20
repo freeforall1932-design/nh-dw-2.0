@@ -1,0 +1,13 @@
+{
+    "extends": "./tsconfig.json",
+    "compilerOptions": {
+        "module": "commonjs",
+        "outDir": "build/test",
+        "skipLibCheck": true
+    },
+    "include": [
+        "src/parsing/**/*.ts",
+        "src/utils/**/*.ts",
+        "src/background/Downloader.ts"
+    ]
+}

@@ -161,9 +161,10 @@ module background
 
         let zip = new JSZip();
         for (let i = 0; i < pagesArr.length; i++) {
+            // Take the page at the current index. Do not mutate pagesArr here:
+            // splicing while iterating made the "last page" check below wrong and
+            // the final ZIP was never downloaded.
             let curr = pagesArr[i];
-            curr = pagesArr[0];
-            pagesArr.splice(0, 1);
             let m = /page=([0-9]+)/.exec(url)
             if (m !== null) {
                 url = url.replace(m[0], "page=" + curr);
@@ -213,21 +214,191 @@ module background
     }
 }
 
-// @ts-ignore
-window.isDownloadFinished = background.isDownloadFinished;
-// @ts-ignore
-window.downloadDoujinshi = background.downloadDoujinshi;
-// @ts-ignore
-window.downloadAllDoujinshis = background.downloadAllDoujinshis;
-// @ts-ignore
-window.goBack = background.goBack;
-// @ts-ignore
-window.updateProgress = background.updateProgress;
-// @ts-ignore
-window.downloadAllPages = background.downloadAllPages;
+// NOTE: MV3 service workers run in a worker global scope without `window`.
+// Do not assign background functions to `window` here: the first assignment
+// would throw a ReferenceError and prevent the message listener below from
+// ever registering. All communication goes through chrome.runtime.onMessage.
+
+// ---- offscreen document plumbing -----------------------------------------
+// When chrome.offscreen is available, downloads run in an offscreen document:
+// it can create real object URLs (no base64 memory blow-up) and it is not
+// subject to the service worker idle timeout. The service worker then only
+// relays commands and lifecycle messages.
+const USE_OFFSCREEN: boolean = typeof chrome !== "undefined"
+    && typeof (chrome as any).offscreen !== "undefined"
+    && typeof (chrome as any).offscreen.createDocument === "function";
+
+let creatingOffscreen: Promise<void> | null = null;
+
+async function ensureOffscreenDocument(): Promise<void> {
+    if (creatingOffscreen !== null) {
+        return creatingOffscreen;
+    }
+    creatingOffscreen = (async () => {
+        const offscreen = (chrome as any).offscreen;
+        if (offscreen === undefined || typeof offscreen.createDocument !== "function") {
+            throw new Error("chrome.offscreen is not available");
+        }
+        const hasDocument = await hasOffscreenDocument();
+        if (!hasDocument) {
+            await new Promise<void>((resolve, reject) => {
+                let result: any;
+                try {
+                    result = offscreen.createDocument({
+                        url: "offscreen.html",
+                        reasons: ["BLOBS"],
+                        justification: "Create object URLs for ZIP downloads; service workers have no URL.createObjectURL"
+                    }, () => resolve());
+                } catch (error) {
+                    reject(error);
+                    return;
+                }
+                if (result && typeof result.then === "function") {
+                    result.then(() => resolve()).catch(reject);
+                }
+            });
+        }
+    })();
+    try {
+        await creatingOffscreen;
+    } finally {
+        creatingOffscreen = null;
+    }
+}
+
+function hasOffscreenDocument(): Promise<boolean> {
+    const offscreen = (chrome as any).offscreen;
+    if (offscreen === undefined || typeof offscreen.hasDocument !== "function") {
+        return Promise.resolve(false);
+    }
+    return new Promise<boolean>((resolve) => {
+        let result: any;
+        try {
+            result = offscreen.hasDocument((has: boolean) => resolve(!!has));
+        } catch (_) {
+            resolve(false);
+            return;
+        }
+        if (result && typeof result.then === "function") {
+            result.then((has: boolean) => resolve(!!has)).catch(() => resolve(false));
+        }
+    });
+}
+
+function closeOffscreenDocument() {
+    const offscreen = (chrome as any).offscreen;
+    if (offscreen === undefined || typeof offscreen.closeDocument !== "function") {
+        return;
+    }
+    let result: any;
+    try {
+        result = offscreen.closeDocument();
+    } catch (_) {
+        return;
+    }
+    if (result && typeof result.catch === "function") {
+        result.catch(() => {});
+    }
+}
+
+function askOffscreen(message: any, callback?: (response: any) => void) {
+    ensureOffscreenDocument()
+        .then(() => {
+            chrome.runtime.sendMessage(Object.assign({ target: "offscreen" }, message), (response) => {
+                if (callback) {
+                    callback(response);
+                }
+            });
+        })
+        .catch((error) => {
+            if (callback) {
+                callback({ result: false, error: String(error) });
+            }
+        });
+}
+
+function relayDownloadError(error: string) {
+    chrome.runtime.sendMessage({ action: "downloadError", error: error });
+}
+
+// Messages from the offscreen document back to the service worker.
+// updateProgress/downloadError broadcasts also reach the popup directly, so
+// the service worker must NOT act on them (acting would ping-pong forever).
+function handleOffscreenMessage(request: any): boolean {
+    if (request.action === "offscreenIdle") {
+        closeOffscreenDocument();
+    }
+    return true;
+}
 
 // Add message listeners for Firefox private mode compatibility
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (!request) {
+        return false;
+    }
+    if (request.from === "offscreen") {
+        return handleOffscreenMessage(request);
+    }
+    if (USE_OFFSCREEN) {
+        // Downloads run in the offscreen document; relay the commands.
+        if (request.action === "isDownloadFinished") {
+            hasOffscreenDocument().then((hasDocument) => {
+                if (!hasDocument) {
+                    // Nothing can be downloading if the document is gone.
+                    sendResponse({ result: true });
+                    return;
+                }
+                chrome.runtime.sendMessage({ target: "offscreen", action: "isDownloadFinished" }, (response) => {
+                    sendResponse({ result: !!(response && response.result) });
+                });
+            });
+        } else if (request.action === "downloadDoujinshi") {
+            askOffscreen({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name }, (response) => {
+                if (response && response.result === "started") {
+                    sendResponse({ result: "started" });
+                } else {
+                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                    sendResponse({ result: "error" });
+                }
+            });
+        } else if (request.action === "downloadAllDoujinshis") {
+            askOffscreen({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, finalName: request.finalName }, (response) => {
+                if (response && response.result === "started") {
+                    sendResponse({ result: "started" });
+                } else {
+                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                    sendResponse({ result: "error" });
+                }
+            });
+        } else if (request.action === "downloadAllPages") {
+            askOffscreen({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url }, (response) => {
+                if (response && response.result === "started") {
+                    sendResponse({ result: "started" });
+                } else {
+                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                    sendResponse({ result: "error" });
+                }
+            });
+        } else if (request.action === "goBack") {
+            askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
+        } else if (request.action === "updateProgress") {
+            askOffscreen({ action: "getProgress" }, (response) => {
+                if (response && typeof response.progress === "number") {
+                    chrome.runtime.sendMessage({
+                        action: "updateProgress",
+                        progress: response.progress,
+                        doujinshiName: response.doujinshiName,
+                        isZipping: response.isZipping
+                    });
+                }
+                sendResponse({ result: "success" });
+            });
+        }
+        return true; // Required for async response
+    }
+
+    // Fallback path for browsers without chrome.offscreen: the downloads run
+    // directly in this worker (base64 data URL delivery).
     if (request.action === "isDownloadFinished") {
         sendResponse({ result: background.isDownloadFinished() });
     } else if (request.action === "downloadDoujinshi") {

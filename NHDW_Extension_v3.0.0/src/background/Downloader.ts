@@ -53,7 +53,7 @@ export default class Downloader
                     if (self.useZip === "raw") {
                         self.currentProgress = 100;
                         try {
-                            self.updateProgress(100, this.#doujinshiName, false);
+                            self.updateProgress(100, self.#doujinshiName, false);
                         } catch (e) { } // Dead object
                     }
                     self.#zip.folder(self.path);
@@ -122,8 +122,11 @@ export default class Downloader
                             streamFiles: false,
                             compression: "DEFLATE",
                             compressionOptions: { level: 5 }, // Balance between speed and compression
-                            // Use web workers for parallel processing if available
-                            worker: true
+                            // In the service worker there is no DOM thread to block, so
+                            // parallel workers are used. The offscreen document zips on
+                            // its own thread and disables workers so it only needs the
+                            // BLOBS offscreen reason.
+                            worker: typeof document === "undefined"
                         };
 
                         resolve(
@@ -155,26 +158,46 @@ export default class Downloader
         }
     }
 
-    // Service workers cannot use FileSaver's DOM-based saveAs implementation.
-    // Convert the generated archive to a data URL and hand it to the Downloads API.
+    // In a DOM context (the offscreen document) the archive is exposed through
+    // a real object URL, which avoids the ~2-3x peak memory of the base64
+    // round-trip and lets large galleries download without service-worker OOM.
+    // Service workers have no URL.createObjectURL, so there we fall back to a
+    // base64 data URL handed to the Downloads API.
     // (Using chrome.downloads also avoids the download silently doing nothing.)
     async #downloadBlob(content: Blob, filename: string): Promise<void> {
-        const bytes = new Uint8Array(await content.arrayBuffer());
-        let binary = "";
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+        let url: string;
+        let revokeObjectUrl: (() => void) | null = null;
+        if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+            url = URL.createObjectURL(content);
+            revokeObjectUrl = () => URL.revokeObjectURL(url);
+        } else {
+            const bytes = new Uint8Array(await content.arrayBuffer());
+            let binary = "";
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode(...bytes.subarray(i, Math.min(i + chunkSize, bytes.length)));
+            }
+            url = "data:application/zip;base64," + btoa(binary);
         }
-        const url = "data:application/zip;base64," + btoa(binary);
-        await new Promise<void>((resolve, reject) => {
-            chrome.downloads.download({ url: url, filename: filename }, function(downloadId) {
-                if (downloadId === undefined) {
-                    reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
-                } else {
-                    resolve();
-                }
+        try {
+            await new Promise<void>((resolve, reject) => {
+                chrome.downloads.download({ url: url, filename: filename }, function(downloadId) {
+                    if (downloadId === undefined) {
+                        reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
+                    } else {
+                        resolve();
+                    }
+                });
             });
-        });
+        } catch (error) {
+            if (revokeObjectUrl !== null) revokeObjectUrl();
+            throw error;
+        }
+        // Keep the object URL alive while Chrome's download manager reads the
+        // blob, then release it.
+        if (revokeObjectUrl !== null) {
+            setTimeout(revokeObjectUrl, this.revokeObjectUrlDelayMs);
+        }
     }
 
     // Number to string but ensure there are always 3 digits
@@ -226,6 +249,15 @@ export default class Downloader
             for (const imageUrl of imageUrls) {
                 const resp = await fetch(imageUrl);
                 if (resp.ok) {
+                    // A 200 response can still be a Cloudflare challenge page or
+                    // an error document. Only accept responses that identify as
+                    // images, otherwise try the next mirror so HTML never ends
+                    // up inside the ZIP as if it were a page.
+                    const contentType = resp.headers.get("content-type");
+                    if (contentType !== null && !contentType.toLowerCase().startsWith("image/")) {
+                        lastStatus = "unexpected content-type \"" + contentType + "\"";
+                        continue;
+                    }
                     const blob = await resp.blob();
                     await new Promise((resolve, reject) => {
                         const reader = new FileReader();
@@ -245,13 +277,19 @@ export default class Downloader
             // download. Use the canonical original-image URL and report startup
             // errors through the downloads API callback.
             const imageUrl = imageUrls[0];
-            chrome.downloads.download({
-                url: imageUrl,
-                filename: this.path.replace(/[\\\\\\/:"*?<>|]/g, '') + "-" + filename
-            }, function(downloadId) {
-                if (downloadId === undefined) {
-                    throw "Failed to download original image (" + chrome.runtime.lastError + ").";
-                }
+            await new Promise<void>((resolve, reject) => {
+                chrome.downloads.download({
+                    url: imageUrl,
+                    // Keep "/" so the configured folder structure is preserved;
+                    // strip only characters Chrome rejects in download filenames.
+                    filename: this.path.replace(/[\\:*?"<>|]/g, '') + "-" + filename
+                }, function(downloadId) {
+                    if (downloadId === undefined) {
+                        reject("Failed to download original image (" + chrome.runtime.lastError + ").");
+                    } else {
+                        resolve();
+                    }
+                });
             });
         }
     }
@@ -263,6 +301,7 @@ export default class Downloader
 
     useZip: string; // How data must be downloaded
     maxConcurrentDownloads: number = 3; // Number of concurrent downloads
+    revokeObjectUrlDelayMs: number = 60000; // How long an object URL stays alive after a successful download
     #json: any; // JSON containing all data
     #zip: typeof JSZip; // ZIP data that will be downloaded at the end
     downloadName: string | null; // Name of the ZIP, null if should not download

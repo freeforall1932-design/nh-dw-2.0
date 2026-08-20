@@ -12,7 +12,16 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Correct duplicate-title behavior (`rename` and `ignore`)
 - [x] Add active-gallery metadata fallback from the open page
 - [x] Add original-image CDN fallback between the canonical and numbered image hosts
-- [ ] Complete a manual Chrome and Brave end-to-end download test
+- [x] Remove legacy `window.*` background assignments that crashed the MV3 service worker before `chrome.runtime.onMessage.addListener` could register (every message from the popup got no response)
+- [x] Ship the webpack-built popup (`index.html` + `js/preview.js`) in `NHDW_Release_v3.0.0`; delete the hand-written `js/popup.js` that messaged a nonexistent content-script listener
+- [x] Fix `content.ts` / `updateContent.ts` caption-loop crash on pages without `.caption` cards; scope gallery IDs to each card's own gallery link (`closest('a[href*="/g/"]')` — the caption sits inside the cover link on nhentai) instead of a document-wide regex matched by index; verified by `scripts/e2e-content.js`
+- [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
+- [x] Fix `downloadAllPages`: stop mutating `pagesArr` while iterating so the final ZIP is actually downloaded
+- [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
+- [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
+- [x] Replace the base64 ZIP download path: downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts` + `offscreen.html`) that delivers the archive through a real `URL.createObjectURL`; the in-worker base64 path remains only as a fallback for browsers without `chrome.offscreen`. The service worker relays commands (`scripts/e2e-relay.js` verifies relay, idle-close, and no message loops).
+- [x] Replace the live-only API test with deterministic fixture tests: `test/parsing.test.js` (API/HTML parsers incl. `\u0022` embeds, malformed/Cloudflare HTML rejection, filename utils) and `test/downloader.test.js` (image URL order and CDN fallback, ZIP entry names and original-page bytes, raw mode, object-URL delivery). The live nhentai check is opt-in behind `RUN_LIVE_TESTS=1` (`npm run test:live`).
+- [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`, plus a ready-to-run CI workflow for real Chrome and Brave included in `SESSION_HANDOFF.md`) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10).
 
 ## Priority 1: reliability and correctness
 
@@ -24,6 +33,14 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - Verify that ZIP entries are original page files and not thumbnail files.
 
 **Acceptance criteria:** `npm test` passes without network access, and live tests remain available for manual verification.
+
+**Progress:** DONE.
+`test/parsing.test.js` covers `ApiParsing` / `HtmlParsing` fixtures (including `\u0022`-escaped
+gallery embeds and non-JSON Cloudflare responses) and filename utilities; `test/downloader.test.js`
+covers image URL generation and CDN fallback order, ZIP entry names and original-page bytes,
+raw mode, and object-URL delivery; `scripts/smoke-mv3.js` / `scripts/e2e-worker.js` /
+`scripts/e2e-offscreen.js` / `scripts/e2e-relay.js` cover the built bundles with chrome/fetch
+stubs and zero network access. The live check is opt-in: `npm run test:live`.
 
 ### 2. Improve Cloudflare and response detection
 
@@ -43,6 +60,14 @@ This document tracks future work for the NHentai Downloader extension. Items are
 
 **Acceptance criteria:** ZIP files contain only valid original image responses with the expected page names.
 
+**Progress:** mostly done. `Downloader.#downloadPageInternalAsync` now rejects
+any 200 response whose `Content-Type` does not start with `image/` (HTML
+challenge pages fall through to the next CDN mirror and surface a clear
+"unexpected content-type" error instead of being zipped as images), covered by
+two tests in `test/downloader.test.js`. The page extension still comes from
+gallery metadata and only original (non-thumbnail) hosts are used. The
+"unexpectedly small response" size guard remains optional/open.
+
 ### 4. Replace the base64 ZIP download path for large galleries
 
 The current service-worker workaround converts the ZIP Blob to a base64 data URL. This increases memory use and may fail for large galleries.
@@ -50,6 +75,17 @@ The current service-worker workaround converts the ZIP Blob to a base64 data URL
 Investigate an offscreen document or another MV3-compatible download architecture that can create a downloadable object URL outside the service worker.
 
 **Acceptance criteria:** a large gallery can be archived without duplicating the entire ZIP several times in memory.
+
+**Progress:** DONE.
+Downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts`, `offscreen.html`)
+created with the `BLOBS` reason. The ZIP Blob is delivered via `URL.createObjectURL` and the
+object URL is revoked after the download is accepted; the base64 data-URL path only remains as
+a fallback for environments without `chrome.offscreen`. As a bonus the offscreen document is
+not subject to the service worker idle timeout, so long downloads survive MV3 worker
+termination. The service worker only relays commands (`isDownloadFinished`, `downloadDoujinshi`,
+`downloadAllDoujinshis`, `downloadAllPages`, `goBack`, progress refresh) and closes the
+document after 60 s of inactivity. Covered by `scripts/e2e-offscreen.js`, `scripts/e2e-relay.js`,
+and the object-URL block in `test/downloader.test.js`.
 
 ## Priority 2: page and search workflow
 
@@ -138,6 +174,29 @@ Record browser version, operating system, page type, and result.
 
 **Acceptance criteria:** supported environments are documented, and unsupported Tor/private-window combinations show a clear limitation rather than an unexplained failure.
 
+**Progress:** the manual test is automated as `scripts/e2e-browser.js` (`npm run test:browser`):
+it loads `NHDW_Release_v3.0.0` in a real Chromium-family browser over the DevTools Protocol
+and verifies the service worker, popup, content scripts, offscreen-document ZIP pipeline, and
+the ZIP on disk (nhentai.net is simulated locally, see the script header). A ready-to-run CI
+workflow for real Google Chrome + real Brave on GitHub-hosted runners is included in
+`SESSION_HANDOFF.md` (copy it to `.github/workflows/e2e-browser.yml` to enable).
+
+Environment note (why it is still `[~]` rather than `[x]`): the development sandbox could not
+execute the suite itself —
+1. its network egress is limited to the npm registry and github.com (nhentai.net, Debian
+   mirrors, storage.googleapis.com, and GitHub release assets are all unreachable), and
+2. the only browser binary obtainable through those channels, `@sparticuz/chromium`, is a
+   serverless build with extension support compiled out (verified: even a minimal MV3 test
+   extension produces no service worker target), and
+3. the sandbox's GitHub token lacks the `workflows` permission, so the CI workflow file
+   cannot be pushed from here.
+
+What was verified in the sandbox: the harness's riskiest plumbing — the local HTTPS
+nhentai.net fixture, `--host-resolver-rules` remapping, and the certificate bypass — works in
+headless Chromium (the browser loaded the fixture page at `https://nhentai.net/`). To close
+this item, run `npm run test:browser` on a machine with Chrome and/or Brave installed
+(prefixed with `sudo` so the fixture can bind port 443), or enable the CI workflow.
+
 ### 11. Verify MV3 lifecycle behavior
 
 - Test popup closing while a download is running.
@@ -190,11 +249,11 @@ Choose one direction:
 
 ## Suggested implementation order
 
-1. Deterministic tests and response validation
+1. ~~Deterministic tests and response validation~~ (done)
 2. DOM-based result-page extraction
 3. Selected-gallery queue
 4. Active-context gallery resolver
-5. Large-ZIP/offscreen download architecture
+5. ~~Large-ZIP/offscreen download architecture~~ (done)
 6. README and UX reconciliation
 7. Configurable source adapters
 8. Optional onion source
