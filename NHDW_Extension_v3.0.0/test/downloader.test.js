@@ -15,10 +15,19 @@ const gallery = {
     tags: []
 };
 
+function makePageBytes(...markerBytes) {
+    const buf = new Uint8Array(2000);
+    buf.fill(0x00);  // zero-fill the rest
+    for (let i = 0; i < markerBytes.length && i < 10; i++) {
+        buf[i] = markerBytes[i];
+    }
+    return buf;
+}
+
 const pageBytes = [
-    new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0x03]),
-    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0a, 0x04, 0x05]),
-    new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x06, 0x07, 0x08])
+    makePageBytes(0xff, 0xd8, 0xff, 0xe0),  // JPEG header
+    makePageBytes(0x89, 0x50, 0x4e, 0x47, 0x0a),  // PNG header
+    makePageBytes(0xff, 0xd8, 0xff, 0xe1)  // JPEG header
 ];
 
 const CANONICAL = 'https://i.nhentai.net/galleries/987654/';
@@ -106,6 +115,7 @@ describe('Downloader (zip mode)', () => {
     it('fetches the canonical image CDN first', async () => {
         const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test');
         downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0; // disable in tests to keep timings deterministic
         await downloader.startAsync();
 
         const expected = [1, 2, 3].map((n) => `${CANONICAL}${n}.${n === 2 ? 'png' : 'jpg'}`);
@@ -162,6 +172,7 @@ describe('Downloader (zip mode)', () => {
         let error = null;
         const downloader = new Downloader(gallery, 'Downloads/Test', (e) => { error = e; }, () => {}, 'Test', new JSZip(), 'Downloads/Test');
         downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0; // disable backoff for deterministic test counting
         await assert.rejects(downloader.startAsync());
         assert.ok(error !== null && /Failed to fetch original image/.test(error));
         assert.strictEqual(fetchStub.attempted.length, 3 * 6 * 5, '3 pages x (1 attempt + 5 retries) x 5 hosts');
@@ -200,10 +211,34 @@ describe('Downloader (zip mode)', () => {
         let error = null;
         const downloader = new Downloader(gallery, 'Downloads/Test', (e) => { error = e; }, () => {}, 'Test', new JSZip(), 'Downloads/Test');
         downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
         await assert.rejects(downloader.startAsync());
         assert.ok(error !== null && /Failed to fetch original image/.test(error));
         assert.ok(/unexpected content-type/.test(error), 'the error must mention the content-type rejection: ' + error);
         assert.strictEqual(fetchStub.attempted.length, 3 * 6 * 5, '3 pages x (1 attempt + 5 retries) x 5 hosts');
+    });
+
+    it('rejects a response that is too small (below minImageBytes)', async () => {
+        // maxConcurrentDownloads 1 keeps the fetch order deterministic.
+        chrome = makeChromeStub('zip', '1');
+        globalThis.chrome = chrome;
+        // Return a tiny response (only 10 bytes) from all hosts so every mirror
+        // is tried and rejected for being too small.
+        const tinyBody = new Uint8Array(10);
+        globalThis.fetch = (url) => {
+            return Promise.resolve(new Response(tinyBody, {
+                status: 200,
+                headers: { 'Content-Type': 'image/jpeg' }
+            }));
+        };
+
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/Test', (e) => { error = e; }, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await assert.rejects(downloader.startAsync());
+        assert.ok(error !== null, 'an error must be reported');
+        assert.ok(/response too small/.test(error), 'the error must mention the size: ' + error);
     });
 });
 
@@ -254,6 +289,7 @@ describe('Downloader (raw mode)', () => {
         };
         let error = null;
         const downloader = new Downloader(gallery, 'Downloads/Fail', (e) => { error = e; }, () => {}, 'Fail', new JSZip(), null);
+        downloader.retryBackoffMs = 0;
         await assert.rejects(downloader.startAsync());
         assert.ok(error !== null && /Failed to download original image/.test(error));
         assert.strictEqual(chrome.downloads.calls.length, 3 * 6, '3 pages x (1 attempt + 5 retries)');
@@ -329,6 +365,17 @@ describe('Downloader (abort/cancellation)', () => {
 
         assert.strictEqual(fetchCalls, 3, 'aborted pages must not be retried (3 pages, one canonical fetch each)');
         assert.strictEqual(chrome.downloads.calls.length, 0, 'no ZIP must be delivered when aborted');
+    });
+});
+
+describe('Downloader (retry backoff)', () => {
+    it('has a configurable retryBackoffMs with a sensible default', () => {
+        const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        assert.strictEqual(downloader.retryBackoffMs, 200, 'default backoff should be 200ms');
+        downloader.retryBackoffMs = 0;
+        assert.strictEqual(downloader.retryBackoffMs, 0);
+        downloader.retryBackoffMs = 1000;
+        assert.strictEqual(downloader.retryBackoffMs, 1000);
     });
 });
 

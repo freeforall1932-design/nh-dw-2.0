@@ -16,11 +16,20 @@ const path = require("path");
 
 const contentPath = process.argv[2] || path.join(__dirname, "..", "js", "content.js");
 const updateContentPath = process.argv[3] || path.join(__dirname, "..", "js", "updateContent.js");
+const getGalleriesPath = process.argv[4] || path.join(__dirname, "..", "js", "getGalleries.js");
 const contentCode = fs.readFileSync(contentPath, "utf8");
 const updateContentCode = fs.readFileSync(updateContentPath, "utf8");
+const getGalleriesCode = fs.readFileSync(getGalleriesPath, "utf8");
 
 // --- minimal DOM ----------------------------------------------------------
 let listenersAdded = 0;
+
+function collect(node, out, pred) {
+    for (const child of node.children) {
+        if (pred(child)) out.push(child);
+        collect(child, out, pred);
+    }
+}
 
 function makeElem(tag, attrs) {
     return {
@@ -30,8 +39,26 @@ function makeElem(tag, attrs) {
         innerHTML: "",
         children: [],
         checked: false,
+        textContent: "",
         getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; },
-        querySelector() { return null; },
+        querySelector(selector) {
+            if (selector === ".caption") {
+                return this.children.find(c => c.tag === "div" && String(c.attrs.class || "").includes("caption")) || null;
+            }
+            if (selector === ".current") {
+                return this.children.find(c => String(c.attrs.class || "").includes("current")) || null;
+            }
+            return null;
+        },
+        querySelectorAll(selector) {
+            const out = [];
+            if (selector === 'a[href*="/g/"]') {
+                collect(this, out, n => n.tag === "a" && String(n.attrs.href || "").includes("/g/"));
+            } else if (selector === 'a[href*="page="]') {
+                collect(this, out, n => n.tag === "a" && String(n.attrs.href || "").includes("page="));
+            }
+            return out;
+        },
         closest(selector) {
             let node = this;
             while (node) {
@@ -143,6 +170,107 @@ console.log("== content.js ==");
         console.error("FAIL: content script crashed on a single-gallery page: " + e.message);
         process.exit(1);
     }
+}
+
+// --- getGalleries.js ------------------------------------------------------
+console.log("== getGalleries.js ==");
+{
+    const body = makeElem("body");
+    const container = makeElem("div", { class: "container" });
+    body.appendChild(container);
+    const rawTitles = [
+        "Title One",
+        "It&apos;s &quot;Quoted&quot; &amp; Fine",
+        "Title Three"
+    ];
+    ["111111", "222222", "333333"].forEach((id, idx) => {
+        const gallery = makeElem("div", { class: "gallery" });
+        const cover = makeElem("a", { href: `/g/${id}/`, class: "cover" });
+        const caption = makeElem("div", { class: "caption" });
+        // Mirror the injected-checkbox markup content.ts adds after the title.
+        caption.innerHTML = rawTitles[idx] + `<br/><br/><input id="${id}" type="checkbox"> NHentai Downloader:`;
+        cover.appendChild(caption);
+        gallery.appendChild(cover);
+        container.appendChild(gallery);
+    });
+    // A duplicate card for the same gallery must be skipped by id.
+    const dupGallery = makeElem("div", { class: "gallery" });
+    const dupCover = makeElem("a", { href: "/g/222222/", class: "cover" });
+    const dupCaption = makeElem("div", { class: "caption" });
+    dupCaption.innerHTML = "Duplicate card";
+    dupCover.appendChild(dupCaption);
+    dupGallery.appendChild(dupCover);
+    container.appendChild(dupGallery);
+
+    // Pagination: current page is a <span class="current">, max is the last link.
+    const pagination = makeElem("section", { class: "pagination" });
+    const page1 = makeElem("a", { href: "?page=1" });
+    page1.textContent = "1";
+    const current = makeElem("span", { class: "current" });
+    current.textContent = "3";
+    const last = makeElem("a", { href: "?page=20", class: "last" });
+    last.textContent = "Last";
+    pagination.appendChild(page1);
+    pagination.appendChild(current);
+    pagination.appendChild(last);
+    body.appendChild(pagination);
+
+    const sent = [];
+    const chromeStub = {
+        runtime: { sendMessage(msg) { sent.push(msg); } },
+        storage: { sync: { get() {} }, local: { get() {}, set() {} } }
+    };
+    const sandbox = {
+        chrome: chromeStub,
+        console,
+        document: {
+            querySelectorAll(sel) {
+                if (sel === 'a[href*="/g/"]') {
+                    const out = [];
+                    collect(body, out, n => n.tag === "a" && String(n.attrs.href || "").includes("/g/"));
+                    return out;
+                }
+                return [];
+            },
+            querySelector(sel) {
+                if (sel === ".pagination") return pagination;
+                return null;
+            }
+        }
+    };
+    sandbox.self = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(getGalleriesCode, sandbox, { filename: "getGalleries.js" });
+
+    if (sent.length !== 1 || sent[0].action !== "getGalleries") {
+        console.error("FAIL: getGalleries did not send exactly one getGalleries message, got " + JSON.stringify(sent));
+        process.exit(1);
+    }
+    const msg = sent[0];
+    if (msg.galleries.length !== 3) {
+        console.error("FAIL: expected 3 unique galleries, got " + msg.galleries.length +
+            " (" + JSON.stringify(msg.galleries) + ")");
+        process.exit(1);
+    }
+    const [a, b, c] = msg.galleries;
+    if (a.id !== "111111" || a.title !== "Title One") {
+        console.error("FAIL: first gallery mismatch: " + JSON.stringify(a));
+        process.exit(1);
+    }
+    if (b.id !== "222222" || b.title !== 'It\'s "Quoted" & Fine') {
+        console.error("FAIL: quoted/entity title mismatch (id/title pair must stay intact): " + JSON.stringify(b));
+        process.exit(1);
+    }
+    if (c.id !== "333333" || c.title !== "Title Three") {
+        console.error("FAIL: third gallery mismatch: " + JSON.stringify(c));
+        process.exit(1);
+    }
+    if (msg.currentPage !== 3 || msg.maxPage !== 20) {
+        console.error("FAIL: pagination mismatch, got currentPage=" + msg.currentPage + " maxPage=" + msg.maxPage);
+        process.exit(1);
+    }
+    console.log("PASS: getGalleries extracts unique cards from the DOM with decoded titles + pagination");
 }
 
 // --- updateContent.js -----------------------------------------------------

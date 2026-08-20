@@ -28,6 +28,8 @@ let syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
 let downloadFails = false;
 let expectedWorkerRejection = false;
 
+const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
+
 const chromeStub = {
     tabs: {
         onUpdated: { addListener() {} },
@@ -37,7 +39,14 @@ const chromeStub = {
     action: { setIcon() {} },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults, syncSettings)); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
+        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
+        session: {
+            get(key, cb) {
+                cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore));
+            },
+            set(items, cb) { Object.assign(sessionStore, items); if (cb) cb(); },
+            remove(key, cb) { delete sessionStore[key]; if (cb) cb(); }
+        }
     },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
@@ -60,6 +69,8 @@ const chromeStub = {
 // --- fetch stub: nhentai API + image CDN --------------------------------
 const GALLERY_ID = 123456;
 const MEDIA_ID = 987654;
+const GALLERY_ID2 = 654321;
+const MEDIA_ID2 = 456789;
 
 const galleryJson = {
     id: GALLERY_ID,
@@ -75,24 +86,50 @@ const galleryJson = {
     tags: []
 };
 
+const galleryJson2 = {
+    id: GALLERY_ID2,
+    media_id: MEDIA_ID2,
+    title: { english: "Test Two", japanese: "", pretty: "Test Two" },
+    images: {
+        pages: [
+            { t: "j", w: 1280, h: 1800 },
+            { t: "j", w: 1280, h: 1800 },
+            { t: "j", w: 1280, h: 1800 }
+        ]
+    },
+    tags: []
+};
+
+const galleryById = {
+    [GALLERY_ID]: galleryJson,
+    [GALLERY_ID2]: galleryJson2
+};
+
 // Distinct fake "image" bytes so we can confirm the ZIP has 3 different files.
 const pageBytes = [
-    new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x01, 0x02, 0x03]),
-    new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0a, 0x04, 0x05]),
-    new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x06, 0x07, 0x08])
+    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe0]); return b; })(),
+    (() => { const b = new Uint8Array(2000); b.set([0x89, 0x50, 0x4e, 0x47, 0x0a]); return b; })(),
+    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe1]); return b; })()
 ];
 
 let failImages = false;
+const failMediaIds = new Set();
 
 function fetchStub(url) {
     const u = String(url);
-    if (u.includes("/api/gallery/" + GALLERY_ID)) {
-        return Promise.resolve(new Response(JSON.stringify(galleryJson), { status: 200 }));
+    const apiMatch = /\/api\/gallery\/([0-9]+)/.exec(u);
+    if (apiMatch) {
+        const gallery = galleryById[apiMatch[1]];
+        if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
     }
-    if (u.includes("nhentai.net/galleries/" + MEDIA_ID + "/")) {
-        if (failImages) return Promise.resolve(new Response("nope", { status: 404 }));
-        const m = /\/([0-9]+)\.(jpg|png)$/.exec(u);
-        if (m) return Promise.resolve(new Response(pageBytes[parseInt(m[1], 10) - 1], { status: 200 }));
+    const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(u);
+    if (imgMatch) {
+        const mediaId = imgMatch[1];
+        const pageNo = parseInt(imgMatch[2], 10);
+        if (failImages || failMediaIds.has(mediaId)) {
+            return Promise.resolve(new Response("nope", { status: 404 }));
+        }
+        return Promise.resolve(new Response(pageBytes[(pageNo - 1) % pageBytes.length], { status: 200 }));
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
 }
@@ -186,7 +223,13 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     // ---- Phase 1: ZIP mode ------------------------------------------------
     syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
     fireDownload("Downloads/Test", "Test");
+    // The active-job marker must be set as soon as the job starts.
+    if (!sessionStore.downloadJob || sessionStore.downloadJob.active !== true) {
+        fail("job marker must be active while a download runs, got " + JSON.stringify(sessionStore.downloadJob));
+    }
     await waitFor(() => downloads.length === 1, "no ZIP download reached chrome.downloads");
+    await waitFor(() => sessionStore.downloadJob === undefined,
+        "job marker must be cleared after the download completes");
 
     const download = downloads[0];
     if (!/^data:application\/zip;base64,/.test(download.url)) {
@@ -254,13 +297,22 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (downloads.length !== 18) {
         fail("expected 18 raw download attempts (3 pages x (1 + 5 retries)), got " + downloads.length);
     }
+    // Each retry must surface in the progress messages (retry "1/5" .. "5/5").
+    const retryMsgs = sentMessages.filter((m) => m.action === "updateProgress" && m.retry);
+    if (retryMsgs.length < 15) {
+        fail("expected >=15 retry progress messages (3 pages x 5 retries), got " + retryMsgs.length);
+    }
+    if (!/retry 1\/5/.test(retryMsgs[0].retry)) {
+        fail("first retry message should read 'retry 1/5', got " + retryMsgs[0].retry);
+    }
     console.log("PASS phase 3: failing raw downloads were retried (" + downloads.length +
-        " attempts) and the error reached the popup: " + error.error);
+        " attempts), retries surfaced in progress (" + retryMsgs.length + " retry messages) and the error reached the popup: " + error.error);
 
     // ---- Phase 4: batch with a failing gallery reports exactly once -------
     // Regression guard: the Downloader surfaces a gallery failure through
     // errorCallback and then re-throws; the batch loop must swallow that
     // re-throw so the outer catch does not report the same failure twice.
+    // A batchSummary must still be emitted with the failure counted.
     sentMessages.length = 0;
     downloads.length = 0;
     downloadFails = false;
@@ -288,7 +340,138 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (downloads.length !== 0) {
         fail("no ZIP must be delivered when the batch gallery fails, got " + downloads.length);
     }
+    const failSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!failSummary || failSummary.succeeded !== 0 || failSummary.failed !== 1 || failSummary.total !== 1) {
+        fail("batchSummary must report 0/1/1 for a single failing gallery, got " + JSON.stringify(failSummary));
+    }
+    if (!failSummary.failedKinds || failSummary.failedKinds.image !== 1) {
+        fail("the failing gallery is an image failure; failedKinds must be {image:1}, got " + JSON.stringify(failSummary.failedKinds));
+    }
     console.log("PASS phase 4: batch gallery failure reported exactly once (no double report)");
+
+    // ---- Phase 5: a failing gallery does not stop the batch ----------------
+    // A metadata failure (404 for an unknown gallery) must be tallied and the
+    // loop must continue to the next gallery, which succeeds and produces the
+    // final ZIP. The batchSummary reports 1 success + 1 failure.
+    // NOTE: JS orders integer-like object keys ascending, so the failing
+    // gallery must have a smaller key than the successful one for the
+    // successful gallery to be processed last (the ZIP is emitted on the
+    // last gallery when downloadAtEnd is true).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    failImages = false;
+    onMessageHandler(
+        { action: "downloadAllDoujinshis", allDoujinshis: { "1": "Missing", [GALLERY_ID]: "Test" }, finalName: "Downloads/Mixed" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "no batchSummary was sent for the mixed batch"
+    );
+    const mixedErrors = sentMessages.filter((m) => m.action === "downloadError");
+    if (mixedErrors.length !== 1) {
+        fail("the missing gallery must produce exactly one downloadError, got " + mixedErrors.length);
+    }
+    const mixedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!mixedSummary || mixedSummary.succeeded !== 1 || mixedSummary.failed !== 1 || mixedSummary.total !== 2) {
+        fail("mixed batch summary must report 1/1/2, got " + JSON.stringify(mixedSummary));
+    }
+    if (!mixedSummary.failedKinds || mixedSummary.failedKinds.metadata !== 1) {
+        fail("the missing gallery is a metadata failure; failedKinds must be {metadata:1}, got " + JSON.stringify(mixedSummary.failedKinds));
+    }
+    // The successful (last) gallery must still deliver its ZIP.
+    if (downloads.length !== 1) {
+        fail("the successful gallery in the mixed batch must deliver a ZIP, got " + downloads.length);
+    }
+    const progressMsgs = sentMessages.filter((m) => m.action === "batchProgress");
+    if (progressMsgs.length < 2) {
+        fail("batchProgress must be sent before each gallery, got " + progressMsgs.length);
+    }
+    console.log("PASS phase 5: batch continues after a gallery failure and reports 1/1/2");
+
+    // ---- Phase 6: interrupted-job detection --------------------------------
+    // A job marker without an active downloader means a previous download died
+    // with the worker/document; isDownloadFinished must report interrupted so
+    // the popup can tell the user (and let them dismiss the notice).
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    let interruptedAnswer = null;
+    onMessageHandler({ action: "isDownloadFinished" }, {}, (r) => { interruptedAnswer = r; });
+    await waitFor(() => interruptedAnswer !== null, "isDownloadFinished did not answer with a stale marker");
+    if (!interruptedAnswer.result || interruptedAnswer.interrupted !== true) {
+        fail("isDownloadFinished must report interrupted=true with a stale marker, got " + JSON.stringify(interruptedAnswer));
+    }
+
+    // Dismissing clears the marker.
+    let clearAnswer = null;
+    onMessageHandler({ action: "clearJobMarker" }, {}, (r) => { clearAnswer = r; });
+    if (!clearAnswer || clearAnswer.result !== "success") {
+        fail("clearJobMarker did not answer success, got " + JSON.stringify(clearAnswer));
+    }
+    if (sessionStore.downloadJob !== undefined) {
+        fail("clearJobMarker must remove the job marker, got " + JSON.stringify(sessionStore.downloadJob));
+    }
+
+    // After clearing, isDownloadFinished reports not-interrupted.
+    let cleanAnswer = null;
+    onMessageHandler({ action: "isDownloadFinished" }, {}, (r) => { cleanAnswer = r; });
+    await waitFor(() => cleanAnswer !== null, "isDownloadFinished did not answer after clearing");
+    if (!cleanAnswer.result || cleanAnswer.interrupted !== false) {
+        fail("isDownloadFinished must report interrupted=false after clearing, got " + JSON.stringify(cleanAnswer));
+    }
+    console.log("PASS phase 6: interrupted-job marker is detected and dismissible");
+
+    // ---- Phase 7: selected-gallery queue (mixed failures) ------------------
+    // Proves the queue behavior end to end: per-gallery batchProgress, the loop
+    // continues past BOTH a metadata failure and an image failure, the last
+    // gallery still emits the single final ZIP, and the summary carries the
+    // per-kind failure counts. Keys of the Record are unique by construction
+    // (no duplicate queue entries possible).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    failMediaIds.add(String(MEDIA_ID));
+    onMessageHandler(
+        { action: "downloadAllDoujinshis",
+          allDoujinshis: { "1": "Missing", [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+          finalName: "Downloads/Queue" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "no batchSummary was sent for the queue batch"
+    );
+    const queueSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!queueSummary || queueSummary.succeeded !== 1 || queueSummary.failed !== 2 || queueSummary.total !== 3) {
+        fail("queue batch summary must report 1/2/3, got " + JSON.stringify(queueSummary));
+    }
+    if (!queueSummary.failedKinds
+        || queueSummary.failedKinds.metadata !== 1
+        || queueSummary.failedKinds.image !== 1) {
+        fail("queue batch failedKinds must be {metadata:1, image:1}, got " + JSON.stringify(queueSummary.failedKinds));
+    }
+    if (downloads.length !== 1) {
+        fail("exactly one ZIP must be delivered (from the last gallery), got " + downloads.length);
+    }
+    const queueErrors = sentMessages.filter((m) => m.action === "downloadError");
+    if (queueErrors.length !== 2) {
+        fail("both failing galleries must report exactly one error each, got " + queueErrors.length);
+    }
+    const queueProgress = sentMessages.filter((m) => m.action === "batchProgress");
+    if (queueProgress.length !== 3) {
+        fail("batchProgress must be sent for all 3 queued galleries, got " + queueProgress.length);
+    }
+    console.log("PASS phase 7: three-gallery queue continues past metadata+image failures and reports 1/2/3");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);
