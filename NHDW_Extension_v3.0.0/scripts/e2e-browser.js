@@ -444,7 +444,9 @@ function ldEnv(nss) {
     ];
     const launchCmd = useXvfb ? xvfbRun : bin;
     const launchArgs = useXvfb ? ["-a", bin, ...args] : args;
-    console.log("  launch mode: " + (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")));
+    const launchMode = useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed");
+    console.log("  launch mode: " + launchMode);
+    githubNotice("browser launch mode", launchMode);
     console.log("  DevTools port: " + debugPort);
     stage("launching browser");
     const child = spawn(launchCmd, launchArgs, { env: ldEnv(nss), stdio: ["ignore", "pipe", "pipe"] });
@@ -490,6 +492,7 @@ function ldEnv(nss) {
                 if (t && msg.method === "Runtime.consoleAPICalled") t.console.push(msg.params);
             }
         });
+        await browser.send("Target.setDiscoverTargets", { discover: true }).catch(() => {});
     } catch (e) {
         const message = "could not connect to the DevTools endpoint: " + e.message;
         console.error("FATAL: " + message);
@@ -499,7 +502,10 @@ function ldEnv(nss) {
     }
     const browserProduct = devtoolsVersion.Browser || "Chromium";
 
-    const listTargets = async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json());
+    const listTargets = async () => {
+        const result = await browser.send("Target.getTargets");
+        return (result.targetInfos || []).map((target) => Object.assign({ id: target.targetId }, target));
+    };
     const attachTarget = async (info) => {
         const t = new Target(browser, info.id, info);
         await t.attach();
@@ -825,13 +831,15 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         stage("waiting for extension service worker");
         let swInfo = null;
+        let lastTargets = [];
         for (let i = 0; i < 150 && !swInfo; i++) {
-            const targets = await listTargets();
-            swInfo = targets.find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://"));
+            lastTargets = await listTargets();
+            swInfo = lastTargets.find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://"));
             if (!swInfo) await sleep(100);
         }
         if (!swInfo) {
-            fail("service worker registration", "no chrome-extension service_worker target appeared (does this browser build support extensions?)\n" + chromeLog.slice(-1500));
+            const targetSummary = lastTargets.map((t) => `${t.type}:${t.url || t.title || "(blank)"}`).join(" | ");
+            fail("service worker registration", "no chrome-extension service_worker target appeared (does this browser build support extensions?)\nTargets: " + targetSummary + "\n" + chromeLog.slice(-1500));
         } else {
             const extensionId = new URL(swInfo.url).host;
             ok("service worker registered", "extension id " + extensionId);
