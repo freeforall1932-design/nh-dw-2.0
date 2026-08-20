@@ -56,6 +56,7 @@ const BROWSER_ARG = argValue("--browser") || process.env.BROWSER_BIN;
 const NSS_LIBS_ARG = argValue("--nss-libs") || process.env.NSS_LIBS;
 const FORCE_HEADLESS = process.argv.includes("--headless") || process.env.NHDW_BROWSER_HEADLESS === "1";
 const FORCE_HEADED = process.argv.includes("--headed") || process.env.NHDW_BROWSER_HEADLESS === "0";
+const CDP_COMMAND_TIMEOUT_MS = parseInt(process.env.NHDW_CDP_TIMEOUT_MS || "15000", 10);
 
 // ---------------------------------------------------------------------------
 // minimal CDP client
@@ -70,10 +71,18 @@ class CDP {
             this.ws.onopen = () => resolve();
             this.ws.onerror = (e) => reject(new Error("WebSocket error: " + (e.message || e)));
         });
+        this.ws.onclose = () => {
+            for (const [id, pending] of this.pending.entries()) {
+                clearTimeout(pending.timeout);
+                pending.reject(new Error("WebSocket closed while waiting for CDP response " + id));
+            }
+            this.pending.clear();
+        };
         this.ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
             if (msg.id !== undefined && this.pending.has(msg.id)) {
-                const { resolve, reject } = this.pending.get(msg.id);
+                const { resolve, reject, timeout } = this.pending.get(msg.id);
+                clearTimeout(timeout);
                 this.pending.delete(msg.id);
                 if (msg.error) reject(new Error(msg.error.message + " (" + (msg.error.code || "?") + ")"));
                 else resolve(msg.result);
@@ -90,7 +99,13 @@ class CDP {
         const msg = { id, method, params };
         if (sessionId) msg.sessionId = sessionId;
         return new Promise((resolve, reject) => {
-            this.pending.set(id, { resolve, reject });
+            const timeout = setTimeout(() => {
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                    reject(new Error(method + " timed out after " + CDP_COMMAND_TIMEOUT_MS + "ms"));
+                }
+            }, CDP_COMMAND_TIMEOUT_MS);
+            this.pending.set(id, { resolve, reject, timeout });
             this.ws.send(JSON.stringify(msg));
         });
     }
