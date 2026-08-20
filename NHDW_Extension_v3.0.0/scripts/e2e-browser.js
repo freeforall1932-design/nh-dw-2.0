@@ -232,9 +232,25 @@ function fixtureServerHandler(req, res) {
 // report helpers
 // ---------------------------------------------------------------------------
 const results = [];
+function ghaEscape(value) {
+    return String(value || "")
+        .replace(/%/g, "%25")
+        .replace(/\r/g, "%0D")
+        .replace(/\n/g, "%0A")
+        .replace(/:/g, "%3A")
+        .replace(/,/g, "%2C");
+}
+function githubError(title, message) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+        console.log(`::error title=${ghaEscape(title)}::${ghaEscape(message)}`);
+    }
+}
 function report(name, status, detail) {
     results.push({ name, status, detail: detail || "" });
     console.log(`  [${status}] ${name}${detail ? " — " + detail : ""}`);
+    if (status === "FAIL") {
+        githubError(name, detail || "failed");
+    }
 }
 function ok(name, detail) { report(name, "PASS", detail); }
 function skip(name, detail) { report(name, "SKIP", detail); }
@@ -316,7 +332,9 @@ function ldEnv(nss) {
     console.log("NHDW real-browser end-to-end test");
     console.log("  extension dir: " + path.resolve(EXTENSION_DIR));
     if (!fs.existsSync(path.join(EXTENSION_DIR, "manifest.json"))) {
-        console.error("FATAL: no manifest.json in " + EXTENSION_DIR);
+        const message = "no manifest.json in " + EXTENSION_DIR;
+        console.error("FATAL: " + message);
+        githubError("browser e2e fatal", message);
         process.exit(2);
     }
     const { bin, nss } = await resolveBrowser();
@@ -376,7 +394,9 @@ function ldEnv(nss) {
         if (!port) await sleep(100);
     }
     if (!port) {
-        console.error("FATAL: browser did not open a DevTools port.\n" + chromeLog.slice(-2000));
+        const message = "browser did not open a DevTools port.\n" + chromeLog.slice(-2000);
+        console.error("FATAL: " + message);
+        githubError("browser did not open DevTools", message);
         child.kill();
         process.exit(2);
     }
@@ -394,7 +414,9 @@ function ldEnv(nss) {
             }
         });
     } catch (e) {
-        console.error("FATAL: could not connect to the DevTools endpoint: " + e.message);
+        const message = "could not connect to the DevTools endpoint: " + e.message;
+        console.error("FATAL: " + message);
+        githubError("browser e2e fatal", message);
         child.kill();
         process.exit(2);
     }
@@ -774,6 +796,8 @@ async function runExtensionTests(ctx) {
         console.log("  all tests passed" + (results.some((r) => r.status === "SKIP") ? " (some skipped)" : ""));
     }
 })().catch((e) => {
-    console.error("FATAL: " + (e && e.stack ? e.stack : e));
+    const message = String(e && e.stack ? e.stack : e);
+    console.error("FATAL: " + message);
+    githubError("browser e2e fatal", message);
     process.exit(2);
 });
