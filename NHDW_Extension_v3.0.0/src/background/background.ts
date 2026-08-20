@@ -36,11 +36,57 @@ function setIcon(url: string | undefined) {
     applyActionIcon(iconPath);
 }
 
+const iconImageDataCache: Record<string, ImageData> = {};
+
+async function loadIconImageData(iconPath: string): Promise<ImageData | null> {
+    if (iconImageDataCache[iconPath]) {
+        return iconImageDataCache[iconPath];
+    }
+    const createImageBitmapFn = (globalThis as any).createImageBitmap;
+    const OffscreenCanvasCtor = (globalThis as any).OffscreenCanvas;
+    if (typeof fetch !== "function" || typeof createImageBitmapFn !== "function" || typeof OffscreenCanvasCtor !== "function") {
+        return null;
+    }
+    try {
+        const url = chrome.runtime.getURL(iconPath.replace(/^\//, ""));
+        const resp = await fetch(url);
+        if (!resp.ok) {
+            return null;
+        }
+        const bitmap = await createImageBitmapFn(await resp.blob());
+        const canvas = new OffscreenCanvasCtor(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+            return null;
+        }
+        ctx.drawImage(bitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+        iconImageDataCache[iconPath] = imageData;
+        return imageData;
+    } catch (_) {
+        return null;
+    }
+}
+
 function applyActionIcon(iconPath: string) {
+    const swallow = (result: any) => {
+        if (result && typeof result.catch === "function") {
+            result.catch(() => { /* toolbar icon updates are best-effort */ });
+        }
+    };
     try {
         const result: any = chrome.action.setIcon({ path: iconPath });
         if (result && typeof result.catch === "function") {
-            result.catch(() => { /* toolbar icon updates are best-effort */ });
+            result.catch(() => {
+                loadIconImageData(iconPath).then((imageData) => {
+                    if (!imageData) {
+                        return;
+                    }
+                    try {
+                        swallow(chrome.action.setIcon({ imageData: imageData } as any));
+                    } catch (_) { /* ignore */ }
+                }).catch(() => {});
+            });
         }
     } catch (_) { /* chrome.action may be missing in tests */ }
 }

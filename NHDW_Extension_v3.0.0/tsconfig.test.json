@@ -10,6 +10,7 @@
         "src/utils/**/*.ts",
         "src/background/Downloader.ts",
         "src/preview/selectedGalleryResolver.ts",
+        "src/preview/activeTabGallery.ts",
         "src/sources/**/*.ts"
     ]
 }

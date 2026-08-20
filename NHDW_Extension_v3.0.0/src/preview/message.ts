@@ -29,6 +29,14 @@ export module message
     export function errorOther(status: number, statusText: string): string {
         return `An unexpected error occured (Code ${status}: ${statusText}).`;
     }
+
+    // Shown when the open tab does not yet contain gallery JSON and the
+    // extension-origin API request was blocked. The user must finish the
+    // challenge on the *gallery page itself* (not just have the URL in the
+    // address bar) before reopening the popup.
+    export function cloudflareMetadata(): string {
+        return "This tab does not contain gallery metadata yet. Finish any Cloudflare challenge, wait until the gallery page itself has loaded, then open the popup again.";
+    }
     
     export function downloadInfo(title: string, nbOfPages: number, extension: string): string {
         return '<h3>' + title + '</h3><div>(' + nbOfPages + ' pages)' +

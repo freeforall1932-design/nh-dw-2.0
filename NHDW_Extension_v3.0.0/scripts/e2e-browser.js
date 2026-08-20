@@ -267,7 +267,9 @@ const LISTING_HTML = `<!DOCTYPE html>
 </body></html>`;
 
 const GALLERY_HTML = `<!DOCTYPE html>
-<html><head><title>Gallery 123456</title></head>
+<html><head><title>Gallery 123456</title>
+<script>window._gallery = ${JSON.stringify(FIXTURE_GALLERY)};</script>
+</head>
 <body><div id="info"><h1>Fixture Gallery</h1></div>
 <div id="thumbnail-container"><a href="https://i.nhentai.net/galleries/987654/1.jpg"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a></div>
 </body></html>`;
