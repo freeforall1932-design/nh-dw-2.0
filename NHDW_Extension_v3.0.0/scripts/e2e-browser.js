@@ -397,6 +397,33 @@ function ldEnv(nss) {
     return env;
 }
 
+async function installChromeForTesting() {
+    const base = path.join(os.tmpdir(), "nhdw-chrome-for-testing");
+    const exe = path.join(base, "chrome-linux64", "chrome");
+    if (fs.existsSync(exe)) return exe;
+    fs.mkdirSync(base, { recursive: true });
+    const metaUrl = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
+    stage("installing Chrome for Testing");
+    try {
+        const meta = await (await fetch(metaUrl)).json();
+        const stable = meta.channels && meta.channels.Stable;
+        const downloads = stable && stable.downloads && stable.downloads.chrome;
+        const item = downloads && downloads.find((d) => d.platform === "linux64");
+        if (!item || !item.url) throw new Error("linux64 Chrome for Testing URL missing from metadata");
+        const zipPath = path.join(base, "chrome-linux64.zip");
+        const resp = await fetch(item.url);
+        if (!resp.ok) throw new Error("download failed: " + resp.status + " " + resp.statusText);
+        fs.writeFileSync(zipPath, Buffer.from(await resp.arrayBuffer()));
+        const unzip = spawnSync("unzip", ["-q", "-o", zipPath, "-d", base], { encoding: "utf8" });
+        if (unzip.status !== 0) throw new Error("unzip failed: " + (unzip.stderr || unzip.stdout || unzip.status));
+        fs.chmodSync(exe, 0o755);
+        return exe;
+    } catch (error) {
+        githubNotice("Chrome for Testing install skipped", String(error && error.message ? error.message : error));
+        return null;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -419,8 +446,16 @@ function ldEnv(nss) {
         githubError("browser e2e fatal", message);
         process.exit(2);
     }
-    const { bin, nss } = await resolveBrowser();
-    const versionOut = spawnSync(bin, ["--version"], { encoding: "utf8", env: ldEnv(nss) }).stdout.trim();
+    let { bin, nss } = await resolveBrowser();
+    let versionOut = spawnSync(bin, ["--version"], { encoding: "utf8", env: ldEnv(nss) }).stdout.trim();
+    if ((process.env.GITHUB_ACTIONS === "true" || process.env.NHDW_USE_CHROME_FOR_TESTING === "1") && /Google Chrome/i.test(versionOut)) {
+        const cft = await installChromeForTesting();
+        if (cft) {
+            bin = cft;
+            nss = null;
+            versionOut = spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim();
+        }
+    }
     console.log("  browser: " + bin);
     console.log("  version: " + versionOut);
 
@@ -442,6 +477,9 @@ function ldEnv(nss) {
 
     // --- launch ------------------------------------------------------------
     const profile = makeBrowserWritableTempDir("nhdw-profile-");
+    const crashDumpsDir = path.join(profile, "Crash Reports");
+    fs.mkdirSync(crashDumpsDir, { recursive: true });
+    try { fs.chmodSync(crashDumpsDir, 0o777); } catch (_) { /* best effort */ }
     const debugPort = await getFreePort();
     const xvfbRun = (!FORCE_HEADLESS && !process.env.DISPLAY) ? whichCommand("xvfb-run") : null;
     const useXvfb = !!xvfbRun;
@@ -462,6 +500,7 @@ function ldEnv(nss) {
         "--remote-debugging-port=" + debugPort,
         "--remote-allow-origins=*",
         "--user-data-dir=" + profile,
+        "--crash-dumps-dir=" + crashDumpsDir,
         "--disable-extensions-except=" + path.resolve(EXTENSION_DIR),
         "--load-extension=" + path.resolve(EXTENSION_DIR),
         "--host-resolver-rules=MAP nhentai.net 127.0.0.1, MAP i.nhentai.net 127.0.0.1, MAP i1.nhentai.net 127.0.0.1, MAP i2.nhentai.net 127.0.0.1, MAP i3.nhentai.net 127.0.0.1, MAP i4.nhentai.net 127.0.0.1",
@@ -475,7 +514,10 @@ function ldEnv(nss) {
         ? process.env.SUDO_USER
         : null;
     if (originalUser) {
-        launchArgs = ["-E", "-u", originalUser, launchCmd, ...launchArgs];
+        // -H resets HOME to the target user's home. Brave's crashpad startup
+        // reads HOME even with --user-data-dir, and preserving /root here makes
+        // the release ZIP crash with SIGTRAP on GitHub runners.
+        launchArgs = ["-H", "-E", "-u", originalUser, launchCmd, ...launchArgs];
         launchCmd = "sudo";
     }
     const launchMode = (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")) + (originalUser ? ` as ${originalUser}` : "");
