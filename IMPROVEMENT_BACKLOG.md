@@ -57,21 +57,28 @@ stubs and zero network access. The live check is opt-in: `npm run test:live`.
 **Progress:** mostly done. Single-gallery metadata now reads the already-open gallery tab first
 (`window._gallery` / `window.gallery`, then `_gallery` JSON already in page `<script>` tags via
 `GalleryEmbed` / `activeTabGallery`). Same-origin `/api/gallery/<id>` and the extension-origin API
-are last resorts, so a loaded gallery tab does not 403 before the popup can show Download. This is
-not a Cloudflare bypass: a challenge interstitial still has no gallery JSON. Image fetches from
-`i*.nhentai.net` in the offscreen/worker path can still be 403'd independently. Extension/offscreen image and batch metadata fetches also request credentials
-and have Cloudflare-aware error messages. The `ApiParsing.GetJsonAsync` method now detects HTML content-type
-before attempting `response.json()` and produces a clear "Cloudflare blocked" message for 403/503 responses
-and an "Unexpected response type" message for 200 HTML pages. The batch download loops in both background.ts
-and offscreen.ts distinguish Cloudflare errors (403/503 or HTML content-type) from plain HTTP errors and
-give the user actionable guidance. The `isCloudflareResponse()` utility is exported from `ApiParsing.ts` for
-reuse. Covered by 6 new fixture tests in `test/parsing.test.js`. Retry backoff is now implemented: the
-Downloader retries page image fetches with exponential backoff (base 200ms, growing to ~3.2s at the last
-retry) so repeated failures don't hammer the server. The `retryBackoffMs` property is configurable.
-API metadata parsing also checks response bodies for common Cloudflare challenge markers
-such as `cf-challenge`, `cf_chl_`, `Just a moment...`, and `Checking your browser`, including
-200 responses with misleading or missing content types. Covered by fixture tests in
-`test/parsing.test.js`.
+are last resorts, so a loaded gallery tab does not 403 before the popup can show Download. ZIP page
+fetches now prefer the same open tab (`tabImageFetch` / `Downloader.sourceTabId`): the popup passes
+the active tab id, the worker relays it to the offscreen document, and each image URL is requested
+from the tab (isolated world first so CDN CORS cannot block host_permissions fetches, then MAIN
+world) before an extension-origin `fetch`. Tab HTTP
+errors skip the extension origin for that URL; CORS / injection failures fall through. HTML and
+tiny bodies are still rejected. A blocked image run after successful metadata says so explicitly
+("Gallery metadata was read; keep the gallery tab open…"). This is not a Cloudflare bypass: a
+challenge interstitial still has no gallery JSON or image bytes. Extension/offscreen image and
+batch metadata fetches also request credentials and have Cloudflare-aware error messages. The
+`ApiParsing.GetJsonAsync` method now detects HTML content-type before attempting `response.json()`
+and produces a clear "Cloudflare blocked" message for 403/503 responses and an "Unexpected response
+type" message for 200 HTML pages. The batch download loops in both background.ts and offscreen.ts
+distinguish Cloudflare errors (403/503 or HTML content-type) from plain HTTP errors and give the
+user actionable guidance. The `isCloudflareResponse()` utility is exported from `ApiParsing.ts` for
+reuse. Covered by fixture tests in `test/parsing.test.js` and tab-first image tests in
+`test/downloader.test.js`. Retry backoff is now implemented: the Downloader retries page image
+fetches with exponential backoff (base 200ms, growing to ~3.2s at the last retry) so repeated
+failures don't hammer the server. The `retryBackoffMs` property is configurable. API metadata
+parsing also checks response bodies for common Cloudflare challenge markers such as `cf-challenge`,
+`cf_chl_`, `Just a moment...`, and `Checking your browser`, including 200 responses with misleading
+or missing content types.
 
 ### 3. Make original-image validation explicit
 

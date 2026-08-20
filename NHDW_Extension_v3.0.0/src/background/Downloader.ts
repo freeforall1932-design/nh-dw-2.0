@@ -1,5 +1,6 @@
 var JSZip = require("jszip");
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
+import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 
 export default class Downloader
 {
@@ -276,25 +277,24 @@ export default class Downloader
         if (this.useZip !== "raw") { // ZIP (or equivalent) format
             let lastStatus = "unknown error";
             for (const imageUrl of imageUrls) {
-                const resp = await fetch(imageUrl, { credentials: "include", cache: "no-store", signal: this.#abortSignal });
-                if (resp.ok) {
+                const loaded = await this.#loadImage(imageUrl);
+                if (loaded.blob) {
                     // A 200 response can still be a Cloudflare challenge page or
                     // an error document. Only accept responses that identify as
                     // images, otherwise try the next mirror so HTML never ends
                     // up inside the ZIP as if it were a page.
-                    const contentType = resp.headers.get("content-type");
+                    const contentType = loaded.contentType;
                     if (contentType !== null && !contentType.toLowerCase().startsWith("image/")) {
                         lastStatus = "unexpected content-type \"" + contentType + "\"";
                         continue;
                     }
-                    const blob = await resp.blob();
                     // Reject suspiciously small responses that are unlikely to
                     // be valid images (e.g. a 1x1 pixel placeholder, an empty
                     // error page, or a "blocked" icon). The vast majority of
                     // nhentai pages are well over 1 KB; anything below this
                     // threshold is almost certainly not a real image.
-                    if (blob.size < this.minImageBytes) {
-                        lastStatus = "response too small (" + blob.size + " bytes)";
+                    if (loaded.blob.size < this.minImageBytes) {
+                        lastStatus = "response too small (" + loaded.blob.size + " bytes)";
                         continue;
                     }
                     await new Promise((resolve, reject) => {
@@ -303,13 +303,13 @@ export default class Downloader
                             resolve(this.#zip.file(this.path + '/' + filename, reader.result as null));
                         };
                         reader.onerror = reject;
-                        reader.readAsArrayBuffer(blob);
+                        reader.readAsArrayBuffer(loaded.blob as Blob);
                     });
                     return;
                 }
-                lastStatus = resp.status + ": " + resp.statusText;
+                lastStatus = loaded.lastStatus;
             }
-            throw "Failed to fetch original image from all image servers (" + lastStatus + ").";
+            throw this.#imageFetchFailureMessage(lastStatus);
         } else { // We don't need to update progress here because it goes too fast anyway
             // Raw mode cannot inspect the response before Chrome starts the
             // download. Use the canonical original-image URL and report startup
@@ -330,6 +330,55 @@ export default class Downloader
                 });
             });
         }
+    }
+
+    // Try the open gallery tab first (page origin + cookies), then the
+    // extension-origin fetch. Tab HTTP errors skip the extension fetch for
+    // that URL; CORS / injection failures fall through.
+    async #loadImage(imageUrl: string): Promise<{ blob: Blob | null; contentType: string | null; lastStatus: string }> {
+        if (this.#isAborted()) {
+            throw "Download was aborted";
+        }
+        if (this.sourceTabId !== null) {
+            const fromTab = await fetchImageFromTab(this.sourceTabId, imageUrl);
+            if (fromTab && fromTab.ok && fromTab.b64) {
+                const bytes = decodeTabImageBytes(fromTab.b64);
+                return {
+                    blob: new Blob([bytes], { type: fromTab.contentType || "application/octet-stream" }),
+                    contentType: fromTab.contentType,
+                    lastStatus: ""
+                };
+            }
+            if (fromTab && fromTab.status > 0) {
+                return {
+                    blob: null,
+                    contentType: fromTab.contentType,
+                    lastStatus: fromTab.status + ": " + fromTab.statusText
+                };
+            }
+        }
+        const resp = await fetch(imageUrl, { credentials: "include", cache: "no-store", signal: this.#abortSignal });
+        if (resp.ok) {
+            return {
+                blob: await resp.blob(),
+                contentType: resp.headers.get("content-type"),
+                lastStatus: ""
+            };
+        }
+        return {
+            blob: null,
+            contentType: resp.headers.get("content-type"),
+            lastStatus: resp.status + ": " + resp.statusText
+        };
+    }
+
+    #imageFetchFailureMessage(lastStatus: string): string {
+        const blocked = /403|503|unexpected content-type|text\/html/i.test(lastStatus);
+        let message = "Failed to fetch original image from all image servers (" + lastStatus + ").";
+        if (blocked) {
+            message += " Gallery metadata was read; keep the gallery tab open after any browser challenge and try again.";
+        }
+        return message;
     }
 
     isDone(): boolean
@@ -355,6 +404,8 @@ export default class Downloader
     #mediaId: number; // Id of the media
 
     isAwaitingAbort: boolean = false;
+    // When set, ZIP image fetches run in this tab's page context first.
+    sourceTabId: number | null = null;
 
     // Progress info
     #progressPercent: number;

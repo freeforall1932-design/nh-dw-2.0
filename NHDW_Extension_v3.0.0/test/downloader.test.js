@@ -6,6 +6,7 @@
 const assert = require('assert');
 const JSZip = require('jszip');
 const Downloader = require('../build/test/background/Downloader.js').default;
+const { decodeTabImageBytes, isAllowedImageUrl } = require('../build/test/background/tabImageFetch.js');
 
 const gallery = {
     id: 123456,
@@ -363,8 +364,135 @@ describe('Downloader (abort/cancellation)', () => {
         const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test', controller.signal);
         await assert.rejects(downloader.startAsync());
 
-        assert.strictEqual(fetchCalls, 3, 'aborted pages must not be retried (3 pages, one canonical fetch each)');
+        assert.strictEqual(fetchCalls, 0, 'already-aborted jobs must not start image fetches');
         assert.strictEqual(chrome.downloads.calls.length, 0, 'no ZIP must be delivered when aborted');
+    });
+});
+
+describe('tab image URL guard', () => {
+    it('allows only original-image CDN URLs', () => {
+        assert.strictEqual(isAllowedImageUrl('https://i.nhentai.net/galleries/987654/1.jpg'), true);
+        assert.strictEqual(isAllowedImageUrl('https://i2.nhentai.net/galleries/1/12.webp'), true);
+        assert.strictEqual(isAllowedImageUrl('https://nhentai.net/g/1/'), false);
+        assert.strictEqual(isAllowedImageUrl('https://evil.example/galleries/1/1.jpg'), false);
+        assert.strictEqual(isAllowedImageUrl('https://i.nhentai.net/galleries/1/1.jpg?x=1'), false);
+    });
+
+    it('round-trips base64 image bytes', () => {
+        const b64 = Buffer.from(pageBytes[0]).toString('base64');
+        const decoded = decodeTabImageBytes(b64);
+        assert.strictEqual(decoded.length, pageBytes[0].length);
+        assert.ok(pageBytes[0].every((b, i) => b === decoded[i]));
+    });
+});
+
+describe('Downloader (tab image fetch)', () => {
+    let chrome;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip', '1');
+        globalThis.chrome = chrome;
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    function tabScriptReturningPages() {
+        const attempted = [];
+        chrome.scripting = {
+            executeScript(details, cb) {
+                const url = details.args[0];
+                attempted.push(url);
+                const m = /\/([0-9]+)\.(jpg|png)$/.exec(url);
+                const idx = m ? parseInt(m[1], 10) - 1 : 0;
+                cb([{ result: {
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                    contentType: idx === 1 ? 'image/png' : 'image/jpeg',
+                    b64: Buffer.from(pageBytes[idx]).toString('base64'),
+                    error: null
+                } }]);
+            }
+        };
+        return attempted;
+    }
+
+    it('fetches through the open tab and does not use extension-origin fetch', async () => {
+        const attempted = tabScriptReturningPages();
+        const worlds = [];
+        const inner = chrome.scripting.executeScript;
+        chrome.scripting.executeScript = (details, cb) => {
+            worlds.push(details.world || 'ISOLATED');
+            return inner(details, cb);
+        };
+        let fetchCalls = 0;
+        globalThis.fetch = () => {
+            fetchCalls++;
+            return Promise.reject(new Error('extension fetch should not run'));
+        };
+
+        const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        downloader.sourceTabId = 99;
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+
+        assert.strictEqual(fetchCalls, 0);
+        assert.ok(worlds.every((w) => w === 'ISOLATED'), 'isolated world must be tried first so CDN CORS cannot block the tab fetch: ' + worlds.join(','));
+        assert.deepStrictEqual(attempted, [1, 2, 3].map((n) => `${CANONICAL}${n}.${n === 2 ? 'png' : 'jpg'}`));
+        const zip = await decodeZip(chrome.downloads.calls[0].url);
+        const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+        const first = new Uint8Array(await zip.file(names[0]).async('uint8array'));
+        assert.ok(pageBytes[0].every((b, j) => b === first[j]));
+    });
+
+    it('falls back to extension fetch when the tab CORS-fails', async () => {
+        chrome.scripting = {
+            executeScript(details, cb) {
+                cb([{ result: { ok: false, status: 0, statusText: '', contentType: null, b64: null, error: 'Failed to fetch' } }]);
+            }
+        };
+        const fetchStub = makeFetchStub();
+        globalThis.fetch = fetchStub;
+
+        const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        downloader.sourceTabId = 7;
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+        assert.ok(fetchStub.attempted.length > 0, 'extension fetch must run after a tab CORS failure');
+        assert.strictEqual(chrome.downloads.calls.length, 1);
+    });
+
+    it('skips extension fetch after a tab HTTP 403 and says metadata was read', async () => {
+        chrome.scripting = {
+            executeScript(details, cb) {
+                cb([{ result: { ok: false, status: 403, statusText: 'Forbidden', contentType: 'text/html', b64: null, error: null } }]);
+            }
+        };
+        let fetchCalls = 0;
+        globalThis.fetch = () => {
+            fetchCalls++;
+            return Promise.resolve(new Response('nope', { status: 403 }));
+        };
+
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/Test', (e) => { error = e; }, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        downloader.sourceTabId = 3;
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await assert.rejects(downloader.startAsync());
+        assert.strictEqual(fetchCalls, 0, 'a real HTTP error from the tab must not also hammer the extension origin');
+        assert.ok(error !== null && /Failed to fetch original image/.test(error));
+        assert.ok(/Gallery metadata was read/.test(error), error);
+        assert.ok(/403/.test(error), error);
     });
 });
 

@@ -15,7 +15,8 @@ export function classifyError(error: any): { kind: string; label: string } {
     if (msg.includes("failed to fetch original image")
         || msg.includes("response too small")
         || msg.includes("unexpected content-type")
-        || msg.includes("failed to download original image")) {
+        || msg.includes("failed to download original image")
+        || msg.includes("gallery metadata was read")) {
         return { kind: "image", label: "Image fetch failed" };
     }
     if (msg.includes("unable to start download") || msg.includes("failed to start")) {

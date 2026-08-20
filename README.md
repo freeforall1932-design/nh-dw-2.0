@@ -42,9 +42,13 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
    to get everything in a single archive. If the results span several pages you can use
    **Download all (N pages)**.
 
-> **Note:** nhentai.net sits behind Cloudflare. If the metadata request is challenged,
-> open the gallery page normally in the tab, complete any challenge, and retry — the
-> extension falls back to reading the gallery data from the open page.
+> **Note:** nhentai.net sits behind Cloudflare. If a request is challenged,
+> open the **gallery page itself**, complete any challenge, and retry. Metadata
+> is read from the open tab (`window._gallery`). ZIP pages are fetched through
+> that tab when possible, then from the extension origin. This is **not** a
+> Cloudflare bypass — a “Just a moment…” interstitial has no gallery JSON and
+> cannot supply image bytes. If the popup shows the gallery but the ZIP fails
+> with an image error, keep the gallery tab open and try again.
 
 ## ⚙️ Troubleshooting
 

@@ -2,7 +2,7 @@ import { extractGalleryFromHtml, looksLikeGallery } from "../parsing/GalleryEmbe
 
 // Run a function in the tab's MAIN world and return its result. Supports both
 // the Promise and callback forms of chrome.scripting.executeScript.
-export function executeInTab<T>(tabId: number, func: (...args: any[]) => T, args: any[] = []): Promise<T | null> {
+export function executeInTab<T>(tabId: number, func: (...args: any[]) => T, args: any[] = [], world: "MAIN" | "ISOLATED" = "MAIN"): Promise<T | null> {
     return new Promise((resolve) => {
         if (typeof chrome === "undefined" || !(chrome as any).scripting || typeof (chrome as any).scripting.executeScript !== "function") {
             resolve(null);
@@ -18,7 +18,7 @@ export function executeInTab<T>(tabId: number, func: (...args: any[]) => T, args
         };
         const details: any = {
             target: { tabId: tabId },
-            world: "MAIN",
+            world: world,
             func: func,
             args: args
         };

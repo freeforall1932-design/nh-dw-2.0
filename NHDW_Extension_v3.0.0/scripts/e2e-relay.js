@@ -111,7 +111,8 @@ function sendToBackground(message) {
         action: "downloadDoujinshi",
         json: { id: 123456 },
         path: "Downloads/Test",
-        name: "Test"
+        name: "Test",
+        tabId: 42
     });
     if (!startAnswer || startAnswer.result !== "started") {
         fail("downloadDoujinshi answered " + JSON.stringify(startAnswer));
@@ -120,7 +121,7 @@ function sendToBackground(message) {
         fail("expected one createDocument call, got " + createDocumentCalls);
     }
     const relay = relays.find((r) => r.action === "downloadDoujinshi");
-    if (!relay || relay.target !== "offscreen" || relay.json.id !== 123456 || relay.path !== "Downloads/Test") {
+    if (!relay || relay.target !== "offscreen" || relay.json.id !== 123456 || relay.path !== "Downloads/Test" || relay.tabId !== 42) {
         fail("downloadDoujinshi was not relayed correctly: " + JSON.stringify(relay));
     }
     console.log("PASS: downloadDoujinshi creates the offscreen document and relays the command");
