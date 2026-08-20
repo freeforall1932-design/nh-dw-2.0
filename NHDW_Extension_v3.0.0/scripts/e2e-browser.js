@@ -328,8 +328,20 @@ function findZips(dir) {
 // ---------------------------------------------------------------------------
 // browser resolution (incl. @sparticuz/chromium with its bundled NSS libs)
 // ---------------------------------------------------------------------------
+function normalizeBrowserBin(bin) {
+    // Brave release ZIPs contain the raw ELF (`brave`) and a launcher wrapper
+    // (`brave-browser`). The wrapper supplies crashpad/profile defaults that
+    // the raw ELF can miss under CI, producing an immediate SIGTRAP.
+    if (path.basename(bin) === "brave") {
+        for (const candidate of [path.join(path.dirname(bin), "brave-browser"), path.join(path.dirname(path.dirname(bin)), "brave-browser")]) {
+            if (fs.existsSync(candidate)) return candidate;
+        }
+    }
+    return bin;
+}
+
 async function resolveBrowser() {
-    if (BROWSER_ARG) return { bin: BROWSER_ARG, nss: NSS_LIBS_ARG || null };
+    if (BROWSER_ARG) return { bin: normalizeBrowserBin(BROWSER_ARG), nss: NSS_LIBS_ARG || null };
     let bin = null;
     let nss = NSS_LIBS_ARG || null;
     bin = whichCommand("chromium") || whichCommand("google-chrome") || whichCommand("brave-browser") || whichCommand("chromium-browser");
@@ -363,7 +375,7 @@ async function resolveBrowser() {
         throw new Error("No browser found. Install one and pass --browser (or BROWSER_BIN). " +
             "Serverless option: npm install @sparticuz/chromium in the extension package and rerun.");
     }
-    return { bin, nss };
+    return { bin: normalizeBrowserBin(bin), nss };
 }
 
 function ldEnv(nss) {
@@ -430,6 +442,12 @@ function ldEnv(nss) {
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
+        "--disable-breakpad",
+        "--disable-crash-reporter",
+        "--disable-crashpad",
+        // Chrome 137+ branded builds ignore --load-extension unless this
+        // feature gate is disabled (unbranded Chromium/Brave ignore it).
+        "--disable-features=DisableLoadExtensionCommandLineSwitch",
         "--no-first-run",
         "--no-default-browser-check",
         "--remote-debugging-port=" + debugPort,
