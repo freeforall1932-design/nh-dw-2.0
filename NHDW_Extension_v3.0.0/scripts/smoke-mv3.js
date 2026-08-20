@@ -51,7 +51,8 @@ const chromeStub = {
     },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
+        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
+        session: { get(_key, cb) { cb({}); }, set() {}, remove() {} }
     },
     runtime: {
         onMessage: {

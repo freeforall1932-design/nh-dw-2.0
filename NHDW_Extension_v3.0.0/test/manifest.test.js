@@ -41,6 +41,20 @@ describe('MV3 manifest', () => {
         }
     });
 
+    it('does not expose every extension file to arbitrary sites via web_accessible_resources', () => {
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            const entries = manifest.web_accessible_resources || [];
+            for (const entry of entries) {
+                assert.ok(!entry.matches.includes('<all_urls>'),
+                    'web_accessible_resources must not match <all_urls> (it would expose every bundled file to any page)');
+                assert.ok(!entry.resources.includes('*'),
+                    'web_accessible_resources must not expose all extension files');
+            }
+        }
+        assert.deepStrictEqual(releaseManifest.web_accessible_resources, sourceManifest.web_accessible_resources,
+            'release web_accessible_resources differs from source');
+    });
+
     it('background bundle uses root-relative toolbar icon paths', () => {
         const bundle = fs.readFileSync(path.join(__dirname, '..', 'js', 'background.js'), 'utf8');
         assert.ok(bundle.includes('/Icon.png'), 'built worker must fetch /Icon.png from the extension root');
