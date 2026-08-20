@@ -18,7 +18,9 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
 - [x] Fix `downloadAllPages`: stop mutating `pagesArr` while iterating so the final ZIP is actually downloaded
 - [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
-- [x] Add window-less service-worker tests (`test/smoke-mv3.js`, `test/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
+- [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
+- [x] Replace the base64 ZIP download path: downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts` + `offscreen.html`) that delivers the archive through a real `URL.createObjectURL`; the in-worker base64 path remains only as a fallback for browsers without `chrome.offscreen`. The service worker relays commands (`scripts/e2e-relay.js` verifies relay, idle-close, and no message loops).
+- [x] Replace the live-only API test with deterministic fixture tests: `test/parsing.test.js` (API/HTML parsers incl. `\u0022` embeds, malformed/Cloudflare HTML rejection, filename utils) and `test/downloader.test.js` (image URL order and CDN fallback, ZIP entry names and original-page bytes, raw mode, object-URL delivery). The live nhentai check is opt-in behind `RUN_LIVE_TESTS=1` (`npm run test:live`).
 - [ ] Complete a manual Chrome and Brave end-to-end download test
 
 ## Priority 1: reliability and correctness
@@ -32,10 +34,13 @@ This document tracks future work for the NHentai Downloader extension. Items are
 
 **Acceptance criteria:** `npm test` passes without network access, and live tests remain available for manual verification.
 
-**Progress:** `test/smoke-mv3.js` and `test/e2e-worker.js` already cover the service-worker
-pipeline (listener registration, ZIP/raw/error download paths, ZIP entry names and bytes)
-without network access. Fixture tests for `ApiParsing` / `HtmlParsing` naming and URL logic
-are still open.
+**Progress:** DONE.
+`test/parsing.test.js` covers `ApiParsing` / `HtmlParsing` fixtures (including `\u0022`-escaped
+gallery embeds and non-JSON Cloudflare responses) and filename utilities; `test/downloader.test.js`
+covers image URL generation and CDN fallback order, ZIP entry names and original-page bytes,
+raw mode, and object-URL delivery; `scripts/smoke-mv3.js` / `scripts/e2e-worker.js` /
+`scripts/e2e-offscreen.js` / `scripts/e2e-relay.js` cover the built bundles with chrome/fetch
+stubs and zero network access. The live check is opt-in: `npm run test:live`.
 
 ### 2. Improve Cloudflare and response detection
 
@@ -62,6 +67,17 @@ The current service-worker workaround converts the ZIP Blob to a base64 data URL
 Investigate an offscreen document or another MV3-compatible download architecture that can create a downloadable object URL outside the service worker.
 
 **Acceptance criteria:** a large gallery can be archived without duplicating the entire ZIP several times in memory.
+
+**Progress:** DONE.
+Downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts`, `offscreen.html`)
+created with the `BLOBS` reason. The ZIP Blob is delivered via `URL.createObjectURL` and the
+object URL is revoked after the download is accepted; the base64 data-URL path only remains as
+a fallback for environments without `chrome.offscreen`. As a bonus the offscreen document is
+not subject to the service worker idle timeout, so long downloads survive MV3 worker
+termination. The service worker only relays commands (`isDownloadFinished`, `downloadDoujinshi`,
+`downloadAllDoujinshis`, `downloadAllPages`, `goBack`, progress refresh) and closes the
+document after 60 s of inactivity. Covered by `scripts/e2e-offscreen.js`, `scripts/e2e-relay.js`,
+and the object-URL block in `test/downloader.test.js`.
 
 ## Priority 2: page and search workflow
 
@@ -202,11 +218,11 @@ Choose one direction:
 
 ## Suggested implementation order
 
-1. Deterministic tests and response validation
+1. ~~Deterministic tests and response validation~~ (done)
 2. DOM-based result-page extraction
 3. Selected-gallery queue
 4. Active-context gallery resolver
-5. Large-ZIP/offscreen download architecture
+5. ~~Large-ZIP/offscreen download architecture~~ (done)
 6. README and UX reconciliation
 7. Configurable source adapters
 8. Optional onion source

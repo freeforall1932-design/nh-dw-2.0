@@ -1,16 +1,22 @@
-// Smoke test: load a built background.js bundle in a window-less context (as an
-// MV3 service worker runs) and prove that the chrome.runtime.onMessage listener
-// actually registers and answers. The previous bundle threw
+// Smoke test: load a built bundle in a window-less context (as an MV3 service
+// worker runs) and prove that its chrome.runtime.onMessage listener actually
+// registers and answers. The pre-fix background bundle threw
 // "ReferenceError: window is not defined" before reaching addListener.
 //
-// Usage:  node test/smoke-mv3.js [path/to/js/background.js]
+// Usage:
+//   node scripts/smoke-mv3.js [path/to/bundle.js] [--offscreen]
+//
+// --offscreen drives the offscreen document bundle, whose listener only
+// answers messages addressed with target:"offscreen".
 // Exit code 0 = listener registered and answered. Exit code 1 = broken bundle.
 
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
 
-const bundlePath = process.argv[2] || path.join(__dirname, "..", "js", "background.js");
+const args = process.argv.slice(2);
+const offscreenMode = args.includes("--offscreen");
+const bundlePath = args.filter((a) => a !== "--offscreen")[0] || path.join(__dirname, "..", "js", "background.js");
 const code = fs.readFileSync(bundlePath, "utf8");
 
 let onMessageHandler = null;
@@ -46,7 +52,7 @@ const sandbox = {
     setTimeout,
     clearTimeout,
     // fetch must not be needed at load time; fail loudly if it is.
-    fetch() { throw new Error("fetch called during background.js load"); }
+    fetch() { throw new Error("fetch called during bundle load"); }
 };
 sandbox.self = sandbox;      // MV3 service workers expose self, not window
 sandbox.globalThis = sandbox;
@@ -72,18 +78,22 @@ if (!messageListenerRegistered) {
 }
 
 // Simulate the popup's first message: isDownloadFinished.
-const response = onMessageHandler({ action: "isDownloadFinished" }, {}, (result) => {
+const request = offscreenMode
+    ? { target: "offscreen", action: "isDownloadFinished" }
+    : { action: "isDownloadFinished" };
+
+const answered = onMessageHandler(request, {}, (result) => {
     if (!result || result.result !== true) {
         console.error("FAIL: isDownloadFinished answered: " + JSON.stringify(result));
         process.exit(1);
     }
     console.log("PASS: listener registered and isDownloadFinished answered " + JSON.stringify(result));
-    console.log("PASS: " + path.basename(bundlePath) + " is safe to run as an MV3 service worker.");
+    console.log("PASS: " + path.basename(bundlePath) + (offscreenMode ? " works as an offscreen document." : " is safe to run as an MV3 service worker."));
     process.exit(0);
 });
 
 // The listener must send a response synchronously for this action.
-if (response === undefined) {
+if (answered === undefined && !offscreenMode) {
     console.error("FAIL: listener returned nothing for isDownloadFinished (sendResponse not called).");
     process.exit(1);
 }

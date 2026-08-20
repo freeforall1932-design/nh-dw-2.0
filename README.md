@@ -6,9 +6,10 @@ A Chrome extension for batch downloading full-size image archives directly from 
 
 ## ✨ Key Features
 * **Batch Download:** Grabs all full-size images from a gallery (not just thumbnails).
-* **Seamless Integration:** Injects a download button directly onto nhentai.net pages.
+* **Seamless Integration:** Injects selection checkboxes directly onto nhentai.net listing pages.
 * **Smart Scraping:** Automatically converts thumbnail URLs to high-quality, full-size images.
 * **Client-Side Zipping:** Creates `.zip` archives locally without relying on external servers.
+* **Large-gallery safe:** the finished archive is handed to Chrome through an MV3 *offscreen document* (real object URL), so huge galleries no longer go through a memory-hungry base64 round-trip in the service worker.
 * **Manifest V3 Compliant:** Fully updated for the latest Chrome extension requirements.
 
 ## 📦 Prerequisites
@@ -58,3 +59,19 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
 ## 📝 Version History
 * **v3.0.0:** Complete rewrite for Manifest V3. Fixed service worker errors, added batch downloading, integrated JSZip locally, and removed deprecated APIs.
 * **v2.2.0:** *(Deprecated)* Original source code base.
+
+## 🧪 Development: building and testing
+
+From `NHDW_Extension_v3.0.0/` (Node 18+):
+
+```bash
+npm install        # once
+npm run build      # webpack -> js/*.js (background, content, offscreen, popup, options...)
+npm test           # fixture tests: parsers, filename utils, Downloader URL/ZIP/raw/object-URL logic
+npm run test:smoke # load built bundles in a window-less VM (MV3 worker / offscreen document)
+npm run test:e2e   # full download pipelines against chrome/fetch stubs, zero network access
+npm run test:live  # opt-in live check against the real nhentai API
+```
+
+The test suite runs entirely offline (mocked `chrome`, `fetch`, `URL.createObjectURL`);
+the single live API check is opt-in via `npm run test:live`.

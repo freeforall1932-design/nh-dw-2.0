@@ -17,7 +17,8 @@ module.exports = {
     updateContent: './src/content/updateContent.ts',
     preview: './src/preview/preview.ts',
     getHtml: './src/preview/getHtml.ts',
-    options: './src/options/options.ts'
+    options: './src/options/options.ts',
+    offscreen: './src/offscreen/offscreen.ts'
   },
   resolve: {
     extensions: ['.ts'],
