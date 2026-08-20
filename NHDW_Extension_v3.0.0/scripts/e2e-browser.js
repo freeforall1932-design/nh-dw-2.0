@@ -164,6 +164,18 @@ class Target {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
+async function waitForExtensionServiceWorker(listTargets, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    let lastTargets = [];
+    while (Date.now() < deadline) {
+        lastTargets = await listTargets();
+        const swInfo = lastTargets.find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://"));
+        if (swInfo) return { swInfo, lastTargets };
+        await sleep(100);
+    }
+    return { swInfo: null, lastTargets };
+}
+
 function whichCommand(name) {
     const r = spawnSync("which", [name], { encoding: "utf8" });
     return r.status === 0 ? r.stdout.trim() : null;
@@ -906,27 +918,27 @@ async function runExtensionTests(ctx) {
         // 1. service worker loads
         // =====================================================================
         stage("waiting for extension service worker");
-        let swInfo = null;
-        let lastTargets = [];
-        for (let i = 0; i < 150 && !swInfo; i++) {
-            lastTargets = await listTargets();
-            swInfo = lastTargets.find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://"));
-            if (!swInfo) await sleep(100);
-        }
+        let { swInfo, lastTargets } = await waitForExtensionServiceWorker(listTargets, 15000);
         if (!swInfo) {
             const targetSummary = lastTargets.map((t) => `${t.type}:${t.url || t.title || "(blank)"}`).join(" | ");
             fail("service worker registration", "no chrome-extension service_worker target appeared (does this browser build support extensions?)\nTargets: " + targetSummary + "\n" + chromeLog.slice(-1500));
         } else {
-            const extensionId = new URL(swInfo.url).host;
+            let extensionId = new URL(swInfo.url).host;
             ok("service worker registered", "extension id " + extensionId);
             stage("service worker reload check");
 
             const sw = await attachTarget(swInfo);
             // Reload the worker and make sure the bundle evaluates without a
             // ReferenceError (this is the regression test for the old `window.*`
-            // bug that killed listener registration).
+            // bug that killed listener registration). Re-acquire the worker
+            // target afterward because the old CDP session can be torn down.
             await sw.eval("chrome.runtime.reload()", false).catch(() => { /* reload tears down the context */ });
-            await sleep(2000);
+            await sleep(1000);
+            const reloaded = await waitForExtensionServiceWorker(listTargets, 15000);
+            if (reloaded.swInfo) {
+                swInfo = reloaded.swInfo;
+                extensionId = new URL(swInfo.url).host;
+            }
             const swExceptions = extensionExceptions(sw);
             if (swExceptions.length > 0) {
                 fail("service worker evaluates cleanly", swExceptions.map((e) => e.text).join("; "));
