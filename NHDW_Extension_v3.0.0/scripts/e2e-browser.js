@@ -21,7 +21,7 @@
 // without it those sections are skipped with a hint.
 //
 // Usage:
-//   node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0 [--browser /path/to/chromium] [--nss-libs /dir]
+//   node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0 [--browser /path/to/chromium] [--nss-libs /dir] [--headed|--headless]
 //
 // Environment:
 //   BROWSER_BIN     browser binary (Chrome, Chromium, or Brave)
@@ -29,6 +29,10 @@
 //                   serverless Chromium builds such as @sparticuz/chromium;
 //                   its bin/al2023.tar.br is extracted automatically)
 //   EXTENSION_DIR   unpacked extension folder
+//   NHDW_BROWSER_HEADLESS=1 forces --headless=new; =0 forces headed mode.
+//                   By default the script uses headed mode when a display is
+//                   present, headed mode under xvfb-run when available, and
+//                   only falls back to headless when no display/Xvfb exists.
 //
 // Exit code 0 = all tests passed (or skipped with a clear reason).
 
@@ -49,6 +53,8 @@ function argValue(name) {
 const EXTENSION_DIR = argValue("--extension") || process.env.EXTENSION_DIR || path.join(__dirname, "..", "..", "NHDW_Release_v3.0.0");
 const BROWSER_ARG = argValue("--browser") || process.env.BROWSER_BIN;
 const NSS_LIBS_ARG = argValue("--nss-libs") || process.env.NSS_LIBS;
+const FORCE_HEADLESS = process.argv.includes("--headless") || process.env.NHDW_BROWSER_HEADLESS === "1";
+const FORCE_HEADED = process.argv.includes("--headed") || process.env.NHDW_BROWSER_HEADLESS === "0";
 
 // ---------------------------------------------------------------------------
 // minimal CDP client
@@ -138,6 +144,11 @@ class Target {
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function whichCommand(name) {
+    const r = spawnSync("which", [name], { encoding: "utf8" });
+    return r.status === 0 ? r.stdout.trim() : null;
+}
 
 // ---------------------------------------------------------------------------
 // fixture content
@@ -277,11 +288,7 @@ async function resolveBrowser() {
     if (BROWSER_ARG) return { bin: BROWSER_ARG, nss: NSS_LIBS_ARG || null };
     let bin = null;
     let nss = NSS_LIBS_ARG || null;
-    const which = (name) => {
-        const r = spawnSync("which", [name], { encoding: "utf8" });
-        return r.status === 0 ? r.stdout.trim() : null;
-    };
-    bin = which("chromium") || which("google-chrome") || which("brave-browser") || which("chromium-browser");
+    bin = whichCommand("chromium") || whichCommand("google-chrome") || whichCommand("brave-browser") || whichCommand("chromium-browser");
     if (!bin) {
         // Try @sparticuz/chromium (a Chromium binary shipped on npm).
         for (const base of [__dirname, path.join(__dirname, "..", "..")]) {
@@ -360,8 +367,11 @@ function ldEnv(nss) {
 
     // --- launch ------------------------------------------------------------
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-profile-"));
+    const xvfbRun = (!FORCE_HEADLESS && !process.env.DISPLAY) ? whichCommand("xvfb-run") : null;
+    const useXvfb = !!xvfbRun;
+    const useHeadless = FORCE_HEADLESS || (!FORCE_HEADED && !process.env.DISPLAY && !useXvfb);
     const args = [
-        "--headless=new",
+        ...(useHeadless ? ["--headless=new"] : []),
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
@@ -377,7 +387,10 @@ function ldEnv(nss) {
         "--test-type",
         "about:blank"
     ];
-    const child = spawn(bin, args, { env: ldEnv(nss), stdio: ["ignore", "ignore", "pipe"] });
+    const launchCmd = useXvfb ? xvfbRun : bin;
+    const launchArgs = useXvfb ? ["-a", bin, ...args] : args;
+    console.log("  launch mode: " + (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")));
+    const child = spawn(launchCmd, launchArgs, { env: ldEnv(nss), stdio: ["ignore", "ignore", "pipe"] });
     let chromeLog = "";
     child.stderr.on("data", (d) => { chromeLog += d.toString(); });
     const exited = new Promise((resolve) => child.on("exit", resolve));
