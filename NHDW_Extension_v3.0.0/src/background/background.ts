@@ -161,9 +161,10 @@ module background
 
         let zip = new JSZip();
         for (let i = 0; i < pagesArr.length; i++) {
+            // Take the page at the current index. Do not mutate pagesArr here:
+            // splicing while iterating made the "last page" check below wrong and
+            // the final ZIP was never downloaded.
             let curr = pagesArr[i];
-            curr = pagesArr[0];
-            pagesArr.splice(0, 1);
             let m = /page=([0-9]+)/.exec(url)
             if (m !== null) {
                 url = url.replace(m[0], "page=" + curr);
@@ -213,18 +214,10 @@ module background
     }
 }
 
-// @ts-ignore
-window.isDownloadFinished = background.isDownloadFinished;
-// @ts-ignore
-window.downloadDoujinshi = background.downloadDoujinshi;
-// @ts-ignore
-window.downloadAllDoujinshis = background.downloadAllDoujinshis;
-// @ts-ignore
-window.goBack = background.goBack;
-// @ts-ignore
-window.updateProgress = background.updateProgress;
-// @ts-ignore
-window.downloadAllPages = background.downloadAllPages;
+// NOTE: MV3 service workers run in a worker global scope without `window`.
+// Do not assign background functions to `window` here: the first assignment
+// would throw a ReferenceError and prevent the message listener below from
+// ever registering. All communication goes through chrome.runtime.onMessage.
 
 // Add message listeners for Firefox private mode compatibility
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {

@@ -21,41 +21,50 @@ chrome.storage.sync.get({
     chrome.storage.local.get({
         allIds: []
     }, function(elemsLocal) {
-        if (elems.displayCheckbox) {
-            // Find and place the popups
-            let r = /\/g\/([0-9]+)\//g;
-            let captions = document.getElementsByClassName("caption");
-            let i = 0;
-            do
-            {
-                let match = r.exec(document.documentElement.innerHTML);
-                tmpIds.push(match![1]);
-                captions[i].innerHTML += '<br/><br/><input id="' + match![1] + '" type="checkbox" ' + (elemsLocal.allIds.includes(match![1]) ? "checked" : "") + '> NHentai Downloader:<br/>Add to downloads<br/>&nbsp;';
-                i++;
-            } while (i < captions.length);
+        if (!elems.displayCheckbox) return;
 
-            // Foreach popups we listen for change
-            for (let i = 0; i < tmpIds.length; i++) {
-                let id = tmpIds[i];
-                document.getElementById(id)!.addEventListener('change', function() {
-                    chrome.storage.local.get({
-                        allIds: []
-                    }, function(elemsLocal) {
-                        let storageAllIds = elemsLocal.allIds;
-                        if ((document.getElementById(id) as HTMLInputElement).checked) {
+        // Single-gallery pages have no caption cards; nothing to do there.
+        const captions = document.getElementsByClassName("caption");
+        if (captions.length === 0) return;
+
+        // Extract each gallery ID from its own caption card instead of running a
+        // document-wide regex matched by index against the live DOM collection.
+        for (let i = 0; i < captions.length; i++) {
+            const link = captions[i].querySelector('a[href*="/g/"]');
+            if (link === null) continue;
+            const match = /\/g\/([0-9]+)\//.exec(link.getAttribute("href") || "");
+            if (match === null) continue;
+            const id = match[1];
+            if (tmpIds.includes(id)) continue; // The same gallery can appear on several cards
+            tmpIds.push(id);
+            captions[i].innerHTML += '<br/><br/><input id="' + id + '" type="checkbox" ' + (elemsLocal.allIds.includes(id) ? "checked" : "") + '> NHentai Downloader:<br/>Add to downloads<br/>&nbsp;';
+        }
+
+        // Foreach popups we listen for change
+        for (let i = 0; i < tmpIds.length; i++) {
+            let id = tmpIds[i];
+            const checkbox = document.getElementById(id);
+            if (checkbox === null) continue;
+            checkbox.addEventListener('change', function() {
+                chrome.storage.local.get({
+                    allIds: []
+                }, function(elemsLocal) {
+                    let storageAllIds = elemsLocal.allIds;
+                    if ((document.getElementById(id) as HTMLInputElement).checked) {
+                        if (!storageAllIds.includes(id)) {
                             storageAllIds.push(id);
-                        } else {
-                            let index = storageAllIds.indexOf(id);
-                            if (index !== -1) {
-                                storageAllIds.splice(index, 1);
-                            }
                         }
-                        chrome.storage.local.set({
-                            allIds: storageAllIds
-                        });
+                    } else {
+                        let index = storageAllIds.indexOf(id);
+                        if (index !== -1) {
+                            storageAllIds.splice(index, 1);
+                        }
+                    }
+                    chrome.storage.local.set({
+                        allIds: storageAllIds
                     });
                 });
-            }
+            });
         }
     });
 });

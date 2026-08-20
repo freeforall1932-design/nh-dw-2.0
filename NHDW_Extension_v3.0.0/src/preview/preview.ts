@@ -29,7 +29,10 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
             }
             // Use message passing instead of direct background page access for Firefox private mode compatibility
             chrome.runtime.sendMessage({ action: "isDownloadFinished" }, function(response) {
-                if (!response.result) {
+                // Guard against a missing response (service worker still waking up
+                // or failed to load): treat it as "no download in progress" instead
+                // of throwing a TypeError before the popup renders.
+                if (!response || !response.result) {
                     chrome.runtime.sendMessage({ action: "updateProgress" });
                     return;
                 }

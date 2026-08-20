@@ -53,7 +53,7 @@ export default class Downloader
                     if (self.useZip === "raw") {
                         self.currentProgress = 100;
                         try {
-                            self.updateProgress(100, this.#doujinshiName, false);
+                            self.updateProgress(100, self.#doujinshiName, false);
                         } catch (e) { } // Dead object
                     }
                     self.#zip.folder(self.path);
@@ -245,13 +245,19 @@ export default class Downloader
             // download. Use the canonical original-image URL and report startup
             // errors through the downloads API callback.
             const imageUrl = imageUrls[0];
-            chrome.downloads.download({
-                url: imageUrl,
-                filename: this.path.replace(/[\\\\\\/:"*?<>|]/g, '') + "-" + filename
-            }, function(downloadId) {
-                if (downloadId === undefined) {
-                    throw "Failed to download original image (" + chrome.runtime.lastError + ").";
-                }
+            await new Promise<void>((resolve, reject) => {
+                chrome.downloads.download({
+                    url: imageUrl,
+                    // Keep "/" so the configured folder structure is preserved;
+                    // strip only characters Chrome rejects in download filenames.
+                    filename: this.path.replace(/[\\:*?"<>|]/g, '') + "-" + filename
+                }, function(downloadId) {
+                    if (downloadId === undefined) {
+                        reject("Failed to download original image (" + chrome.runtime.lastError + ").");
+                    } else {
+                        resolve();
+                    }
+                });
             });
         }
     }

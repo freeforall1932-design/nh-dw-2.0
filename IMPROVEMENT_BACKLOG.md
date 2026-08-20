@@ -12,6 +12,13 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Correct duplicate-title behavior (`rename` and `ignore`)
 - [x] Add active-gallery metadata fallback from the open page
 - [x] Add original-image CDN fallback between the canonical and numbered image hosts
+- [x] Remove legacy `window.*` background assignments that crashed the MV3 service worker before `chrome.runtime.onMessage.addListener` could register (every message from the popup got no response)
+- [x] Ship the webpack-built popup (`index.html` + `js/preview.js`) in `NHDW_Release_v3.0.0`; delete the hand-written `js/popup.js` that messaged a nonexistent content-script listener
+- [x] Fix `content.ts` / `updateContent.ts` caption-loop crash on pages without `.caption` cards; scope gallery IDs to each card's own link instead of a document-wide regex matched by index
+- [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
+- [x] Fix `downloadAllPages`: stop mutating `pagesArr` while iterating so the final ZIP is actually downloaded
+- [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
+- [x] Add window-less service-worker tests (`test/smoke-mv3.js`, `test/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
 - [ ] Complete a manual Chrome and Brave end-to-end download test
 
 ## Priority 1: reliability and correctness
@@ -24,6 +31,11 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - Verify that ZIP entries are original page files and not thumbnail files.
 
 **Acceptance criteria:** `npm test` passes without network access, and live tests remain available for manual verification.
+
+**Progress:** `test/smoke-mv3.js` and `test/e2e-worker.js` already cover the service-worker
+pipeline (listener registration, ZIP/raw/error download paths, ZIP entry names and bytes)
+without network access. Fixture tests for `ApiParsing` / `HtmlParsing` naming and URL logic
+are still open.
 
 ### 2. Improve Cloudflare and response detection
 

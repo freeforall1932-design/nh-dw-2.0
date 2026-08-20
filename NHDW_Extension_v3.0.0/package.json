@@ -7,7 +7,9 @@
   },
   "scripts": {
     "build": "webpack",
-    "test": "mocha"
+    "test": "mocha",
+    "test:smoke": "node test/smoke-mv3.js",
+    "test:e2e": "node test/e2e-worker.js"
   },
   "repository": {
     "type": "git",
