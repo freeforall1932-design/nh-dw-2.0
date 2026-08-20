@@ -21,7 +21,7 @@
 // without it those sections are skipped with a hint.
 //
 // Usage:
-//   node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0 [--browser /path/to/chromium] [--nss-libs /dir]
+//   node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0 [--browser /path/to/chromium] [--nss-libs /dir] [--headed|--headless]
 //
 // Environment:
 //   BROWSER_BIN     browser binary (Chrome, Chromium, or Brave)
@@ -29,6 +29,10 @@
 //                   serverless Chromium builds such as @sparticuz/chromium;
 //                   its bin/al2023.tar.br is extracted automatically)
 //   EXTENSION_DIR   unpacked extension folder
+//   NHDW_BROWSER_HEADLESS=1 forces --headless=new; =0 forces headed mode.
+//                   By default the script uses headed mode when a display is
+//                   present, headed mode under xvfb-run when available, and
+//                   only falls back to headless when no display/Xvfb exists.
 //
 // Exit code 0 = all tests passed (or skipped with a clear reason).
 
@@ -36,6 +40,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const https = require("https");
+const net = require("net");
 const { spawn, spawnSync } = require("child_process");
 
 // ---------------------------------------------------------------------------
@@ -49,6 +54,12 @@ function argValue(name) {
 const EXTENSION_DIR = argValue("--extension") || process.env.EXTENSION_DIR || path.join(__dirname, "..", "..", "NHDW_Release_v3.0.0");
 const BROWSER_ARG = argValue("--browser") || process.env.BROWSER_BIN;
 const NSS_LIBS_ARG = argValue("--nss-libs") || process.env.NSS_LIBS;
+const FORCE_HEADLESS = process.argv.includes("--headless") || process.env.NHDW_BROWSER_HEADLESS === "1";
+const FORCE_HEADED = process.argv.includes("--headed") || process.env.NHDW_BROWSER_HEADLESS === "0";
+const CDP_COMMAND_TIMEOUT_MS = parseInt(process.env.NHDW_CDP_TIMEOUT_MS || "15000", 10);
+const SCRIPT_TIMEOUT_MS = parseInt(process.env.NHDW_BROWSER_E2E_TIMEOUT_MS || "240000", 10);
+let launchedChild = null;
+let currentStage = "initializing";
 
 // ---------------------------------------------------------------------------
 // minimal CDP client
@@ -63,10 +74,18 @@ class CDP {
             this.ws.onopen = () => resolve();
             this.ws.onerror = (e) => reject(new Error("WebSocket error: " + (e.message || e)));
         });
+        this.ws.onclose = () => {
+            for (const [id, pending] of this.pending.entries()) {
+                clearTimeout(pending.timeout);
+                pending.reject(new Error("WebSocket closed while waiting for CDP response " + id));
+            }
+            this.pending.clear();
+        };
         this.ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
             if (msg.id !== undefined && this.pending.has(msg.id)) {
-                const { resolve, reject } = this.pending.get(msg.id);
+                const { resolve, reject, timeout } = this.pending.get(msg.id);
+                clearTimeout(timeout);
                 this.pending.delete(msg.id);
                 if (msg.error) reject(new Error(msg.error.message + " (" + (msg.error.code || "?") + ")"));
                 else resolve(msg.result);
@@ -83,7 +102,13 @@ class CDP {
         const msg = { id, method, params };
         if (sessionId) msg.sessionId = sessionId;
         return new Promise((resolve, reject) => {
-            this.pending.set(id, { resolve, reject });
+            const timeout = setTimeout(() => {
+                if (this.pending.has(id)) {
+                    this.pending.delete(id);
+                    reject(new Error(method + " timed out after " + CDP_COMMAND_TIMEOUT_MS + "ms"));
+                }
+            }, CDP_COMMAND_TIMEOUT_MS);
+            this.pending.set(id, { resolve, reject, timeout });
             this.ws.send(JSON.stringify(msg));
         });
     }
@@ -138,6 +163,47 @@ class Target {
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function waitForExtensionServiceWorker(listTargets, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    let lastTargets = [];
+    while (Date.now() < deadline) {
+        lastTargets = await listTargets();
+        const swInfo = lastTargets.find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://"));
+        if (swInfo) return { swInfo, lastTargets };
+        await sleep(100);
+    }
+    return { swInfo: null, lastTargets };
+}
+
+function whichCommand(name) {
+    const r = spawnSync("which", [name], { encoding: "utf8" });
+    return r.status === 0 ? r.stdout.trim() : null;
+}
+
+function getFreePort() {
+    return new Promise((resolve, reject) => {
+        const server = net.createServer();
+        server.on("error", reject);
+        server.listen(0, "127.0.0.1", () => {
+            const address = server.address();
+            const port = address && typeof address === "object" ? address.port : null;
+            server.close(() => {
+                if (port) resolve(port);
+                else reject(new Error("Unable to allocate a debugging port"));
+            });
+        });
+    });
+}
+
+function makeBrowserWritableTempDir(prefix) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    // When the script itself is elevated to bind port 443, launch the browser
+    // as the original user; profile/download directories must therefore be
+    // writable by that user too.
+    try { fs.chmodSync(dir, 0o777); } catch (_) { /* best effort */ }
+    return dir;
+}
 
 // ---------------------------------------------------------------------------
 // fixture content
@@ -232,9 +298,35 @@ function fixtureServerHandler(req, res) {
 // report helpers
 // ---------------------------------------------------------------------------
 const results = [];
+function ghaEscape(value) {
+    return String(value || "")
+        .replace(/%/g, "%25")
+        .replace(/\r/g, "%0D")
+        .replace(/\n/g, "%0A")
+        .replace(/:/g, "%3A")
+        .replace(/,/g, "%2C");
+}
+function githubError(title, message) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+        console.log(`::error title=${ghaEscape(title)}::${ghaEscape(message)}`);
+    }
+}
+function githubNotice(title, message) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+        console.log(`::notice title=${ghaEscape(title)}::${ghaEscape(message)}`);
+    }
+}
+function stage(name) {
+    currentStage = name;
+    console.log("  stage: " + name);
+    githubNotice("browser e2e stage", name);
+}
 function report(name, status, detail) {
     results.push({ name, status, detail: detail || "" });
     console.log(`  [${status}] ${name}${detail ? " — " + detail : ""}`);
+    if (status === "FAIL") {
+        githubError(name, detail || "failed");
+    }
 }
 function ok(name, detail) { report(name, "PASS", detail); }
 function skip(name, detail) { report(name, "SKIP", detail); }
@@ -257,15 +349,23 @@ function findZips(dir) {
 // ---------------------------------------------------------------------------
 // browser resolution (incl. @sparticuz/chromium with its bundled NSS libs)
 // ---------------------------------------------------------------------------
+function normalizeBrowserBin(bin) {
+    // Brave release ZIPs contain the raw ELF (`brave`) and a launcher wrapper
+    // (`brave-browser`). The wrapper supplies crashpad/profile defaults that
+    // the raw ELF can miss under CI, producing an immediate SIGTRAP.
+    if (path.basename(bin) === "brave") {
+        for (const candidate of [path.join(path.dirname(bin), "brave-browser"), path.join(path.dirname(path.dirname(bin)), "brave-browser")]) {
+            if (fs.existsSync(candidate)) return candidate;
+        }
+    }
+    return bin;
+}
+
 async function resolveBrowser() {
-    if (BROWSER_ARG) return { bin: BROWSER_ARG, nss: NSS_LIBS_ARG || null };
+    if (BROWSER_ARG) return { bin: normalizeBrowserBin(BROWSER_ARG), nss: NSS_LIBS_ARG || null };
     let bin = null;
     let nss = NSS_LIBS_ARG || null;
-    const which = (name) => {
-        const r = spawnSync("which", [name], { encoding: "utf8" });
-        return r.status === 0 ? r.stdout.trim() : null;
-    };
-    bin = which("chromium") || which("google-chrome") || which("brave-browser") || which("chromium-browser");
+    bin = whichCommand("chromium") || whichCommand("google-chrome") || whichCommand("brave-browser") || whichCommand("chromium-browser");
     if (!bin) {
         // Try @sparticuz/chromium (a Chromium binary shipped on npm).
         for (const base of [__dirname, path.join(__dirname, "..", "..")]) {
@@ -296,7 +396,7 @@ async function resolveBrowser() {
         throw new Error("No browser found. Install one and pass --browser (or BROWSER_BIN). " +
             "Serverless option: npm install @sparticuz/chromium in the extension package and rerun.");
     }
-    return { bin, nss };
+    return { bin: normalizeBrowserBin(bin), nss };
 }
 
 function ldEnv(nss) {
@@ -309,18 +409,65 @@ function ldEnv(nss) {
     return env;
 }
 
+async function installChromeForTesting() {
+    const base = path.join(os.tmpdir(), "nhdw-chrome-for-testing");
+    const exe = path.join(base, "chrome-linux64", "chrome");
+    if (fs.existsSync(exe)) return exe;
+    fs.mkdirSync(base, { recursive: true });
+    const metaUrl = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
+    stage("installing Chrome for Testing");
+    try {
+        const meta = await (await fetch(metaUrl)).json();
+        const stable = meta.channels && meta.channels.Stable;
+        const downloads = stable && stable.downloads && stable.downloads.chrome;
+        const item = downloads && downloads.find((d) => d.platform === "linux64");
+        if (!item || !item.url) throw new Error("linux64 Chrome for Testing URL missing from metadata");
+        const zipPath = path.join(base, "chrome-linux64.zip");
+        const resp = await fetch(item.url);
+        if (!resp.ok) throw new Error("download failed: " + resp.status + " " + resp.statusText);
+        fs.writeFileSync(zipPath, Buffer.from(await resp.arrayBuffer()));
+        const unzip = spawnSync("unzip", ["-q", "-o", zipPath, "-d", base], { encoding: "utf8" });
+        if (unzip.status !== 0) throw new Error("unzip failed: " + (unzip.stderr || unzip.stdout || unzip.status));
+        fs.chmodSync(exe, 0o755);
+        return exe;
+    } catch (error) {
+        githubNotice("Chrome for Testing install skipped", String(error && error.message ? error.message : error));
+        return null;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 (async () => {
     console.log("NHDW real-browser end-to-end test");
+    const globalTimeout = setTimeout(() => {
+        const summary = results.map((r) => `[${r.status}] ${r.name}${r.detail ? " — " + r.detail : ""}`).join("\n");
+        const message = "timed out after " + SCRIPT_TIMEOUT_MS + "ms at stage: " + currentStage + (summary ? "\n\nResults so far:\n" + summary : "");
+        console.error("FATAL: " + message);
+        githubError("browser e2e timed out", message);
+        if (launchedChild) {
+            try { launchedChild.kill("SIGKILL"); } catch (_) { /* noop */ }
+        }
+        process.exit(2);
+    }, SCRIPT_TIMEOUT_MS);
     console.log("  extension dir: " + path.resolve(EXTENSION_DIR));
     if (!fs.existsSync(path.join(EXTENSION_DIR, "manifest.json"))) {
-        console.error("FATAL: no manifest.json in " + EXTENSION_DIR);
+        const message = "no manifest.json in " + EXTENSION_DIR;
+        console.error("FATAL: " + message);
+        githubError("browser e2e fatal", message);
         process.exit(2);
     }
-    const { bin, nss } = await resolveBrowser();
-    const versionOut = spawnSync(bin, ["--version"], { encoding: "utf8", env: ldEnv(nss) }).stdout.trim();
+    let { bin, nss } = await resolveBrowser();
+    let versionOut = spawnSync(bin, ["--version"], { encoding: "utf8", env: ldEnv(nss) }).stdout.trim();
+    if ((process.env.GITHUB_ACTIONS === "true" || process.env.NHDW_USE_CHROME_FOR_TESTING === "1") && /Google Chrome/i.test(versionOut)) {
+        const cft = await installChromeForTesting();
+        if (cft) {
+            bin = cft;
+            nss = null;
+            versionOut = spawnSync(bin, ["--version"], { encoding: "utf8" }).stdout.trim();
+        }
+    }
     console.log("  browser: " + bin);
     console.log("  version: " + versionOut);
 
@@ -341,17 +488,31 @@ function ldEnv(nss) {
     }
 
     // --- launch ------------------------------------------------------------
-    const profile = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-profile-"));
+    const profile = makeBrowserWritableTempDir("nhdw-profile-");
+    const crashDumpsDir = path.join(profile, "Crash Reports");
+    fs.mkdirSync(crashDumpsDir, { recursive: true });
+    try { fs.chmodSync(crashDumpsDir, 0o777); } catch (_) { /* best effort */ }
+    const debugPort = await getFreePort();
+    const xvfbRun = (!FORCE_HEADLESS && !process.env.DISPLAY) ? whichCommand("xvfb-run") : null;
+    const useXvfb = !!xvfbRun;
+    const useHeadless = FORCE_HEADLESS || (!FORCE_HEADED && !process.env.DISPLAY && !useXvfb);
     const args = [
-        "--headless=new",
+        ...(useHeadless ? ["--headless=new"] : []),
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
+        "--disable-breakpad",
+        "--disable-crash-reporter",
+        "--disable-crashpad",
+        // Chrome 137+ branded builds ignore --load-extension unless this
+        // feature gate is disabled (unbranded Chromium/Brave ignore it).
+        "--disable-features=DisableLoadExtensionCommandLineSwitch",
         "--no-first-run",
         "--no-default-browser-check",
-        "--remote-debugging-port=0",
+        "--remote-debugging-port=" + debugPort,
         "--remote-allow-origins=*",
         "--user-data-dir=" + profile,
+        "--crash-dumps-dir=" + crashDumpsDir,
         "--disable-extensions-except=" + path.resolve(EXTENSION_DIR),
         "--load-extension=" + path.resolve(EXTENSION_DIR),
         "--host-resolver-rules=MAP nhentai.net 127.0.0.1, MAP i.nhentai.net 127.0.0.1, MAP i1.nhentai.net 127.0.0.1, MAP i2.nhentai.net 127.0.0.1, MAP i3.nhentai.net 127.0.0.1, MAP i4.nhentai.net 127.0.0.1",
@@ -359,33 +520,59 @@ function ldEnv(nss) {
         "--test-type",
         "about:blank"
     ];
-    const child = spawn(bin, args, { env: ldEnv(nss), stdio: ["ignore", "ignore", "pipe"] });
-    let chromeLog = "";
-    child.stderr.on("data", (d) => { chromeLog += d.toString(); });
-    const exited = new Promise((resolve) => child.on("exit", resolve));
-
-    // Wait for the DevTools port.
-    const portFile = path.join(profile, "DevToolsActivePort");
-    let port = null;
-    for (let i = 0; i < 100 && !port; i++) {
-        if (fs.existsSync(portFile)) {
-            const [p] = fs.readFileSync(portFile, "utf8").split("\n");
-            port = parseInt(p, 10);
-            if (!Number.isFinite(port)) port = null;
-        }
-        if (!port) await sleep(100);
+    let launchCmd = useXvfb ? xvfbRun : bin;
+    let launchArgs = useXvfb ? ["-a", bin, ...args] : args;
+    const originalUser = (typeof process.getuid === "function" && process.getuid() === 0 && process.env.SUDO_USER && process.env.SUDO_USER !== "root")
+        ? process.env.SUDO_USER
+        : null;
+    if (originalUser) {
+        // -H resets HOME to the target user's home. Brave's crashpad startup
+        // reads HOME even with --user-data-dir, and preserving /root here makes
+        // the release ZIP crash with SIGTRAP on GitHub runners.
+        launchArgs = ["-H", "-E", "-u", originalUser, launchCmd, ...launchArgs];
+        launchCmd = "sudo";
     }
-    if (!port) {
-        console.error("FATAL: browser did not open a DevTools port.\n" + chromeLog.slice(-2000));
+    const launchMode = (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")) + (originalUser ? ` as ${originalUser}` : "");
+    console.log("  launch mode: " + launchMode);
+    githubNotice("browser launch mode", launchMode);
+    console.log("  DevTools port: " + debugPort);
+    stage("launching browser");
+    const child = spawn(launchCmd, launchArgs, { env: ldEnv(nss), stdio: ["ignore", "pipe", "pipe"] });
+    launchedChild = child;
+    let chromeLog = "";
+    let childExit = null;
+    child.stdout.on("data", (d) => { chromeLog += d.toString(); });
+    child.stderr.on("data", (d) => { chromeLog += d.toString(); });
+    const exited = new Promise((resolve) => child.on("exit", (code, signal) => {
+        childExit = { code, signal };
+        resolve(childExit);
+    }));
+
+    // Wait for the DevTools endpoint. A fixed high port is more reliable than
+    // DevToolsActivePort under headed/Xvfb launches on CI runners.
+    let port = debugPort;
+    let devtoolsVersion = null;
+    for (let i = 0; i < 600 && !devtoolsVersion && !childExit; i++) {
+        try {
+            const resp = await fetch(`http://127.0.0.1:${port}/json/version`);
+            if (resp.ok) devtoolsVersion = await resp.json();
+        } catch (_) { /* not listening yet */ }
+        if (!devtoolsVersion) await sleep(100);
+    }
+    if (!devtoolsVersion) {
+        const exitDetail = childExit ? `browser process exited with code ${childExit.code}, signal ${childExit.signal}` : "browser process is still running";
+        const message = "browser did not open a DevTools port (" + exitDetail + ").\n" + chromeLog.slice(-3000);
+        console.error("FATAL: " + message);
+        githubError("browser did not open DevTools", message);
         child.kill();
         process.exit(2);
     }
+    stage("connected to DevTools");
 
     const targetsBySession = new Map();
     let browser;
     try {
-        const version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json();
-        browser = new CDP(version.webSocketDebuggerUrl);
+        browser = new CDP(devtoolsVersion.webSocketDebuggerUrl);
         browser.on((msg) => {
             if ((msg.method === "Runtime.exceptionThrown" || msg.method === "Runtime.consoleAPICalled") && msg.sessionId) {
                 const t = targetsBySession.get(msg.sessionId);
@@ -393,16 +580,20 @@ function ldEnv(nss) {
                 if (t && msg.method === "Runtime.consoleAPICalled") t.console.push(msg.params);
             }
         });
+        await browser.send("Target.setDiscoverTargets", { discover: true }).catch(() => {});
     } catch (e) {
-        console.error("FATAL: could not connect to the DevTools endpoint: " + e.message);
+        const message = "could not connect to the DevTools endpoint: " + e.message;
+        console.error("FATAL: " + message);
+        githubError("browser e2e fatal", message);
         child.kill();
         process.exit(2);
     }
-    const browserProduct = (async () => {
-        try { const v = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); return v.Browser || "Chromium"; } catch (_) { return "Chromium"; }
-    })();
+    const browserProduct = devtoolsVersion.Browser || "Chromium";
 
-    const listTargets = async () => (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json());
+    const listTargets = async () => {
+        const result = await browser.send("Target.getTargets");
+        return (result.targetInfos || []).map((target) => Object.assign({ id: target.targetId }, target));
+    };
     const attachTarget = async (info) => {
         const t = new Target(browser, info.id, info);
         await t.attach();
@@ -422,6 +613,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 2. popup renders (proves popup -> service worker message bridge)
         // =====================================================================
+        stage("popup renders");
         {
             const created = await browser.send("Target.createTarget", { url: `chrome-extension://${extensionId}/index.html` });
             await sleep(300);
@@ -447,6 +639,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 3. content script on real (fixture) nhentai pages over HTTPS
         // =====================================================================
+        stage("content scripts on fixture pages");
         if (!fixtureServer) {
             skip("content script tests", "no privileged fixture server (port 443): " + (fixtureServerError ? fixtureServerError.code : "unknown"));
         } else {
@@ -497,8 +690,9 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 4. offscreen document pipeline with a real ZIP on disk
         // =====================================================================
+        stage("offscreen ZIP pipeline");
         {
-            const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-downloads-"));
+            const downloadDir = makeBrowserWritableTempDir("nhdw-downloads-");
             try {
                 await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
             } catch (e) {
@@ -607,8 +801,9 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 5. popup UI driven download (gallery page -> popup -> ZIP on disk)
         // =====================================================================
+        stage("popup UI download flow");
         {
-            const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-ui-downloads-"));
+            const downloadDir = makeBrowserWritableTempDir("nhdw-ui-downloads-");
             try {
                 await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
             } catch (_) { /* fall back to directory search */ }
@@ -699,6 +894,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 6. options page sanity
         // =====================================================================
+        stage("options page");
         {
             const created = await browser.send("Target.createTarget", { url: `chrome-extension://${extensionId}/options.html` });
             await sleep(300);
@@ -721,24 +917,28 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 1. service worker loads
         // =====================================================================
-        let swInfo = null;
-        for (let i = 0; i < 150 && !swInfo; i++) {
-            const targets = await listTargets();
-            swInfo = targets.find((t) => t.type === "service_worker" && t.url.includes("chrome-extension://"));
-            if (!swInfo) await sleep(100);
-        }
+        stage("waiting for extension service worker");
+        let { swInfo, lastTargets } = await waitForExtensionServiceWorker(listTargets, 15000);
         if (!swInfo) {
-            fail("service worker registration", "no chrome-extension service_worker target appeared (does this browser build support extensions?)\n" + chromeLog.slice(-1500));
+            const targetSummary = lastTargets.map((t) => `${t.type}:${t.url || t.title || "(blank)"}`).join(" | ");
+            fail("service worker registration", "no chrome-extension service_worker target appeared (does this browser build support extensions?)\nTargets: " + targetSummary + "\n" + chromeLog.slice(-1500));
         } else {
-            const extensionId = new URL(swInfo.url).host;
+            let extensionId = new URL(swInfo.url).host;
             ok("service worker registered", "extension id " + extensionId);
+            stage("service worker reload check");
 
             const sw = await attachTarget(swInfo);
             // Reload the worker and make sure the bundle evaluates without a
             // ReferenceError (this is the regression test for the old `window.*`
-            // bug that killed listener registration).
+            // bug that killed listener registration). Re-acquire the worker
+            // target afterward because the old CDP session can be torn down.
             await sw.eval("chrome.runtime.reload()", false).catch(() => { /* reload tears down the context */ });
-            await sleep(2000);
+            await sleep(1000);
+            const reloaded = await waitForExtensionServiceWorker(listTargets, 15000);
+            if (reloaded.swInfo) {
+                swInfo = reloaded.swInfo;
+                extensionId = new URL(swInfo.url).host;
+            }
             const swExceptions = extensionExceptions(sw);
             if (swExceptions.length > 0) {
                 fail("service worker evaluates cleanly", swExceptions.map((e) => e.text).join("; "));
@@ -758,10 +958,12 @@ async function runExtensionTests(ctx) {
         try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_) { /* noop */ }
     }
 
+    clearTimeout(globalTimeout);
+
     // ------------------------------------------------------------------
     // summary
     // ------------------------------------------------------------------
-    const product = await browserProduct;
+    const product = browserProduct;
     console.log("\nResults (" + product + "):");
     let failed = 0;
     for (const r of results) {
@@ -769,11 +971,16 @@ async function runExtensionTests(ctx) {
     }
     if (failed > 0) {
         console.log(`  ${failed} test(s) FAILED`);
-        process.exitCode = 1;
     } else {
         console.log("  all tests passed" + (results.some((r) => r.status === "SKIP") ? " (some skipped)" : ""));
     }
+    // CI browser wrappers (xvfb-run/Chrome/Brave crashpad children) can leave
+    // inherited pipe handles open even after the direct browser process exits.
+    // Exit explicitly once the result summary has been printed.
+    process.exit(failed > 0 ? 1 : 0);
 })().catch((e) => {
-    console.error("FATAL: " + (e && e.stack ? e.stack : e));
+    const message = String(e && e.stack ? e.stack : e);
+    console.error("FATAL: " + message);
+    githubError("browser e2e fatal", message);
     process.exit(2);
 });

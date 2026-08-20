@@ -247,7 +247,7 @@ export default class Downloader
         if (this.useZip !== "raw") { // ZIP (or equivalent) format
             let lastStatus = "unknown error";
             for (const imageUrl of imageUrls) {
-                const resp = await fetch(imageUrl);
+                const resp = await fetch(imageUrl, { credentials: "include", cache: "no-store" });
                 if (resp.ok) {
                     // A 200 response can still be a Cloudflare challenge page or
                     // an error document. Only accept responses that identify as

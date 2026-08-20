@@ -14,7 +14,8 @@
     "tabs",
     "storage",
     "alarms",
-    "scripting"
+    "scripting",
+    "offscreen"
   ],
   "host_permissions": [
     "https://nhentai.net/*",

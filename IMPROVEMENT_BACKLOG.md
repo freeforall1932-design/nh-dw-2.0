@@ -20,6 +20,7 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
 - [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
 - [x] Replace the base64 ZIP download path: downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts` + `offscreen.html`) that delivers the archive through a real `URL.createObjectURL`; the in-worker base64 path remains only as a fallback for browsers without `chrome.offscreen`. The service worker relays commands (`scripts/e2e-relay.js` verifies relay, idle-close, and no message loops).
+- [x] Include the MV3 `offscreen` permission in both source and release manifests so real Chrome/Brave expose `chrome.offscreen` and use the intended object-URL ZIP path.
 - [x] Replace the live-only API test with deterministic fixture tests: `test/parsing.test.js` (API/HTML parsers incl. `\u0022` embeds, malformed/Cloudflare HTML rejection, filename utils) and `test/downloader.test.js` (image URL order and CDN fallback, ZIP entry names and original-page bytes, raw mode, object-URL delivery). The live nhentai check is opt-in behind `RUN_LIVE_TESTS=1` (`npm run test:live`).
 - [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`, plus a ready-to-run CI workflow for real Chrome and Brave included in `SESSION_HANDOFF.md`) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10).
 
@@ -51,6 +52,12 @@ stubs and zero network access. The live check is opt-in: `npm run test:live`.
 
 **Acceptance criteria:** a blocked request produces a useful error and never creates a corrupt image entry.
 
+**Progress:** partial. Single-gallery metadata now retries through the active nhentai tab's page context
+(`credentials: "include"`, same-origin `/api/gallery/<id>`, then embedded `window._gallery` HTML parsing)
+so a browser session that can read the gallery can usually supply metadata even when Cloudflare blocks the
+extension-origin API request. Extension/offscreen image and batch metadata fetches also request credentials.
+Still open: targeted Cloudflare detection/backoff for all metadata layers and batch/gallery-list resolution.
+
 ### 3. Make original-image validation explicit
 
 - Confirm that every downloaded response has an image content type.
@@ -78,7 +85,8 @@ Investigate an offscreen document or another MV3-compatible download architectur
 
 **Progress:** DONE.
 Downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts`, `offscreen.html`)
-created with the `BLOBS` reason. The ZIP Blob is delivered via `URL.createObjectURL` and the
+created with the `BLOBS` reason and both source/release manifests now request the required
+`offscreen` permission. The ZIP Blob is delivered via `URL.createObjectURL` and the
 object URL is revoked after the download is accepted; the base64 data-URL path only remains as
 a fallback for environments without `chrome.offscreen`. As a bonus the offscreen document is
 not subject to the service worker idle timeout, so long downloads survive MV3 worker
