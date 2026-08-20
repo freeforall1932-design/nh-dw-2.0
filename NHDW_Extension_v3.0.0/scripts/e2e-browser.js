@@ -875,10 +875,13 @@ async function runExtensionTests(ctx) {
     }
     if (failed > 0) {
         console.log(`  ${failed} test(s) FAILED`);
-        process.exitCode = 1;
     } else {
         console.log("  all tests passed" + (results.some((r) => r.status === "SKIP") ? " (some skipped)" : ""));
     }
+    // CI browser wrappers (xvfb-run/Chrome/Brave crashpad children) can leave
+    // inherited pipe handles open even after the direct browser process exits.
+    // Exit explicitly once the result summary has been printed.
+    process.exit(failed > 0 ? 1 : 0);
 })().catch((e) => {
     const message = String(e && e.stack ? e.stack : e);
     console.error("FATAL: " + message);
