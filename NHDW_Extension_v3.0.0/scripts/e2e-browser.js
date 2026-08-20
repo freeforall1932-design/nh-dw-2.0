@@ -57,6 +57,9 @@ const NSS_LIBS_ARG = argValue("--nss-libs") || process.env.NSS_LIBS;
 const FORCE_HEADLESS = process.argv.includes("--headless") || process.env.NHDW_BROWSER_HEADLESS === "1";
 const FORCE_HEADED = process.argv.includes("--headed") || process.env.NHDW_BROWSER_HEADLESS === "0";
 const CDP_COMMAND_TIMEOUT_MS = parseInt(process.env.NHDW_CDP_TIMEOUT_MS || "15000", 10);
+const SCRIPT_TIMEOUT_MS = parseInt(process.env.NHDW_BROWSER_E2E_TIMEOUT_MS || "240000", 10);
+let launchedChild = null;
+let currentStage = "initializing";
 
 // ---------------------------------------------------------------------------
 // minimal CDP client
@@ -287,6 +290,16 @@ function githubError(title, message) {
         console.log(`::error title=${ghaEscape(title)}::${ghaEscape(message)}`);
     }
 }
+function githubNotice(title, message) {
+    if (process.env.GITHUB_ACTIONS === "true") {
+        console.log(`::notice title=${ghaEscape(title)}::${ghaEscape(message)}`);
+    }
+}
+function stage(name) {
+    currentStage = name;
+    console.log("  stage: " + name);
+    githubNotice("browser e2e stage", name);
+}
 function report(name, status, detail) {
     results.push({ name, status, detail: detail || "" });
     console.log(`  [${status}] ${name}${detail ? " — " + detail : ""}`);
@@ -368,6 +381,16 @@ function ldEnv(nss) {
 // ---------------------------------------------------------------------------
 (async () => {
     console.log("NHDW real-browser end-to-end test");
+    const globalTimeout = setTimeout(() => {
+        const summary = results.map((r) => `[${r.status}] ${r.name}${r.detail ? " — " + r.detail : ""}`).join("\n");
+        const message = "timed out after " + SCRIPT_TIMEOUT_MS + "ms at stage: " + currentStage + (summary ? "\n\nResults so far:\n" + summary : "");
+        console.error("FATAL: " + message);
+        githubError("browser e2e timed out", message);
+        if (launchedChild) {
+            try { launchedChild.kill("SIGKILL"); } catch (_) { /* noop */ }
+        }
+        process.exit(2);
+    }, SCRIPT_TIMEOUT_MS);
     console.log("  extension dir: " + path.resolve(EXTENSION_DIR));
     if (!fs.existsSync(path.join(EXTENSION_DIR, "manifest.json"))) {
         const message = "no manifest.json in " + EXTENSION_DIR;
@@ -423,7 +446,9 @@ function ldEnv(nss) {
     const launchArgs = useXvfb ? ["-a", bin, ...args] : args;
     console.log("  launch mode: " + (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")));
     console.log("  DevTools port: " + debugPort);
+    stage("launching browser");
     const child = spawn(launchCmd, launchArgs, { env: ldEnv(nss), stdio: ["ignore", "pipe", "pipe"] });
+    launchedChild = child;
     let chromeLog = "";
     let childExit = null;
     child.stdout.on("data", (d) => { chromeLog += d.toString(); });
@@ -452,6 +477,7 @@ function ldEnv(nss) {
         child.kill();
         process.exit(2);
     }
+    stage("connected to DevTools");
 
     const targetsBySession = new Map();
     let browser;
@@ -495,6 +521,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 2. popup renders (proves popup -> service worker message bridge)
         // =====================================================================
+        stage("popup renders");
         {
             const created = await browser.send("Target.createTarget", { url: `chrome-extension://${extensionId}/index.html` });
             await sleep(300);
@@ -520,6 +547,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 3. content script on real (fixture) nhentai pages over HTTPS
         // =====================================================================
+        stage("content scripts on fixture pages");
         if (!fixtureServer) {
             skip("content script tests", "no privileged fixture server (port 443): " + (fixtureServerError ? fixtureServerError.code : "unknown"));
         } else {
@@ -570,6 +598,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 4. offscreen document pipeline with a real ZIP on disk
         // =====================================================================
+        stage("offscreen ZIP pipeline");
         {
             const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-downloads-"));
             try {
@@ -680,6 +709,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 5. popup UI driven download (gallery page -> popup -> ZIP on disk)
         // =====================================================================
+        stage("popup UI download flow");
         {
             const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-ui-downloads-"));
             try {
@@ -772,6 +802,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 6. options page sanity
         // =====================================================================
+        stage("options page");
         {
             const created = await browser.send("Target.createTarget", { url: `chrome-extension://${extensionId}/options.html` });
             await sleep(300);
@@ -794,6 +825,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         // 1. service worker loads
         // =====================================================================
+        stage("waiting for extension service worker");
         let swInfo = null;
         for (let i = 0; i < 150 && !swInfo; i++) {
             const targets = await listTargets();
@@ -805,6 +837,7 @@ async function runExtensionTests(ctx) {
         } else {
             const extensionId = new URL(swInfo.url).host;
             ok("service worker registered", "extension id " + extensionId);
+            stage("service worker reload check");
 
             const sw = await attachTarget(swInfo);
             // Reload the worker and make sure the bundle evaluates without a
@@ -830,6 +863,8 @@ async function runExtensionTests(ctx) {
         child.kill("SIGKILL");
         try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_) { /* noop */ }
     }
+
+    clearTimeout(globalTimeout);
 
     // ------------------------------------------------------------------
     // summary
