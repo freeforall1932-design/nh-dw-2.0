@@ -184,6 +184,15 @@ function getFreePort() {
     });
 }
 
+function makeBrowserWritableTempDir(prefix) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    // When the script itself is elevated to bind port 443, launch the browser
+    // as the original user; profile/download directories must therefore be
+    // writable by that user too.
+    try { fs.chmodSync(dir, 0o777); } catch (_) { /* best effort */ }
+    return dir;
+}
+
 // ---------------------------------------------------------------------------
 // fixture content
 // ---------------------------------------------------------------------------
@@ -432,7 +441,7 @@ function ldEnv(nss) {
     }
 
     // --- launch ------------------------------------------------------------
-    const profile = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-profile-"));
+    const profile = makeBrowserWritableTempDir("nhdw-profile-");
     const debugPort = await getFreePort();
     const xvfbRun = (!FORCE_HEADLESS && !process.env.DISPLAY) ? whichCommand("xvfb-run") : null;
     const useXvfb = !!xvfbRun;
@@ -460,9 +469,16 @@ function ldEnv(nss) {
         "--test-type",
         "about:blank"
     ];
-    const launchCmd = useXvfb ? xvfbRun : bin;
-    const launchArgs = useXvfb ? ["-a", bin, ...args] : args;
-    const launchMode = useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed");
+    let launchCmd = useXvfb ? xvfbRun : bin;
+    let launchArgs = useXvfb ? ["-a", bin, ...args] : args;
+    const originalUser = (typeof process.getuid === "function" && process.getuid() === 0 && process.env.SUDO_USER && process.env.SUDO_USER !== "root")
+        ? process.env.SUDO_USER
+        : null;
+    if (originalUser) {
+        launchArgs = ["-E", "-u", originalUser, launchCmd, ...launchArgs];
+        launchCmd = "sudo";
+    }
+    const launchMode = (useXvfb ? "headed under xvfb-run" : (useHeadless ? "headless=new" : "headed")) + (originalUser ? ` as ${originalUser}` : "");
     console.log("  launch mode: " + launchMode);
     githubNotice("browser launch mode", launchMode);
     console.log("  DevTools port: " + debugPort);
@@ -622,7 +638,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         stage("offscreen ZIP pipeline");
         {
-            const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-downloads-"));
+            const downloadDir = makeBrowserWritableTempDir("nhdw-downloads-");
             try {
                 await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
             } catch (e) {
@@ -733,7 +749,7 @@ async function runExtensionTests(ctx) {
         // =====================================================================
         stage("popup UI download flow");
         {
-            const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), "nhdw-ui-downloads-"));
+            const downloadDir = makeBrowserWritableTempDir("nhdw-ui-downloads-");
             try {
                 await browser.send("Browser.setDownloadBehavior", { behavior: "allow", downloadPath: downloadDir, eventsEnabled: true });
             } catch (_) { /* fall back to directory search */ }
