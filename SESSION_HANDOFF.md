@@ -12,15 +12,15 @@ Previous work landed via PR #12 (tab-first image fetches) — now on `main` (`c6
 - This session's commits (oldest first):
   - `fd34186` Salvage local fixes from nh-dw-2.0-main-fixed.zip
   - `120279d` Fix offscreen document API surface; add folder output mode; tab-session batch
-  - (+ a follow-up commit from the pre-merge review: useZip whitelist
-    normalization in Downloader so a corrupt/legacy value can never make a
-    download silently save nothing; regression test added)
+  - `7b56877` Normalize useZip to a whitelist; handoff for fresh sessions
+    (pre-merge review: useZip whitelist in Downloader so a corrupt/legacy
+    value can never make a download silently save nothing; regression test)
 
 ## How to pick up (this sandbox often looks like a fresh clone of main)
 
   git fetch origin '+refs/heads/arena/01a01f4d-nh-dw-2-0:refs/remotes/origin/arena/01a01f4d-nh-dw-2-0'
   git reset --hard origin/arena/01a01f4d-nh-dw-2-0
-  # confirm HEAD is the follow-up commit and js/offscreen.js contains "saveDownload"
+  # confirm HEAD is 7b56877 and js/offscreen.js contains "saveDownload"
   cd NHDW_Extension_v3.0.0
   npm ci                 # funding/audit noise is OK; NEVER npm audit fix --force
   npm run build
