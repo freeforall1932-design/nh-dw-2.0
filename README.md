@@ -94,6 +94,7 @@ so no real nhentai account or Cloudflare clearance is needed.
   `@sparticuz/chromium` have extensions compiled out and will fail the first check).
 * Run with elevated privileges so the script can bind its local nhentai fixture to port 443
   (otherwise the content-script and real-fetch sections are skipped with a hint).
-* CI: `scripts/ci/e2e-browser.yml` runs the offline suites plus the browser suite in real
-  Google Chrome and real Brave on GitHub-hosted runners. Copy it to
-  `.github/workflows/e2e-browser.yml` to enable it (see the file header).
+* CI: a ready-to-use GitHub Actions workflow that runs the offline suites plus the browser
+  suite in real Google Chrome and real Brave on GitHub-hosted runners is included in
+  `SESSION_HANDOFF.md` (the sandbox token cannot write `.github/workflows` files — copy
+  the YAML to `.github/workflows/e2e-browser.yml` to enable it).

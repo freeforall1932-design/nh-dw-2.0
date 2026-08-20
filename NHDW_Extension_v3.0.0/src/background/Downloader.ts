@@ -249,6 +249,15 @@ export default class Downloader
             for (const imageUrl of imageUrls) {
                 const resp = await fetch(imageUrl);
                 if (resp.ok) {
+                    // A 200 response can still be a Cloudflare challenge page or
+                    // an error document. Only accept responses that identify as
+                    // images, otherwise try the next mirror so HTML never ends
+                    // up inside the ZIP as if it were a page.
+                    const contentType = resp.headers.get("content-type");
+                    if (contentType !== null && !contentType.toLowerCase().startsWith("image/")) {
+                        lastStatus = "unexpected content-type \"" + contentType + "\"";
+                        continue;
+                    }
                     const blob = await resp.blob();
                     await new Promise((resolve, reject) => {
                         const reader = new FileReader();

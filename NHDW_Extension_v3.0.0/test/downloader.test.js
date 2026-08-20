@@ -45,11 +45,18 @@ function makeChromeStub(useZip, maxConcurrentDownloads = '3') {
     return stub;
 }
 
-function makeFetchStub(failHosts = []) {
+function makeFetchStub(failHosts = [], htmlHosts = []) {
     const attempted = [];
     const fn = (url) => {
         const u = String(url);
         attempted.push(u);
+        if (htmlHosts.some((h) => u.startsWith(h))) {
+            // Cloudflare challenge / error page masquerading as a 200 response.
+            return Promise.resolve(new Response('<html><head><title>Just a moment...</title></head><body>challenge</body></html>', {
+                status: 200,
+                headers: { 'Content-Type': 'text/html' }
+            }));
+        }
         if (failHosts.some((h) => u.startsWith(h))) {
             return Promise.resolve(new Response('nope', { status: 404 }));
         }
@@ -157,6 +164,45 @@ describe('Downloader (zip mode)', () => {
         downloader.revokeObjectUrlDelayMs = 10;
         await assert.rejects(downloader.startAsync());
         assert.ok(error !== null && /Failed to fetch original image/.test(error));
+        assert.strictEqual(fetchStub.attempted.length, 3 * 6 * 5, '3 pages x (1 attempt + 5 retries) x 5 hosts');
+    });
+
+    it('skips a mirror that answers 200 with an HTML challenge page instead of an image', async () => {
+        // maxConcurrentDownloads 1 keeps the fetch order deterministic.
+        chrome = makeChromeStub('zip', '1');
+        globalThis.chrome = chrome;
+        fetchStub = makeFetchStub([], [CANONICAL]);
+        globalThis.fetch = fetchStub;
+
+        const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        downloader.revokeObjectUrlDelayMs = 10;
+        await downloader.startAsync();
+
+        // Every page hits the canonical host (200 but text/html), then succeeds
+        // on the first numbered mirror.
+        const expected = [1, 2, 3].flatMap((n) => {
+            const file = `${n}.${n === 2 ? 'png' : 'jpg'}`;
+            return [`${CANONICAL}${file}`, `${MIRRORS[0]}${file}`];
+        });
+        assert.deepStrictEqual(fetchStub.attempted, expected);
+        // The ZIP must contain the real page bytes, not the HTML challenge.
+        const zip = await decodeZip(chrome.downloads.calls[0].url);
+        const names = Object.keys(zip.files).filter((f) => !zip.files[f].dir).sort();
+        assert.strictEqual(names.length, 3);
+        const first = new Uint8Array(await zip.file(names[0]).async('uint8array'));
+        assert.ok(pageBytes[0].every((b, j) => b === first[j]), 'first entry must be image bytes');
+    });
+
+    it('reports an error when every host answers with HTML challenge pages', async () => {
+        fetchStub = makeFetchStub([], [CANONICAL].concat(MIRRORS));
+        globalThis.fetch = fetchStub;
+
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/Test', (e) => { error = e; }, () => {}, 'Test', new JSZip(), 'Downloads/Test');
+        downloader.revokeObjectUrlDelayMs = 10;
+        await assert.rejects(downloader.startAsync());
+        assert.ok(error !== null && /Failed to fetch original image/.test(error));
+        assert.ok(/unexpected content-type/.test(error), 'the error must mention the content-type rejection: ' + error);
         assert.strictEqual(fetchStub.attempted.length, 3 * 6 * 5, '3 pages x (1 attempt + 5 retries) x 5 hosts');
     });
 });
