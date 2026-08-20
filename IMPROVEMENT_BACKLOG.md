@@ -60,7 +60,8 @@ stubs and zero network access. The live check is opt-in: `npm run test:live`.
 are last resorts, so a loaded gallery tab does not 403 before the popup can show Download. ZIP page
 fetches now prefer the same open tab (`tabImageFetch` / `Downloader.sourceTabId`): the popup passes
 the active tab id, the worker relays it to the offscreen document, and each image URL is requested
-from the page context (origin, referrer, cookies) before an extension-origin `fetch`. Tab HTTP
+from the tab (isolated world first so CDN CORS cannot block host_permissions fetches, then MAIN
+world) before an extension-origin `fetch`. Tab HTTP
 errors skip the extension origin for that URL; CORS / injection failures fall through. HTML and
 tiny bodies are still rejected. A blocked image run after successful metadata says so explicitly
 ("Gallery metadata was read; keep the gallery tab open…"). This is not a Cloudflare bypass: a

@@ -426,6 +426,12 @@ describe('Downloader (tab image fetch)', () => {
 
     it('fetches through the open tab and does not use extension-origin fetch', async () => {
         const attempted = tabScriptReturningPages();
+        const worlds = [];
+        const inner = chrome.scripting.executeScript;
+        chrome.scripting.executeScript = (details, cb) => {
+            worlds.push(details.world || 'ISOLATED');
+            return inner(details, cb);
+        };
         let fetchCalls = 0;
         globalThis.fetch = () => {
             fetchCalls++;
@@ -439,6 +445,7 @@ describe('Downloader (tab image fetch)', () => {
         await downloader.startAsync();
 
         assert.strictEqual(fetchCalls, 0);
+        assert.ok(worlds.every((w) => w === 'ISOLATED'), 'isolated world must be tried first so CDN CORS cannot block the tab fetch: ' + worlds.join(','));
         assert.deepStrictEqual(attempted, [1, 2, 3].map((n) => `${CANONICAL}${n}.${n === 2 ? 'png' : 'jpg'}`));
         const zip = await decodeZip(chrome.downloads.calls[0].url);
         const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();

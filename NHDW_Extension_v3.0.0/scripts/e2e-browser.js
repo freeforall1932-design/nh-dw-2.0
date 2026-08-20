@@ -129,8 +129,19 @@ class Target {
     async attach() {
         const { sessionId } = await this.browser.send("Target.attachToTarget", { targetId: this.targetId, flatten: true });
         this.sessionId = sessionId;
-        await this.send("Runtime.enable");
-        await this.send("Log.enable");
+        let lastError = null;
+        for (let i = 0; i < 4; i++) {
+            try {
+                await this.send("Runtime.enable");
+                lastError = null;
+                break;
+            } catch (e) {
+                lastError = e;
+                await sleep(400);
+            }
+        }
+        if (lastError) throw lastError;
+        await this.send("Log.enable").catch(() => {});
         return this;
     }
     async send(method, params = {}) {
@@ -510,8 +521,12 @@ async function installChromeForTesting() {
     try { fs.chmodSync(crashDumpsDir, 0o777); } catch (_) { /* best effort */ }
     const debugPort = await getFreePort();
     const xvfbRun = (!FORCE_HEADLESS && !process.env.DISPLAY) ? whichCommand("xvfb-run") : null;
-    const useXvfb = !!xvfbRun;
-    const useHeadless = FORCE_HEADLESS || (!FORCE_HEADED && !process.env.DISPLAY && !useXvfb);
+    // GitHub-hosted runners: headed xvfb + Brave SIGTRAPs, and Chrome CDP
+    // Runtime.enable can hang on a headed target. Prefer headless=new in CI
+    // unless the caller forced --headed.
+    const preferCiHeadless = process.env.GITHUB_ACTIONS === "true" && !FORCE_HEADED;
+    const useHeadless = FORCE_HEADLESS || preferCiHeadless || (!FORCE_HEADED && !process.env.DISPLAY && !xvfbRun);
+    const useXvfb = !!xvfbRun && !useHeadless;
     const args = [
         ...(useHeadless ? ["--headless=new"] : []),
         "--no-sandbox",
@@ -610,7 +625,20 @@ async function installChromeForTesting() {
         const result = await browser.send("Target.getTargets");
         return (result.targetInfos || []).map((target) => Object.assign({ id: target.targetId }, target));
     };
+    const waitForCreatedTarget = async (targetId, timeoutMs = 10000) => {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const targets = await listTargets();
+            const info = targets.find((t) => t.id === targetId);
+            if (info) return info;
+            await sleep(100);
+        }
+        return null;
+    };
     const attachTarget = async (info) => {
+        if (!info || !info.id) {
+            throw new Error("attachTarget called without a target info object");
+        }
         const t = new Target(browser, info.id, info);
         await t.attach();
         targetsBySession.set(t.sessionId, t);
@@ -661,8 +689,7 @@ async function runExtensionTests(ctx) {
         } else {
             // Listing page: content.js must inject checkboxes per caption.
             const listingCreated = await browser.send("Target.createTarget", { url: "https://nhentai.net/" });
-            await sleep(300);
-            const listingInfo = (await listTargets()).find((t) => t.id === listingCreated.targetId);
+            const listingInfo = await waitForCreatedTarget(listingCreated.targetId);
             const listing = await attachTarget(listingInfo);
             try {
                 const n = await listing.waitFor(
@@ -675,7 +702,7 @@ async function runExtensionTests(ctx) {
                     fail("content script injects checkboxes", "expected 3, got " + n);
                 }
                 if (extensionExceptions(listing).length > 0) {
-                    fail("content script has no errors on listing pages", extensionExceptions(listing).map((e) => e.text).join("; "));
+                    fail("content script has no error
                 } else {
                     ok("content script has no errors on listing pages");
                 }
@@ -687,8 +714,7 @@ async function runExtensionTests(ctx) {
             // Single gallery page: no .caption elements; the old code crashed
             // with captions[0] undefined. The new code must leave it alone.
             const galleryCreated = await browser.send("Target.createTarget", { url: "https://nhentai.net/g/123456/" });
-            await sleep(300);
-            const galleryInfo = (await listTargets()).find((t) => t.id === galleryCreated.targetId);
+            const galleryInfo = await waitForCreatedTarget(galleryCreated.targetId);
             const galleryTab = await attachTarget(galleryInfo);
             try {
                 await galleryTab.waitFor(`document.getElementById('info') !== null`, 15000, "gallery page to load");
@@ -913,8 +939,7 @@ async function runExtensionTests(ctx) {
         stage("options page");
         {
             const created = await browser.send("Target.createTarget", { url: `chrome-extension://${extensionId}/options.html` });
-            await sleep(300);
-            const info = (await listTargets()).find((t) => t.id === created.targetId);
+            const info = await waitForCreatedTarget(created.targetId);
             const tab = await attachTarget(info);
             try {
                 await tab.waitFor(
@@ -1013,6 +1038,13 @@ async function runExtensionTests(ctx) {
     // inherited pipe handles open even after the direct browser process exits.
     // Exit explicitly once the result summary has been printed.
     process.exit(failed > 0 ? 1 : 0);
+})().catch((e) => {
+    const message = String(e && e.stack ? e.stack : e);
+    console.error("FATAL: " + message);
+    githubError("browser e2e fatal", message);
+    process.exit(2);
+});
+ocess.exit(failed > 0 ? 1 : 0);
 })().catch((e) => {
     const message = String(e && e.stack ? e.stack : e);
     console.error("FATAL: " + message);

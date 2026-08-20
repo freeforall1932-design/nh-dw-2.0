@@ -1,10 +1,10 @@
 import { executeInTab } from "../preview/activeTabGallery";
 
 // Fetch one original image through an already-open nhentai tab so the request
-// uses the page's origin, referrer, and cookies. This is not a Cloudflare
-// bypass: a challenge interstitial still cannot read image bytes, and CORS
-// on the CDN can still fail (in which case the caller falls back to an
-// extension-origin fetch).
+// uses the tab's cookies and network stack. Isolated-world fetch is tried
+// first (MV3 host_permissions, not subject to page CORS). MAIN world is the
+// fallback when isolation cannot run. This is not a Cloudflare bypass: a
+// challenge interstitial still cannot read image bytes.
 
 export type TabImageResult = {
     ok: boolean;
@@ -77,9 +77,24 @@ function fetchImageInPage(imageUrl: string): Promise<TabImageResult> {
     });
 }
 
+function usableTabResult(result: TabImageResult | null): boolean {
+    return !!(result && (result.ok || result.status > 0));
+}
+
 export async function fetchImageFromTab(tabId: number, url: string): Promise<TabImageResult | null> {
     if (!isAllowedImageUrl(url)) {
         return null;
     }
-    return executeInTab(tabId, fetchImageInPage, [url]);
+    // Isolated world first: MV3 host_permissions let content-script fetches
+    // skip page CORS. MAIN world looks more like the page but i*.nhentai.net
+    // often has no Access-Control-Allow-Origin for nhentai.net.
+    const isolated = await executeInTab(tabId, fetchImageInPage, [url], "ISOLATED");
+    if (usableTabResult(isolated)) {
+        return isolated;
+    }
+    const main = await executeInTab(tabId, fetchImageInPage, [url], "MAIN");
+    if (usableTabResult(main)) {
+        return main;
+    }
+    return isolated || main;
 }

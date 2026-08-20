@@ -16,7 +16,7 @@ Written 2026-08-20 after tab-first image fetches.
 
 **Fix (in the tree now):**
 
-- `src/background/tabImageFetch.ts`: MAIN-world `fetch` of an original-image CDN URL, returns base64 bytes. Host allowlist only (`i` / `i1`–`i4`.nhentai.net galleries). Injected function is a Promise chain (no async/await) so webpack/es6 helpers are not serialized into the tab.
+- `src/background/tabImageFetch.ts`: isolated-world `fetch` first (host_permissions, skips page CORS), then MAIN world, then extension origin. Host allowlist only (`i` / `i1`–`i4`.nhentai.net galleries). Injected function is a Promise chain (no async/await) so webpack/es6 helpers are not serialized into the tab.
 - `Downloader.sourceTabId`: try the tab first; tab HTTP errors skip the extension origin for that URL; CORS / injection failures fall through to `fetch`.
 - Popup sends the active `tabId` on `downloadDoujinshi` / batch / multi-page; the worker relays it to offscreen.
 - Blocked image runs after successful metadata say so: “Gallery metadata was read; keep the gallery tab open after any browser challenge and try again.” HTML / tiny bodies are still rejected.
