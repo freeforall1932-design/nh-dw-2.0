@@ -40,6 +40,11 @@ async function getGalleryFromActiveTab(id: string): Promise<any | null> {
 }
 
 // Add message listener for progress updates and error messages
+// NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
+// must return false. Returning true kept the message channel open and made
+// Chrome log "A listener indicated an asynchronous response by returning true,
+// but the message channel closed before a response was received" for every
+// progress tick, with offscreen.html as the sender.
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
         Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry);
@@ -68,7 +73,7 @@ chrome.runtime.onMessage.addListener(function(request) {
             }
         }, 0);
     }
-    return true;
+    return false;
 });
 
 export default class Popup
@@ -333,8 +338,8 @@ export default class Popup
                         if (pathElement) {
                             let finalName = pathElement.value;
                             document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
-                            const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis));
                             const tabId = await getActiveTabId();
+                            const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis), tabId);
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
                             chrome.runtime.sendMessage({
                                 action: "downloadAllDoujinshis",
@@ -395,8 +400,8 @@ export default class Popup
                                 if (pathElement) {
                                     let finalName = pathElement.value;
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
-                                    const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis));
                                     const tabId = await getActiveTabId();
+                                    const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis), tabId);
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
                                     chrome.runtime.sendMessage({
                                         action: "downloadAllPages",
