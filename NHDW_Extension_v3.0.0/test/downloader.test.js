@@ -260,6 +260,78 @@ describe('Downloader (raw mode)', () => {
     });
 });
 
+describe('Downloader (abort/cancellation)', () => {
+    let chrome;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip');
+        globalThis.chrome = chrome;
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    it('aborts in-flight image fetches and never surfaces an error callback', async () => {
+        const controller = new AbortController();
+        // Fetch resolves slowly unless the signal aborts first; this proves the
+        // in-flight request is actually cancelled, not just flagged.
+        globalThis.fetch = (url, opts) => new Promise((resolve, reject) => {
+            const m = /\/([0-9]+)\.(jpg|png)$/.exec(String(url));
+            const idx = m ? parseInt(m[1], 10) - 1 : 0;
+            const timer = setTimeout(() => resolve(new Response(pageBytes[idx], { status: 200 })), 500);
+            const onAbort = () => {
+                clearTimeout(timer);
+                reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+            };
+            if (opts && opts.signal) {
+                if (opts.signal.aborted) onAbort();
+                else opts.signal.addEventListener('abort', onAbort, { once: true });
+            }
+        });
+
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/Test', (e) => { error = e; }, () => {}, 'Test', new JSZip(), 'Downloads/Test', controller.signal);
+        const promise = downloader.startAsync();
+
+        // Let the first batch of fetches go in-flight, then cancel.
+        await new Promise((r) => setTimeout(r, 10));
+        controller.abort();
+
+        await assert.rejects(promise);
+        assert.strictEqual(error, null, 'a user cancellation must not surface as a download error');
+        assert.strictEqual(chrome.downloads.calls.length, 0, 'no ZIP must be delivered after cancellation');
+    });
+
+    it('does not retry or fall back to mirrors after the signal is aborted', async () => {
+        const controller = new AbortController();
+        let fetchCalls = 0;
+        globalThis.fetch = (url, opts) => {
+            fetchCalls++;
+            if (opts && opts.signal && opts.signal.aborted) {
+                return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+            }
+            const m = /\/([0-9]+)\.(jpg|png)$/.exec(String(url));
+            const idx = m ? parseInt(m[1], 10) - 1 : 0;
+            return Promise.resolve(new Response(pageBytes[idx], { status: 200 }));
+        };
+
+        // Abort BEFORE the download starts: each page fetch must fail once with
+        // an AbortError and never trigger the 5x retry / mirror fallback.
+        controller.abort();
+        const downloader = new Downloader(gallery, 'Downloads/Test', () => {}, () => {}, 'Test', new JSZip(), 'Downloads/Test', controller.signal);
+        await assert.rejects(downloader.startAsync());
+
+        assert.strictEqual(fetchCalls, 3, 'aborted pages must not be retried (3 pages, one canonical fetch each)');
+        assert.strictEqual(chrome.downloads.calls.length, 0, 'no ZIP must be delivered when aborted');
+    });
+});
+
 describe('Downloader (object URL delivery, offscreen document)', () => {
     let chrome;
     let storedBlobs;

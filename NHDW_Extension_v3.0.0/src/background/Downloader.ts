@@ -2,7 +2,7 @@ var JSZip = require("jszip");
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null)
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null)
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -11,6 +11,7 @@ export default class Downloader
         this.path = path;
         this.#zip = zip;
         this.downloadName = downloadName;
+        this.#abortSignal = signal;
 
         // @ts-ignore
         if (typeof browser !== "undefined") { // Firefox
@@ -77,6 +78,13 @@ export default class Downloader
                         await this.#downloadPageInternalAsync(i, i * 100 / maxNbOfPage);
                         break;
                     } catch (error: any) {
+                        // A user cancellation aborts the fetch signal, so the
+                        // thrown error is an AbortError (or the signal is simply
+                        // marked aborted). Bail out immediately instead of
+                        // retrying the aborted request five more times.
+                        if (this.#isAborted() || (error && error.name === "AbortError")) {
+                            throw "Download was aborted";
+                        }
                         if (nbTries > 0) {
                             console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
                             nbTries--;
@@ -85,7 +93,7 @@ export default class Downloader
                         }
                     }
                 }
-                if (this.isAwaitingAbort) {
+                if (this.#isAborted()) {
                     throw "Download was aborted";
                 }
             };
@@ -102,7 +110,7 @@ export default class Downloader
                 // Wait for all downloads in this batch to complete
                 await Promise.all(downloadPromises);
 
-                if (this.isAwaitingAbort) {
+                if (this.#isAborted()) {
                     throw "Download was aborted";
                 }
             }
@@ -153,9 +161,20 @@ export default class Downloader
         catch (error)
         {
             this.currentProgress = 100;
-            this.#errorCallback(error);
+            // A user cancellation is not an error: the popup already reset the
+            // UI when the user pressed Cancel, so do not surface "Download was
+            // aborted" as if the download had failed.
+            if (!this.#isAborted() && !(error && error.name === "AbortError")) {
+                this.#errorCallback(error);
+            }
             throw error;
         }
+    }
+
+    // True when the user has asked to cancel, either through the legacy
+    // isAwaitingAbort flag or (preferred) through an aborted AbortSignal.
+    #isAborted(): boolean {
+        return this.isAwaitingAbort || (this.#abortSignal !== null && this.#abortSignal.aborted);
     }
 
     // In a DOM context (the offscreen document) the archive is exposed through
@@ -247,7 +266,7 @@ export default class Downloader
         if (this.useZip !== "raw") { // ZIP (or equivalent) format
             let lastStatus = "unknown error";
             for (const imageUrl of imageUrls) {
-                const resp = await fetch(imageUrl, { credentials: "include", cache: "no-store" });
+                const resp = await fetch(imageUrl, { credentials: "include", cache: "no-store", signal: this.#abortSignal });
                 if (resp.ok) {
                     // A 200 response can still be a Cloudflare challenge page or
                     // an error document. Only accept responses that identify as
@@ -304,6 +323,7 @@ export default class Downloader
     revokeObjectUrlDelayMs: number = 60000; // How long an object URL stays alive after a successful download
     #json: any; // JSON containing all data
     #zip: typeof JSZip; // ZIP data that will be downloaded at the end
+    #abortSignal: AbortSignal | null; // Cancels in-flight image fetches when the user aborts
     downloadName: string | null; // Name of the ZIP, null if should not download
     path: string; // Save path
     progressCallback: Function; // Function to call when progress is made

@@ -20,6 +20,26 @@ var JSZip = require("jszip");
 let currentDownloader: Downloader | null = null;
 let parsing: AParsing;
 
+// One AbortController per download job. All metadata and image fetches share
+// this signal so that `goBack` can abort in-flight requests, not merely flag
+// the job as "awaiting abort" while the network calls run to completion.
+let jobAbortController: AbortController | null = null;
+
+function beginJob(): AbortSignal {
+    jobAbortController = new AbortController();
+    return jobAbortController.signal;
+}
+
+function abortJob() {
+    if (jobAbortController !== null) {
+        jobAbortController.abort();
+    }
+}
+
+function jobWasAborted(): boolean {
+    return jobAbortController !== null && jobAbortController.signal.aborted;
+}
+
 chrome.storage.sync.get({
     htmlParsing: false,
     maxConcurrentDownloads: "3"
@@ -78,8 +98,9 @@ function isDownloadFinished(): boolean {
 
 function downloadDoujinshi(jsonTmp: any, path: string, name: string) {
     cancelIdleTimer();
+    const signal = beginJob();
     let zip = new JSZip();
-    currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path);
+    currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
     currentDownloader.startAsync().then(scheduleIdleClose).catch(scheduleIdleClose);
 }
 
@@ -115,7 +136,7 @@ async function downloadAllDoujinshisAsync(
 
     for (let i = 0; i < length; i++) {
         let key = allKeys[i];
-        const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store" });
+        const resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
         if (resp.ok)
         {
             const json = await parsing.GetJsonAsync(resp);
@@ -144,12 +165,20 @@ async function downloadAllDoujinshisAsync(
             }
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
-            zipName);
+            zipName, jobAbortController ? jobAbortController.signal : null);
             // We download the ZIP file in the following cases:
             // downloadSeparately is true (set in extension options)
             // OR downloadAtEnd is true (can be false if downloading many pages) AND we are at the doujin of the current list
 
-            await currentDownloader.startAsync();
+            try {
+                await currentDownloader.startAsync();
+            } catch (_) {
+                // The Downloader already surfaced its own failure through
+                // errorCallback (and intentionally stays silent on abort).
+                // Stop the batch here without re-throwing so the outer catch
+                // does not report the same failure a second time.
+                return;
+            }
         }
         else
         {
@@ -160,10 +189,16 @@ async function downloadAllDoujinshisAsync(
 
 function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string) {
     cancelIdleTimer();
+    beginJob();
     let zip = new JSZip();
     downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true)
         .then(scheduleIdleClose)
-        .catch(function(error) { errorCallback(String(error)); scheduleIdleClose(); });
+        .catch(function(error) {
+            if (!jobWasAborted()) {
+                errorCallback(String(error));
+            }
+            scheduleIdleClose();
+        });
 }
 
 async function downloadAllPagesAsync(
@@ -198,7 +233,7 @@ async function downloadAllPagesAsync(
         } else {
             url += "?page=" + curr
         }
-        const resp = await fetch(url, { credentials: "include", cache: "no-store" });
+        const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
         if (resp.ok)
         {
             const text = await resp.text();
@@ -225,12 +260,20 @@ async function downloadAllPagesAsync(
 
 function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string) {
     cancelIdleTimer();
+    beginJob();
     downloadAllPagesAsync(allDoujinshis, pagesArr, path, url)
         .then(scheduleIdleClose)
-        .catch(function(error) { errorCallback(String(error)); scheduleIdleClose(); });
+        .catch(function(error) {
+            if (!jobWasAborted()) {
+                errorCallback(String(error));
+            }
+            scheduleIdleClose();
+        });
 }
 
 function goBack() {
+    // Abort any in-flight fetch, then let the download loop notice and unwind.
+    abortJob();
     if (!isDownloadFinished()) {
         currentDownloader!.isAwaitingAbort = true;
         currentDownloader!.currentProgress = 100;

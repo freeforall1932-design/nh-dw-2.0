@@ -82,12 +82,15 @@ const pageBytes = [
     new Uint8Array([0xff, 0xd8, 0xff, 0xe1, 0x06, 0x07, 0x08])
 ];
 
+let failImages = false;
+
 function fetchStub(url) {
     const u = String(url);
     if (u.includes("/api/gallery/" + GALLERY_ID)) {
         return Promise.resolve(new Response(JSON.stringify(galleryJson), { status: 200 }));
     }
     if (u.includes("nhentai.net/galleries/" + MEDIA_ID + "/")) {
+        if (failImages) return Promise.resolve(new Response("nope", { status: 404 }));
         const m = /\/([0-9]+)\.(jpg|png)$/.exec(u);
         if (m) return Promise.resolve(new Response(pageBytes[parseInt(m[1], 10) - 1], { status: 200 }));
     }
@@ -103,7 +106,8 @@ const sandbox = {
     fetch: fetchStub,
     Response,
     Blob, // jszip needs a Blob constructor for generateAsync({type:"blob"})
-    btoa
+    btoa,
+    AbortController
     // NOTE: do not inject host built-ins like Uint8Array/ArrayBuffer/Promise:
     // they would shadow the VM's own intrinsics and break instanceof checks
     // inside the bundle (a real service worker uses a single realm).
@@ -252,6 +256,39 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     console.log("PASS phase 3: failing raw downloads were retried (" + downloads.length +
         " attempts) and the error reached the popup: " + error.error);
+
+    // ---- Phase 4: batch with a failing gallery reports exactly once -------
+    // Regression guard: the Downloader surfaces a gallery failure through
+    // errorCallback and then re-throws; the batch loop must swallow that
+    // re-throw so the outer catch does not report the same failure twice.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    downloadFails = false;
+    expectedWorkerRejection = false; // batch wrapper catches its own errors
+    failImages = true;
+    syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
+    onMessageHandler(
+        { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "Test" }, finalName: "Downloads/Batch" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "downloadError").length >= 1,
+        "no downloadError was sent for the failing batch gallery"
+    );
+    const batchErrors = sentMessages.filter((m) => m.action === "downloadError");
+    if (batchErrors.length !== 1) {
+        fail("batch gallery failure must be reported exactly once, got " + batchErrors.length +
+            ": " + JSON.stringify(batchErrors));
+    }
+    if (downloads.length !== 0) {
+        fail("no ZIP must be delivered when the batch gallery fails, got " + downloads.length);
+    }
+    console.log("PASS phase 4: batch gallery failure reported exactly once (no double report)");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

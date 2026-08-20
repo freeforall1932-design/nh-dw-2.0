@@ -6,9 +6,23 @@ export module utils
     export function cleanName(name: string, replaceSpaces: boolean): string {
         let newName = name.split('').filter(e => !invalidCharacter.includes(e)).join('');
         if (replaceSpaces) {
-            return newName.trim().replace(/ +/g, '_');
+            newName = newName.trim().replace(/ +/g, '_');
+        } else {
+            newName = newName.trim();
         }
-        return newName.trim();
+        // Windows reserves a handful of device names regardless of extension
+        // (CON.zip, PRN.jpg, COM1.png, ...). Prefix them so Chrome can still
+        // save the file instead of failing silently.
+        if (reservedWindowsNames.has(newName.toUpperCase())) {
+            newName = "_" + newName;
+        }
+        // A title made entirely of invalid characters (or spaces) would
+        // produce an empty filename, which Chrome rejects. Fall back to a
+        // safe placeholder so the download still starts.
+        if (newName === "") {
+            newName = "untitled";
+        }
+        return newName;
     }
 
     export function getDownloadName(exampleString: string, prettyName: string, englishName: string, japaneseName: string, id: string, tags: Array<Tag>): string {
@@ -36,4 +50,12 @@ export module utils
     let invalidCharacter: Array<string> = [
         '/', '\\', '?', '%', '*', ':', '|', '"', '<', '>', '.'
     ]
+
+    // Windows device names that cannot be used as file/folder names even with
+    // an extension. Kept uppercase for case-insensitive matching.
+    let reservedWindowsNames: Set<string> = new Set([
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+    ])
 }

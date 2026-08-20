@@ -68,6 +68,30 @@ describe('utils', () => {
         assert.strictEqual(utils.cleanName('My  Nice   Title ', true), 'My_Nice_Title');
     });
 
+    it('cleanName prefixes Windows reserved device names', () => {
+        assert.strictEqual(utils.cleanName('CON', false), '_CON');
+        assert.strictEqual(utils.cleanName('prn', false), '_prn');
+        assert.strictEqual(utils.cleanName('NUL', false), '_NUL');
+        assert.strictEqual(utils.cleanName('Com1', false), '_Com1');
+        assert.strictEqual(utils.cleanName('LPT9', false), '_LPT9');
+        // Ordinary names must be left untouched.
+        assert.strictEqual(utils.cleanName('Continue', false), 'Continue');
+        assert.strictEqual(utils.cleanName('Conan', false), 'Conan');
+    });
+
+    it('cleanName falls back to a placeholder for empty or all-invalid titles', () => {
+        assert.strictEqual(utils.cleanName('', false), 'untitled');
+        assert.strictEqual(utils.cleanName('   ', false), 'untitled');
+        assert.strictEqual(utils.cleanName('?*:/\\', false), 'untitled');
+        assert.strictEqual(utils.cleanName('...', false), 'untitled');
+        assert.strictEqual(utils.cleanName('', true), 'untitled');
+    });
+
+    it('cleanName preserves Unicode titles', () => {
+        assert.strictEqual(utils.cleanName('\u65e5\u672c\u8a9e \u30c6\u30b9\u30c8', true), '\u65e5\u672c\u8a9e_\u30c6\u30b9\u30c8');
+        assert.strictEqual(utils.cleanName('\u597d\u304d\u306a\u7269\u8a9e', false), '\u597d\u304d\u306a\u7269\u8a9e');
+    });
+
     it('getDownloadName substitutes every placeholder', () => {
         const tags = [
             { id: 1, type: 'language', name: 'english', url: '', count: 0 },

@@ -232,6 +232,13 @@ Choose one direction:
 - Distinguish metadata failure, Cloudflare failure, image failure, ZIP failure, and cancellation.
 - Report the number of successful and failed galleries at the end.
 
+**Progress:** partial. A batch gallery failure is now reported exactly once: the
+`Downloader` surfaces its own failure through `errorCallback` and the batch loop
+(`downloadAllDoujinshisAsync` in both the service-worker and offscreen paths) swallows
+the subsequent re-throw instead of letting the outer catch re-report the same error.
+Covered by a regression phase in `scripts/e2e-offscreen.js` and `scripts/e2e-worker.js`.
+The richer reporting (per-gallery success/failure summary, distinct failure kinds) remains open.
+
 ### 14. Make filenames safe and predictable
 
 - Sanitize names consistently in single and multiple download modes.
@@ -239,12 +246,29 @@ Choose one direction:
 - Add gallery ID to the default filename when titles are empty or duplicated.
 - Test Unicode titles and reserved Windows filename characters.
 
+**Progress:** partial. `utils.cleanName` now prefixes Windows reserved device names
+(`CON`, `PRN`, `AUX`, `NUL`, `COM1-9`, `LPT1-9`) with an underscore and falls back to
+`"untitled"` when a title sanitizes down to an empty string, so Chrome never receives
+a reserved or empty download filename. Covered by three new tests in `test/parsing.test.js`
+(reserved names, empty fallback, Unicode preservation). Still open: using the gallery ID
+as the fallback/collision disambiguator (needs call-site changes in popup/background/offscreen).
+
 ### 15. Add cancellation that stops active work
 
 - Abort outstanding `fetch` calls with `AbortController`.
 - Stop queued galleries after cancellation.
 - Avoid starting new image downloads after the user presses Cancel.
 - Report partial-download behavior clearly.
+
+**Progress:** DONE (code complete; pending real-browser confirmation).
+`Downloader` now accepts an optional `AbortSignal` and passes it to every image
+`fetch`; `goBack` aborts a per-job `AbortController` (in both the service-worker
+fallback path and the offscreen document) so in-flight metadata, listing-page, and
+image requests actually cancel instead of only setting the legacy `isAwaitingAbort`
+flag. Aborted pages are no longer retried through the 5x/mirror fallback, queued
+galleries stop when the loop unwinds, and a user cancellation is not surfaced as a
+`downloadError` (the popup already resets its UI on Cancel). Covered by two new
+fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-abort).
 
 ## Security and maintenance
 
