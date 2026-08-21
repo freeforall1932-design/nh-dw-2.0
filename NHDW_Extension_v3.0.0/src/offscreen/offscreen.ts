@@ -39,6 +39,13 @@ let parsing: AParsing = new ApiParsing();
 // the job as "awaiting abort" while the network calls run to completion.
 let jobAbortController: AbortController | null = null;
 
+// True while a top-level job (single gallery, batch, or pages) is running.
+// isDownloadFinished answers from this flag rather than
+// `currentDownloader.isDone()`, which is momentarily true between galleries in
+// a batch (the last gallery's Downloader is done but the batch is not) and
+// used to make the popup misreport a running batch as finished/interrupted.
+let jobRunning = false;
+
 function beginJob(): AbortSignal {
     jobAbortController = new AbortController();
     return jobAbortController.signal;
@@ -54,9 +61,19 @@ function jobWasAborted(): boolean {
     return jobAbortController !== null && jobAbortController.signal.aborted;
 }
 
+// Tell the service worker the job is over so it clears the active-job marker
+// right away. The document itself is closed later by the 60s idle timer;
+// clearing the marker at completion (not on idle) stops the popup from
+// misreporting a finished download as "interrupted" during that window.
+function notifyJobFinished() {
+    jobRunning = false;
+    chrome.runtime.sendMessage({ from: "offscreen", action: "jobFinished" });
+}
+
 // The active-job marker lives in the service worker's chrome.storage.session
 // (offscreen documents have no chrome.storage). The worker sets it when it
-// relays a download command and clears it on goBack / offscreenIdle.
+// relays a download command and clears it on jobFinished / goBack /
+// offscreenIdle.
 
 // Pick the metadata parser for this job from the options the service worker
 // relayed (it read chrome.storage.sync on our behalf).
@@ -157,13 +174,14 @@ function progressCallback(progress: number, doujinshiName: string | null, isZipp
 }
 
 function isDownloadFinished(): boolean {
-    return currentDownloader == null || currentDownloader.isDone();
+    return !jobRunning;
 }
 
 function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
     const signal = beginJob();
+    jobRunning = true;
     let zip = new JSZip();
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
         undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined });
@@ -172,8 +190,8 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
         currentDownloader.sourceTabId = sourceTabId;
     }
     currentDownloader.startAsync()
-        .then(() => { scheduleIdleClose(); })
-        .catch(() => { scheduleIdleClose(); });
+        .then(() => { notifyJobFinished(); scheduleIdleClose(); })
+        .catch(() => { notifyJobFinished(); scheduleIdleClose(); });
 }
 
 function tryParseGalleryText(text: string): any | null {
@@ -379,13 +397,15 @@ function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName:
     cancelIdleTimer();
     applyParserOptions(options);
     beginJob();
+    jobRunning = true;
     let zip = new JSZip();
     downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata, sourceTabId, options || {})
-        .then(() => { scheduleIdleClose(); })
+        .then(() => { notifyJobFinished(); scheduleIdleClose(); })
         .catch(function(error) {
             if (!jobWasAborted()) {
                 errorCallback(String(error));
             }
+            notifyJobFinished();
             scheduleIdleClose();
         });
 }
@@ -446,21 +466,24 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
     cancelIdleTimer();
     applyParserOptions(options);
     beginJob();
+    jobRunning = true;
     downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId, options || {})
-        .then(() => { scheduleIdleClose(); })
+        .then(() => { notifyJobFinished(); scheduleIdleClose(); })
         .catch(function(error) {
             if (!jobWasAborted()) {
                 errorCallback(String(error));
             }
+            notifyJobFinished();
             scheduleIdleClose();
         });
 }
 
 function goBack() {
     abortJob();
-    if (!isDownloadFinished()) {
-        currentDownloader!.isAwaitingAbort = true;
-        currentDownloader!.currentProgress = 100;
+    jobRunning = false;
+    if (currentDownloader !== null && !currentDownloader.isDone()) {
+        currentDownloader.isAwaitingAbort = true;
+        currentDownloader.currentProgress = 100;
     }
     currentDownloader = null;
 }

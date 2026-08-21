@@ -302,6 +302,18 @@ Chrome). Covered by `scripts/e2e-worker.js` phase 6 (marker set/cleared during a
 job, stale-marker detection, dismissible notice) and marker assertions in
 `scripts/e2e-offscreen.js`.
 
+**Follow-up fix (false "Download interrupted" after a success):** the offscreen document
+originally cleared the marker only on its 60s idle close, so for a full minute after a
+successful download the popup misreported it as "interrupted" (and a batch between
+galleries could look "finished" because `isDownloadFinished` was keyed off the
+per-gallery `isDone()`). Now the offscreen document sends `jobFinished` when a job ends
+and the worker clears the marker immediately; the offscreen `isDownloadFinished` answers
+from a whole-job `jobRunning` flag; and the worker's offscreen-branch `isDownloadFinished`
+clears the marker and answers `interrupted:false` whenever the live document reports the
+job finished. A genuine interruption (document gone, marker still set) still answers
+`interrupted:true`. Covered by `scripts/e2e-relay.js` (finished-vs-interrupted, `jobFinished`)
+and `scripts/e2e-offscreen.js` (running flag, `jobFinished` sent).
+
 ## Priority 5: product and UX
 
 ### 12. Reconcile README behavior with the implementation
@@ -368,6 +380,53 @@ flag. Aborted pages are no longer retried through the 5x/mirror fallback, queued
 galleries stop when the loop unwinds, and a user cancellation is not surfaced as a
 `downloadError` (the popup already resets its UI on Cancel). Covered by two new
 fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-abort).
+
+### 16. Bucket list: popup format selection and PDF output
+
+Two user-requested enhancements (not yet implemented — recorded here for a future
+session).
+
+**16a. Choose the download format from the popup (same tab), not just the options page.**
+
+- Show the output format (ZIP / CBZ / images-folder / raw) directly in the popup, next
+  to the single-gallery "Download" button and the batch "Download" button.
+- Selecting a format in the popup should apply to that download without opening the
+  extension options page; persist the last choice (or keep it per-download) as chosen.
+
+**16b. Add PDF as an output format.**
+
+- Add a "Download as PDF" option alongside ZIP/CBZ/folder/raw.
+- Requires converting the fetched page images into a PDF (e.g. via jsPDF or an
+  equivalent) inside the offscreen document, then saving through the existing
+  `saveDownload` relay; the current whitelist in `Downloader.startAsync` (zip/cbz/
+  folder/raw) must be extended, not bypassed.
+
+**Progress:** not started.
+
+### 17. "More Like This" batch download
+
+Download the recommended galleries shown at the bottom of a gallery page in one
+batch, without visiting each one.
+
+**Data source (needs real-site inspection first — the SvelteKit frontend can ship
+this data several ways):**
+
+- Option A: embedded in the gallery payload already captured by the extension
+  (`/api/v2/galleries/<id>`) under a recommendation key.
+- Option B: a separate API call (e.g. `/api/v2/galleries/<id>/recommendations`).
+- Option C: only in the rendered HTML after hydration (scrape the `href`/`alt`
+  of the recommendation cards as a fallback).
+
+**Tasks:**
+
+- Inspect DevTools Network on a live gallery page to pin down which of the above
+  holds, then extract `{ id, title }` into the shared card shape already consumed
+  by the batch pipeline.
+- Surface a "Download recommendations" action in the popup (or an injected button
+  under the "More Like This" section) that feeds those IDs through the existing
+  batch download / selected-gallery resolver path.
+
+**Progress:** not started (data source unresolved).
 
 ## Security and maintenance
 

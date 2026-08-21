@@ -713,6 +713,14 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
             .then((result: any) => sendResponse(result));
         return true;
     }
+    if (request.action === "jobFinished") {
+        // The offscreen document finished a job (success or error). Clear the
+        // active-job marker immediately instead of waiting for its 60s idle
+        // close, so a later isDownloadFinished cannot misreport a completed
+        // download as "interrupted".
+        background.clearJobMarker();
+        return false;
+    }
     if (request.action === "offscreenIdle") {
         // The job is over (or the document went idle after one): clear the
         // marker so a future "interrupted download" notice is accurate, then
@@ -766,9 +774,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         sendResponse({ result: false });
                         return;
                     }
-                    background.jobInterrupted().then((interrupted) => {
-                        sendResponse({ result: true, interrupted: interrupted });
-                    });
+                    // The offscreen document is alive and reports the job
+                    // finished, so it completed normally. Clear any lingering
+                    // marker (the document only cleared it on its 60s idle
+                    // close) and never flag a finished job as interrupted:
+                    // that stale-marker false positive made the popup claim
+                    // "Download interrupted" right after a success.
+                    background.clearJobMarker();
+                    sendResponse({ result: true, interrupted: false });
                 });
             });
             return true;
