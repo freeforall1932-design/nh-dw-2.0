@@ -237,7 +237,7 @@ function sendToBackground(message) {
 
     // 10. fetchUrlInTab: page text (gallery API / listings) through the tab.
     const tabUrlAnswer = await new Promise((resolve) => {
-        onMessageHandler({ from: "offscreen", action: "fetchUrlInTab", tabId: 42, url: "https://nhentai.net/api/gallery/123456" }, {}, resolve);
+        onMessageHandler({ from: "offscreen", action: "fetchUrlInTab", tabId: 42, url: "https://nhentai.net/api/v2/galleries/123456" }, {}, resolve);
     });
     if (!tabUrlAnswer || tabUrlAnswer.ok !== true) {
         fail("fetchUrlInTab answered " + JSON.stringify(tabUrlAnswer));

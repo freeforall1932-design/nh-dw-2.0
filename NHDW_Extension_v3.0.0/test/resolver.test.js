@@ -16,7 +16,7 @@ describe('selected gallery resolver', () => {
                 executeScript(details, callback) {
                     executeCalls.push(details);
                     const url = details.args && details.args[0];
-                    const match = typeof url === 'string' && /gallery\/(\d+)/.exec(url);
+                    const match = typeof url === 'string' && /galler(?:y|ies)\/(\d+)/.exec(url);
                     if (match) {
                         const id = match[1];
                         callback([{ result: {
@@ -74,7 +74,7 @@ describe('selected gallery resolver', () => {
         assert.strictEqual(executeCalls.length, 0);
     });
 
-    it('parses window._gallery from already-loaded script tags without hitting /api/gallery', async () => {
+    it('parses gallery metadata from already-loaded script tags without hitting the API', async () => {
         const embed = String.raw`{\u0022id\u0022:555,\u0022media_id\u0022:\u0022777\u0022,\u0022title\u0022:{\u0022pretty\u0022:\u0022From Script\u0022},\u0022images\u0022:{\u0022pages\u0022:[{\u0022t\u0022:\u0022j\u0022}]}}`;
         let executeCount = 0;
         global.chrome.scripting.executeScript = (details, callback) => {
@@ -87,7 +87,7 @@ describe('selected gallery resolver', () => {
         const gallery = await readGalleryFromTab(42, '555');
         assert.strictEqual(gallery.media_id, '777');
         assert.strictEqual(gallery.title.pretty, 'From Script');
-        assert.strictEqual(executeCount, 1, 'must not fall through to a same-origin /api/gallery fetch');
+        assert.strictEqual(executeCount, 1, 'must not fall through to a same-origin API fetch');
     });
 
     it('accepts a gallery object already present on the page without extra fetches', async () => {

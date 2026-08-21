@@ -157,7 +157,7 @@ function imageBytesFor(url) {
 
 function fetchStub(url) {
     const u = String(url);
-    const apiMatch = /\/api\/gallery\/([0-9]+)/.exec(u);
+    const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
@@ -179,7 +179,7 @@ function tabImageBytesFor(url) {
 }
 
 function tabUrlTextFor(url) {
-    const apiMatch = /\/api\/gallery\/([0-9]+)/.exec(String(url));
+    const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(String(url));
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
         return gallery ? JSON.stringify(gallery) : null;
@@ -484,7 +484,7 @@ function askOffscreen(message) {
     if (!tabMetaSummary || tabMetaSummary.succeeded !== 1 || tabMetaSummary.failed !== 0) {
         fail("tab metadata batch must succeed 1/1, got " + JSON.stringify(tabMetaSummary));
     }
-    const tabUrlFetches = tabFetches.filter((t) => t.kind === "url" && /\/api\/gallery\//.test(t.url));
+    const tabUrlFetches = tabFetches.filter((t) => t.kind === "url" && /\/api\/(?:v2\/galleries|gallery)\//.test(t.url));
     if (tabUrlFetches.length === 0) {
         fail("unresolved batch metadata was not fetched through the user tab (fetchUrlInTab)");
     }

@@ -7,7 +7,7 @@ const ApiParsing = require('../build/test/parsing/ApiParsing.js').default;
 const { isCloudflareResponse, isCloudflareBody } = require('../build/test/parsing/ApiParsing.js');
 const HtmlParsing = require('../build/test/parsing/HtmlParsing.js').default;
 const { parseGalleryCardsFromHtml, extractFirstLine } = require('../build/test/parsing/CardParsing.js');
-const { extractGalleryFromHtml, looksLikeGallery } = require('../build/test/parsing/GalleryEmbed.js');
+const { extractGalleryFromHtml, looksLikeGallery, normalizeGalleryV2, coerceGallery } = require('../build/test/parsing/GalleryEmbed.js');
 const { utils, classifyError } = require('../build/test/utils/utils.js');
 const { clearnetSource } = require('../build/test/sources/GallerySource.js');
 
@@ -15,7 +15,7 @@ describe('ApiParsing', () => {
     const parsing = new ApiParsing();
 
     it('builds the API URL for a gallery id', () => {
-        assert.strictEqual(parsing.GetUrl('123456'), 'https://nhentai.net/api/gallery/123456');
+        assert.strictEqual(parsing.GetUrl('123456'), 'https://nhentai.net/api/v2/galleries/123456');
     });
 
     it('parses a successful JSON response', async () => {
@@ -104,7 +104,7 @@ describe('GallerySource', () => {
         assert.strictEqual(clearnetSource.matchesUrl('https://nhentai.net/search/?q=test'), true);
         assert.strictEqual(clearnetSource.getGalleryId('https://nhentai.net/g/123456/1/'), '123456');
         assert.strictEqual(clearnetSource.getGalleryUrl('123456'), 'https://nhentai.net/g/123456/');
-        assert.strictEqual(clearnetSource.getApiUrl('123456'), 'https://nhentai.net/api/gallery/123456');
+        assert.strictEqual(clearnetSource.getApiUrl('123456'), 'https://nhentai.net/api/v2/galleries/123456');
         assert.deepStrictEqual(clearnetSource.getImageUrls('987654', '1.jpg'), [
             'https://i.nhentai.net/galleries/987654/1.jpg',
             'https://i1.nhentai.net/galleries/987654/1.jpg',
@@ -181,6 +181,85 @@ describe('GalleryEmbed', () => {
     it('returns null for Cloudflare challenge HTML without a gallery embed', () => {
         const html = '<html><title>Just a moment...</title><body>cf-challenge</body></html>';
         assert.strictEqual(extractGalleryFromHtml(html), null);
+    });
+
+    // The live site is a SvelteKit app: there is no window._gallery and the
+    // metadata ships inside data-sveltekit-fetched application/json payloads
+    // holding an API v2 response.
+    describe('SvelteKit / API v2 pages', () => {
+        const v2 = {
+            id: 674496,
+            media_id: '4128713',
+            title: {
+                english: '[Hiyakake Gohan] Tonari no Ko [English]',
+                japanese: 'japanese title',
+                pretty: 'Tonari no Ko'
+            },
+            cover: { path: 'galleries/4128713/cover.webp.webp', width: 350, height: 484 },
+            num_pages: 3,
+            num_favorites: 6206,
+            pages: [
+                { number: 1, path: 'galleries/4128713/1.webp', width: 1280, height: 1771 },
+                { number: 2, path: 'galleries/4128713/2.jpg', width: 1280, height: 909 },
+                { number: 3, path: 'galleries/4128713/3.png', width: 1280, height: 1780 }
+            ]
+        };
+
+        function embed(dataUrl, payload) {
+            return '<script type="application/json" data-sveltekit-fetched data-url="' + dataUrl + '">'
+                + JSON.stringify({ status: 200, statusText: 'OK', headers: {}, body: JSON.stringify(payload) })
+                + '<\/script>';
+        }
+
+        it('normalizes an API v2 record into the legacy shape', () => {
+            const legacy = normalizeGalleryV2(v2);
+            assert.strictEqual(looksLikeGallery(legacy), true);
+            assert.strictEqual(legacy.media_id, '4128713');
+            assert.strictEqual(legacy.title.pretty, 'Tonari no Ko');
+            assert.strictEqual(legacy.num_pages, 3);
+            // Extensions map to the single-letter codes Downloader switches on.
+            assert.deepStrictEqual(legacy.images.pages.map((p) => p.t), ['w', 'j', 'p']);
+            assert.deepStrictEqual(legacy.images.pages[0], { t: 'w', w: 1280, h: 1771 });
+        });
+
+        it('extracts the gallery from an embedded SvelteKit payload', () => {
+            const html = '<html><body>' + embed('/api/v2/galleries/674496?include=comments', v2) + '</body></html>';
+            const parsed = extractGalleryFromHtml(html);
+            assert.strictEqual(looksLikeGallery(parsed), true);
+            assert.strictEqual(parsed.media_id, '4128713');
+            assert.strictEqual(parsed.images.pages.length, 3);
+        });
+
+        it('ignores non-gallery embedded payloads such as ad zones and listings', () => {
+            const html = '<html><body>'
+                + embed('/api/v2/zones', { zones: { 'homepage:top': { type: 'html' } } })
+                + embed('/api/v2/galleries?page=1', { result: [{ id: 1, media_id: '2' }], num_pages: 25535 })
+                + '</body></html>';
+            assert.strictEqual(extractGalleryFromHtml(html), null);
+        });
+
+        it('picks the gallery payload even when other payloads come first', () => {
+            const html = '<html><body>'
+                + embed('/api/v2/zones', { zones: {} })
+                + embed('/api/v2/galleries?page=1', { result: [], num_pages: 1 })
+                + embed('/api/v2/galleries/674496', v2)
+                + '</body></html>';
+            const parsed = extractGalleryFromHtml(html);
+            assert.ok(parsed, 'expected the gallery payload to be found');
+            assert.strictEqual(parsed.media_id, '4128713');
+        });
+
+        it('rejects a v2 record whose pages have no usable image extension', () => {
+            const broken = Object.assign({}, v2, {
+                pages: [{ number: 1, path: 'galleries/4128713/1.bin', width: 1, height: 1 }]
+            });
+            assert.strictEqual(normalizeGalleryV2(broken), null);
+        });
+
+        it('coerceGallery passes legacy objects through unchanged', () => {
+            assert.strictEqual(coerceGallery(gallery), gallery);
+            assert.strictEqual(coerceGallery(null), null);
+        });
     });
 });
 

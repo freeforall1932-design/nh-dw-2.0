@@ -27,7 +27,7 @@ export const clearnetSource: GallerySource = {
     },
 
     getApiUrl(id: string): string {
-        return "https://nhentai.net/api/gallery/" + encodeURIComponent(id);
+        return "https://nhentai.net/api/v2/galleries/" + encodeURIComponent(id);
     },
 
     getImageUrls(mediaId: string, filename: string): string[] {

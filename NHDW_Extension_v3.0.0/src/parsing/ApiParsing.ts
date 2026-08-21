@@ -1,5 +1,6 @@
 import AParsing from "./AParsing";
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
+import { coerceGallery } from "./GalleryEmbed";
 
 const CLOUDFLARE_BODY_MARKERS = [
     "cf-challenge",
@@ -60,10 +61,15 @@ export default class ApiParsing implements AParsing
             throw new Error("Unexpected response type \"text/html\" (HTTP " + status + ").");
         }
 
+        let parsed: any;
         try {
-            return JSON.parse(body);
+            parsed = JSON.parse(body);
         } catch (error) {
             throw new Error("Invalid JSON response from the API (HTTP " + status + ").");
         }
+
+        // nhentai's API v2 uses a different gallery shape than the rest of the
+        // extension consumes, so normalise it here.
+        return coerceGallery(parsed) || parsed;
     }
 }

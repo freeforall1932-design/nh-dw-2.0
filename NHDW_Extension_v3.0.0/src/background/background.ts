@@ -6,7 +6,7 @@ import Downloader from "./Downloader";
 import { utils, classifyError } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
 import { clearnetSource } from "../sources/GallerySource";
-import { extractGalleryFromHtml, looksLikeGallery } from "../parsing/GalleryEmbed";
+import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 var JSZip = require("jszip");
@@ -108,8 +108,8 @@ function tryParseGalleryText(text: string): any | null {
     const trimmed = String(text).trim();
     if (trimmed.startsWith("{")) {
         try {
-            const j = JSON.parse(trimmed);
-            if (looksLikeGallery(j)) return j;
+            const j = coerceGallery(JSON.parse(trimmed));
+            if (j) return j;
         } catch (_) {}
     }
     const fromHtml = extractGalleryFromHtml(text);
@@ -141,8 +141,8 @@ async function getGalleryViaTab(tabId: number, galleryId: string, parsing: APars
                 if (parsed) return parsed;
                 // Also try JSON directly if content-type is json
                 try {
-                    const j = JSON.parse(via.text);
-                    if (looksLikeGallery(j)) return j;
+                    const j = coerceGallery(JSON.parse(via.text));
+                    if (j) return j;
                 } catch (_) {}
             }
         } catch (_) {

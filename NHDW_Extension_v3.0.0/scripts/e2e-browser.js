@@ -235,7 +235,7 @@ const PATCHED_FETCH_SRC = `
 window.__nhdwFixture = true;
 window.fetch = function(input, init) {
     const url = String(input);
-    if (url.includes("nhentai.net/api/gallery/123456")) {
+    if (url.includes("nhentai.net/api/v2/galleries/123456") || url.includes("nhentai.net/api/gallery/123456")) {
         return Promise.resolve(new Response(${JSON.stringify(JSON.stringify(FIXTURE_GALLERY))}, { status: 200, headers: { "Content-Type": "application/json" } }));
     }
     const m = /galleries\\/987654\\/([0-9]+)\\.(jpg|png)$/.exec(url);
@@ -294,7 +294,7 @@ function fixtureServerHandler(req, res) {
         const id = url.match(/g\/(\d+)/)[1];
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(GALLERY_HTML.replace("123456", id));
-    } else if (/^\/api\/gallery\/\d+/.test(url)) {
+    } else if (/^\/api\/(?:v2\/galleries|gallery)\/\d+/.test(url)) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(FIXTURE_GALLERY));
     } else if (req.method === "OPTIONS") {
@@ -702,7 +702,7 @@ async function runExtensionTests(ctx) {
                     fail("content script injects checkboxes", "expected 3, got " + n);
                 }
                 if (extensionExceptions(listing).length > 0) {
-                    fail("content script has no error
+                    fail("content script has no errors on listing pages", extensionExceptions(listing).join("; "));
                 } else {
                     ok("content script has no errors on listing pages");
                 }
@@ -1038,13 +1038,6 @@ async function runExtensionTests(ctx) {
     // inherited pipe handles open even after the direct browser process exits.
     // Exit explicitly once the result summary has been printed.
     process.exit(failed > 0 ? 1 : 0);
-})().catch((e) => {
-    const message = String(e && e.stack ? e.stack : e);
-    console.error("FATAL: " + message);
-    githubError("browser e2e fatal", message);
-    process.exit(2);
-});
-ocess.exit(failed > 0 ? 1 : 0);
 })().catch((e) => {
     const message = String(e && e.stack ? e.stack : e);
     console.error("FATAL: " + message);

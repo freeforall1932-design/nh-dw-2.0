@@ -4,7 +4,7 @@ import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "../background/Downloader";
 import { utils, classifyError } from "../utils/utils";
-import { extractGalleryFromHtml, looksLikeGallery } from "../parsing/GalleryEmbed";
+import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
 var JSZip = require("jszip");
 
@@ -181,8 +181,8 @@ function tryParseGalleryText(text: string): any | null {
     const trimmed = String(text).trim();
     if (trimmed.startsWith("{")) {
         try {
-            const j = JSON.parse(trimmed);
-            if (looksLikeGallery(j)) return j;
+            const j = coerceGallery(JSON.parse(trimmed));
+            if (j) return j;
         } catch (_) {}
     }
     const fromHtml = extractGalleryFromHtml(text);
@@ -192,7 +192,7 @@ function tryParseGalleryText(text: string): any | null {
 
 async function getGalleryViaTab(tabId: number, galleryId: string): Promise<any | null> {
     const urls = [
-        "https://nhentai.net/api/gallery/" + encodeURIComponent(galleryId),
+        "https://nhentai.net/api/v2/galleries/" + encodeURIComponent(galleryId),
         "https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/",
         "https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/1/"
     ];
@@ -298,6 +298,7 @@ async function downloadAllDoujinshisAsync(
                     json = await parsing.GetJsonAsync(resp);
                     // If parsing is ApiParsing but we actually fetched a gallery page via tab fallback,
                     // try HTML parsing as second chance.
+                    json = coerceGallery(json) || json;
                     if (!looksLikeGallery(json) && resp.text) {
                         try {
                             const t = typeof resp.text === "function" ? await resp.text() : "";
