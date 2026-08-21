@@ -271,24 +271,29 @@ function askOffscreen(message) {
 
     // Start a download the way the service worker would relay it (with the
     // options the worker read from chrome.storage.sync on the document's
-    // behalf — the document itself has no storage access).
-    const startAnswer = await askOffscreen({
+    // behalf — the document itself has no storage access). Run the start and
+    // the isDownloadFinished probe back-to-back synchronously so the download
+    // cannot complete in between: while the job is running, isDownloadFinished
+    // must answer false (the jobRunning flag) rather than the per-gallery
+    // isDone() that used to flip true between galleries and mislead the worker.
+    let startAnswer = null;
+    onMessageHandler({
+        target: "offscreen",
         action: "downloadDoujinshi",
         json: galleryJson,
         path: "Downloads/Test",
         name: "Test",
         options: relayedOptions
-    });
+    }, {}, (r) => { startAnswer = r; });
     if (!startAnswer || startAnswer.result !== "started") {
         fail("downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(startAnswer));
     }
-
-    // During the download, isDownloadFinished must be false and progress must flow.
-    const busyAnswer = await askOffscreen({ action: "isDownloadFinished" });
-    if (busyAnswer && busyAnswer.result === true) {
-        // The 3-page download is so fast it may already be done; that is
-        // acceptable, but then we at least expect a completed progress event.
+    let busyAnswer = null;
+    onMessageHandler({ target: "offscreen", action: "isDownloadFinished" }, {}, (r) => { busyAnswer = r; });
+    if (!busyAnswer || busyAnswer.result !== false) {
+        fail("isDownloadFinished must be false while a job is running, got " + JSON.stringify(busyAnswer));
     }
+
     const progressAnswer = await askOffscreen({ action: "getProgress" });
     if (!progressAnswer || progressAnswer.result !== "success") {
         fail("getProgress did not answer success, got " + JSON.stringify(progressAnswer));
@@ -343,6 +348,15 @@ function askOffscreen(message) {
     if (!doneAnswer || doneAnswer.result !== true) {
         fail("isDownloadFinished should be true after completion, got " + JSON.stringify(doneAnswer));
     }
+
+    // The document must tell the worker the job finished (jobFinished) so the
+    // worker clears its active-job marker promptly instead of waiting for the
+    // 60s idle close (which left the marker set and made the popup misreport a
+    // successful download as "interrupted").
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "jobFinished" && m.from === "offscreen"),
+        "the offscreen document did not send jobFinished after the download completed"
+    );
 
     console.log("PASS: ZIP (" + buf.length + " bytes) delivered via object URL " + download.url);
     console.log("PASS: entries: " + names.join(", ") + "; " + progressMessages.length + " progress broadcasts");

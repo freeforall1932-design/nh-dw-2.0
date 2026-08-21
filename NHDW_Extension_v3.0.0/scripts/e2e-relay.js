@@ -20,6 +20,10 @@ const executeScriptCalls = [];
 let createDocumentCalls = 0;
 let closeDocumentCalls = 0;
 let hasDocumentResult = false;
+// What the simulated offscreen document answers for isDownloadFinished.
+let offscreenFinished = false;
+// chrome.storage.session backing store (the active-job marker lives here).
+const sessionStore = {};
 
 const chromeStub = {
     tabs: {
@@ -31,7 +35,11 @@ const chromeStub = {
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
-        session: { get(_key, cb) { cb({}); }, set() {}, remove() {} }
+        session: {
+            get(key, cb) { cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore)); },
+            set(items) { Object.assign(sessionStore, items); },
+            remove(key) { delete sessionStore[key]; }
+        }
     },
     scripting: {
         // The worker performs tab injections on behalf of the offscreen
@@ -57,7 +65,7 @@ const chromeStub = {
                 // Simulate the offscreen document answering.
                 if (cb) {
                     const response = { result: "started" };
-                    if (message.action === "isDownloadFinished") response.result = false;
+                    if (message.action === "isDownloadFinished") response.result = offscreenFinished;
                     else if (message.action === "getProgress") {
                         response.progress = 42;
                         response.doujinshiName = "Test";
@@ -184,6 +192,43 @@ function sendToBackground(message) {
         fail("offscreenIdle did not close the offscreen document (closeDocument calls: " + closeDocumentCalls + ")");
     }
     console.log("PASS: offscreenIdle closes the offscreen document");
+
+    // 5b. A finished job must not be reported as interrupted. Even with a
+    //     stale active-job marker still set (the 60s idle window before the
+    //     offscreen document closes), a LIVE document that reports the job
+    //     finished means the download completed normally: the worker must
+    //     clear the marker and answer interrupted:false (the stale-marker
+    //     false positive previously made the popup claim "Download
+    //     interrupted" right after a success).
+    hasDocumentResult = true;
+    offscreenFinished = true;
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    const finishedAnswer = await sendToBackground({ action: "isDownloadFinished" });
+    if (!finishedAnswer || finishedAnswer.result !== true || finishedAnswer.interrupted !== false) {
+        fail("a finished job with a live document must answer interrupted:false, got " + JSON.stringify(finishedAnswer));
+    }
+    if (sessionStore.downloadJob !== undefined) {
+        fail("isDownloadFinished must clear a stale marker when the document reports the job finished");
+    }
+    console.log("PASS: finished job with a live document clears the marker and answers interrupted:false");
+
+    // 5c. jobFinished from the offscreen document clears the marker promptly.
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    onMessageHandler({ from: "offscreen", action: "jobFinished" }, {}, () => {});
+    if (sessionStore.downloadJob !== undefined) {
+        fail("jobFinished must clear the active-job marker, got " + JSON.stringify(sessionStore.downloadJob));
+    }
+    console.log("PASS: jobFinished clears the active-job marker");
+
+    // 5d. A genuinely interrupted job (no document, marker still set) must
+    //     still be reported as interrupted.
+    hasDocumentResult = false;
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    const interruptedAnswer = await sendToBackground({ action: "isDownloadFinished" });
+    if (!interruptedAnswer || interruptedAnswer.result !== true || interruptedAnswer.interrupted !== true) {
+        fail("a missing document with a stale marker must answer interrupted:true, got " + JSON.stringify(interruptedAnswer));
+    }
+    console.log("PASS: missing document with a stale marker still answers interrupted:true");
 
     // 6. Progress broadcasts from the offscreen document must not loop back
     //    into the relay (they are consumed, not re-sent) and must not keep
