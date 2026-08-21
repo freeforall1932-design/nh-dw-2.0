@@ -702,7 +702,7 @@ async function runExtensionTests(ctx) {
                     fail("content script injects checkboxes", "expected 3, got " + n);
                 }
                 if (extensionExceptions(listing).length > 0) {
-                    fail("content script has no error
+                    fail("content script has no errors on listing pages", extensionExceptions(listing).join("; "));
                 } else {
                     ok("content script has no errors on listing pages");
                 }
@@ -1038,13 +1038,6 @@ async function runExtensionTests(ctx) {
     // inherited pipe handles open even after the direct browser process exits.
     // Exit explicitly once the result summary has been printed.
     process.exit(failed > 0 ? 1 : 0);
-})().catch((e) => {
-    const message = String(e && e.stack ? e.stack : e);
-    console.error("FATAL: " + message);
-    githubError("browser e2e fatal", message);
-    process.exit(2);
-});
-ocess.exit(failed > 0 ? 1 : 0);
 })().catch((e) => {
     const message = String(e && e.stack ? e.stack : e);
     console.error("FATAL: " + message);
