@@ -19,12 +19,12 @@ describe('selected gallery resolver', () => {
                     const match = typeof url === 'string' && /gallery\/(\d+)/.exec(url);
                     if (match) {
                         const id = match[1];
-                        callback([{ result: JSON.stringify({
+                        callback([{ result: {
                             id: Number(id),
                             media_id: 'media-' + id,
                             title: { pretty: 'Gallery ' + id },
                             images: { pages: [{ t: 'w' }] }
-                        }) }]);
+                        } }]);
                     } else {
                         callback([{ result: { gallery: null, scripts: [] } }]);
                     }
@@ -43,6 +43,28 @@ describe('selected gallery resolver', () => {
         assert.strictEqual(resolved['123'].media_id, 'media-123');
         assert.strictEqual(resolved['456'].media_id, 'media-456');
         assert.ok(executeCalls.length >= 2);
+        assert.ok(executeCalls.every((call) => call.target.tabId === 42));
+    });
+
+    it('uses an invisible same-tab gallery document only after tab-scoped fetches fail', async () => {
+        global.chrome.scripting.executeScript = (details, callback) => {
+            executeCalls.push(details);
+            const arg = details.args && details.args[0];
+            if (arg === '333') {
+                callback([{ result: {
+                    id: 333,
+                    media_id: 'frame-333',
+                    title: { pretty: 'Frame Gallery' },
+                    images: { pages: [{ t: 'w' }] }
+                } }]);
+            } else {
+                callback([{ result: null }]);
+            }
+        };
+
+        const resolved = await resolveSelectedGalleries(['333'], 42);
+        assert.strictEqual(resolved['333'].media_id, 'frame-333');
+        assert.ok(executeCalls.some((call) => call.args[0] === '333'));
         assert.ok(executeCalls.every((call) => call.target.tabId === 42));
     });
 
