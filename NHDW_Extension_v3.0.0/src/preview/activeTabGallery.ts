@@ -88,6 +88,56 @@ async function fetchTextInTab(tabId: number, url: string): Promise<string | null
     return typeof result === "string" ? result : null;
 }
 
+// Load a gallery page in an invisible, same-origin frame inside the existing
+// tab. This is only a final metadata fallback after ordinary tab-scoped fetches
+// fail. It does not create, focus, or navigate a browser tab; it reads the
+// gallery object rendered by a page in the user's already-cleared session.
+// A challenge page still produces no gallery object and is reported as such.
+async function readGalleryFromFrameInTab(tabId: number, galleryId: string): Promise<any | null> {
+    return await executeInTab(tabId, function (id: string): Promise<any | null> {
+        return new Promise(function (resolve) {
+            const frame = document.createElement("iframe");
+            frame.setAttribute("aria-hidden", "true");
+            frame.style.cssText = "display:none!important;width:1px!important;height:1px!important;border:0!important;";
+            let completed = false;
+            let timeout: number | undefined;
+
+            function finish(value: any | null) {
+                if (completed) return;
+                completed = true;
+                if (timeout !== undefined) window.clearTimeout(timeout);
+                try { frame.remove(); } catch (_) {
+                    try { frame.parentNode?.removeChild(frame); } catch (__) {}
+                }
+                resolve(value);
+            }
+
+            function read(attempt: number) {
+                try {
+                    const childWindow: any = frame.contentWindow;
+                    const gallery = childWindow && (childWindow._gallery || childWindow.gallery);
+                    if (gallery && typeof gallery === "object") {
+                        finish(gallery);
+                        return;
+                    }
+                } catch (_) {
+                    // A challenge or a non-same-origin document cannot provide metadata.
+                }
+                if (attempt >= 9) {
+                    finish(null);
+                } else {
+                    window.setTimeout(function () { read(attempt + 1); }, 300);
+                }
+            }
+
+            frame.onload = function () { read(0); };
+            timeout = window.setTimeout(function () { finish(null); }, 8000);
+            frame.src = "/g/" + encodeURIComponent(id) + "/";
+            (document.documentElement || document.body).appendChild(frame);
+        });
+    }, [galleryId], "MAIN");
+}
+
 async function fetchJsonInTab(tabId: number, url: string): Promise<any | null> {
     const result = await executeInTab(tabId, async (u: string) => {
         try {
@@ -191,11 +241,15 @@ export async function readGalleryFromTab(tabId: number, galleryId?: string): Pro
 // Public helper used by the selected-gallery resolver to fetch metadata
 // through an already-open tab (e.g. the homepage) without opening a new one.
 export async function fetchGalleryViaTab(tabId: number, galleryId: string): Promise<any | null> {
+    // API first: it is small and avoids constructing a document when the tab
+    // session permits the request.
     const apiGallery = await fetchJsonInTab(tabId, "https://nhentai.net/api/gallery/" + encodeURIComponent(galleryId));
     if (looksLikeGallery(apiGallery)) return apiGallery;
 
+    // Some sessions serve gallery HTML even when API fetches are rejected.
+    // Do not repeat the API request here: repeating a rejected request adds
+    // noise and can make a challenged session less reliable.
     const urls = [
-        "https://nhentai.net/api/gallery/" + encodeURIComponent(galleryId),
         "https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/",
         "https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/1/"
     ];
@@ -205,5 +259,10 @@ export async function fetchGalleryViaTab(tabId: number, galleryId: string): Prom
         const parsed = tryParseGalleryText(text);
         if (looksLikeGallery(parsed)) return parsed;
     }
-    return null;
+
+    // A document load is intentionally the final fallback. It remains inside
+    // the existing tab and gives sites that initialize _gallery after page load
+    // a chance to expose the exact metadata the single-gallery path reads.
+    const framedGallery = await readGalleryFromFrameInTab(tabId, galleryId);
+    return looksLikeGallery(framedGallery) ? framedGallery : null;
 }

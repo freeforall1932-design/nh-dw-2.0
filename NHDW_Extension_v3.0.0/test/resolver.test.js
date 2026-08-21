@@ -2,55 +2,32 @@ const assert = require('assert');
 const { resolveSelectedGalleries } = require('../build/test/preview/selectedGalleryResolver.js');
 const { readGalleryFromTab } = require('../build/test/preview/activeTabGallery.js');
 
-function eventHook() {
-    const listeners = new Set();
-    return {
-        addListener(listener) { listeners.add(listener); },
-        removeListener(listener) { listeners.delete(listener); },
-        emit(...args) { for (const listener of Array.from(listeners)) listener(...args); },
-        get size() { return listeners.size; }
-    };
-}
-
 describe('selected gallery resolver', () => {
-    let created;
-    let removed;
-    let updated;
-    let nextTabId;
+    let executeCalls;
 
     beforeEach(() => {
-        created = [];
-        removed = [];
-        updated = eventHook();
-        nextTabId = 100;
+        executeCalls = [];
         global.chrome = {
             runtime: { lastError: null },
-            tabs: {
-                onUpdated: updated,
-                create(options, callback) {
-                    const tab = { id: nextTabId++, status: 'loading', url: options.url };
-                    created.push(tab);
-                    callback(tab);
-                },
-                get(tabId, callback) {
-                    const tab = created.find((candidate) => candidate.id === tabId);
-                    callback(tab);
-                },
-                remove(tabId, callback) {
-                    removed.push(tabId);
-                    if (callback) callback();
-                }
-            },
+            // Deliberately omit tabs.create. Batch metadata must be obtained
+            // from the already-open source tab, never from temporary tabs.
+            tabs: {},
             scripting: {
                 executeScript(details, callback) {
-                    const tab = created.find((candidate) => candidate.id === details.target.tabId);
-                    const id = tab.url.match(/\/g\/(\d+)\//)[1];
-                    callback([{ result: {
-                        id: Number(id),
-                        media_id: 'media-' + id,
-                        title: { pretty: 'Gallery ' + id },
-                        images: { pages: [{ t: 'w' }] }
-                    } }]);
+                    executeCalls.push(details);
+                    const url = details.args && details.args[0];
+                    const match = typeof url === 'string' && /gallery\/(\d+)/.exec(url);
+                    if (match) {
+                        const id = match[1];
+                        callback([{ result: {
+                            id: Number(id),
+                            media_id: 'media-' + id,
+                            title: { pretty: 'Gallery ' + id },
+                            images: { pages: [{ t: 'w' }] }
+                        } }]);
+                    } else {
+                        callback([{ result: { gallery: null, scripts: [] } }]);
+                    }
                 }
             }
         };
@@ -60,31 +37,41 @@ describe('selected gallery resolver', () => {
         delete global.chrome;
     });
 
-    it('resolves selected galleries sequentially and closes every temporary tab', async () => {
-        const resultPromise = resolveSelectedGalleries(['123', '456']);
-        // Each tab starts loading, so the resolver must wait for the update event.
-        await new Promise((resolve) => setImmediate(resolve));
-        assert.strictEqual(created.length, 1);
-        updated.emit(created[0].id, { status: 'complete' });
-        await new Promise((resolve) => setImmediate(resolve));
-        assert.strictEqual(created.length, 2);
-        updated.emit(created[1].id, { status: 'complete' });
-
-        const resolved = await resultPromise;
+    it('resolves selected galleries through the supplied tab without creating or navigating tabs', async () => {
+        const resolved = await resolveSelectedGalleries(['123', '456'], 42);
         assert.deepStrictEqual(Object.keys(resolved), ['123', '456']);
-        assert.deepStrictEqual(removed, [100, 101]);
-        assert.strictEqual(updated.size, 0);
+        assert.strictEqual(resolved['123'].media_id, 'media-123');
+        assert.strictEqual(resolved['456'].media_id, 'media-456');
+        assert.ok(executeCalls.length >= 2);
+        assert.ok(executeCalls.every((call) => call.target.tabId === 42));
     });
 
-    it('uses an already-complete tab without waiting for an update event', async () => {
-        global.chrome.tabs.get = (tabId, callback) => {
-            const tab = created.find((candidate) => candidate.id === tabId);
-            callback(Object.assign({}, tab, { status: 'complete' }));
+    it('uses an invisible same-tab gallery document only after tab-scoped fetches fail', async () => {
+        global.chrome.scripting.executeScript = (details, callback) => {
+            executeCalls.push(details);
+            const arg = details.args && details.args[0];
+            if (arg === '333') {
+                callback([{ result: {
+                    id: 333,
+                    media_id: 'frame-333',
+                    title: { pretty: 'Frame Gallery' },
+                    images: { pages: [{ t: 'w' }] }
+                } }]);
+            } else {
+                callback([{ result: null }]);
+            }
         };
+
+        const resolved = await resolveSelectedGalleries(['333'], 42);
+        assert.strictEqual(resolved['333'].media_id, 'frame-333');
+        assert.ok(executeCalls.some((call) => call.args[0] === '333'));
+        assert.ok(executeCalls.every((call) => call.target.tabId === 42));
+    });
+
+    it('does not try to create a fallback tab when no source tab was supplied', async () => {
         const resolved = await resolveSelectedGalleries(['789']);
-        assert.strictEqual(resolved['789'].media_id, 'media-789');
-        assert.deepStrictEqual(removed, [100]);
-        assert.strictEqual(updated.size, 0);
+        assert.deepStrictEqual(resolved, {});
+        assert.strictEqual(executeCalls.length, 0);
     });
 
     it('parses window._gallery from already-loaded script tags without hitting /api/gallery', async () => {

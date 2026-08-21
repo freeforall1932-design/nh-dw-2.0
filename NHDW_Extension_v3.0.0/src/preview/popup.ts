@@ -339,7 +339,13 @@ export default class Popup
                             let finalName = pathElement.value;
                             document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                             const tabId = await getActiveTabId();
-                            const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis), tabId);
+                            const selectedIds = Object.keys(allDoujinshis);
+                            const galleryMetadata = await resolveSelectedGalleries(selectedIds, tabId);
+                            if (Object.keys(galleryMetadata).length === 0) {
+                                document.getElementById('action')!.innerHTML =
+                                    "Could not read gallery metadata from this tab. Keep the NHentai page open after completing any browser verification, then try again.";
+                                return;
+                            }
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
                             chrome.runtime.sendMessage({
                                 action: "downloadAllDoujinshis",
@@ -401,7 +407,13 @@ export default class Popup
                                     let finalName = pathElement.value;
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                                     const tabId = await getActiveTabId();
-                                    const galleryMetadata = await resolveSelectedGalleries(Object.keys(allDoujinshis), tabId);
+                                    const selectedIds = Object.keys(allDoujinshis);
+                                    const galleryMetadata = await resolveSelectedGalleries(selectedIds, tabId);
+                                    if (Object.keys(galleryMetadata).length === 0) {
+                                        document.getElementById('action')!.innerHTML =
+                                            "Could not read gallery metadata from this tab. Keep the NHentai page open after completing any browser verification, then try again.";
+                                        return;
+                                    }
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
                                     chrome.runtime.sendMessage({
                                         action: "downloadAllPages",
