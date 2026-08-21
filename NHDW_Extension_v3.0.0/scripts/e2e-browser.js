@@ -235,7 +235,7 @@ const PATCHED_FETCH_SRC = `
 window.__nhdwFixture = true;
 window.fetch = function(input, init) {
     const url = String(input);
-    if (url.includes("nhentai.net/api/gallery/123456")) {
+    if (url.includes("nhentai.net/api/v2/galleries/123456") || url.includes("nhentai.net/api/gallery/123456")) {
         return Promise.resolve(new Response(${JSON.stringify(JSON.stringify(FIXTURE_GALLERY))}, { status: 200, headers: { "Content-Type": "application/json" } }));
     }
     const m = /galleries\\/987654\\/([0-9]+)\\.(jpg|png)$/.exec(url);
@@ -294,7 +294,7 @@ function fixtureServerHandler(req, res) {
         const id = url.match(/g\/(\d+)/)[1];
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(GALLERY_HTML.replace("123456", id));
-    } else if (/^\/api\/gallery\/\d+/.test(url)) {
+    } else if (/^\/api\/(?:v2\/galleries|gallery)\/\d+/.test(url)) {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(FIXTURE_GALLERY));
     } else if (req.method === "OPTIONS") {

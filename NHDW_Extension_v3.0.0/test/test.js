@@ -9,7 +9,7 @@ const live = process.env.RUN_LIVE_TESTS === '1' ? describe : describe.skip;
 
 live('Live nhentai API (opt-in)', () => {
     it('Get doujinshi pretty text', async () => {
-        const response = await fetch('https://nhentai.net/api/gallery/161194');
+        const response = await fetch('https://nhentai.net/api/v2/galleries/161194');
         assert.equal(response.status, 200);
         const json = await response.json();
         assert.equal(json.title.pretty, "Tsuna-kan. | Tuna Can");

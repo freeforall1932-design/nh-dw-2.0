@@ -19,7 +19,7 @@ export default class HtmlParsing implements AParsing
         {
             const json = extractGalleryFromHtml(value);
             if (json === null) {
-                throw new Error("Unknown page format: window._gallery was not found.");
+                throw new Error("Unknown page format: no gallery metadata was found in the page.");
             }
             return json;
         });

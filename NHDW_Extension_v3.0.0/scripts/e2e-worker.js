@@ -117,7 +117,7 @@ const failMediaIds = new Set();
 
 function fetchStub(url) {
     const u = String(url);
-    const apiMatch = /\/api\/gallery\/([0-9]+)/.exec(u);
+    const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));

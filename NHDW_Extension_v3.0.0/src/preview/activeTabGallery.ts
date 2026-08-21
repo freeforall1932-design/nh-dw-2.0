@@ -1,4 +1,4 @@
-import { extractGalleryFromHtml, looksLikeGallery } from "../parsing/GalleryEmbed";
+import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 
 // Run a function in the tab's MAIN world and return its result. Supports both
 // the Promise and callback forms of chrome.scripting.executeScript.
@@ -63,14 +63,14 @@ function tryParseGalleryText(text: string): any | null {
     // Try JSON first (API response)
     if (trimmed.startsWith("{")) {
         try {
-            const parsed = JSON.parse(trimmed);
-            if (looksLikeGallery(parsed)) return parsed;
+            const parsed = coerceGallery(JSON.parse(trimmed));
+            if (parsed) return parsed;
         } catch (_) {
             // fall through to HTML parsing
         }
     }
     const fromHtml = extractGalleryFromHtml(text);
-    if (looksLikeGallery(fromHtml)) return fromHtml;
+    if (fromHtml) return fromHtml;
     return null;
 }
 
@@ -120,6 +120,24 @@ async function readGalleryFromFrameInTab(tabId: number, galleryId: string): Prom
                         finish(gallery);
                         return;
                     }
+                    // Current SvelteKit pages have no window._gallery; the
+                    // metadata lives in embedded application/json payloads.
+                    const childDoc = childWindow && childWindow.document;
+                    if (childDoc && childDoc.documentElement) {
+                        const nodes = childDoc.querySelectorAll('script[type="application/json"]');
+                        const blobs: string[] = [];
+                        for (let i = 0; i < nodes.length; i++) {
+                            const el: any = nodes[i];
+                            const url = el.getAttribute("data-url") || "";
+                            if (url.indexOf("/api/v2/galleries") !== -1) {
+                                blobs.push(el.textContent || "");
+                            }
+                        }
+                        if (blobs.length > 0) {
+                            finish({ __jsonBlobs: blobs });
+                            return;
+                        }
+                    }
                 } catch (_) {
                     // A challenge or a non-same-origin document cannot provide metadata.
                 }
@@ -136,6 +154,28 @@ async function readGalleryFromFrameInTab(tabId: number, galleryId: string): Prom
             (document.documentElement || document.body).appendChild(frame);
         });
     }, [galleryId], "MAIN");
+}
+
+// The injected frame reader returns either a gallery object (legacy pages) or
+// a set of embedded application/json payloads (current SvelteKit pages).
+function resolveFrameResult(raw: any): any | null {
+    if (!raw) {
+        return null;
+    }
+    const direct = coerceGallery(raw);
+    if (direct) {
+        return direct;
+    }
+    const blobs = (raw as any).__jsonBlobs;
+    if (Array.isArray(blobs)) {
+        for (const blob of blobs) {
+            const parsed = extractGalleryFromHtml(String(blob || ""));
+            if (parsed) {
+                return parsed;
+            }
+        }
+    }
+    return null;
 }
 
 async function fetchJsonInTab(tabId: number, url: string): Promise<any | null> {
@@ -160,7 +200,7 @@ async function fetchJsonInTab(tabId: number, url: string): Promise<any | null> {
 // Read gallery metadata from an already-open nhentai tab.
 // 1. window._gallery / window.gallery (no network)
 // 2. parse script tags already in the document (no network)
-// 3. same-origin /api/gallery/<id> via tab fetch
+// 3. same-origin /api/v2/galleries/<id> via tab fetch
 // 4. same-origin gallery pages /g/<id>/ and /g/<id>/1/ via tab fetch + HTML parsing
 // Steps 1-2 are retried a few times to cover late-setting JS and challenge pages.
 export async function readGalleryFromTab(tabId: number, galleryId?: string): Promise<any | null> {
@@ -173,9 +213,18 @@ export async function readGalleryFromTab(tabId: number, galleryId?: string): Pro
             try {
                 const nodes = document.getElementsByTagName("script");
                 for (let i = 0; i < nodes.length; i++) {
-                    const text = nodes[i].textContent || "";
+                    const node = nodes[i];
+                    const text = node.textContent || "";
+                    // Legacy inline embed.
                     if (text.indexOf("_gallery") !== -1) {
                         scripts.push(text);
+                    }
+                    // Current SvelteKit embedded API payloads. These are what
+                    // the live site ships, so they must be captured verbatim
+                    // rather than relying on the truncated outerHTML below.
+                    const dataUrl = node.getAttribute ? (node.getAttribute("data-url") || "") : "";
+                    if (dataUrl.indexOf("/api/v2/galleries") !== -1 && text) {
+                        scripts.push('<script type="application/json" data-url="' + dataUrl + '">' + text + '<\/script>');
                     }
                 }
                 // Also capture full HTML for fallback parsing if needed
@@ -185,17 +234,19 @@ export async function readGalleryFromTab(tabId: number, galleryId?: string): Pro
         });
 
         // Mocks and older injectors may return the gallery object directly.
-        if (looksLikeGallery(page)) {
-            return page;
+        const directPage = coerceGallery(page);
+        if (directPage) {
+            return directPage;
         }
-        if (page && looksLikeGallery((page as any).gallery)) {
-            return (page as any).gallery;
+        const directGallery = page ? coerceGallery((page as any).gallery) : null;
+        if (directGallery) {
+            return directGallery;
         }
         if (page && Array.isArray((page as any).scripts)) {
             const scripts: string[] = (page as any).scripts;
             for (let i = 0; i < scripts.length; i++) {
                 const parsed = extractGalleryFromHtml(scripts[i]);
-                if (looksLikeGallery(parsed)) {
+                if (parsed) {
                     return parsed;
                 }
             }
@@ -203,7 +254,7 @@ export async function readGalleryFromTab(tabId: number, galleryId?: string): Pro
             const html = (page as any).html as string;
             if (html) {
                 const parsed = extractGalleryFromHtml(html);
-                if (looksLikeGallery(parsed)) return parsed;
+                if (parsed) return parsed;
             }
         }
         if (attempt < 4) {
@@ -216,8 +267,8 @@ export async function readGalleryFromTab(tabId: number, galleryId?: string): Pro
     }
 
     // Same-origin /api/gallery fetch via the tab (reuses Cloudflare clearance).
-    const apiGallery = await fetchJsonInTab(tabId, "/api/gallery/" + galleryId);
-    if (looksLikeGallery(apiGallery)) {
+    const apiGallery = coerceGallery(await fetchJsonInTab(tabId, "/api/v2/galleries/" + galleryId));
+    if (apiGallery) {
         return apiGallery;
     }
 
@@ -243,8 +294,8 @@ export async function readGalleryFromTab(tabId: number, galleryId?: string): Pro
 export async function fetchGalleryViaTab(tabId: number, galleryId: string): Promise<any | null> {
     // API first: it is small and avoids constructing a document when the tab
     // session permits the request.
-    const apiGallery = await fetchJsonInTab(tabId, "https://nhentai.net/api/gallery/" + encodeURIComponent(galleryId));
-    if (looksLikeGallery(apiGallery)) return apiGallery;
+    const apiGallery = coerceGallery(await fetchJsonInTab(tabId, "https://nhentai.net/api/v2/galleries/" + encodeURIComponent(galleryId)));
+    if (apiGallery) return apiGallery;
 
     // Some sessions serve gallery HTML even when API fetches are rejected.
     // Do not repeat the API request here: repeating a rejected request adds
@@ -263,6 +314,6 @@ export async function fetchGalleryViaTab(tabId: number, galleryId: string): Prom
     // A document load is intentionally the final fallback. It remains inside
     // the existing tab and gives sites that initialize _gallery after page load
     // a chance to expose the exact metadata the single-gallery path reads.
-    const framedGallery = await readGalleryFromFrameInTab(tabId, galleryId);
-    return looksLikeGallery(framedGallery) ? framedGallery : null;
+    const framedGallery = resolveFrameResult(await readGalleryFromFrameInTab(tabId, galleryId));
+    return framedGallery;
 }
