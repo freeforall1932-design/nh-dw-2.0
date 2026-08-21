@@ -546,6 +546,60 @@ function askOffscreen(message) {
     }
     console.log("PASS: three-gallery queue continues past metadata+image failures and reports 1/2/3");
 
+    // ---- Separate-files batch: one archive per gallery, no false notice -----
+    // The user's worst real-browser symptom: with "separate files per title",
+    // only the first gallery downloaded and the rest looked "interrupted".
+    // That came from the stale job marker + per-gallery isDone() misreporting
+    // between galleries. Here we prove the loop itself is sound: each gallery
+    // emits its OWN archive with its OWN name, and the whole job is reported
+    // finished exactly once at the end (so the worker clears its marker).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    tabFetches.length = 0;
+    failMediaIds.clear();
+    const separateOptions = Object.assign({}, relayedOptions, { downloadSeparately: true });
+    const separateStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/Separate",
+        options: separateOptions
+    });
+    if (!separateStart || separateStart.result !== "started") {
+        fail("separate-files batch did not answer {result:'started'}, got " + JSON.stringify(separateStart));
+    }
+    await waitFor(
+        () => downloads.length === 2,
+        "separate-files batch must emit one archive per gallery"
+    );
+    const separateFilenames = downloads.map((d) => d.filename).sort();
+    const expectedSeparate = ["Test.zip", "Test Two.zip"].sort();
+    if (JSON.stringify(separateFilenames) !== JSON.stringify(expectedSeparate)) {
+        fail("separate-files filenames mismatch. Expected " + JSON.stringify(expectedSeparate) +
+            " got " + JSON.stringify(separateFilenames));
+    }
+    // Each archive must be a real ZIP with its own 3 pages inside.
+    for (const d of downloads) {
+        const b = Buffer.from(await objectBlobs[d.url].arrayBuffer());
+        if (b.length < 4 || b.toString("latin1", 0, 2) !== "PK") {
+            fail("separate-files archive is not a ZIP: " + d.filename);
+        }
+        const z = await JSZip.loadAsync(b);
+        const entries = Object.keys(z.files).filter((n) => !z.files[n].dir);
+        if (entries.length !== 3) {
+            fail("separate-files archive " + d.filename + " must contain 3 pages, got " + JSON.stringify(entries));
+        }
+    }
+    // Exactly one jobFinished at the end (not one per gallery, not none).
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "separate-files batch must send exactly one jobFinished at the end"
+    );
+    const separateSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!separateSummary || separateSummary.succeeded !== 2 || separateSummary.failed !== 0) {
+        fail("separate-files batchSummary must report 2/0/2, got " + JSON.stringify(separateSummary));
+    }
+    console.log("PASS: separate-files batch emits one archive per gallery (no interruption false positive)");
+
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {
         fail("offscreen document touched forbidden APIs: storage=" + forbidden.storage +

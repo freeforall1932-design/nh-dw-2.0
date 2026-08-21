@@ -49,7 +49,15 @@ Fix (in `src/offscreen/offscreen.ts` and `src/background/background.ts`):
 
 Tests added: `scripts/e2e-relay.js` (finished-vs-interrupted, `jobFinished`
 clears the marker, missing-document still interrupted) and
-`scripts/e2e-offscreen.js` (running flag false during a job, `jobFinished` sent).
+`scripts/e2e-offscreen.js` (running flag false during a job, `jobFinished` sent,
+plus a **separate-files** phase proving one archive per gallery with no
+interruption false positive — the user's worst reported symptom).
+
+Note for future sessions: a prior diagnosis suggested the bug lived in a
+`chrome.downloads.onChanged` (`delta.state === 'complete'`) listener. That
+listener does not exist anywhere in this codebase (verified by grep); the
+state is tracked by the `chrome.storage.session.downloadJob` marker (worker) +
+the offscreen `jobRunning` flag, which is what was actually wrong.
 
 ## Validation (all green this session)
 
@@ -75,11 +83,14 @@ machine. Re-test by reloading the unpacked extension
    "interrupted" notice (this was the worst symptom reported).
 4. ZIP / raw / folder / CBZ modes still work.
 
-## Bucket list (recorded, NOT implemented — see IMPROVEMENT_BACKLOG.md item 16)
+## Bucket list (recorded, NOT implemented — see IMPROVEMENT_BACKLOG.md items 16-17)
 
 - Choose the output format (ZIP/CBZ/folder/raw) from the popup in the same tab,
-  not only from the options page.
-- "Download as PDF" output format.
+  not only from the options page. (item 16)
+- "Download as PDF" output format. (item 16)
+- "More Like This" batch download: download the recommended galleries at the
+  bottom of a gallery page in one batch. Data source still unresolved (embedded
+  payload vs separate API call vs hydrated HTML). (item 17)
 
 ## Do NOT
 

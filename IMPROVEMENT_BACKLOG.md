@@ -403,6 +403,31 @@ session).
 
 **Progress:** not started.
 
+### 17. "More Like This" batch download
+
+Download the recommended galleries shown at the bottom of a gallery page in one
+batch, without visiting each one.
+
+**Data source (needs real-site inspection first — the SvelteKit frontend can ship
+this data several ways):**
+
+- Option A: embedded in the gallery payload already captured by the extension
+  (`/api/v2/galleries/<id>`) under a recommendation key.
+- Option B: a separate API call (e.g. `/api/v2/galleries/<id>/recommendations`).
+- Option C: only in the rendered HTML after hydration (scrape the `href`/`alt`
+  of the recommendation cards as a fallback).
+
+**Tasks:**
+
+- Inspect DevTools Network on a live gallery page to pin down which of the above
+  holds, then extract `{ id, title }` into the shared card shape already consumed
+  by the batch pipeline.
+- Surface a "Download recommendations" action in the popup (or an injected button
+  under the "More Like This" section) that feeds those IDs through the existing
+  batch download / selected-gallery resolver path.
+
+**Progress:** not started (data source unresolved).
+
 ## Security and maintenance
 
 - Keep host permissions limited to the actual clearnet, image, and explicitly configured onion hosts.
