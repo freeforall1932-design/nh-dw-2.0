@@ -286,7 +286,8 @@ async function downloadAllDoujinshisAsync(
             current: i + 1,
             total: length,
             galleryName: allDoujinshis[key],
-            stage: "Downloading"
+            stage: "Downloading",
+            queued: queuedJobs.length
         });
 
         let jsonViaTab: any | null = null;

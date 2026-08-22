@@ -98,9 +98,12 @@ export module message
     };
 
     // Batch gallery progress — shown while processing a batch
-    export function batchProgress(current: number, total: number, galleryName: string, stage: string): string {
+    export function batchProgress(current: number, total: number, galleryName: string, stage: string, queued: number = 0): string {
+        const queueHtml = queued > 0
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
+            : '';
         return 'Gallery ' + current + ' of ' + total + ': ' + stage + ' ' + galleryName +
             '...<br/><progress max="100" id="progressBar" value="' + Math.round(current / total * 100) + '"></progress>' +
-            '<br/><br/><input type="button" id="buttonBack" value="Cancel"/>';
+            queueHtml + '<br/><br/><input type="button" id="buttonBack" value="Cancel current"/>';
     }
 }

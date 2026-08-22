@@ -76,6 +76,26 @@ async function getRelatedGalleries(galleryId: string): Promise<Record<string, st
     return galleries;
 }
 
+function wireActiveJobControls() {
+    const buttonBack = document.getElementById('buttonBack');
+    if (buttonBack) {
+        buttonBack.addEventListener('click', function() {
+            const popup = Popup.getInstance();
+            chrome.runtime.sendMessage({ action: "goBack" }, function() {
+                popup.updatePreviewAsync(popup.url);
+            });
+        });
+    }
+    const clearQueue = document.getElementById('buttonClearQueue');
+    if (clearQueue) {
+        clearQueue.addEventListener('click', function() {
+            chrome.runtime.sendMessage({ action: "clearQueue" }, function() {
+                clearQueue.remove();
+            });
+        });
+    }
+}
+
 // Add message listener for progress updates and error messages
 // NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
 // must return false. Returning true kept the message channel open and made
@@ -93,7 +113,8 @@ chrome.runtime.onMessage.addListener(function(request) {
     } else if (request.action === "batchProgress") {
         // Per-gallery progress while a batch download is running
         document.getElementById('action')!.innerHTML = message.batchProgress(
-            request.current, request.total, request.galleryName, request.stage || "Downloading");
+            request.current, request.total, request.galleryName, request.stage || "Downloading", request.queued || 0);
+        setTimeout(wireActiveJobControls, 0);
     } else if (request.action === "batchSummary") {
         // End-of-batch success/failure summary
         document.getElementById('action')!.innerHTML = message.batchSummary(
