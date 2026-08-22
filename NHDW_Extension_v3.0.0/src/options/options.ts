@@ -1,6 +1,7 @@
 import CheckBox from "./CheckBox";
 import InputField from "./InputField";
 import Select from "./Select";
+import { verifyAndSaveApiKey, removeApiKey } from "./apiKey";
 
 let options = [
     new Select("useZip"),
@@ -67,34 +68,20 @@ saveApiKeyButton.addEventListener("click", async () => {
 
     saveApiKeyButton.disabled = true;
     setApiKeyStatus("Verifying API key…");
-    try {
-        // User-Agent is a forbidden browser fetch header, so Chrome supplies
-        // its own. Authorization is the documented third-party API mechanism.
-        const response = await fetch("https://nhentai.net/api/v2/user", {
-            headers: { "Authorization": "Key " + apiKey },
-            cache: "no-store"
-        });
-        if (!response.ok) {
-            throw new Error("HTTP " + response.status);
-        }
-        const profile = await response.json();
-        if (!profile || typeof profile.username !== "string" || !profile.username) {
-            throw new Error("The API did not return a user profile");
-        }
-        chrome.storage.local.set({ apiKey: apiKey }, () => {
-            apiKeyInput.value = "";
-            setApiKeyStatus("Key verified for " + profile.username + ".");
-        });
-    } catch (error) {
-        setApiKeyStatus("Could not verify this key (" + String(error) + "). It was not saved.");
-    } finally {
-        saveApiKeyButton.disabled = false;
+    // User-Agent is a forbidden browser fetch header, so Chrome supplies its
+    // own. Authorization is the documented third-party API mechanism.
+    const result = await verifyAndSaveApiKey(apiKey, chrome.storage.local);
+    if (result.ok) {
+        apiKeyInput.value = "";
+        setApiKeyStatus("Key verified for " + result.username + ".");
+    } else {
+        setApiKeyStatus("Could not verify this key (" + result.error + "). It was not saved.");
     }
+    saveApiKeyButton.disabled = false;
 });
 
-removeApiKeyButton.addEventListener("click", () => {
-    chrome.storage.local.remove("apiKey", () => {
-        apiKeyInput.value = "";
-        setApiKeyStatus("API key removed from this browser profile.");
-    });
+removeApiKeyButton.addEventListener("click", async () => {
+    await removeApiKey(chrome.storage.local);
+    apiKeyInput.value = "";
+    setApiKeyStatus("API key removed from this browser profile.");
 });

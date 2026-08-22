@@ -12,6 +12,7 @@
         "src/background/tabImageFetch.ts",
         "src/preview/selectedGalleryResolver.ts",
         "src/preview/activeTabGallery.ts",
+        "src/options/apiKey.ts",
         "src/sources/**/*.ts"
     ]
 }
