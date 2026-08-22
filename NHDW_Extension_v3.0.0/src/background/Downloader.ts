@@ -118,7 +118,12 @@ export default class Downloader
                             throw "Download was aborted";
                         }
                         if (nbTries > 0) {
-                            console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
+                            // Retry warnings help diagnose real downloads, but
+                            // deterministic failure fixtures opt out to keep
+                            // test output focused on assertion failures.
+                            if (!(globalThis as any).__NHDW_SILENT_RETRY_LOGS__) {
+                                console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
+                            }
                             nbTries--;
                             // Surface the retry in the progress UI so the user can
                             // see the download is recovering rather than stuck.

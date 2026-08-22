@@ -138,6 +138,7 @@ function fetchStub(url) {
 const sandbox = {
     chrome: chromeStub,
     console,
+    __NHDW_SILENT_RETRY_LOGS__: true,
     setTimeout,
     clearTimeout,
     fetch: fetchStub,
