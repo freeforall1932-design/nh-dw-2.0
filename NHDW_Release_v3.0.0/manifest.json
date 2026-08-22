@@ -19,7 +19,11 @@
     "storage",
     "alarms",
     "scripting",
-    "offscreen"
+    "offscreen",
+    "permissions"
+  ],
+  "optional_host_permissions": [
+    "https://*.nhentai.net/*"
   ],
   "host_permissions": [
     "https://nhentai.net/*",

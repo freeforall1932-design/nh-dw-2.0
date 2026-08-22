@@ -6,6 +6,7 @@ import Downloader from "../background/Downloader";
 import { utils, classifyError } from "../utils/utils";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
+import { setImageServers } from "../sources/cdnConfig";
 var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
@@ -94,6 +95,19 @@ function notifyJobFinished() {
 // relayed (it read chrome.storage.sync on our behalf).
 function applyParserOptions(options: any) {
     parsing = (options && options.htmlParsing) ? new HtmlParsing() : new ApiParsing();
+}
+
+// Apply the image CDN server list the service worker resolved (GET /api/v2/cdn,
+// validated, permission-filtered, cached for the session) and relayed with the
+// job. The offscreen document must not fetch the config itself: it has no
+// chrome.storage to cache in and no chrome.permissions to filter with. The
+// list feeds both URL generation and allowed-image validation (cdnConfig.ts is
+// shared with tabImageFetch), and the built-in fallback mirrors always remain
+// as the tail. Each queued job carries its own options, so this is applied per
+// job rather than once.
+function applyCdnServers(options: any) {
+    const relayed = options && Array.isArray(options.imageServers) ? options.imageServers : null;
+    setImageServers(relayed && relayed.length > 0 ? relayed : null);
 }
 
 // Ask the service worker to hand a URL to the download manager. The URL is
@@ -202,6 +216,7 @@ function isDownloadFinished(): boolean {
 function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
+    applyCdnServers(options);
     const signal = beginJob();
     jobRunning = true;
     let zip = new JSZip();
@@ -428,6 +443,7 @@ async function downloadAllDoujinshisAsync(
 function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
+    applyCdnServers(options);
     beginJob();
     jobRunning = true;
     let zip = new JSZip();
@@ -497,6 +513,7 @@ async function downloadAllPagesAsync(
 function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
+    applyCdnServers(options);
     beginJob();
     jobRunning = true;
     downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId, options || {})

@@ -30,6 +30,14 @@ let expectedWorkerRejection = false;
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
+// GET /api/v2/cdn fixture: reports a mirror OUTSIDE the hardcoded set so the
+// phase asserts prove the worker actually resolved runtime CDN config.
+const CDN_CONFIG_FIXTURE = JSON.stringify({
+    image_servers: ["https://i5.nhentai.net"],
+    thumb_servers: ["https://t.nhentai.net"]
+});
+let cdnConfigFetches = 0;
+
 const chromeStub = {
     tabs: {
         onUpdated: { addListener() {} },
@@ -37,6 +45,10 @@ const chromeStub = {
         query(_query, cb) { cb([{ url: "https://nhentai.net/g/123456/" }]); }
     },
     action: { setIcon() {} },
+    permissions: {
+        // The manifest's optional_host_permissions grant check.
+        contains(_permissions, cb) { cb(true); }
+    },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults, syncSettings)); } },
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
@@ -117,6 +129,10 @@ const failMediaIds = new Set();
 
 function fetchStub(url) {
     const u = String(url);
+    if (u.includes("/api/v2/cdn")) {
+        cdnConfigFetches++;
+        return Promise.resolve(new Response(CDN_CONFIG_FIXTURE, { status: 200 }));
+    }
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
@@ -224,10 +240,13 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     // ---- Phase 1: ZIP mode ------------------------------------------------
     syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
     fireDownload("Downloads/Test", "Test");
-    // The active-job marker must be set as soon as the job starts.
-    if (!sessionStore.downloadJob || sessionStore.downloadJob.active !== true) {
-        fail("job marker must be active while a download runs, got " + JSON.stringify(sessionStore.downloadJob));
-    }
+    // The active-job marker must be set as soon as the job starts. The worker
+    // resolves the CDN config first (one small fixture request), so the marker
+    // appears within the resolution microtask chain rather than synchronously.
+    await waitFor(
+        () => sessionStore.downloadJob && sessionStore.downloadJob.active === true,
+        "job marker must be active while a download runs"
+    );
     await waitFor(() => downloads.length === 1, "no ZIP download reached chrome.downloads");
     await waitFor(() => sessionStore.downloadJob === undefined,
         "job marker must be cleared after the download completes");
@@ -264,10 +283,13 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     await waitFor(() => downloads.length === 3, "raw mode did not issue 3 per-page downloads");
 
     const rawUrls = downloads.map((d) => d.url).sort();
+    // Raw mode hands the FIRST configured server to chrome.downloads: with the
+    // /api/v2/cdn fixture active that is the runtime-reported i5 mirror, which
+    // proves the CDN config flowed through validation into URL generation.
     const expectedRaw = [
-        "https://i.nhentai.net/galleries/987654/1.jpg",
-        "https://i.nhentai.net/galleries/987654/2.png",
-        "https://i.nhentai.net/galleries/987654/3.jpg"
+        "https://i5.nhentai.net/galleries/987654/1.jpg",
+        "https://i5.nhentai.net/galleries/987654/2.png",
+        "https://i5.nhentai.net/galleries/987654/3.jpg"
     ];
     if (JSON.stringify(rawUrls) !== JSON.stringify(expectedRaw)) {
         fail("raw mode URLs mismatch. Expected " + JSON.stringify(expectedRaw) + " got " + JSON.stringify(rawUrls));
@@ -276,7 +298,7 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("raw mode filename does not use the configured path: " +
             downloads.map((d) => d.filename).join(", "));
     }
-    console.log("PASS phase 2: raw mode issued 3 per-page downloads to the canonical image CDN");
+    console.log("PASS phase 2: raw mode issued 3 per-page downloads to the runtime-configured image CDN");
 
     // ---- Phase 3: raw mode with failing downloads -------------------------
     sentMessages.length = 0;
@@ -473,6 +495,34 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("batchProgress must be sent for all 3 queued galleries, got " + queueProgress.length);
     }
     console.log("PASS phase 7: three-gallery queue continues past metadata+image failures and reports 1/2/3");
+
+    // ---- Phase 8: CDN configuration hardening ------------------------------
+    // Every job above resolved its image servers through the worker: the
+    // /api/v2/cdn fixture was fetched exactly ONCE (session cache + in-memory
+    // cache cover the rest), the cache was persisted to storage.session, and
+    // getCdnStatus reports the merged list with no missing host grants.
+    if (cdnConfigFetches !== 1) {
+        fail("the CDN config must be fetched once and then cached, got " + cdnConfigFetches + " fetches");
+    }
+    if (!sessionStore.cdnConfig || !Array.isArray(sessionStore.cdnConfig.servers)
+        || sessionStore.cdnConfig.servers[0] !== "https://i5.nhentai.net") {
+        fail("the resolved CDN config must be cached in storage.session, got " + JSON.stringify(sessionStore.cdnConfig));
+    }
+    let cdnStatusAnswer = null;
+    onMessageHandler({ action: "getCdnStatus" }, {}, (r) => { cdnStatusAnswer = r; });
+    await waitFor(() => cdnStatusAnswer !== null, "getCdnStatus did not answer");
+    if (!cdnStatusAnswer || cdnStatusAnswer.result !== "success"
+        || !Array.isArray(cdnStatusAnswer.imageServers)
+        || cdnStatusAnswer.imageServers[0] !== "https://i5.nhentai.net"
+        || !cdnStatusAnswer.imageServers.includes("https://i.nhentai.net")) {
+        fail("getCdnStatus must report the merged server list (runtime first, fallback after), got "
+            + JSON.stringify(cdnStatusAnswer));
+    }
+    if (!Array.isArray(cdnStatusAnswer.missingOrigins) || cdnStatusAnswer.missingOrigins.length !== 0) {
+        fail("getCdnStatus must report no missing grants when everything is permitted, got "
+            + JSON.stringify(cdnStatusAnswer.missingOrigins));
+    }
+    console.log("PASS phase 8: CDN config fetched once, cached for the session, merged with fallback mirrors");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

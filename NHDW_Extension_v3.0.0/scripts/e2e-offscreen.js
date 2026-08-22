@@ -155,8 +155,13 @@ function imageBytesFor(url) {
     return pageBytes[(pageNo - 1) % pageBytes.length];
 }
 
+// All URLs the offscreen document fetched directly (no source tab): used to
+// prove which CDN host URL generation actually used.
+const fetchedUrls = [];
+
 function fetchStub(url) {
     const u = String(url);
+    fetchedUrls.push(u);
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
@@ -610,6 +615,39 @@ function askOffscreen(message) {
         fail("separate-files batchSummary must report 2/0/2, got " + JSON.stringify(separateSummary));
     }
     console.log("PASS: separate-files batch emits one archive per gallery (no interruption false positive)");
+
+    // ---- Relayed CDN image servers drive URL generation --------------------
+    // The worker resolved GET /api/v2/cdn, validated the hosts, and relayed
+    // the list with the job options. A runtime-reported mirror (i7, outside
+    // the hardcoded set) must be used for the page URLs; a hostile entry the
+    // worker would never relay is still dropped by the shared sanitizer.
+    downloads.length = 0;
+    sentMessages.length = 0;
+    fetchedUrls.length = 0;
+    let cdnStartAnswer = null;
+    onMessageHandler({
+        target: "offscreen",
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/CdnTest",
+        name: "CdnTest",
+        options: Object.assign({}, relayedOptions, {
+            imageServers: ["https://i7.nhentai.net", "https://evil.example", "not a server"]
+        })
+    }, {}, (r) => { cdnStartAnswer = r; });
+    if (!cdnStartAnswer || cdnStartAnswer.result !== "started") {
+        fail("relayed-CDN downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(cdnStartAnswer));
+    }
+    await waitFor(() => downloads.length === 1, "relayed-CDN job did not deliver its ZIP");
+    const cdnPageFetches = fetchedUrls.filter((u) => u.includes("/galleries/987654/"));
+    if (cdnPageFetches.length !== 3 || !cdnPageFetches.every((u) => u.startsWith("https://i7.nhentai.net/"))) {
+        fail("page URLs must be generated from the relayed runtime server (i7) only, got: "
+            + JSON.stringify(cdnPageFetches));
+    }
+    if (fetchedUrls.some((u) => u.includes("evil.example"))) {
+        fail("an invalid relayed server must never be contacted: " + JSON.stringify(fetchedUrls));
+    }
+    console.log("PASS: relayed CDN image servers drive URL generation (runtime mirror first, invalid entries dropped)");
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {

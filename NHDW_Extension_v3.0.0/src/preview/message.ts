@@ -43,6 +43,20 @@ export module message
     export function cloudflareMetadata(): string {
         return "This tab does not contain gallery metadata yet. Finish any Cloudflare challenge, wait until the gallery page itself has loaded, then open the popup again.";
     }
+
+    // nhentai's CDN config reported image hosts this extension has no host
+    // permission for. Downloads keep using the permitted hosts; the button
+    // requests the optional https://*.nhentai.net grant (user gesture required,
+    // which is why this lives in the popup).
+    export function cdnNotice(origins: string[]): string {
+        const list = origins.map((origin) => {
+            const host = /^https:\/\/([^/]+)\//.exec(origin);
+            return host ? host[1] : origin;
+        }).join(", ");
+        return '<b>New nhentai image hosts</b><br/>' +
+            '<small>nhentai now serves images from ' + list + '. Downloads keep working on the current hosts.</small><br/>' +
+            '<input type="button" id="buttonGrantCdn" value="Grant image host access"/>';
+    }
     
     export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string): string {
         const selected = (value: string) => value === selectedFormat ? ' selected' : '';

@@ -162,7 +162,25 @@ function sendToBackground(message) {
     if (!relay.options || relay.options.useZip !== "cbz" || relay.options.maxConcurrentDownloads === undefined) {
         fail("downloadDoujinshi relay must carry the worker-read options and one-job CBZ override: " + JSON.stringify(relay.options));
     }
+    // The worker resolves the CDN image server list and relays it with the job
+    // (the offscreen document has no storage/permissions to resolve it itself).
+    if (!Array.isArray(relay.options.imageServers) || relay.options.imageServers[0] !== "https://i.nhentai.net"
+        || !relay.options.imageServers.includes("https://i4.nhentai.net")) {
+        fail("downloadDoujinshi relay must carry the resolved image server list, got: "
+            + JSON.stringify(relay.options.imageServers));
+    }
     console.log("PASS: downloadDoujinshi creates the offscreen document and relays the one-job format override");
+
+    // 1b. getCdnStatus: the popup asks which image hosts are active and which
+    //     need the optional host grant. With no CDN config fetched (the fetch
+    //     stub here throws) the answer is the fallback list with no gaps.
+    const cdnStatusAnswer = await sendToBackground({ action: "getCdnStatus" });
+    if (!cdnStatusAnswer || cdnStatusAnswer.result !== "success"
+        || !Array.isArray(cdnStatusAnswer.imageServers) || cdnStatusAnswer.imageServers.length === 0
+        || !Array.isArray(cdnStatusAnswer.missingOrigins)) {
+        fail("getCdnStatus answered " + JSON.stringify(cdnStatusAnswer));
+    }
+    console.log("PASS: getCdnStatus reports the image server list and host-grant gaps for the popup");
 
     // 3. updateProgress: relay getProgress and broadcast the answer to the popup.
     const progressAnswer = await sendToBackground({ action: "updateProgress" });
@@ -270,13 +288,18 @@ function sendToBackground(message) {
 
     // 9. fetchInTab: the worker injects the image fetch into the tab
     //    (chrome.scripting is not available in the offscreen document).
+    //    executeScriptCalls[0] is the CDN config fetch the worker made when
+    //    the job started (MAIN world, /api/v2/cdn through the source tab), so
+    //    assert on the LAST injection, which is the one under test.
     const tabImageAnswer = await new Promise((resolve) => {
         onMessageHandler({ from: "offscreen", action: "fetchInTab", tabId: 42, url: "https://i.nhentai.net/galleries/987654/1.jpg", world: "ISOLATED" }, {}, resolve);
     });
     if (!tabImageAnswer || tabImageAnswer.ok !== true || !tabImageAnswer.b64) {
         fail("fetchInTab answered " + JSON.stringify(tabImageAnswer));
     }
-    if (executeScriptCalls.length < 1 || executeScriptCalls[0].world !== "ISOLATED" || !executeScriptCalls[0].target || executeScriptCalls[0].target.tabId !== 42) {
+    const imageInjection = executeScriptCalls[executeScriptCalls.length - 1];
+    if (!imageInjection || imageInjection.world !== "ISOLATED" || !imageInjection.target || imageInjection.target.tabId !== 42
+        || !String(imageInjection.args[0]).includes("/galleries/987654/1.jpg")) {
         fail("fetchInTab was not injected through chrome.scripting.executeScript: " + JSON.stringify(executeScriptCalls));
     }
     console.log("PASS: fetchInTab injects the image fetch into the tab via the worker");

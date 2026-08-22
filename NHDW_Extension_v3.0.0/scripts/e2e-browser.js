@@ -235,6 +235,9 @@ const PATCHED_FETCH_SRC = `
 window.__nhdwFixture = true;
 window.fetch = function(input, init) {
     const url = String(input);
+    if (url.includes("nhentai.net/api/v2/cdn")) {
+        return Promise.resolve(new Response(JSON.stringify({ image_servers: ["https://i.nhentai.net"], thumb_servers: ["https://t.nhentai.net"] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    }
     if (url.includes("nhentai.net/api/v2/galleries/123456") || url.includes("nhentai.net/api/gallery/123456")) {
         return Promise.resolve(new Response(${JSON.stringify(JSON.stringify(FIXTURE_GALLERY))}, { status: 200, headers: { "Content-Type": "application/json" } }));
     }
@@ -290,6 +293,14 @@ function fixtureServerHandler(req, res) {
     if (url === "/") {
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(LISTING_HTML);
+    } else if (url === "/api/v2/cdn") {
+        // CDN configuration fixture: reports the canonical mirror, which the
+        // extension merges with its fallback list (see src/sources/cdnConfig.ts).
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({
+            image_servers: ["https://i.nhentai.net"],
+            thumb_servers: ["https://t.nhentai.net"]
+        }));
     } else if (/^\/g\/\d+\/?$/.test(url)) {
         const id = url.match(/g\/(\d+)/)[1];
         res.writeHead(200, { "Content-Type": "text/html" });
@@ -527,8 +538,17 @@ async function installChromeForTesting() {
     const preferCiHeadless = process.env.GITHUB_ACTIONS === "true" && !FORCE_HEADED;
     const useHeadless = FORCE_HEADLESS || preferCiHeadless || (!FORCE_HEADED && !process.env.DISPLAY && !xvfbRun);
     const useXvfb = !!xvfbRun && !useHeadless;
+    // Escape hatch for constrained environments (no display AND no xvfb, e.g.
+    // containers where headless=new strips extension support): extra Chrome
+    // switches such as "--ozone-platform=headless" run the full browser —
+    // extensions included — without an X server.
+    const extraChromeArgs = (process.env.NHDW_CHROME_EXTRA_ARGS || "")
+        .split(" ")
+        .map((a) => a.trim())
+        .filter(Boolean);
     const args = [
         ...(useHeadless ? ["--headless=new"] : []),
+        ...extraChromeArgs,
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",

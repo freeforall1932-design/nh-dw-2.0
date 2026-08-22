@@ -1,4 +1,5 @@
 import { executeInTab } from "../preview/activeTabGallery";
+import { isAllowedImageUrl as isAllowedCdnImageUrl } from "../sources/cdnConfig";
 
 // Fetch one original image through an already-open nhentai tab so the request
 // uses the tab's cookies and network stack. Isolated-world fetch is tried
@@ -15,10 +16,14 @@ export type TabImageResult = {
     error: string | null;
 };
 
-const IMAGE_HOST = /^https:\/\/i[1-4]?\.nhentai\.net\/galleries\/[0-9]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
-
+// Allowed-image validation is shared with URL generation through the CDN
+// configuration (cdnConfig.ts): both accept exactly the same validated,
+// nhentai-owned HTTPS image hosts — the hardcoded i/i1-i4 set plus any
+// API-reported server the service worker activated. This function is injected
+// into the user's tab, so it stays as strict as the old hardcoded regex:
+// exact /galleries/<id>/<page>.<ext> path, no query string, no fragments.
 export function isAllowedImageUrl(url: string): boolean {
-    return IMAGE_HOST.test(url);
+    return isAllowedCdnImageUrl(url);
 }
 
 export function decodeTabImageBytes(b64: string): Uint8Array {
