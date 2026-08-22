@@ -401,7 +401,7 @@ offscreen job options.
   `saveDownload` relay; the current whitelist in `Downloader.startAsync` (zip/cbz/
   folder/raw) must be extended, not bypassed.
 
-**Progress:** not started.
+**Progress:** not started. Session-only pause/resume is implemented, but durable restart-safe resume remains a separate checkpoint/rebuild feature.
 
 ### 17. "More Like This" batch download
 
