@@ -52,6 +52,30 @@ function getOptionalApiHeaders(): Promise<Record<string, string>> {
     });
 }
 
+async function getRelatedGalleries(galleryId: string): Promise<Record<string, string>> {
+    const response = await fetch("https://nhentai.net/api/v2/galleries/" + encodeURIComponent(galleryId) + "/related", {
+        credentials: "include",
+        cache: "no-store",
+        headers: await getOptionalApiHeaders()
+    });
+    if (!response.ok) {
+        throw new Error("Related galleries request failed (HTTP " + response.status + ").");
+    }
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.result)) {
+        throw new Error("Related galleries response was invalid.");
+    }
+    const galleries: Record<string, string> = {};
+    for (const gallery of payload.result) {
+        if (!gallery || !Number.isFinite(Number(gallery.id))) {
+            continue;
+        }
+        const relatedId = String(gallery.id);
+        galleries[relatedId] = String(gallery.english_title || gallery.japanese_title || relatedId);
+    }
+    return galleries;
+}
+
 // Add message listener for progress updates and error messages
 // NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
 // must return false. Returning true kept the message channel open and made
@@ -203,15 +227,14 @@ export default class Popup
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
-                document.getElementById('action')!.innerHTML = message.downloadInfo(title, json.images.pages.length, extension);
+                document.getElementById('action')!.innerHTML = message.downloadInfo(escapeHtml(title), json.images.pages.length, extension);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
-                // Add event listener after updating the HTML content
+                // Add event listeners after updating the HTML content.
                 setTimeout(() => {
                     const button = document.getElementById('button');
                     if (button) {
                         button.addEventListener('click', async function() {
-                            // Use message passing instead of direct background page access for Firefox private mode compatibility
                             const tabId = await getActiveTabId();
                             chrome.runtime.sendMessage({
                                 action: "downloadDoujinshi",
@@ -221,6 +244,33 @@ export default class Popup
                                 tabId: tabId
                             });
                             self.updateProgress(0, title, false);
+                        });
+                    }
+
+                    const similarButton = document.getElementById('buttonSimilar');
+                    if (similarButton) {
+                        similarButton.addEventListener('click', async function() {
+                            similarButton.setAttribute("disabled", "disabled");
+                            document.getElementById('action')!.innerHTML = "Finding similar galleries...";
+                            try {
+                                const related = await getRelatedGalleries(id);
+                                if (Object.keys(related).length === 0) {
+                                    throw new Error("No related galleries were returned.");
+                                }
+                                const tabId = await getActiveTabId();
+                                const finalName = utils.cleanName(title + " - similar", elems.replaceSpaces, id);
+                                chrome.runtime.sendMessage({
+                                    action: "downloadAllDoujinshis",
+                                    allDoujinshis: related,
+                                    galleryMetadata: {},
+                                    finalName: finalName,
+                                    tabId: tabId
+                                });
+                                self.updateProgress(0, finalName, false);
+                            } catch (error) {
+                                document.getElementById('action')!.innerHTML =
+                                    "Could not load similar galleries: " + escapeHtml(String(error));
+                            }
                         });
                     }
                 }, 0);

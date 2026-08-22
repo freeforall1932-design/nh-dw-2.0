@@ -40,7 +40,10 @@ export module message
     
     export function downloadInfo(title: string, nbOfPages: number, extension: string): string {
         return '<h3>' + title + '</h3><div>(' + nbOfPages + ' pages)' +
-            '</div><br/><input type="button" id="button" value="Download" autofocus/><br/><br/>Downloads/<input type="text" id="path"/>' + extension;
+            '</div><br/><input type="button" id="button" value="Download" autofocus/>' +
+            '<input type="button" id="buttonSimilar" value="Download similar"/>' +
+            '<br/><small>Downloads the related galleries recommended by nhentai.</small>' +
+            '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;
     }
     
     export function invalidSyntax(): string {

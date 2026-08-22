@@ -83,14 +83,14 @@ machine. Re-test by reloading the unpacked extension
    "interrupted" notice (this was the worst symptom reported).
 4. ZIP / raw / folder / CBZ modes still work.
 
-## Bucket list (recorded, NOT implemented — see IMPROVEMENT_BACKLOG.md items 16-17)
+## Bucket list
 
 - Choose the output format (ZIP/CBZ/folder/raw) from the popup in the same tab,
   not only from the options page. (item 16)
 - "Download as PDF" output format. (item 16)
-- "More Like This" batch download: download the recommended galleries at the
-  bottom of a gallery page in one batch. Data source still unresolved (embedded
-  payload vs separate API call vs hydrated HTML). (item 17)
+- "More Like This" batch download is implemented with the confirmed
+  `/api/v2/galleries/{id}/related` endpoint and needs real-browser verification.
+  It works anonymously and uses the optional saved API key when available.
 
 ## Do NOT
 

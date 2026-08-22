@@ -405,28 +405,23 @@ session).
 
 ### 17. "More Like This" batch download
 
-Download the recommended galleries shown at the bottom of a gallery page in one
-batch, without visiting each one.
+**Progress:** implemented; needs real-browser verification.
 
-**Data source (needs real-site inspection first — the SvelteKit frontend can ship
-this data several ways):**
+The popup now displays **Download similar** beside the regular single-gallery
+Download action. It calls the confirmed public endpoint
+`GET /api/v2/galleries/{id}/related`, maps `result[]` to the existing
+`Record<id, title>` batch shape, and sends it to `downloadAllDoujinshis`.
 
-- Option A: embedded in the gallery payload already captured by the extension
-  (`/api/v2/galleries/<id>`) under a recommendation key.
-- Option B: a separate API call (e.g. `/api/v2/galleries/<id>/recommendations`).
-- Option C: only in the rendered HTML after hydration (scrape the `href`/`alt`
-  of the recommendation cards as a fallback).
+- An API key is optional; if the user has saved one it is attached to improve the
+  endpoint rate limit, otherwise the public endpoint is used.
+- The existing gallery tab is supplied to the batch pipeline for its normal
+  tab-first metadata resolution. No tabs are opened or navigated automatically.
+- Empty, malformed, and HTTP-error responses leave the popup with a clear error
+  instead of starting a download.
 
-**Tasks:**
-
-- Inspect DevTools Network on a live gallery page to pin down which of the above
-  holds, then extract `{ id, title }` into the shared card shape already consumed
-  by the batch pipeline.
-- Surface a "Download recommendations" action in the popup (or an injected button
-  under the "More Like This" section) that feeds those IDs through the existing
-  batch download / selected-gallery resolver path.
-
-**Progress:** not started (data source unresolved).
+**Remaining acceptance:** verify a real gallery in Chrome/Brave, including an
+anonymous request, a key-authenticated request, an empty related list, and an
+image/metadata failure within the related batch.
 
 ## Security and maintenance
 
