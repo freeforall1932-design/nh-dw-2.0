@@ -77,6 +77,7 @@ function notifyJobFinished() {
     if (next) {
         // Continue directly into the next job. Do not send jobFinished between
         // queued jobs: the worker's active-job marker must stay set.
+        broadcastQueueState();
         runQueuedJob(next);
         return;
     }
@@ -174,6 +175,12 @@ function errorCallback(error: string) {
     chrome.runtime.sendMessage({ from: "offscreen", action: "downloadError", error: error });
 }
 
+function broadcastQueueState() {
+    if (latestProgress !== null) {
+        chrome.runtime.sendMessage(Object.assign({ from: "offscreen", action: "updateProgress", queued: queuedJobs.length }, latestProgress));
+    }
+}
+
 function progressCallback(progress: number, doujinshiName: string | null, isZipping: boolean, retry: string | null = null) {
     latestProgress = { progress: progress, doujinshiName: doujinshiName, isZipping: isZipping, retry: retry };
     chrome.runtime.sendMessage({
@@ -182,7 +189,8 @@ function progressCallback(progress: number, doujinshiName: string | null, isZipp
         progress: progress,
         doujinshiName: doujinshiName,
         isZipping: isZipping,
-        retry: retry
+        retry: retry,
+        queued: queuedJobs.length
     });
 }
 
@@ -530,6 +538,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     } else if (request.action === "downloadDoujinshi" || request.action === "downloadAllDoujinshis" || request.action === "downloadAllPages") {
         if (jobRunning) {
             queuedJobs.push(request);
+            broadcastQueueState();
             sendResponse({ result: "queued", position: queuedJobs.length });
         } else {
             runQueuedJob(request);
@@ -539,10 +548,15 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         goBack();
         sendResponse({ result: "success" });
     } else if (request.action === "getProgress") {
-        sendResponse(Object.assign({ result: "success" },
+        sendResponse(Object.assign({ result: "success", queued: queuedJobs.length },
             latestProgress === null
                 ? { progress: undefined, doujinshiName: null, isZipping: false, retry: null }
                 : latestProgress));
+    } else if (request.action === "clearQueue") {
+        const removed = queuedJobs.length;
+        queuedJobs.splice(0, queuedJobs.length);
+        broadcastQueueState();
+        sendResponse({ result: "success", removed: removed });
     }
     return false;
 });

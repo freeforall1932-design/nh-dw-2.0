@@ -834,6 +834,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
             return true;
+        } else if (request.action === "clearQueue") {
+            askOffscreen({ action: "clearQueue" }, (response) => {
+                sendResponse(response || { result: "error" });
+            });
+            return true;
         } else if (request.action === "updateProgress") {
             askOffscreen({ action: "getProgress" }, (response) => {
                 if (response && typeof response.progress === "number") {
@@ -841,7 +846,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                         action: "updateProgress",
                         progress: response.progress,
                         doujinshiName: response.doujinshiName,
-                        isZipping: response.isZipping
+                        isZipping: response.isZipping,
+                        retry: response.retry,
+                        queued: response.queued
                     });
                 }
                 sendResponse({ result: "success" });

@@ -13,9 +13,12 @@ export module message
             'Please start the download again.</p><br/><input type="button" id="buttonDismiss" value="Got it"/>';
     }
     
-    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string): string {
+    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string, queued: number = 0): string {
         const retryHtml = retry ? '<br/><small>Retrying (' + retry + ')...</small>' : '';
-        return `${status} ${doujinshiName}, please wait...${retryHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel"/>`;
+        const queueHtml = queued > 0
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
+            : '';
+        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel current"/>`;
     }
     
     export function invalidPage(): string {

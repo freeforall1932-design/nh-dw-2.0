@@ -84,7 +84,7 @@ async function getRelatedGalleries(galleryId: string): Promise<Record<string, st
 // progress tick, with offscreen.html as the sender.
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
-        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry);
+        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry, request.queued);
     } else if (request.action === "downloadError") {
         // Label the failure kind (metadata / Cloudflare / image / archive /
         // cancellation) so the user understands what went wrong at a glance.
@@ -127,7 +127,7 @@ export default class Popup
     //#endregion "singleton"
 
     // Update progress bar on the preview popup
-    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string) {
+    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string, queued: number = 0) {
         if (isZipping && progress == 100) { // File is being downloaded
             document.getElementById('action')!.innerHTML = message.downloadDone();
             // Add event listener after updating the HTML content
@@ -144,8 +144,8 @@ export default class Popup
                 }
             }, 0);
         } else { // Download in progress
-            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry);
-            // Add event listener after updating the HTML content
+            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry, queued);
+            // Add event listeners after updating the HTML content
             setTimeout(() => {
                 const buttonBack = document.getElementById('buttonBack');
                 if (buttonBack) {
@@ -154,6 +154,14 @@ export default class Popup
                         // Use message passing instead of direct background page access for Firefox private mode compatibility
                         chrome.runtime.sendMessage({ action: "goBack" }, function() {
                             popup.updatePreviewAsync(popup.url);
+                        });
+                    });
+                }
+                const clearQueue = document.getElementById('buttonClearQueue');
+                if (clearQueue) {
+                    clearQueue.addEventListener('click', function() {
+                        chrome.runtime.sendMessage({ action: "clearQueue" }, function() {
+                            clearQueue.remove();
                         });
                     });
                 }
