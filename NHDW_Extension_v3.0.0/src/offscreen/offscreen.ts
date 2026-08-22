@@ -45,6 +45,13 @@ let jobAbortController: AbortController | null = null;
 // a batch (the last gallery's Downloader is done but the batch is not) and
 // used to make the popup misreport a running batch as finished/interrupted.
 let jobRunning = false;
+let jobPaused = false;
+
+// Jobs are serialized inside the long-lived offscreen document. Keeping this
+// queue here (rather than in the MV3 worker) means it remains available while
+// the worker is idle and is reawakened by progress/finish messages. Each entry
+// already contains its per-job options and source tab id supplied by the worker.
+const queuedJobs: any[] = [];
 
 function beginJob(): AbortSignal {
     jobAbortController = new AbortController();
@@ -67,6 +74,14 @@ function jobWasAborted(): boolean {
 // misreporting a finished download as "interrupted" during that window.
 function notifyJobFinished() {
     jobRunning = false;
+    const next = queuedJobs.shift();
+    if (next) {
+        // Continue directly into the next job. Do not send jobFinished between
+        // queued jobs: the worker's active-job marker must stay set.
+        broadcastQueueState();
+        runQueuedJob(next);
+        return;
+    }
     chrome.runtime.sendMessage({ from: "offscreen", action: "jobFinished" });
 }
 
@@ -161,6 +176,12 @@ function errorCallback(error: string) {
     chrome.runtime.sendMessage({ from: "offscreen", action: "downloadError", error: error });
 }
 
+function broadcastQueueState() {
+    if (latestProgress !== null) {
+        chrome.runtime.sendMessage(Object.assign({ from: "offscreen", action: "updateProgress", queued: queuedJobs.length, paused: jobPaused }, latestProgress));
+    }
+}
+
 function progressCallback(progress: number, doujinshiName: string | null, isZipping: boolean, retry: string | null = null) {
     latestProgress = { progress: progress, doujinshiName: doujinshiName, isZipping: isZipping, retry: retry };
     chrome.runtime.sendMessage({
@@ -169,7 +190,8 @@ function progressCallback(progress: number, doujinshiName: string | null, isZipp
         progress: progress,
         doujinshiName: doujinshiName,
         isZipping: isZipping,
-        retry: retry
+        retry: retry,
+        queued: queuedJobs.length
     });
 }
 
@@ -265,7 +287,8 @@ async function downloadAllDoujinshisAsync(
             current: i + 1,
             total: length,
             galleryName: allDoujinshis[key],
-            stage: "Downloading"
+            stage: "Downloading",
+            queued: queuedJobs.length
         });
 
         let jsonViaTab: any | null = null;
@@ -299,7 +322,16 @@ async function downloadAllDoujinshisAsync(
                         text: () => Promise.resolve(tabText)
                     };
                 } else {
-                    resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+                    const headers: Record<string, string> = {};
+                    if (options && typeof options.apiKey === "string" && options.apiKey.trim()) {
+                        headers["Authorization"] = "Key " + options.apiKey.trim();
+                    }
+                    resp = await fetch(parsing.GetUrl(key), {
+                        credentials: "include",
+                        cache: "no-store",
+                        headers: headers,
+                        signal: jobAbortController ? jobAbortController.signal : undefined
+                    });
                 }
             }
         }
@@ -479,6 +511,8 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
 }
 
 function goBack() {
+    jobPaused = false;
+    if (currentDownloader) currentDownloader.resume();
     abortJob();
     jobRunning = false;
     if (currentDownloader !== null && !currentDownloader.isDone()) {
@@ -488,30 +522,54 @@ function goBack() {
     currentDownloader = null;
 }
 
+function runQueuedJob(request: any) {
+    jobPaused = false;
+    if (request.action === "downloadDoujinshi") {
+        downloadDoujinshi(request.json, request.path, request.name, request.tabId, request.options);
+    } else if (request.action === "downloadAllDoujinshis") {
+        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId, request.options);
+    } else if (request.action === "downloadAllPages") {
+        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId, request.options);
+    }
+}
+
 // Commands relayed by the service worker.
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (!request || request.target !== "offscreen") {
         return false;
     }
     if (request.action === "isDownloadFinished") {
-        sendResponse({ result: isDownloadFinished() });
-    } else if (request.action === "downloadDoujinshi") {
-        downloadDoujinshi(request.json, request.path, request.name, request.tabId, request.options);
-        sendResponse({ result: "started" });
-    } else if (request.action === "downloadAllDoujinshis") {
-        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId, request.options);
-        sendResponse({ result: "started" });
-    } else if (request.action === "downloadAllPages") {
-        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId, request.options);
-        sendResponse({ result: "started" });
+        sendResponse({ result: isDownloadFinished(), queued: queuedJobs.length });
+    } else if (request.action === "downloadDoujinshi" || request.action === "downloadAllDoujinshis" || request.action === "downloadAllPages") {
+        if (jobRunning) {
+            queuedJobs.push(request);
+            broadcastQueueState();
+            sendResponse({ result: "queued", position: queuedJobs.length });
+        } else {
+            runQueuedJob(request);
+            sendResponse({ result: "started" });
+        }
     } else if (request.action === "goBack") {
         goBack();
         sendResponse({ result: "success" });
+    } else if (request.action === "pause") {
+        if (currentDownloader) currentDownloader.pause();
+        jobPaused = true;
+        sendResponse({ result: "success", paused: true });
+    } else if (request.action === "resume") {
+        if (currentDownloader) currentDownloader.resume();
+        jobPaused = false;
+        sendResponse({ result: "success", paused: false });
     } else if (request.action === "getProgress") {
-        sendResponse(Object.assign({ result: "success" },
+        sendResponse(Object.assign({ result: "success", queued: queuedJobs.length, paused: jobPaused },
             latestProgress === null
                 ? { progress: undefined, doujinshiName: null, isZipping: false, retry: null }
                 : latestProgress));
+    } else if (request.action === "clearQueue") {
+        const removed = queuedJobs.length;
+        queuedJobs.splice(0, queuedJobs.length);
+        broadcastQueueState();
+        sendResponse({ result: "success", removed: removed });
     }
     return false;
 });

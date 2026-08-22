@@ -146,7 +146,8 @@ function sendToBackground(message) {
         json: { id: 123456 },
         path: "Downloads/Test",
         name: "Test",
-        tabId: 42
+        tabId: 42,
+        formatOverride: "cbz"
     });
     if (!startAnswer || startAnswer.result !== "started") {
         fail("downloadDoujinshi answered " + JSON.stringify(startAnswer));
@@ -158,10 +159,10 @@ function sendToBackground(message) {
     if (!relay || relay.target !== "offscreen" || relay.json.id !== 123456 || relay.path !== "Downloads/Test" || relay.tabId !== 42) {
         fail("downloadDoujinshi was not relayed correctly: " + JSON.stringify(relay));
     }
-    if (!relay.options || typeof relay.options.useZip !== "string" || relay.options.maxConcurrentDownloads === undefined) {
-        fail("downloadDoujinshi relay must carry the worker-read options: " + JSON.stringify(relay.options));
+    if (!relay.options || relay.options.useZip !== "cbz" || relay.options.maxConcurrentDownloads === undefined) {
+        fail("downloadDoujinshi relay must carry the worker-read options and one-job CBZ override: " + JSON.stringify(relay.options));
     }
-    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the command with options");
+    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the one-job format override");
 
     // 3. updateProgress: relay getProgress and broadcast the answer to the popup.
     const progressAnswer = await sendToBackground({ action: "updateProgress" });

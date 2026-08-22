@@ -383,15 +383,15 @@ fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-a
 
 ### 16. Bucket list: popup format selection and PDF output
 
-Two user-requested enhancements (not yet implemented — recorded here for a future
-session).
-
 **16a. Choose the download format from the popup (same tab), not just the options page.**
 
-- Show the output format (ZIP / CBZ / images-folder / raw) directly in the popup, next
-  to the single-gallery "Download" button and the batch "Download" button.
-- Selecting a format in the popup should apply to that download without opening the
-  extension options page; persist the last choice (or keep it per-download) as chosen.
+**Progress:** implemented; needs real-browser verification.
+
+The single-gallery popup now has a ZIP / CBZ / images-folder / raw picker next to
+Download and Download similar. Its selection is sent as a validated one-job override
+through the service worker to the offscreen pipeline; it does **not** overwrite the
+user's saved Options default. The relay e2e test verifies that an override reaches the
+offscreen job options.
 
 **16b. Add PDF as an output format.**
 
@@ -401,32 +401,27 @@ session).
   `saveDownload` relay; the current whitelist in `Downloader.startAsync` (zip/cbz/
   folder/raw) must be extended, not bypassed.
 
-**Progress:** not started.
+**Progress:** not started. Session-only pause/resume is implemented, but durable restart-safe resume remains a separate checkpoint/rebuild feature.
 
 ### 17. "More Like This" batch download
 
-Download the recommended galleries shown at the bottom of a gallery page in one
-batch, without visiting each one.
+**Progress:** implemented; needs real-browser verification.
 
-**Data source (needs real-site inspection first — the SvelteKit frontend can ship
-this data several ways):**
+The popup now displays **Download similar** beside the regular single-gallery
+Download action. It calls the confirmed public endpoint
+`GET /api/v2/galleries/{id}/related`, maps `result[]` to the existing
+`Record<id, title>` batch shape, and sends it to `downloadAllDoujinshis`.
 
-- Option A: embedded in the gallery payload already captured by the extension
-  (`/api/v2/galleries/<id>`) under a recommendation key.
-- Option B: a separate API call (e.g. `/api/v2/galleries/<id>/recommendations`).
-- Option C: only in the rendered HTML after hydration (scrape the `href`/`alt`
-  of the recommendation cards as a fallback).
+- An API key is optional; if the user has saved one it is attached to improve the
+  endpoint rate limit, otherwise the public endpoint is used.
+- The existing gallery tab is supplied to the batch pipeline for its normal
+  tab-first metadata resolution. No tabs are opened or navigated automatically.
+- Empty, malformed, and HTTP-error responses leave the popup with a clear error
+  instead of starting a download.
 
-**Tasks:**
-
-- Inspect DevTools Network on a live gallery page to pin down which of the above
-  holds, then extract `{ id, title }` into the shared card shape already consumed
-  by the batch pipeline.
-- Surface a "Download recommendations" action in the popup (or an injected button
-  under the "More Like This" section) that feeds those IDs through the existing
-  batch download / selected-gallery resolver path.
-
-**Progress:** not started (data source unresolved).
+**Remaining acceptance:** verify a real gallery in Chrome/Brave, including an
+anonymous request, a key-authenticated request, an empty related list, and an
+image/metadata failure within the related batch.
 
 ## Security and maintenance
 

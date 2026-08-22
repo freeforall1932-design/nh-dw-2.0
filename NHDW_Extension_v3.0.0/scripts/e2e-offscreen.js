@@ -191,6 +191,7 @@ function tabUrlTextFor(url) {
 const sandbox = {
     chrome: chromeStub,
     console,
+    __NHDW_SILENT_RETRY_LOGS__: true,
     setTimeout,
     clearTimeout,
     fetch: fetchStub,
@@ -567,12 +568,22 @@ function askOffscreen(message) {
     if (!separateStart || separateStart.result !== "started") {
         fail("separate-files batch did not answer {result:'started'}, got " + JSON.stringify(separateStart));
     }
+    const queuedStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/Queued",
+        name: "Queued",
+        options: relayedOptions
+    });
+    if (!queuedStart || queuedStart.result !== "queued" || queuedStart.position !== 1) {
+        fail("second job must be queued at position 1, got " + JSON.stringify(queuedStart));
+    }
     await waitFor(
-        () => downloads.length === 2,
-        "separate-files batch must emit one archive per gallery"
+        () => downloads.length === 3,
+        "separate-files batch followed by a queued gallery must emit three archives"
     );
     const separateFilenames = downloads.map((d) => d.filename).sort();
-    const expectedSeparate = ["Test.zip", "Test Two.zip"].sort();
+    const expectedSeparate = ["Test.zip", "Test Two.zip", "Downloads/Queued.zip"].sort();
     if (JSON.stringify(separateFilenames) !== JSON.stringify(expectedSeparate)) {
         fail("separate-files filenames mismatch. Expected " + JSON.stringify(expectedSeparate) +
             " got " + JSON.stringify(separateFilenames));

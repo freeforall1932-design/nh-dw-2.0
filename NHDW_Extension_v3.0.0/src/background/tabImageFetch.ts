@@ -129,10 +129,6 @@ export function fetchUrlInPage(url: string): Promise<TabUrlResult> {
     });
 }
 
-function usableTabUrlResult(result: TabUrlResult | null): boolean {
-    return !!(result && result.ok && result.text !== null);
-}
-
 // ---- service worker relay --------------------------------------------------
 // Offscreen documents only expose chrome.runtime among extension APIs (Chrome
 // docs: "The runtime API is the only extensions API supported by offscreen

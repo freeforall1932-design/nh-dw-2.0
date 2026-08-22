@@ -6,6 +6,7 @@
         <select id="useZip">
             <option value="zip">ZIP</option>
             <option value="cbz">CBZ</option>
+            <option value="folder">Images in a folder (no zip)</option>
             <option value="raw">Raw (not recommanded)</option>
         </select>
         <br/>
@@ -39,6 +40,14 @@
             <option value="15">15 (Fastest, may cause errors)</option>
         </select>
         <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
+        <br/><hr/>
+        <h3>Optional nhentai API key</h3>
+        <p><small>Optional. Downloads work without a key. Paste a key you generated in your nhentai account settings; this extension never asks for your password or creates keys. The key is kept in this browser profile only and is not synced.</small></p>
+        <label for="apiKey">API key:</label>
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key">
+        <button id="saveApiKey" type="button">Save &amp; verify</button>
+        <button id="removeApiKey" type="button">Remove key</button>
+        <div id="apiKeyStatus" role="status" aria-live="polite"></div>
         <br/><hr/>
         <h3>Name template</h3>
         <input id="downloadName" type="text"/>

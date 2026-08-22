@@ -665,10 +665,19 @@ const DOWNLOAD_OPTION_DEFAULTS = {
 function readDownloadOptions(callback: (options: any) => void) {
     try {
         chrome.storage.sync.get(DOWNLOAD_OPTION_DEFAULTS, (elems: any) => {
-            callback(elems);
+            // Credentials intentionally live in storage.local rather than
+            // synced preferences. The offscreen document cannot read storage,
+            // so relay this optional key only with the active job options.
+            try {
+                chrome.storage.local.get({ apiKey: "" }, (local: any) => {
+                    callback(Object.assign({}, elems, { apiKey: local && local.apiKey ? local.apiKey : "" }));
+                });
+            } catch (_) {
+                callback(Object.assign({}, elems, { apiKey: "" }));
+            }
         });
     } catch (_) {
-        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS));
+        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS, { apiKey: "" }));
     }
 }
 
@@ -738,7 +747,7 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
 // other message must return false or Chrome logs "A listener indicated an
 // asynchronous response by returning true, but the message channel closed
 // before a response was received" once the sender goes away.
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (!request) {
         return false;
     }
@@ -791,12 +800,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // / goBack handlers clear it when the job is over.
         const startRelayedJob = (relayedMessage: any) => {
             readDownloadOptions((options) => {
+                const formatOverride = relayedMessage.formatOverride;
+                if (formatOverride === "zip" || formatOverride === "cbz" || formatOverride === "folder" || formatOverride === "raw") {
+                    // Popup format choices affect this job only; do not mutate
+                    // the user's persisted default in chrome.storage.sync.
+                    options.useZip = formatOverride;
+                }
                 background.setJobMarker(true);
                 // options: the offscreen document cannot read chrome.storage,
                 // so the worker relays the download settings with the command.
                 askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
-                    if (response && response.result === "started") {
-                        sendResponse({ result: "started" });
+                    if (response && (response.result === "started" || response.result === "queued")) {
+                        // A queued job is held by the offscreen document and
+                        // will start after the active job sends jobFinished.
+                        // Keep the worker marker set across the whole queue.
+                        sendResponse({ result: response.result, position: response.position });
                     } else {
                         background.clearJobMarker();
                         relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
@@ -807,14 +825,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return true;
         };
         if (request.action === "downloadDoujinshi") {
-            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
+            return true;
+        } else if (request.action === "pause" || request.action === "resume") {
+            askOffscreen({ action: request.action }, (response) => sendResponse(response || { result: "error" }));
+            return true;
+        } else if (request.action === "clearQueue") {
+            askOffscreen({ action: "clearQueue" }, (response) => {
+                sendResponse(response || { result: "error" });
+            });
             return true;
         } else if (request.action === "updateProgress") {
             askOffscreen({ action: "getProgress" }, (response) => {
@@ -823,7 +849,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         action: "updateProgress",
                         progress: response.progress,
                         doujinshiName: response.doujinshiName,
-                        isZipping: response.isZipping
+                        isZipping: response.isZipping,
+                        retry: response.retry,
+                        queued: response.queued,
+                        paused: response.paused
                     });
                 }
                 sendResponse({ result: "success" });

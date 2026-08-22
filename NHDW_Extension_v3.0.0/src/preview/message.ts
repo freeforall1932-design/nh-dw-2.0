@@ -13,9 +13,15 @@ export module message
             'Please start the download again.</p><br/><input type="button" id="buttonDismiss" value="Got it"/>';
     }
     
-    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string): string {
+    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string, queued: number = 0, paused: boolean = false): string {
         const retryHtml = retry ? '<br/><small>Retrying (' + retry + ')...</small>' : '';
-        return `${status} ${doujinshiName}, please wait...${retryHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel"/>`;
+        const queueHtml = queued > 0
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
+            : '';
+        const pauseHtml = paused
+            ? '<br/><b>Paused.</b> Completed pages are kept for this browser session.<br/><input type="button" id="buttonResume" value="Resume current"/>'
+            : '<br/><input type="button" id="buttonPause" value="Pause current"/>';
+        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}${pauseHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel current"/>`;
     }
     
     export function invalidPage(): string {
@@ -38,9 +44,19 @@ export module message
         return "This tab does not contain gallery metadata yet. Finish any Cloudflare challenge, wait until the gallery page itself has loaded, then open the popup again.";
     }
     
-    export function downloadInfo(title: string, nbOfPages: number, extension: string): string {
+    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string): string {
+        const selected = (value: string) => value === selectedFormat ? ' selected' : '';
         return '<h3>' + title + '</h3><div>(' + nbOfPages + ' pages)' +
-            '</div><br/><input type="button" id="button" value="Download" autofocus/><br/><br/>Downloads/<input type="text" id="path"/>' + extension;
+            '</div><br/>Format: <select id="downloadFormat">' +
+            '<option value="zip"' + selected('zip') + '>ZIP</option>' +
+            '<option value="cbz"' + selected('cbz') + '>CBZ</option>' +
+            '<option value="folder"' + selected('folder') + '>Images in a folder</option>' +
+            '<option value="raw"' + selected('raw') + '>Raw images</option>' +
+            '</select>' +
+            '<br/><input type="button" id="button" value="Download" autofocus/>' +
+            '<input type="button" id="buttonSimilar" value="Download similar"/>' +
+            '<br/><small>Downloads the related galleries recommended by nhentai.</small>' +
+            '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;
     }
     
     export function invalidSyntax(): string {
@@ -85,9 +101,12 @@ export module message
     };
 
     // Batch gallery progress — shown while processing a batch
-    export function batchProgress(current: number, total: number, galleryName: string, stage: string): string {
+    export function batchProgress(current: number, total: number, galleryName: string, stage: string, queued: number = 0): string {
+        const queueHtml = queued > 0
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
+            : '';
         return 'Gallery ' + current + ' of ' + total + ': ' + stage + ' ' + galleryName +
             '...<br/><progress max="100" id="progressBar" value="' + Math.round(current / total * 100) + '"></progress>' +
-            '<br/><br/><input type="button" id="buttonBack" value="Cancel"/>';
+            queueHtml + '<br/><br/><input type="button" id="buttonBack" value="Cancel current"/>';
     }
 }

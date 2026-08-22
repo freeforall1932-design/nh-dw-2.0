@@ -1,102 +1,102 @@
-# Session handoff — nh-dw-2.0 / NHentai Downloader
+# Current Session Handoff — nh-dw-2.0
 
-Written 2026-08-21 after fixing the false "Download interrupted" popup notice.
+**Updated:** 2026-08-22
 
-## Repo state (verified, not stale)
+## Repository and branch
 
-- Repo checkout: /home/user/nh-dw-2.0
-- **Session branch (this session; never switch/push any other branch): `arena/01a0247d-nh-dw-2-0`**
-- `main` / `origin/main` are at `c869d37` (the merge of PR #17).
-- **PR #16 and PR #17 are both MERGED** (PR #17 merge commit `c869d37`,
-  merged 2026-08-21T09:53:01Z). There is no open PR for this session's work
-  yet — open one from `arena/01a0247d-nh-dw-2-0` when pushing follow-ups.
+- Checkout: `/home/user/nh-dw-2.0`
+- **Only use this session branch:** `arena/01a027b3-nh-dw-2-0`
+- Do not trust older branch names in historic handoff text.
+- Source: `NHDW_Extension_v3.0.0/`
+- Loadable unpacked build: `NHDW_Release_v3.0.0/`
+- These are distinct folders. Source contains TypeScript/tests; release is the browser-loadable package. After every build: `cp js/*.js ../NHDW_Release_v3.0.0/js/` and verify `diff -rq js ../NHDW_Release_v3.0.0/js`.
 
-The SvelteKit / API v2 work from PR #17 is already on `main` (markers present):
-`extractGalleryFromSvelteKit` + `normalizeGalleryV2` (GalleryEmbed.ts),
-`api/v2/galleries` (GallerySource.ts), `resolveFrameResult` (activeTabGallery.ts).
+## Current implemented work
 
-## This session's work: fix the false "Download interrupted" notice
+### Download lifecycle
+- MV3 service worker relays downloads to offscreen document; offscreen owns fetch/ZIP work, worker owns storage/downloads/scripting.
+- False `Download interrupted` marker bug is fixed: offscreen sends `jobFinished`, worker clears session marker immediately.
+- Download requests are serialized in an offscreen queue. A second request returns a queue position and runs after the active job.
+- Popup exposes progress, queue count, **Clear queue**, and **Cancel current**. Batch-progress controls are also wired.
+- Session-only pause/resume is implemented. Completed image bytes remain in the current in-memory archive; pause is safe at image-batch boundaries. Closing popup does not stop work. Pause state is restored when popup reopens.
+- Session-only means no restart persistence: browser close, extension reload, offscreen crash/forced close lose in-memory archive state. Do not claim durable restart resume.
 
-Real-browser report: after a successful download (single or batch, and
-especially "separate files per gallery"), reopening the popup showed
-"Download interrupted — A previous download was interrupted before it finished"
-even though the file had downloaded fine.
+### Source-tab requirement
+- User has whitelisted `nhentai.net` in their tab-freezing/suspender settings.
+- The source nhentai gallery tab may be backgrounded while the user watches YouTube or browses elsewhere, but must remain open and on nhentai until its job completes. Do not navigate/close it during download; tab-context image fetch relies on its Cloudflare-cleared session.
 
-Root cause (offscreen path only — the no-offscreen fallback clears the marker
-in `.then()/.catch()` and was already correct):
+### API key
+- Options page has optional user-pasted API key field with Save & verify / Remove key.
+- Uses third-party-safe `GET /api/v2/user` and `Authorization: Key <key>` only. Never use `/api/v2/auth/*` or ask for passwords.
+- Key is in `chrome.storage.local`, not sync, and never rendered back into the input.
+- Unit coverage: blank, valid, invalid/malformed, removal. `npm test`: **87 passing, 1 pending live test**.
 
-1. The worker sets `chrome.storage.session.downloadJob` when it relays a job,
-   but the offscreen document cleared it only on its 60s idle close
-   (`offscreenIdle`). For a full minute after a success the marker stayed set.
-2. `isDownloadFinished` (offscreen branch) answered `interrupted:true` whenever
-   the marker was set AND the document reported the job finished — so every
-   successful download was misreported as interrupted during that window.
-3. The offscreen `isDownloadFinished` was keyed off `currentDownloader.isDone()`,
-   which is momentarily true BETWEEN galleries in a batch (the last gallery's
-   Downloader is done but the batch is not), so a batch could also look
-   "finished" mid-run.
+### Popup features
+- Per-job format picker: ZIP, CBZ, folder, raw; does not change saved default.
+- Download similar uses `GET /api/v2/galleries/{id}/related`, anonymously or with optional API key.
 
-Fix (in `src/offscreen/offscreen.ts` and `src/background/background.ts`):
+## Recent commits
 
-- Offscreen sends a `jobFinished` message when a job ends (success or error);
-  the worker clears the marker on it immediately (no 60s wait).
-- Offscreen `isDownloadFinished` now answers from a whole-job `jobRunning`
-  flag instead of per-gallery `isDone()`; `goBack` also resets it.
-- Worker `isDownloadFinished` (offscreen branch): a LIVE document that reports
-  the job finished means it completed normally — clear the marker and answer
-  `interrupted:false`. A genuine interruption (document gone + marker set)
-  still answers `interrupted:true`.
+```
+3bbb4fd chore: remove unused extension code
+711fc32 feat: add optional API key verification
+72f22e8 feat: add similar gallery batch downloads
+64b7ff9 feat: add popup download format picker
+8ae5479 feat: queue download requests serially
+38bf149 feat: add queue status and controls
+908de8e fix: wire batch queue controls
+e3e0bb7 test: silence expected retry fixture logs
+d369ece test: cover optional API key storage flow
+fba49d2 feat: add session pause and resume controls
+a094aba feat: expose pause and resume in popup
+df52c74 build: sync release pause controls
+```
 
-Tests added: `scripts/e2e-relay.js` (finished-vs-interrupted, `jobFinished`
-clears the marker, missing-document still interrupted) and
-`scripts/e2e-offscreen.js` (running flag false during a job, `jobFinished` sent,
-plus a **separate-files** phase proving one archive per gallery with no
-interruption false positive — the user's worst reported symptom).
+## Validation
 
-Note for future sessions: a prior diagnosis suggested the bug lived in a
-`chrome.downloads.onChanged` (`delta.state === 'complete'`) listener. That
-listener does not exist anywhere in this codebase (verified by grep); the
-state is tracked by the `chrome.storage.session.downloadJob` marker (worker) +
-the offscreen `jobRunning` flag, which is what was actually wrong.
+```bash
+cd NHDW_Extension_v3.0.0
+npm ci
+npm run build
+npm test              # 87 passing, 1 pending live test
+npm run test:smoke
+npm run test:e2e
+cp js/*.js ../NHDW_Release_v3.0.0/js/
+diff -rq js ../NHDW_Release_v3.0.0/js
+```
 
-## Validation (all green this session)
+`npm run test:browser` needs Chrome/Brave and remains real-browser validation. Retry fixture logs are intentionally quiet in tests; production retry warnings remain enabled.
 
-  cd NHDW_Extension_v3.0.0
-  npm ci
-  npm run build           # webpack compiled successfully
-  npm test                # 83 passing, 1 pending (live API)
-  npm run test:smoke      # 5/5
-  npm run test:e2e        # all suites
-  # after source edits: cp js/*.js ../NHDW_Release_v3.0.0/js/
-  diff -rq js ../NHDW_Release_v3.0.0/js   # must be empty (it is)
+## Required real-browser verification before PR
 
-## Still needs REAL-BROWSER verification (cannot do here — no Chrome, no DISPLAY)
+Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://extensions`.
 
-The fix is unit/e2e-harness-verified but the reported symptoms were on a real
-machine. Re-test by reloading the unpacked extension
-`/home/user/nh-dw-2.0/NHDW_Release_v3.0.0`:
+1. Single ZIP/CBZ/folder/raw downloads; reopen popup after completion: no false interruption.
+2. Queue two or more jobs; verify serial order, queue count, Clear queue, and Cancel current.
+3. Pause after some pages, close popup, reopen it, verify Resume and final archive contents.
+4. Download similar anonymously and with a verified API key.
+5. API key: valid key, invalid key, remove key; ensure saved key never appears in input.
+6. Keep source gallery tab backgrounded while browsing another site; confirm it completes. Do not navigate the source tab away.
 
-1. Single gallery ZIP download -> reopen popup -> should show the normal
-   preview (NOT "Download interrupted").
-2. Homepage batch -> navigate to a gallery -> reopen popup -> same.
-3. "Separate files per gallery" batch of 2-3 -> all files download, no
-   "interrupted" notice (this was the worst symptom reported).
-4. ZIP / raw / folder / CBZ modes still work.
+## Next backlog / task 5
 
-## Bucket list (recorded, NOT implemented — see IMPROVEMENT_BACKLOG.md items 16-17)
+**Task 5: CDN configuration hardening** is not implemented.
 
-- Choose the output format (ZIP/CBZ/folder/raw) from the popup in the same tab,
-  not only from the options page. (item 16)
-- "Download as PDF" output format. (item 16)
-- "More Like This" batch download: download the recommended galleries at the
-  bottom of a gallery page in one batch. Data source still unresolved (embedded
-  payload vs separate API call vs hydrated HTML). (item 17)
+- API docs (`old deprecated source code/NHENTAI_API_V2.md`) say use `GET /api/v2/cdn`; current `GallerySource.getImageUrls()` and `tabImageFetch` still hardcode `i.nhentai.net` through `i4.nhentai.net`.
+- This needs a careful design because arbitrary CDN hosts are not automatically permitted by MV3 `host_permissions`.
+- Do not blindly add `<all_urls>`. Prefer validated HTTPS nhentai-owned hosts plus an optional/dynamic permission strategy, shared configuration for URL generation and allowed-image validation, cached fallback list, and fixture tests.
 
-## Do NOT
+Other unimplemented items:
+- Server-side ZIP/CBZ endpoint with API key; fall back on 429/503.
+- PDF output format.
+- Persistent restart-safe resume (separate feature; requires checkpoint/rebuild strategy).
+- Search/favorites/blacklist/comments API UI features.
 
-- Switch or push any branch other than `arena/01a0247d-nh-dw-2-0`.
-- Run `npm audit fix --force` (3 transitive Mocha advisories; remediation needs
-  a breaking test-stack change).
-- Claim the extension bypasses Cloudflare, or add Tor/onion routing.
-- Treat sandbox browser-launch limits (no Chrome binary / DISPLAY) as an
-  extension regression.
+## Do not
+
+- Do not switch branches or push to a branch other than `arena/01a027b3-nh-dw-2-0`.
+- Do not put `chrome.storage`, `chrome.downloads`, or `chrome.scripting` in the offscreen document.
+- Do not use `/api/v2/auth/*` or `/api/v2/user/keys`.
+- Do not remove tab-first fetching or claim Cloudflare bypass.
+- Do not run `npm audit fix --force`.
+- Do not expand web-accessible resources.

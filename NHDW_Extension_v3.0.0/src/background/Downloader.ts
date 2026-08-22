@@ -27,6 +27,20 @@ export default class Downloader
         this.#mediaId = this.#json.media_id;
     }
 
+    isPaused: boolean = false;
+    #resumePaused: (() => void) | null = null;
+
+    pause() { this.isPaused = true; }
+    resume() {
+        this.isPaused = false;
+        if (this.#resumePaused) { this.#resumePaused(); this.#resumePaused = null; }
+    }
+    async #waitIfPaused() {
+        while (this.isPaused && !this.#isAborted()) {
+            await new Promise<void>((resolve) => { this.#resumePaused = resolve; });
+        }
+    }
+
     updateProgress(progress: number, name: string | null, isZipping: boolean, retry: string | null = null) {
         try {
             this.progressCallback(progress, name, isZipping, retry);
@@ -118,7 +132,12 @@ export default class Downloader
                             throw "Download was aborted";
                         }
                         if (nbTries > 0) {
-                            console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
+                            // Retry warnings help diagnose real downloads, but
+                            // deterministic failure fixtures opt out to keep
+                            // test output focused on assertion failures.
+                            if (!(globalThis as any).__NHDW_SILENT_RETRY_LOGS__) {
+                                console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
+                            }
                             nbTries--;
                             // Surface the retry in the progress UI so the user can
                             // see the download is recovering rather than stuck.
@@ -143,6 +162,7 @@ export default class Downloader
 
             // Process pages in batches based on maxConcurrentDownloads
             for (let i = 0; i < maxNbOfPage; i += this.maxConcurrentDownloads) {
+                await this.#waitIfPaused();
                 const downloadPromises = [];
 
                 // Create a batch of download promises
