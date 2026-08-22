@@ -227,11 +227,15 @@ export default class Popup
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
-                document.getElementById('action')!.innerHTML = message.downloadInfo(escapeHtml(title), json.images.pages.length, extension);
+                document.getElementById('action')!.innerHTML = message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listeners after updating the HTML content.
                 setTimeout(() => {
+                    const selectedFormat = () => {
+                        const value = (document.getElementById('downloadFormat') as HTMLSelectElement | null)?.value;
+                        return value === 'cbz' || value === 'folder' || value === 'raw' ? value : 'zip';
+                    };
                     const button = document.getElementById('button');
                     if (button) {
                         button.addEventListener('click', async function() {
@@ -241,7 +245,8 @@ export default class Popup
                                 json: json,
                                 path: (document.getElementById('path') as HTMLInputElement).value,
                                 name: title,
-                                tabId: tabId
+                                tabId: tabId,
+                                formatOverride: selectedFormat()
                             });
                             self.updateProgress(0, title, false);
                         });
@@ -264,7 +269,8 @@ export default class Popup
                                     allDoujinshis: related,
                                     galleryMetadata: {},
                                     finalName: finalName,
-                                    tabId: tabId
+                                    tabId: tabId,
+                                    formatOverride: selectedFormat()
                                 });
                                 self.updateProgress(0, finalName, false);
                             } catch (error) {

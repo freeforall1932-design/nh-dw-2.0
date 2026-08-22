@@ -800,6 +800,12 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         // / goBack handlers clear it when the job is over.
         const startRelayedJob = (relayedMessage: any) => {
             readDownloadOptions((options) => {
+                const formatOverride = relayedMessage.formatOverride;
+                if (formatOverride === "zip" || formatOverride === "cbz" || formatOverride === "folder" || formatOverride === "raw") {
+                    // Popup format choices affect this job only; do not mutate
+                    // the user's persisted default in chrome.storage.sync.
+                    options.useZip = formatOverride;
+                }
                 background.setJobMarker(true);
                 // options: the offscreen document cannot read chrome.storage,
                 // so the worker relays the download settings with the command.
@@ -816,11 +822,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             return true;
         };
         if (request.action === "downloadDoujinshi") {
-            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));

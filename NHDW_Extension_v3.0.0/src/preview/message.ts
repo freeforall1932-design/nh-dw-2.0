@@ -38,9 +38,16 @@ export module message
         return "This tab does not contain gallery metadata yet. Finish any Cloudflare challenge, wait until the gallery page itself has loaded, then open the popup again.";
     }
     
-    export function downloadInfo(title: string, nbOfPages: number, extension: string): string {
+    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string): string {
+        const selected = (value: string) => value === selectedFormat ? ' selected' : '';
         return '<h3>' + title + '</h3><div>(' + nbOfPages + ' pages)' +
-            '</div><br/><input type="button" id="button" value="Download" autofocus/>' +
+            '</div><br/>Format: <select id="downloadFormat">' +
+            '<option value="zip"' + selected('zip') + '>ZIP</option>' +
+            '<option value="cbz"' + selected('cbz') + '>CBZ</option>' +
+            '<option value="folder"' + selected('folder') + '>Images in a folder</option>' +
+            '<option value="raw"' + selected('raw') + '>Raw images</option>' +
+            '</select>' +
+            '<br/><input type="button" id="button" value="Download" autofocus/>' +
             '<input type="button" id="buttonSimilar" value="Download similar"/>' +
             '<br/><small>Downloads the related galleries recommended by nhentai.</small>' +
             '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;

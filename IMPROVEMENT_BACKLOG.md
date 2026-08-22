@@ -383,15 +383,15 @@ fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-a
 
 ### 16. Bucket list: popup format selection and PDF output
 
-Two user-requested enhancements (not yet implemented — recorded here for a future
-session).
-
 **16a. Choose the download format from the popup (same tab), not just the options page.**
 
-- Show the output format (ZIP / CBZ / images-folder / raw) directly in the popup, next
-  to the single-gallery "Download" button and the batch "Download" button.
-- Selecting a format in the popup should apply to that download without opening the
-  extension options page; persist the last choice (or keep it per-download) as chosen.
+**Progress:** implemented; needs real-browser verification.
+
+The single-gallery popup now has a ZIP / CBZ / images-folder / raw picker next to
+Download and Download similar. Its selection is sent as a validated one-job override
+through the service worker to the offscreen pipeline; it does **not** overwrite the
+user's saved Options default. The relay e2e test verifies that an override reaches the
+offscreen job options.
 
 **16b. Add PDF as an output format.**
 
