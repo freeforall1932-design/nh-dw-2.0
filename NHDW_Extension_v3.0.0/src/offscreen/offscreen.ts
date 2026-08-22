@@ -6,6 +6,7 @@ import Downloader from "../background/Downloader";
 import { utils, classifyError } from "../utils/utils";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
+import { setImageServers } from "../sources/cdnConfig";
 var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
@@ -96,8 +97,21 @@ function applyParserOptions(options: any) {
     parsing = (options && options.htmlParsing) ? new HtmlParsing() : new ApiParsing();
 }
 
+// Apply the image CDN server list the service worker resolved (GET /api/v2/cdn,
+// validated, permission-filtered, cached for the session) and relayed with the
+// job. The offscreen document must not fetch the config itself: it has no
+// chrome.storage to cache in and no chrome.permissions to filter with. The
+// list feeds both URL generation and allowed-image validation (cdnConfig.ts is
+// shared with tabImageFetch), and the built-in fallback mirrors always remain
+// as the tail. Each queued job carries its own options, so this is applied per
+// job rather than once.
+function applyCdnServers(options: any) {
+    const relayed = options && Array.isArray(options.imageServers) ? options.imageServers : null;
+    setImageServers(relayed && relayed.length > 0 ? relayed : null);
+}
+
 // Ask the service worker to hand a URL to the download manager. The URL is
-// either a blob: object URL created here (zip/folder mode) or the original
+// either a blob: object URL created here (zip/pdf mode) or the original
 // CDN URL (raw mode). Blob URLs are extension-origin, so the worker can
 // download them even though it cannot create object URLs itself.
 function saveViaServiceWorker(url: string, filename: string): Promise<void> {
@@ -202,11 +216,14 @@ function isDownloadFinished(): boolean {
 function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
+    applyCdnServers(options);
     const signal = beginJob();
     jobRunning = true;
     let zip = new JSZip();
+    // Single-gallery jobs own their archive: pages at the root, file named
+    // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
-        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined });
+        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat" });
     currentDownloader.saveUrl = saveViaServiceWorker;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -263,6 +280,14 @@ async function downloadAllDoujinshisAsync(
     let duplicateBehaviour: string = options.duplicateBehaviour || "rename";
     let replaceSpaces: boolean = options.replaceSpaces !== undefined ? options.replaceSpaces : true;
     let downloadSeparately: boolean = !!options.downloadSeparately;
+    // Each gallery in a separate archive owns that archive (flat entries,
+    // named after the gallery); a shared batch archive keeps one folder per
+    // gallery inside.
+    const gallerySettings: any = {
+        useZip: options.useZip,
+        maxConcurrentDownloads: options.maxConcurrentDownloads,
+        archiveLayout: downloadSeparately ? "flat" : "nested"
+    };
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;
     let allKeys = Object.keys(allDoujinshis);
@@ -386,7 +411,7 @@ async function downloadAllDoujinshisAsync(
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip,
             zipName, jobAbortController ? jobAbortController.signal : null, undefined,
-            { useZip: options.useZip, maxConcurrentDownloads: options.maxConcurrentDownloads });
+            gallerySettings);
             currentDownloader.saveUrl = saveViaServiceWorker;
             if (typeof sourceTabId === "number") {
                 currentDownloader.sourceTabId = sourceTabId;
@@ -428,6 +453,7 @@ async function downloadAllDoujinshisAsync(
 function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
+    applyCdnServers(options);
     beginJob();
     jobRunning = true;
     let zip = new JSZip();
@@ -497,6 +523,7 @@ async function downloadAllPagesAsync(
 function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
+    applyCdnServers(options);
     beginJob();
     jobRunning = true;
     downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId, options || {})

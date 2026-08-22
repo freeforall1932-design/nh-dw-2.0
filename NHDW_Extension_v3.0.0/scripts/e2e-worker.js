@@ -30,6 +30,14 @@ let expectedWorkerRejection = false;
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
+// GET /api/v2/cdn fixture: reports a mirror OUTSIDE the hardcoded set so the
+// phase asserts prove the worker actually resolved runtime CDN config.
+const CDN_CONFIG_FIXTURE = JSON.stringify({
+    image_servers: ["https://i5.nhentai.net"],
+    thumb_servers: ["https://t.nhentai.net"]
+});
+let cdnConfigFetches = 0;
+
 const chromeStub = {
     tabs: {
         onUpdated: { addListener() {} },
@@ -37,6 +45,10 @@ const chromeStub = {
         query(_query, cb) { cb([{ url: "https://nhentai.net/g/123456/" }]); }
     },
     action: { setIcon() {} },
+    permissions: {
+        // The manifest's optional_host_permissions grant check.
+        contains(_permissions, cb) { cb(true); }
+    },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults, syncSettings)); } },
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
@@ -106,17 +118,33 @@ const galleryById = {
 };
 
 // Distinct fake "image" bytes so we can confirm the ZIP has 3 different files.
-const pageBytes = [
-    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe0]); return b; })(),
-    (() => { const b = new Uint8Array(2000); b.set([0x89, 0x50, 0x4e, 0x47, 0x0a]); return b; })(),
-    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe1]); return b; })()
-];
+// Each is a minimal JPEG with a real SOF0 frame (distinct dimensions per page)
+// so the PDF output path can parse dimensions and embed the bytes verbatim.
+function jpegPage(width, height) {
+    const b = new Uint8Array(2000);
+    b.set([
+        0xff, 0xd8,                          // SOI
+        0xff, 0xc0, 0x00, 0x11, 0x08,        // SOF0, length 17, precision 8
+        (height >> 8) & 0xff, height & 0xff, // height
+        (width >> 8) & 0xff, width & 0xff,   // width
+        0x03,                                // 3 components (RGB)
+        0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01
+    ]);
+    b[b.length - 2] = 0xff;
+    b[b.length - 1] = 0xd9;                  // EOI
+    return b;
+}
+const pageBytes = [jpegPage(1280, 1808), jpegPage(1280, 1700), jpegPage(1280, 1600)];
 
 let failImages = false;
 const failMediaIds = new Set();
 
 function fetchStub(url) {
     const u = String(url);
+    if (u.includes("/api/v2/cdn")) {
+        cdnConfigFetches++;
+        return Promise.resolve(new Response(CDN_CONFIG_FIXTURE, { status: 200 }));
+    }
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
@@ -224,10 +252,13 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     // ---- Phase 1: ZIP mode ------------------------------------------------
     syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
     fireDownload("Downloads/Test", "Test");
-    // The active-job marker must be set as soon as the job starts.
-    if (!sessionStore.downloadJob || sessionStore.downloadJob.active !== true) {
-        fail("job marker must be active while a download runs, got " + JSON.stringify(sessionStore.downloadJob));
-    }
+    // The active-job marker must be set as soon as the job starts. The worker
+    // resolves the CDN config first (one small fixture request), so the marker
+    // appears within the resolution microtask chain rather than synchronously.
+    await waitFor(
+        () => sessionStore.downloadJob && sessionStore.downloadJob.active === true,
+        "job marker must be active while a download runs"
+    );
     await waitFor(() => downloads.length === 1, "no ZIP download reached chrome.downloads");
     await waitFor(() => sessionStore.downloadJob === undefined,
         "job marker must be cleared after the download completes");
@@ -242,7 +273,9 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     const zip = await JSZip.loadAsync(buf);
     const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
-    const expected = ["Downloads/Test/001.jpg", "Downloads/Test/002.png", "Downloads/Test/003.jpg"];
+    // Single-gallery archives are flat: pages at the root, archive named
+    // after the gallery (no Title/Title double folder).
+    const expected = ["001.jpg", "002.png", "003.jpg"];
     if (JSON.stringify(names) !== JSON.stringify(expected)) {
         fail("ZIP entries mismatch. Expected " + JSON.stringify(expected) + " got " + JSON.stringify(names));
     }
@@ -264,19 +297,52 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     await waitFor(() => downloads.length === 3, "raw mode did not issue 3 per-page downloads");
 
     const rawUrls = downloads.map((d) => d.url).sort();
+    // Raw mode hands the FIRST configured server to chrome.downloads: with the
+    // /api/v2/cdn fixture active that is the runtime-reported i5 mirror, which
+    // proves the CDN config flowed through validation into URL generation.
     const expectedRaw = [
-        "https://i.nhentai.net/galleries/987654/1.jpg",
-        "https://i.nhentai.net/galleries/987654/2.png",
-        "https://i.nhentai.net/galleries/987654/3.jpg"
+        "https://i5.nhentai.net/galleries/987654/1.jpg",
+        "https://i5.nhentai.net/galleries/987654/2.png",
+        "https://i5.nhentai.net/galleries/987654/3.jpg"
     ];
     if (JSON.stringify(rawUrls) !== JSON.stringify(expectedRaw)) {
         fail("raw mode URLs mismatch. Expected " + JSON.stringify(expectedRaw) + " got " + JSON.stringify(rawUrls));
     }
-    if (downloads.some((d) => !d.filename.startsWith("Downloads/RawTest-"))) {
-        fail("raw mode filename does not use the configured path: " +
-            downloads.map((d) => d.filename).join(", "));
+    const rawNames = downloads.map((d) => d.filename).sort();
+    const expectedRawNames = ["Downloads/RawTest/001.jpg", "Downloads/RawTest/002.png", "Downloads/RawTest/003.jpg"];
+    if (JSON.stringify(rawNames) !== JSON.stringify(expectedRawNames)) {
+        fail("raw mode filenames must be a titled folder of numbered pages, expected " +
+            JSON.stringify(expectedRawNames) + " got " + JSON.stringify(rawNames));
     }
-    console.log("PASS phase 2: raw mode issued 3 per-page downloads to the canonical image CDN");
+    console.log("PASS phase 2: raw mode issued 3 per-page downloads to the runtime-configured image CDN");
+
+    // ---- Phase 2b: PDF mode (one titled file per gallery) ------------------
+    downloads.length = 0;
+    syncSettings = { useZip: "pdf", maxConcurrentDownloads: "3" };
+    fireDownload("Downloads/PdfTest", "PdfTest");
+    await waitFor(() => downloads.length === 1, "PDF mode did not deliver a file");
+    const pdfDownload = downloads[0];
+    if (pdfDownload.filename !== "Downloads/PdfTest.pdf") {
+        fail("PDF filename must be the gallery name, got " + pdfDownload.filename);
+    }
+    if (!/^data:application\/pdf;base64,/.test(pdfDownload.url)) {
+        fail("PDF download URL must be an application/pdf data URL, got " + pdfDownload.url.slice(0, 50));
+    }
+    const pdfBytes = Buffer.from(pdfDownload.url.split(",")[1], "base64");
+    const pdfText = pdfBytes.toString("latin1");
+    if (!pdfText.startsWith("%PDF-1.4")) {
+        fail("PDF header missing");
+    }
+    if (!pdfText.includes("/Count 3") || pdfText.split("/Filter /DCTDecode").length - 1 !== 3) {
+        fail("PDF must embed one JPEG per page (3 pages)");
+    }
+    if (!pdfText.includes("/MediaBox [0 0 1280 1808]")) {
+        fail("PDF page 1 must use the image dimensions");
+    }
+    if (!pdfText.endsWith("%%EOF\n")) {
+        fail("PDF trailer missing");
+    }
+    console.log("PASS phase 2b: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.filename);
 
     // ---- Phase 3: raw mode with failing downloads -------------------------
     sentMessages.length = 0;
@@ -473,6 +539,34 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("batchProgress must be sent for all 3 queued galleries, got " + queueProgress.length);
     }
     console.log("PASS phase 7: three-gallery queue continues past metadata+image failures and reports 1/2/3");
+
+    // ---- Phase 8: CDN configuration hardening ------------------------------
+    // Every job above resolved its image servers through the worker: the
+    // /api/v2/cdn fixture was fetched exactly ONCE (session cache + in-memory
+    // cache cover the rest), the cache was persisted to storage.session, and
+    // getCdnStatus reports the merged list with no missing host grants.
+    if (cdnConfigFetches !== 1) {
+        fail("the CDN config must be fetched once and then cached, got " + cdnConfigFetches + " fetches");
+    }
+    if (!sessionStore.cdnConfig || !Array.isArray(sessionStore.cdnConfig.servers)
+        || sessionStore.cdnConfig.servers[0] !== "https://i5.nhentai.net") {
+        fail("the resolved CDN config must be cached in storage.session, got " + JSON.stringify(sessionStore.cdnConfig));
+    }
+    let cdnStatusAnswer = null;
+    onMessageHandler({ action: "getCdnStatus" }, {}, (r) => { cdnStatusAnswer = r; });
+    await waitFor(() => cdnStatusAnswer !== null, "getCdnStatus did not answer");
+    if (!cdnStatusAnswer || cdnStatusAnswer.result !== "success"
+        || !Array.isArray(cdnStatusAnswer.imageServers)
+        || cdnStatusAnswer.imageServers[0] !== "https://i5.nhentai.net"
+        || !cdnStatusAnswer.imageServers.includes("https://i.nhentai.net")) {
+        fail("getCdnStatus must report the merged server list (runtime first, fallback after), got "
+            + JSON.stringify(cdnStatusAnswer));
+    }
+    if (!Array.isArray(cdnStatusAnswer.missingOrigins) || cdnStatusAnswer.missingOrigins.length !== 0) {
+        fail("getCdnStatus must report no missing grants when everything is permitted, got "
+            + JSON.stringify(cdnStatusAnswer.missingOrigins));
+    }
+    console.log("PASS phase 8: CDN config fetched once, cached for the session, merged with fallback mirrors");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

@@ -1,3 +1,5 @@
+import { buildImageUrl, getImageServers } from "./cdnConfig";
+
 export interface GallerySource {
     matchesUrl(url: string): boolean;
     getGalleryId(url: string): string | null;
@@ -31,10 +33,10 @@ export const clearnetSource: GallerySource = {
     },
 
     getImageUrls(mediaId: string, filename: string): string[] {
-        return [
-            "https://i.nhentai.net/galleries/" + encodeURIComponent(mediaId) + "/" + filename,
-            ...[1, 2, 3, 4].map((server) =>
-                "https://i" + server + ".nhentai.net/galleries/" + encodeURIComponent(mediaId) + "/" + filename)
-        ];
+        // Server order comes from the shared CDN configuration (see
+        // cdnConfig.ts): the validated /api/v2/cdn list first when the worker
+        // resolved one, then the cached fallback mirrors. Hosts are HTTPS
+        // nhentai-owned origins only — never hardcoded i.nhentai.net alone.
+        return getImageServers().map((server) => buildImageUrl(server, mediaId, filename));
     }
 };

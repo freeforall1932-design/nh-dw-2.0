@@ -21,8 +21,33 @@ describe('MV3 manifest', () => {
     });
 
     it('keeps source and release manifests in sync for runtime-critical fields', () => {
-        for (const key of ['permissions', 'host_permissions', 'background', 'action', 'content_scripts', 'options_ui']) {
+        for (const key of ['permissions', 'optional_host_permissions', 'host_permissions', 'background', 'action', 'content_scripts', 'options_ui']) {
             assert.deepStrictEqual(releaseManifest[key], sourceManifest[key], `release manifest ${key} differs from source`);
+        }
+    });
+
+    it('hardens CDN host access without <all_urls>: static hosts plus an optional nhentai-only grant', () => {
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            // chrome.permissions is required to check/request the optional grant.
+            assert.ok(manifest.permissions.includes('permissions'),
+                'the permissions API must be declared to use optional host permissions');
+
+            // Optional hosts: HTTPS, nhentai-owned only, no wildcards beyond *.nhentai.net.
+            const optional = manifest.optional_host_permissions || [];
+            assert.ok(optional.length > 0, 'optional_host_permissions must exist for dynamic CDN hosts');
+            for (const pattern of optional) {
+                assert.ok(!pattern.includes('<all_urls>') && pattern !== '*://*/*',
+                    'optional_host_permissions must never contain <all_urls>');
+                assert.ok(/^https:\/\/(?:\*\.)?[a-z0-9-]*\*?\.nhentai\.net\/\*$/.test(pattern),
+                    'optional host patterns must be https and nhentai-scoped: ' + pattern);
+            }
+
+            // Static hosts: unchanged known mirrors, no broadening.
+            for (const pattern of manifest.host_permissions) {
+                assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?nhentai\.net\/\*$/.test(pattern),
+                    'host_permissions must stay https nhentai-scoped: ' + pattern);
+                assert.ok(!pattern.includes('<all_urls>'), 'host_permissions must not contain <all_urls>');
+            }
         }
     });
 

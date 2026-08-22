@@ -9,7 +9,8 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 
 ## Features
 
-- **Single download** — Open a gallery page, click the extension icon, choose a filename, and download as ZIP, CBZ, a **folder of images** (no zip), or raw images.
+- **Single download** — Open a gallery page, click the extension icon, and download as ZIP, CBZ, PDF, or raw images. The popup is split in two columns: the current gallery (format picker, filename, Download) on the left and a **Similar galleries** picker on the right.
+- **Similar galleries** — On a gallery page, the popup's right column loads nhentai's related recommendations as a checkbox list; pick the ones you want and each selected gallery downloads as its own titled file (ZIP/CBZ/PDF/raw per the same format picker).
 - **Batch download** — On search, tag, artist, category, or favorites pages, check the boxes injected next to each gallery card and download them all at once.
 - **Multi-page download** — From listing pages with pagination, download galleries across several pages in one operation.
 - **Name templates** — Customise filenames with placeholders: `{pretty}`, `{english}`, `{japanese}`, `{id}`, `{artist}`, `{group}`, `{character}`, `{language}`.
@@ -33,8 +34,8 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 1. **Popup** — Clicking the extension icon on an nhentai page opens a popup that detects whether you are on a single gallery or a listing page.
 2. **Metadata** — Gallery info is fetched from `nhentai.net/api/gallery/<id>` or, if Cloudflare blocks the request, from the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
-4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin against the canonical CDN (`i.nhentai.net`) with automatic fallback through numbered mirrors (`i1`–`i4`). HTML challenge responses are rejected so they never end up inside a ZIP.
-5. **Archive / folder output** — For ZIP/CBZ formats, pages are collected in memory and archived via JSZip. In *folder* mode no archive is built at all: each page is saved as its own file into a `Downloads/<Title>/` folder in the browser's download directory. In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts.
+4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin. The image server list is resolved per session from `nhentai.net/api/v2/cdn` (validated HTTPS `*.nhentai.net` origins, API order first), with automatic fallback through the built-in mirrors (`i.nhentai.net`, `i1`–`i4`). If nhentai reports image hosts the extension has no permission for, the popup offers a one-click **Grant image host access** (optional `https://*.nhentai.net/*` permission — downloads keep working on the permitted hosts either way). HTML challenge responses are rejected so they never end up inside a ZIP.
+5. **Archive / PDF output** — ZIP and CBZ archives are named after the gallery with the numbered pages directly at the archive root (no double `Title/Title` folder when extracting). **PDF** assembles the same pages into one `<Title>.pdf` (JPEG pages are embedded as-is; other formats are converted). In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts. Raw mode saves the numbered pages (`001.jpg`, `002.png`, …) inside a `Downloads/<Title>/` folder.
 6. **Saving** — The offscreen document only uses the APIs Chrome actually exposes there (`chrome.runtime`); finished objects are saved by the **service worker** via `chrome.downloads` (raw mode hands the original CDN URL to the same download manager).
 
 ---
@@ -48,6 +49,7 @@ nhentai uses Cloudflare, which may challenge requests that appear automated. The
 - Requesting batch metadata and listing pages through the **open nhentai tab's session** (which carries any completed challenge clearance) before falling back to the extension origin.
 - Offering an **HTML parsing** option (Settings → Advanced → Use HTML to get API info) that extracts gallery data from the rendered page.
 - Falling back through CDN mirrors when an image server returns a non-image response, and never adding HTML or tiny bodies to the ZIP.
+- Resolving the current image server list from `GET /api/v2/cdn` once per session (through the open tab's session when possible) instead of trusting one hardcoded mirror; anything that is not an HTTPS nhentai-owned origin is rejected.
 
 This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”, there is no gallery JSON and no image bytes to read. If metadata succeeds but images fail, keep the gallery tab open after the challenge and try again.
 
@@ -76,7 +78,7 @@ The original extension supported Firefox; the MV3 version requires `chrome.offsc
 
 | Setting | Description |
 |---|---|
-| **Download format** | ZIP, CBZ, or Raw (images downloaded individually) |
+| **Download format** | ZIP, CBZ, PDF, or Raw (numbered images in a titled folder) |
 | **Display checkboxes** | Show/hide selection checkboxes on listing pages |
 | **Dark mode** | Dark theme for the popup |
 | **Duplicate behaviour** | Rename duplicates with a suffix or ignore them |
