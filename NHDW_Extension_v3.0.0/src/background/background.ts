@@ -665,10 +665,19 @@ const DOWNLOAD_OPTION_DEFAULTS = {
 function readDownloadOptions(callback: (options: any) => void) {
     try {
         chrome.storage.sync.get(DOWNLOAD_OPTION_DEFAULTS, (elems: any) => {
-            callback(elems);
+            // Credentials intentionally live in storage.local rather than
+            // synced preferences. The offscreen document cannot read storage,
+            // so relay this optional key only with the active job options.
+            try {
+                chrome.storage.local.get({ apiKey: "" }, (local: any) => {
+                    callback(Object.assign({}, elems, { apiKey: local && local.apiKey ? local.apiKey : "" }));
+                });
+            } catch (_) {
+                callback(Object.assign({}, elems, { apiKey: "" }));
+            }
         });
     } catch (_) {
-        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS));
+        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS, { apiKey: "" }));
     }
 }
 

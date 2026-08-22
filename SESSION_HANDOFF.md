@@ -100,3 +100,11 @@ machine. Re-test by reloading the unpacked extension
 - Claim the extension bypasses Cloudflare, or add Tor/onion routing.
 - Treat sandbox browser-launch limits (no Chrome binary / DISPLAY) as an
   extension regression.
+
+## Optional API key (implemented 2026-08-22)
+
+- The Options page has an explicit **Optional nhentai API key** field. A user must manually paste a key generated in nhentai account settings and click **Save & verify**.
+- It validates only through the third-party-safe `GET /api/v2/user` endpoint using `Authorization: Key <key>`; it never uses `/api/v2/auth/*`, requests a password, or creates a key.
+- Keys are kept in `chrome.storage.local`, not `storage.sync`, and are never rendered back into the Options page. They can be removed with **Remove key**.
+- A verified key is attached to extension-origin gallery API fallback requests. Normal tab-first metadata and downloads continue to work without it.
+- Follow-up bucket-list work: server-side ZIP/CBZ endpoint, related-gallery downloads, favorites/search, and CDN configuration may use this optional key when their endpoints benefit from it.

@@ -39,6 +39,19 @@ async function getGalleryFromActiveTab(id: string): Promise<any | null> {
     return readGalleryFromTab(tabId, id);
 }
 
+function getOptionalApiHeaders(): Promise<Record<string, string>> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ apiKey: "" }, (stored: any) => {
+                const apiKey = typeof stored.apiKey === "string" ? stored.apiKey.trim() : "";
+                resolve(apiKey ? { "Authorization": "Key " + apiKey } : {});
+            });
+        } catch (_) {
+            resolve({});
+        }
+    });
+}
+
 // Add message listener for progress updates and error messages
 // NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
 // must return false. Returning true kept the message channel open and made
@@ -152,7 +165,11 @@ export default class Popup
 
         if (json === null) {
             try {
-                const resp = await fetch(this.parsing!.GetUrl(id), { credentials: "include", cache: "no-store" });
+                const resp = await fetch(this.parsing!.GetUrl(id), {
+                    credentials: "include",
+                    cache: "no-store",
+                    headers: await getOptionalApiHeaders()
+                });
                 status = resp.status;
                 statusText = resp.statusText;
                 if (resp.ok) {

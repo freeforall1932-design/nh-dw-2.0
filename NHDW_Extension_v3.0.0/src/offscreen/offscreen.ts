@@ -299,7 +299,16 @@ async function downloadAllDoujinshisAsync(
                         text: () => Promise.resolve(tabText)
                     };
                 } else {
-                    resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
+                    const headers: Record<string, string> = {};
+                    if (options && typeof options.apiKey === "string" && options.apiKey.trim()) {
+                        headers["Authorization"] = "Key " + options.apiKey.trim();
+                    }
+                    resp = await fetch(parsing.GetUrl(key), {
+                        credentials: "include",
+                        cache: "no-store",
+                        headers: headers,
+                        signal: jobAbortController ? jobAbortController.signal : undefined
+                    });
                 }
             }
         }
