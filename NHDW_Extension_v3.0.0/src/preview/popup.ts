@@ -247,8 +247,14 @@ export default class Popup
                                 name: title,
                                 tabId: tabId,
                                 formatOverride: selectedFormat()
+                            }, (response) => {
+                                if (response && response.result === "queued") {
+                                    document.getElementById('action')!.innerHTML =
+                                        "Download queued at position " + response.position + ".";
+                                    return;
+                                }
+                                self.updateProgress(0, title, false);
                             });
-                            self.updateProgress(0, title, false);
                         });
                     }
 
@@ -271,8 +277,14 @@ export default class Popup
                                     finalName: finalName,
                                     tabId: tabId,
                                     formatOverride: selectedFormat()
+                                }, (response) => {
+                                    if (response && response.result === "queued") {
+                                        document.getElementById('action')!.innerHTML =
+                                            "Similar-gallery download queued at position " + response.position + ".";
+                                        return;
+                                    }
+                                    self.updateProgress(0, finalName, false);
                                 });
-                                self.updateProgress(0, finalName, false);
                             } catch (error) {
                                 document.getElementById('action')!.innerHTML =
                                     "Could not load similar galleries: " + escapeHtml(String(error));

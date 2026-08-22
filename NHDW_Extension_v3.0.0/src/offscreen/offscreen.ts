@@ -46,6 +46,12 @@ let jobAbortController: AbortController | null = null;
 // used to make the popup misreport a running batch as finished/interrupted.
 let jobRunning = false;
 
+// Jobs are serialized inside the long-lived offscreen document. Keeping this
+// queue here (rather than in the MV3 worker) means it remains available while
+// the worker is idle and is reawakened by progress/finish messages. Each entry
+// already contains its per-job options and source tab id supplied by the worker.
+const queuedJobs: any[] = [];
+
 function beginJob(): AbortSignal {
     jobAbortController = new AbortController();
     return jobAbortController.signal;
@@ -67,6 +73,13 @@ function jobWasAborted(): boolean {
 // misreporting a finished download as "interrupted" during that window.
 function notifyJobFinished() {
     jobRunning = false;
+    const next = queuedJobs.shift();
+    if (next) {
+        // Continue directly into the next job. Do not send jobFinished between
+        // queued jobs: the worker's active-job marker must stay set.
+        runQueuedJob(next);
+        return;
+    }
     chrome.runtime.sendMessage({ from: "offscreen", action: "jobFinished" });
 }
 
@@ -497,22 +510,31 @@ function goBack() {
     currentDownloader = null;
 }
 
+function runQueuedJob(request: any) {
+    if (request.action === "downloadDoujinshi") {
+        downloadDoujinshi(request.json, request.path, request.name, request.tabId, request.options);
+    } else if (request.action === "downloadAllDoujinshis") {
+        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId, request.options);
+    } else if (request.action === "downloadAllPages") {
+        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId, request.options);
+    }
+}
+
 // Commands relayed by the service worker.
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (!request || request.target !== "offscreen") {
         return false;
     }
     if (request.action === "isDownloadFinished") {
-        sendResponse({ result: isDownloadFinished() });
-    } else if (request.action === "downloadDoujinshi") {
-        downloadDoujinshi(request.json, request.path, request.name, request.tabId, request.options);
-        sendResponse({ result: "started" });
-    } else if (request.action === "downloadAllDoujinshis") {
-        downloadAllDoujinshis(request.allDoujinshis, request.finalName, request.galleryMetadata || {}, request.tabId, request.options);
-        sendResponse({ result: "started" });
-    } else if (request.action === "downloadAllPages") {
-        downloadAllPages(request.allDoujinshis, request.pages, request.finalName, request.url, request.tabId, request.options);
-        sendResponse({ result: "started" });
+        sendResponse({ result: isDownloadFinished(), queued: queuedJobs.length });
+    } else if (request.action === "downloadDoujinshi" || request.action === "downloadAllDoujinshis" || request.action === "downloadAllPages") {
+        if (jobRunning) {
+            queuedJobs.push(request);
+            sendResponse({ result: "queued", position: queuedJobs.length });
+        } else {
+            runQueuedJob(request);
+            sendResponse({ result: "started" });
+        }
     } else if (request.action === "goBack") {
         goBack();
         sendResponse({ result: "success" });

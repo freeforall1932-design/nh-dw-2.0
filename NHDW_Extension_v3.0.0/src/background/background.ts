@@ -810,8 +810,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 // options: the offscreen document cannot read chrome.storage,
                 // so the worker relays the download settings with the command.
                 askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
-                    if (response && response.result === "started") {
-                        sendResponse({ result: "started" });
+                    if (response && (response.result === "started" || response.result === "queued")) {
+                        // A queued job is held by the offscreen document and
+                        // will start after the active job sends jobFinished.
+                        // Keep the worker marker set across the whole queue.
+                        sendResponse({ result: response.result, position: response.position });
                     } else {
                         background.clearJobMarker();
                         relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
