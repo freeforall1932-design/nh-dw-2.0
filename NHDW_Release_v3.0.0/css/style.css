@@ -63,3 +63,40 @@ input[type="button"]:hover {
     display: inline-block;
     margin-bottom: 6px;
 }
+
+/* Two-column popup: current gallery on the left, similar galleries on the right */
+.popupColumns {
+    display: flex;
+    gap: 12px;
+    margin-top: 6px;
+    text-align: left;
+}
+
+.popupColumn {
+    flex: 1 1 0;
+    min-width: 0;
+}
+
+#similarPanel {
+    margin-top: 4px;
+}
+
+.similarList {
+    max-height: 190px;
+    overflow-y: auto;
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 4px 6px;
+    margin: 6px 0;
+}
+
+.similarList label {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#htmlDark .similarList {
+    border-color: #555;
+}

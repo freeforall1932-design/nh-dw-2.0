@@ -6,6 +6,7 @@
 const assert = require('assert');
 const JSZip = require('jszip');
 const Downloader = require('../build/test/background/Downloader.js').default;
+const { sanitizeArtifactFilename } = require('../build/test/background/Downloader.js');
 const { decodeTabImageBytes, isAllowedImageUrl } = require('../build/test/background/tabImageFetch.js');
 
 const gallery = {
@@ -274,9 +275,9 @@ describe('Downloader (raw mode)', () => {
         ]);
         const filenames = chrome.downloads.calls.map((c) => c.filename);
         assert.deepStrictEqual(filenames, [
-            'Downloads/RawTest-001.jpg',
-            'Downloads/RawTest-002.png',
-            'Downloads/RawTest-003.jpg'
+            'Downloads/RawTest/001.jpg',
+            'Downloads/RawTest/002.png',
+            'Downloads/RawTest/003.jpg'
         ]);
         // Raw mode must not fetch anything itself (Chrome does the download).
         assert.strictEqual(fetchStub.attempted.length, 0);
@@ -297,15 +298,40 @@ describe('Downloader (raw mode)', () => {
     });
 });
 
-describe('Downloader (folder mode)', () => {
+describe('Downloader (PDF mode)', () => {
     let chrome;
-    let fetchStub;
+
+    // Minimal JPEGs with a real SOF0 frame so the PDF path can read the
+    // dimensions and embed them without a canvas re-encode.
+    function makeJpegPage(width, height) {
+        const buf = new Uint8Array(2000);
+        buf.set([
+            0xFF, 0xD8,                                  // SOI
+            0xFF, 0xC0, 0x00, 0x11,                      // SOF0, length 17
+            0x08,                                        // precision
+            (height >> 8) & 0xFF, height & 0xFF,         // height
+            (width >> 8) & 0xFF, width & 0xFF,           // width
+            0x03,                                        // 3 components (RGB)
+            0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01
+        ]);
+        buf[buf.length - 2] = 0xFF;
+        buf[buf.length - 1] = 0xD9;                      // EOI
+        return buf;
+    }
+
+    const jpegPages = [makeJpegPage(120, 200), makeJpegPage(120, 190), makeJpegPage(120, 180)];
 
     beforeEach(() => {
-        chrome = makeChromeStub('zip');
-        fetchStub = makeFetchStub();
+        chrome = makeChromeStub('pdf');
         globalThis.chrome = chrome;
-        globalThis.fetch = fetchStub;
+        globalThis.fetch = (url) => {
+            const m = /\/([0-9]+)\.(jpg|png)$/.exec(String(url));
+            const idx = m ? parseInt(m[1], 10) - 1 : 0;
+            return Promise.resolve(new Response(jpegPages[idx], {
+                status: 200,
+                headers: { 'Content-Type': 'image/jpeg' }
+            }));
+        };
         globalThis.URL = undefined; // Node has no createObjectURL -> data-URL branch
         globalThis.FileReader = FileReaderStub;
     });
@@ -317,9 +343,9 @@ describe('Downloader (folder mode)', () => {
         delete globalThis.FileReader;
     });
 
-    it('saves one image file per page into the gallery folder and never zips', async () => {
+    it('assembles one PDF per gallery named after the title, pages in order, never zips', async () => {
         const saved = [];
-        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/FolderTest', () => {}, () => {}, 'FolderTest', new JSZip(), 'Downloads/FolderTest', null, undefined, { useZip: 'folder', maxConcurrentDownloads: 3 });
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/PdfTest', () => {}, () => {}, 'PdfTest', new JSZip(), 'Downloads/PdfTest', null, undefined, { useZip: 'pdf', maxConcurrentDownloads: 3 });
         downloader.revokeObjectUrlDelayMs = 10;
         downloader.retryBackoffMs = 0;
         downloader.saveUrl = (url, filename) => {
@@ -328,17 +354,38 @@ describe('Downloader (folder mode)', () => {
         };
         await downloader.startAsync();
 
-        assert.strictEqual(chrome.downloads.calls.length, 0, 'folder mode must not use chrome.downloads directly');
-        assert.strictEqual(saved.length, 3, 'one save per page');
-        assert.deepStrictEqual(saved.map((s) => s.filename), [
-            'Downloads/FolderTest/001.jpg',
-            'Downloads/FolderTest/002.png',
-            'Downloads/FolderTest/003.jpg'
-        ]);
-        for (const s of saved) {
-            assert.ok(/^data:/.test(s.url) || /^blob:/.test(s.url), 'expected a data/blob URL, got ' + s.url.slice(0, 40));
-        }
-        assert.ok(downloader.isDone(), 'folder mode must report completion');
+        assert.strictEqual(chrome.downloads.calls.length, 0, 'PDF mode must not use chrome.downloads directly');
+        assert.strictEqual(saved.length, 1, 'one PDF artifact for the whole gallery');
+        assert.strictEqual(saved[0].filename, 'Downloads/PdfTest.pdf');
+        assert.ok(/^data:application\/pdf;base64,/.test(saved[0].url), 'expected a PDF data URL, got ' + saved[0].url.slice(0, 40));
+        const bytes = Buffer.from(saved[0].url.split(',')[1], 'base64');
+        assert.ok(bytes.slice(0, 8).toString('latin1').startsWith('%PDF-1.4'), 'PDF header');
+        assert.ok(bytes.toString('latin1').includes('/Count 3'), 'three pages');
+        assert.ok(bytes.toString('latin1').endsWith('%%EOF\n'), 'PDF trailer');
+        // The embedded images keep their original bytes (DCTDecode, no re-encode).
+        const occurrences = bytes.toString('latin1').split('/Filter /DCTDecode').length - 1;
+        assert.strictEqual(occurrences, 3, 'one embedded JPEG per page');
+        // Page order: first embedded image must be page 1's dimensions.
+        const mediaBox = bytes.toString('latin1').match(/\/MediaBox \[0 0 (\d+) (\d+)\]/g);
+        assert.ok(mediaBox, 'MediaBox entries found');
+        assert.strictEqual(mediaBox[0], '/MediaBox [0 0 120 200]', 'page 1 first');
+        assert.strictEqual(mediaBox[2], '/MediaBox [0 0 120 180]', 'page 3 last');
+        assert.ok(downloader.isDone(), 'PDF mode must report completion');
+    });
+
+    it('maps the retired "folder" format to PDF so old settings keep working', async () => {
+        const saved = [];
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/LegacyFolder', () => {}, () => {}, 'LegacyFolder', new JSZip(), 'Downloads/LegacyFolder', null, undefined, { useZip: 'folder', maxConcurrentDownloads: 3 });
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        downloader.saveUrl = (url, filename) => {
+            saved.push({ url, filename });
+            return Promise.resolve();
+        };
+        await downloader.startAsync();
+        assert.strictEqual(saved.length, 1);
+        assert.strictEqual(saved[0].filename, 'Downloads/LegacyFolder.pdf');
+        assert.ok(/^data:application\/pdf/.test(saved[0].url));
     });
 
     it('uses constructor settings and never reads chrome.storage', async () => {
@@ -348,8 +395,8 @@ describe('Downloader (folder mode)', () => {
             cb(Object.assign({}, defaults));
         };
         const saved = [];
-        // downloadName null = mid-batch gallery (no final archive of its own).
-        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/FolderTest2', () => {}, () => {}, 'FolderTest2', new JSZip(), null, null, undefined, { useZip: 'folder' });
+        // downloadName null = mid-batch gallery (no final artifact of its own).
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/PdfMidBatch', () => {}, () => {}, 'PdfMidBatch', new JSZip(), null, null, undefined, { useZip: 'pdf' });
         downloader.revokeObjectUrlDelayMs = 10;
         downloader.retryBackoffMs = 0;
         downloader.saveUrl = (url, filename) => {
@@ -358,17 +405,80 @@ describe('Downloader (folder mode)', () => {
         };
         await downloader.startAsync();
         assert.strictEqual(storageReads, 0, 'constructor settings must skip chrome.storage');
-        assert.strictEqual(saved.length, 3);
-        assert.strictEqual(chrome.downloads.calls.length, 0);
+        assert.strictEqual(saved.length, 0, 'mid-batch PDF galleries do not emit their own file');
+    });
+});
+
+describe('Downloader (archive layout)', () => {
+    let chrome;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip');
+        globalThis.chrome = chrome;
+        globalThis.fetch = makeFetchStub();
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
     });
 
-    it('fails the gallery when a folder save is rejected', async () => {
-        let error = null;
-        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/FolderFail', (e) => { error = e; }, () => {}, 'FolderFail', new JSZip(), 'Downloads/FolderFail', null, undefined, { useZip: 'folder', maxConcurrentDownloads: 1 });
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    it('puts pages at the archive root for a single-gallery (flat) archive', async () => {
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/Flat', () => {}, () => {}, 'Flat', new JSZip(), 'Downloads/Flat', null, undefined, { useZip: 'zip', maxConcurrentDownloads: 3, archiveLayout: 'flat' });
+        downloader.revokeObjectUrlDelayMs = 10;
         downloader.retryBackoffMs = 0;
-        downloader.saveUrl = () => Promise.reject(new Error('disk full (fixture)'));
-        await assert.rejects(downloader.startAsync());
-        assert.ok(error !== null && /Failed to save image to 001\.jpg/.test(String(error)));
+        await downloader.startAsync();
+
+        assert.strictEqual(chrome.downloads.calls.length, 1);
+        const { filename, url } = chrome.downloads.calls[0];
+        assert.strictEqual(filename, 'Downloads/Flat.zip', 'archive named after the gallery');
+        const zip = await decodeZip(url);
+        const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+        assert.deepStrictEqual(names, ['001.jpg', '002.png', '003.jpg'], 'no Title/Title double folder inside');
+    });
+
+    it('keeps one folder per gallery inside a shared (nested) batch archive', async () => {
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/Nested', () => {}, () => {}, 'Nested', new JSZip(), 'Downloads/Nested', null, undefined, { useZip: 'zip', maxConcurrentDownloads: 3, archiveLayout: 'nested' });
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+
+        const zip = await decodeZip(chrome.downloads.calls[0].url);
+        const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+        assert.deepStrictEqual(names, ['Downloads/Nested/001.jpg', 'Downloads/Nested/002.png', 'Downloads/Nested/003.jpg']);
+    });
+});
+
+describe('sanitizeArtifactFilename', () => {
+    it('keeps clean names and subfolders untouched', () => {
+        assert.strictEqual(sanitizeArtifactFilename('Downloads/Some Title/001.jpg', 'x'), 'Downloads/Some Title/001.jpg');
+        assert.strictEqual(sanitizeArtifactFilename('Title.zip', 'x'), 'Title.zip');
+    });
+
+    it('strips reserved characters that make Chrome drop the filename', () => {
+        assert.strictEqual(sanitizeArtifactFilename('What?Ever:*.zip', 'x'), 'WhatEver.zip');
+        // Backslashes and stray leading dots disappear per segment.
+        assert.strictEqual(sanitizeArtifactFilename('..\\hidden/..jpg', 'x'), 'hidden/jpg');
+        // Control characters are removed entirely.
+        assert.strictEqual(sanitizeArtifactFilename('bad\nname.zip', 'x'), 'badname.zip');
+    });
+
+    it('trims trailing dots and spaces per segment (Windows rejects them)', () => {
+        assert.strictEqual(sanitizeArtifactFilename('title.zip.  ', 'x'), 'title.zip');
+        assert.strictEqual(sanitizeArtifactFilename('folder. /page.jpg', 'x'), 'folder/page.jpg');
+    });
+
+    it('bounds segment length and never returns an empty name', () => {
+        const long = 'a'.repeat(400);
+        const sanitized = sanitizeArtifactFilename(long + '.zip', 'x');
+        assert.ok(sanitized.length <= 124, 'segment capped: ' + sanitized.length);
+        assert.ok(sanitized.length > 0);
+        assert.strictEqual(sanitizeArtifactFilename('', 'Gallery 123'), 'Gallery 123');
+        assert.notStrictEqual(sanitizeArtifactFilename('///', 'x'), '');
     });
 });
 

@@ -31,6 +31,9 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Batch metadata for unresolved gallery ids and listing-page fetches in `downloadAllPages` now go through the user's open nhentai tab session (via the worker relay) before falling back to the extension origin.
 - [x] Narrow `web_accessible_resources` to the two toolbar icons on `https://nhentai.net/*` (was `*` on `<all_urls>`, exposing every bundled file to any page); guarded by a manifest test.
 - [x] CDN configuration hardening (replace the hardcoded `i.nhentai.net`–`i4.nhentai.net` image hosts): the service worker now resolves `GET /api/v2/cdn` per session (source-tab session first, extension fetch second, short timeout, cached in memory + `chrome.storage.session` for one hour), validates every entry as a bare HTTPS `*.nhentai.net` origin, and merges the API order in front of the built-in fallback mirrors. `src/sources/cdnConfig.ts` is the single shared configuration for URL generation (`GallerySource.getImageUrls`) and allowed-image validation (`tabImageFetch.isAllowedImageUrl`), relayed to the offscreen document with each job's options. Hosts outside the static `host_permissions` are covered by `optional_host_permissions: ["https://*.nhentai.net/*"]`: jobs only use permitted hosts (so downloads never stall on CORS-blocked mirrors), and the popup shows a one-click *Grant image host access* notice (`getCdnStatus`) when nhentai reports a host the extension has not been granted yet. No `<all_urls>` anywhere; guarded by manifest and fixture tests (`test/cdn-config.test.js`, 22 cases).
+- [x] PDF output format (replacing the retired images-folder mode) via a dependency-free PDF writer (`src/utils/pdfBuilder.ts`): RGB JPEGs embed verbatim (DCTDecode), other formats re-encode through an image canvas; delivered as `<title>.pdf`. Legacy `"folder"` settings map to `"pdf"` everywhere.
+- [x] Archive naming/structure: single-gallery ZIP/CBZ/PDF named after the title with pages at the archive root (no `Title/Title` double folder); shared batch archives keep a folder per gallery; raw mode saves `Title/001.jpg`-style numbered pages inside a titled folder; last-mile filename sanitization stops Chrome from dropping names to blob-UUID/number fallbacks.
+- [x] Two-column popup: current gallery (format picker + path + Download) on the left, similar-galleries selection panel (checkbox list + All/None + Download selected) on the right; the selected related galleries each download as their own titled archive (`separate: true` per-job override).
 
 ## Priority 1: reliability and correctness
 
@@ -388,41 +391,63 @@ fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-a
 
 **Progress:** implemented; needs real-browser verification.
 
-The single-gallery popup now has a ZIP / CBZ / images-folder / raw picker next to
-Download and Download similar. Its selection is sent as a validated one-job override
-through the service worker to the offscreen pipeline; it does **not** overwrite the
-user's saved Options default. The relay e2e test verifies that an override reaches the
-offscreen job options.
+The single-gallery popup has a ZIP / CBZ / PDF / raw picker in the left column of the
+two-column layout (current gallery left, similar galleries right). Its selection is sent
+as a validated one-job override through the service worker to the offscreen pipeline; it
+does **not** overwrite the user's saved Options default. The relay e2e test verifies that
+an override reaches the offscreen job options. The retired "images in a folder" format
+was replaced by PDF (16b): legacy stored/relayed `"folder"` values map to `"pdf"`
+everywhere (options select, popup pickers, format overrides, `Downloader` whitelist).
 
 **16b. Add PDF as an output format.**
 
-- Add a "Download as PDF" option alongside ZIP/CBZ/folder/raw.
-- Requires converting the fetched page images into a PDF (e.g. via jsPDF or an
-  equivalent) inside the offscreen document, then saving through the existing
-  `saveDownload` relay; the current whitelist in `Downloader.startAsync` (zip/cbz/
-  folder/raw) must be extended, not bypassed.
+- Add a "Download as PDF" option alongside ZIP/CBZ/raw. — **Done.**
+- Requires converting the fetched page images into a PDF inside the offscreen document,
+  then saving through the existing `saveDownload` relay; the whitelist in
+  `Downloader.startAsync` was extended (zip/cbz/pdf/raw), not bypassed. — **Done.**
 
-**Progress:** not started. Session-only pause/resume is implemented, but durable restart-safe resume remains a separate checkpoint/rebuild feature.
+**Progress:** implemented; needs real-browser verification.
+
+`src/utils/pdfBuilder.ts` is a dependency-free PDF 1.4 writer: baseline/progressive RGB
+JPEGs are embedded verbatim as DCTDecode XObjects at native size (dimensions parsed
+from the SOF frame — `jpegInfo`), and grayscale/CMYK JPEGs plus PNG/GIF/WebP pages are
+re-encoded to RGB JPEG through `createImageBitmap` + `OffscreenCanvas` where available
+(offscreen document and MV3 worker both qualify; transparent areas flatten onto white).
+Pages are collected in order during the fetch loop and assembled once at the end,
+delivered as `<gallery title>.pdf` through the same object-URL/data-URL path as ZIP.
+Covered by `test/pdf-builder.test.js` (frame parsing, structure, verbatim embedding,
+xref offset verification) and PDF phases in the worker/offscreen e2e pipelines.
+
+**Archive naming/structure hardening (same work item):** single-gallery ZIP/CBZ/PDF
+files are named after the gallery with pages at the archive **root** — no more
+`Title.zip` containing `Title/001.jpg`. Shared batch archives keep one folder per
+gallery inside. Raw mode saves numbered pages (`001.jpg`, `002.png`, …) inside a folder
+named after the gallery. A last-mile `sanitizeArtifactFilename` guard strips characters
+that make Chrome silently drop the requested filename (which is how downloads could
+land under blob-URL/number names). `separate: true` from the popup forces one archive
+per gallery for the similar-gallery selection.
 
 ### 17. "More Like This" batch download
 
 **Progress:** implemented; needs real-browser verification.
 
-The popup now displays **Download similar** beside the regular single-gallery
-Download action. It calls the confirmed public endpoint
-`GET /api/v2/galleries/{id}/related`, maps `result[]` to the existing
-`Record<id, title>` batch shape, and sends it to `downloadAllDoujinshis`.
+The popup's right column is a **similar-galleries panel**: *Show similar galleries*
+fetches `GET /api/v2/galleries/{id}/related` once, then lists every related gallery
+with a checkbox (title plus page count; untitled cards show `(Non-titled) #id` like
+nhentai itself). **All/None** toggle the selection and **Download selected (n)**
+downloads exactly the checked galleries — each as its own titled archive
+(`separate: true`), using the same per-job format picker as the current gallery.
 
 - An API key is optional; if the user has saved one it is attached to improve the
   endpoint rate limit, otherwise the public endpoint is used.
 - The existing gallery tab is supplied to the batch pipeline for its normal
   tab-first metadata resolution. No tabs are opened or navigated automatically.
-- Empty, malformed, and HTTP-error responses leave the popup with a clear error
+- Empty, malformed, and HTTP-error responses leave the panel with a clear error
   instead of starting a download.
 
 **Remaining acceptance:** verify a real gallery in Chrome/Brave, including an
-anonymous request, a key-authenticated request, an empty related list, and an
-image/metadata failure within the related batch.
+anonymous request, a key-authenticated request, an empty related list, unselecting
+some entries, and an image/metadata failure within the related batch.
 
 ## Security and maintenance
 

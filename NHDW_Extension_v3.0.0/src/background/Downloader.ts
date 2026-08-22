@@ -1,10 +1,11 @@
 var JSZip = require("jszip");
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
+import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -63,23 +64,32 @@ export default class Downloader
             // storage read) must fall back to "zip" — an unknown value would
             // otherwise be fetched into the ZIP but never saved (the final
             // step only archives for zip/cbz), silently "succeeding".
-            self.useZip = (useZipRaw === "zip" || useZipRaw === "cbz" || useZipRaw === "folder" || useZipRaw === "raw")
-                ? useZipRaw
+            // "folder" is the retired image-folder format: saved settings from
+            // older versions map to its replacement, PDF.
+            const normalized = useZipRaw === "folder" ? "pdf" : useZipRaw;
+            self.useZip = (normalized === "zip" || normalized === "cbz" || normalized === "pdf" || normalized === "raw")
+                ? normalized
                 : "zip";
             const configuredConcurrency = parseInt(maxConcurrentDownloads as any, 10);
             // Protect the batching loop from corrupt/old sync settings.
             self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
                 ? configuredConcurrency
                 : 3;
+            // "flat": this Downloader owns the whole archive, so pages sit at
+            // the archive ROOT and the archive is named after the gallery —
+            // no Title/Title/… double folder. "nested" (the default) is for
+            // galleries that share one batch archive: each gallery keeps its
+            // own folder inside it.
+            self.#archiveLayout = (this.#settings && this.#settings.archiveLayout === "flat") ? "flat" : "nested";
             if (self.useZip === "raw") {
                 self.currentProgress = 100;
                 try {
                     self.updateProgress(100, self.#doujinshiName, false);
                 } catch (e) { } // Dead object
             }
-            // Folder mode never assembles an archive, so it must not create
-            // (or fill) the zip folder either.
-            if (self.useZip === "zip" || self.useZip === "cbz") {
+            // Only a shared batch archive needs the per-gallery folder inside;
+            // zip/cbz only — PDF and raw never build a zip folder tree.
+            if ((self.useZip === "zip" || self.useZip === "cbz") && self.#archiveLayout === "nested") {
                 self.#zip.folder(self.path);
             }
         };
@@ -215,10 +225,31 @@ export default class Downloader
                                 })
                         );
                     });
+                } else if (this.useZip === "pdf") {
+                    // PDF: assemble the collected pages (in page order) into a
+                    // single document. JPEG pages are embedded as-is
+                    // (DCTDecode, no re-encode); others are re-encoded through
+                    // an image canvas where the platform provides one.
+                    this.updateProgress(0, this.#doujinshiName + ".pdf", true);
+                    const pages = this.#pdfPages.slice().sort((a, b) => a.index - b.index);
+                    if (pages.length === 0) {
+                        throw "No pages were collected for the PDF.";
+                    }
+                    const images: PdfImage[] = [];
+                    for (const page of pages) {
+                        images.push(await this.#preparePdfImage(page.bytes, page.contentType));
+                    }
+                    this.updateProgress(70, this.#doujinshiName + ".pdf", true);
+                    const pdf = buildPdfDocument(images);
+                    await this.#downloadBlob(new Blob([pdf], { type: "application/pdf" }), this.downloadName + ".pdf");
+                    this.currentProgress = 100;
+                    try {
+                        this.updateProgress(100, null, true); // Notify popup that we are done
+                    } catch (e) { } // Dead object
                 } else {
-                    // "raw" and "folder" never assemble an archive: raw hands
-                    // the CDN URLs to the download manager directly, and folder
-                    // already saved one file per page while fetching.
+                    // "raw" never assembles an archive: raw hands the CDN URLs
+                    // to the download manager directly (one numbered file per
+                    // page inside a folder named after the gallery).
                     this.currentProgress = 100;
                     this.updateProgress(100, null, true); // Notify popup that we are done
                 }
@@ -268,12 +299,18 @@ export default class Downloader
     // chrome.downloads is not exposed (only chrome.runtime is), so the caller
     // sets saveUrl to a relay that asks the service worker to download.
     async #saveArtifact(url: string, filename: string): Promise<void> {
+        // Last-mile filename hardening: chrome.downloads silently ignores the
+        // filename for invalid names (control characters, stray dots/edges),
+        // and the file then lands under the blob/CDN URL's own name — random
+        // hex or a bare number instead of the gallery title. Sanitize each
+        // path segment so the requested name always survives.
+        const safeName = sanitizeArtifactFilename(filename, this.#doujinshiName);
         if (this.saveUrl !== null) {
-            await this.saveUrl(url, filename);
+            await this.saveUrl(url, safeName);
             return;
         }
         await new Promise<void>((resolve, reject) => {
-            chrome.downloads.download({ url: url, filename: filename }, function(downloadId) {
+            chrome.downloads.download({ url: url, filename: safeName }, function(downloadId) {
                 if (downloadId === undefined) {
                     reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
                 } else {
@@ -338,70 +375,132 @@ export default class Downloader
         // one random mirror failure abort an otherwise valid gallery.
         const imageUrls = this.#source.getImageUrls(String(this.#mediaId), filenameParsing);
 
-        if (this.useZip !== "raw") { // ZIP (or equivalent) format
-            let lastStatus = "unknown error";
-            for (const imageUrl of imageUrls) {
-                const loaded = await this.#loadImage(imageUrl);
-                if (loaded.blob) {
-                    // A 200 response can still be a Cloudflare challenge page or
-                    // an error document. Only accept responses that identify as
-                    // images, otherwise try the next mirror so HTML never ends
-                    // up inside the ZIP as if it were a page.
-                    const contentType = loaded.contentType;
-                    if (contentType !== null && !contentType.toLowerCase().startsWith("image/")) {
-                        lastStatus = "unexpected content-type \"" + contentType + "\"";
-                        continue;
-                    }
-                    // Reject suspiciously small responses that are unlikely to
-                    // be valid images (e.g. a 1x1 pixel placeholder, an empty
-                    // error page, or a "blocked" icon). The vast majority of
-                    // nhentai pages are well over 1 KB; anything below this
-                    // threshold is almost certainly not a real image.
-                    if (loaded.blob.size < this.minImageBytes) {
-                        lastStatus = "response too small (" + loaded.blob.size + " bytes)";
-                        continue;
-                    }
-                    if (this.useZip === "folder") {
-                        // Old-school output: no archive at all — one image
-                        // file per page, directly inside the gallery folder in
-                        // the browser's download directory (the download
-                        // manager creates the subfolder from the filename).
-                        const { url, revoke } = await this.#urlForBlob(loaded.blob as Blob);
-                        try {
-                            await this.#saveArtifact(url, this.path + "/" + filename);
-                        } catch (error) {
-                            if (revoke !== null) revoke();
-                            throw "Failed to save image to " + filename + " (" + error + ").";
-                        }
-                        if (revoke !== null) {
-                            setTimeout(revoke, this.revokeObjectUrlDelayMs);
-                        }
-                        return;
-                    }
-                    await new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onload = () => {
-                            resolve(this.#zip.file(this.path + '/' + filename, reader.result as null));
-                        };
-                        reader.onerror = reject;
-                        reader.readAsArrayBuffer(loaded.blob as Blob);
-                    });
-                    return;
-                }
-                lastStatus = loaded.lastStatus;
-            }
-            throw this.#imageFetchFailureMessage(lastStatus);
-        } else { // We don't need to update progress here because it goes too fast anyway
+        if (this.useZip === "raw") {
             // Raw mode cannot inspect the response before Chrome starts the
             // download. Use the canonical original-image URL and report startup
             // errors through the downloads API callback (routed through
             // #saveArtifact so the offscreen document can relay to the worker).
+            // Pages are numbered (001.jpg…) inside a folder named after the
+            // gallery so the download manager groups them like every other
+            // format does.
             const imageUrl = imageUrls[0];
             try {
-                await this.#saveArtifact(imageUrl, this.path.replace(/[\\:*?"<>|]/g, '') + "-" + filename);
+                await this.#saveArtifact(imageUrl, this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
             } catch (error) {
                 throw "Failed to download original image (" + error + ").";
             }
+            return;
+        }
+
+        // ZIP/CBZ and PDF share the fetch + validation loop; only the payload
+        // handling differs (archive entry vs in-memory page list).
+        const validated = await this.#loadValidatedImage(imageUrls);
+        if (this.useZip === "pdf") {
+            // Keep the raw bytes; encoding decisions happen once, at assembly.
+            this.#pdfPages.push({
+                index: currPage,
+                bytes: new Uint8Array(await validated.blob.arrayBuffer()),
+                contentType: validated.contentType
+            });
+            return;
+        }
+        await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+                resolve(this.#zip.file(this.#archiveEntryName(filename), reader.result as null));
+            };
+            reader.onerror = reject;
+            reader.readAsArrayBuffer(validated.blob as Blob);
+        });
+    }
+
+    // Fetch the first mirror that answers with a real image. A 200 response
+    // can still be a Cloudflare challenge page or an error document: only
+    // responses that identify as images (and are not suspiciously small) are
+    // accepted, otherwise the next mirror is tried so HTML never ends up
+    // inside the archive as if it were a page.
+    async #loadValidatedImage(imageUrls: string[]): Promise<{ blob: Blob; contentType: string | null }> {
+        let lastStatus = "unknown error";
+        for (const imageUrl of imageUrls) {
+            const loaded = await this.#loadImage(imageUrl);
+            if (loaded.blob) {
+                const contentType = loaded.contentType;
+                if (contentType !== null && !contentType.toLowerCase().startsWith("image/")) {
+                    lastStatus = "unexpected content-type \"" + contentType + "\"";
+                    continue;
+                }
+                // Reject suspiciously small responses that are unlikely to
+                // be valid images (e.g. a 1x1 pixel placeholder, an empty
+                // error page, or a "blocked" icon). The vast majority of
+                // nhentai pages are well over 1 KB; anything below this
+                // threshold is almost certainly not a real image.
+                if (loaded.blob.size < this.minImageBytes) {
+                    lastStatus = "response too small (" + loaded.blob.size + " bytes)";
+                    continue;
+                }
+                return { blob: loaded.blob, contentType: contentType };
+            }
+            lastStatus = loaded.lastStatus;
+        }
+        throw this.#imageFetchFailureMessage(lastStatus);
+    }
+
+    // Entry name inside the archive. Flat layouts (the archive belongs to this
+    // gallery alone) put pages at the root so the archive is never
+    // Title.zip -> Title/001.jpg (the double-name hassle); shared batch
+    // archives keep one folder per gallery.
+    #archiveEntryName(filename: string): string {
+        return this.#archiveLayout === "flat" ? filename : this.path + "/" + filename;
+    }
+
+    // Prepare one collected page for the PDF. RGB JPEGs are embedded as-is
+    // (fast and lossless); grayscale/CMYK JPEGs and PNG/GIF/WebP pages are
+    // re-encoded to RGB JPEG through an image canvas when the platform
+    // provides one (the offscreen document and MV3 workers both do).
+    async #preparePdfImage(bytes: Uint8Array, contentType: string | null): Promise<PdfImage> {
+        const info = jpegInfo(bytes);
+        if (info !== null && info.components === 3 && info.width > 0 && info.height > 0) {
+            return { bytes: bytes, width: info.width, height: info.height };
+        }
+        const reencoded = await this.#reencodeImageToJpeg(bytes, contentType);
+        if (reencoded === null) {
+            throw "PDF export cannot encode a page (no image canvas available in this context).";
+        }
+        return reencoded;
+    }
+
+    async #reencodeImageToJpeg(bytes: Uint8Array, contentType: string | null): Promise<PdfImage | null> {
+        const createImageBitmapFn = (globalThis as any).createImageBitmap;
+        const OffscreenCanvasCtor = (globalThis as any).OffscreenCanvas;
+        if (typeof createImageBitmapFn !== "function" || typeof OffscreenCanvasCtor !== "function") {
+            return null;
+        }
+        try {
+            const bitmap = await createImageBitmapFn(new Blob([bytes], { type: contentType || "image/jpeg" }));
+            try {
+                const canvas = new OffscreenCanvasCtor(bitmap.width, bitmap.height);
+                const ctx = canvas.getContext("2d");
+                if (!ctx) {
+                    return null;
+                }
+                // JPEG has no alpha channel: flatten transparency onto white
+                // instead of letting transparent pages turn black.
+                ctx.fillStyle = "#FFFFFF";
+                ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                ctx.drawImage(bitmap, 0, 0);
+                const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.92 });
+                return {
+                    bytes: new Uint8Array(await blob.arrayBuffer()),
+                    width: bitmap.width,
+                    height: bitmap.height
+                };
+            } finally {
+                if (bitmap && typeof bitmap.close === "function") {
+                    bitmap.close();
+                }
+            }
+        } catch (_) {
+            return null;
         }
     }
 
@@ -479,16 +578,49 @@ export default class Downloader
     isAwaitingAbort: boolean = false;
     // When set, ZIP image fetches run in this tab's page context first.
     sourceTabId: number | null = null;
-    // When set, artifacts (zip blobs, folder-mode images, raw CDN URLs) are
-    // saved through this function instead of chrome.downloads. The offscreen
-    // document sets it to a relay, because chrome.downloads is not exposed in
-    // offscreen documents (only chrome.runtime is).
+    // When set, artifacts (zip/pdf blobs, raw CDN URLs) are saved through this
+    // function instead of chrome.downloads. The offscreen document sets it to
+    // a relay, because chrome.downloads is not exposed in offscreen documents
+    // (only chrome.runtime is).
     saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string };
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string };
+    // "flat" = this gallery owns the whole archive (pages at the root);
+    // "nested" = shared batch archive (one folder per gallery inside).
+    #archiveLayout: string = "nested";
+    // Pages collected for PDF assembly, filled in page order at the end.
+    #pdfPages: Array<{ index: number; bytes: Uint8Array; contentType: string | null }> = [];
 
     // Progress info
     #progressPercent: number;
     #progressName: string | null;
     #progressZipping: boolean;
     #progressRetry: string | null = null;
+}
+// Make a downloads-API filename safe enough that Chrome never discards it:
+// keep the subfolder structure (a/b/c.jpg), strip control and reserved
+// characters per segment, drop leading dots and trailing dots/spaces (Windows
+// rejects those), bound segment length, and fall back to the gallery name when
+// nothing usable is left. This runs right before chrome.downloads.download for
+// every artifact (archives, PDFs, raw pages).
+export function sanitizeArtifactFilename(filename: string, fallbackStem: string): string {
+    const segments = String(filename).split("/");
+    const cleanedSegments: string[] = [];
+    for (const segment of segments) {
+        let cleaned = segment
+            .replace(/[\x00-\x1f\x7f]/g, "")
+            .replace(/[\\:*?"<>|]/g, "")
+            .replace(/^\.+/, "")
+            .replace(/[. ]+$/g, "");
+        if (cleaned.length > 120) {
+            cleaned = cleaned.slice(0, 120).replace(/[. ]+$/g, "");
+        }
+        if (cleaned !== "") {
+            cleanedSegments.push(cleaned);
+        }
+    }
+    let joined = cleanedSegments.join("/");
+    if (joined === "" || joined === "/") {
+        joined = sanitizeArtifactFilename(String(fallbackStem || "download"), "download");
+    }
+    return joined;
 }

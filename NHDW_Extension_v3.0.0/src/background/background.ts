@@ -228,10 +228,16 @@ module background
         return currentDownloader == null || currentDownloader.isDone();
     }
 
-    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null) {
+    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string }) {
         const signal = beginJob();
         let zip = new JSZip();
-        currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
+        // Single-gallery jobs always own their archive: pages go to the root
+        // and the file is named after the gallery (no Title/Title double name).
+        const settings: any = { archiveLayout: "flat" };
+        if (options && options.useZip) {
+            settings.useZip = options.useZip;
+        }
+        currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
         if (typeof sourceTabId === "number") {
             currentDownloader.sourceTabId = sourceTabId;
         }
@@ -243,10 +249,10 @@ module background
             .catch(function(error) { clearJobMarker(); throw error; });
     }
 
-    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null) {
+    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
         beginJob();
         let zip = new JSZip();
-        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId)
+        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId, options)
             .then(() => clearJobMarker())
             .catch(function(error) {
                 clearJobMarker();
@@ -264,12 +270,14 @@ module background
         progressCallback: Function,
         downloadAtEnd: boolean,
         galleryMetadata: Record<string, any> = {},
-        sourceTabId?: number | null
+        sourceTabId?: number | null,
+        options?: { useZip?: string; downloadSeparately?: boolean }
     ) {
         let downloadName: string = "";
         let duplicateBehaviour: string = "";
         let replaceSpaces: boolean = false;
         let downloadSeparately: boolean = false;
+        let maxConcurrentDownloads: string | undefined;
         await new Promise((resolve, _reject) => {
             resolve(
                 chrome.storage.sync.get({
@@ -283,9 +291,24 @@ module background
                     duplicateBehaviour = elems.duplicateBehaviour;
                     replaceSpaces = elems.replaceSpaces;
                     downloadSeparately = elems.downloadSeparately;
+                    maxConcurrentDownloads = elems.maxConcurrentDownloads;
                 })
             );
         });
+        // A per-job override (the popup's similar-gallery panel always asks
+        // for one archive per selected gallery) beats the stored "download
+        // each file separately" option.
+        if (options && options.downloadSeparately !== undefined) {
+            downloadSeparately = !!options.downloadSeparately;
+        }
+        // Each gallery in a separate archive owns that archive: flat entries,
+        // file named after the gallery. One shared archive keeps a folder per
+        // gallery inside so titles never collide.
+        const gallerySettings: any = { archiveLayout: downloadSeparately ? "flat" : "nested" };
+        if (options && options.useZip) {
+            gallerySettings.useZip = options.useZip;
+            gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
+        }
         let names: Array<string> = [];
         let length = Object.keys(allDoujinshis).length;
         let allKeys = Object.keys(allDoujinshis);
@@ -368,7 +391,7 @@ module background
                 }
                 currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
                 downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
-                zipName, jobAbortController ? jobAbortController.signal : null);
+                zipName, jobAbortController ? jobAbortController.signal : null, undefined, gallerySettings);
                 if (typeof sourceTabId === "number") {
                     currentDownloader.sourceTabId = sourceTabId;
                 }
@@ -415,9 +438,9 @@ module background
         }
     }
 
-    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null) {
+    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
         beginJob();
-        downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId)
+        downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId, options)
             .then(() => clearJobMarker())
             .catch(function(error) {
                 clearJobMarker();
@@ -434,7 +457,8 @@ module background
         errorCallback: Function,
         progressCallback: Function,
         url: string,
-        sourceTabId?: number | null
+        sourceTabId?: number | null,
+        options?: { useZip?: string; downloadSeparately?: boolean }
     ) {
         let downloadName: string = "";
         await new Promise((resolve, _reject) => {
@@ -498,7 +522,7 @@ module background
                     }
                     allDoujinshis[card.id] = tmpName;
                 }
-                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId);
+                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId, options);
             }
         }
     }
@@ -520,6 +544,16 @@ module background
             currentDownloader!.updateProgressLatest(updateCallback);
         }
     }
+}
+
+// Popup format choices arrive as a per-job override. "folder" is the retired
+// image-folder format: map it to its replacement (PDF) so old callers keep
+// working; unknown values return undefined and the stored default applies.
+function normalizeFormatOverride(value: any): string | undefined {
+    const normalized = value === "folder" ? "pdf" : value;
+    return (normalized === "zip" || normalized === "cbz" || normalized === "pdf" || normalized === "raw")
+        ? normalized
+        : undefined;
 }
 
 // NOTE: MV3 service workers run in a worker global scope without `window`.
@@ -817,10 +851,18 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         const startRelayedJob = (relayedMessage: any) => {
             readDownloadOptions((options) => {
                 const formatOverride = relayedMessage.formatOverride;
-                if (formatOverride === "zip" || formatOverride === "cbz" || formatOverride === "folder" || formatOverride === "raw") {
+                // "folder" is the retired image-folder format; its replacement
+                // is PDF, so old callers map across instead of failing.
+                const normalizedFormat = formatOverride === "folder" ? "pdf" : formatOverride;
+                if (normalizedFormat === "zip" || normalizedFormat === "cbz" || normalizedFormat === "pdf" || normalizedFormat === "raw") {
                     // Popup format choices affect this job only; do not mutate
                     // the user's persisted default in chrome.storage.sync.
-                    options.useZip = formatOverride;
+                    options.useZip = normalizedFormat;
+                }
+                if (relayedMessage.separate) {
+                    // The popup's similar-gallery selection asks for one
+                    // archive per gallery, overriding the stored default.
+                    options.downloadSeparately = true;
                 }
                 background.setJobMarker(true);
                 // Resolve the nhentai image CDN config (GET /api/v2/cdn, cached
@@ -852,9 +894,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         if (request.action === "downloadDoujinshi") {
             return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId, formatOverride: request.formatOverride });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId, formatOverride: request.formatOverride, separate: request.separate });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId, formatOverride: request.formatOverride });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId, formatOverride: request.formatOverride, separate: request.separate });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
@@ -921,7 +963,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     });
                 },
                 request.name,
-                request.tabId
+                request.tabId,
+                { useZip: normalizeFormatOverride(request.formatOverride) }
             );
             sendResponse({ result: "started" });
         });
@@ -946,7 +989,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     });
                 },
                 request.galleryMetadata || {},
-                request.tabId
+                request.tabId,
+                { useZip: normalizeFormatOverride(request.formatOverride), downloadSeparately: request.separate === undefined ? undefined : !!request.separate }
             );
             sendResponse({ result: "started" });
         });
@@ -972,7 +1016,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     });
                 },
                 request.url,
-                request.tabId
+                request.tabId,
+                { useZip: normalizeFormatOverride(request.formatOverride), downloadSeparately: request.separate === undefined ? undefined : !!request.separate }
             );
             sendResponse({ result: "started" });
         });

@@ -118,11 +118,23 @@ const galleryById = {
 };
 
 // Distinct fake "image" bytes so we can confirm the ZIP has 3 different files.
-const pageBytes = [
-    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe0]); return b; })(),
-    (() => { const b = new Uint8Array(2000); b.set([0x89, 0x50, 0x4e, 0x47, 0x0a]); return b; })(),
-    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe1]); return b; })()
-];
+// Each is a minimal JPEG with a real SOF0 frame (distinct dimensions per page)
+// so the PDF output path can parse dimensions and embed the bytes verbatim.
+function jpegPage(width, height) {
+    const b = new Uint8Array(2000);
+    b.set([
+        0xff, 0xd8,                          // SOI
+        0xff, 0xc0, 0x00, 0x11, 0x08,        // SOF0, length 17, precision 8
+        (height >> 8) & 0xff, height & 0xff, // height
+        (width >> 8) & 0xff, width & 0xff,   // width
+        0x03,                                // 3 components (RGB)
+        0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01
+    ]);
+    b[b.length - 2] = 0xff;
+    b[b.length - 1] = 0xd9;                  // EOI
+    return b;
+}
+const pageBytes = [jpegPage(1280, 1808), jpegPage(1280, 1700), jpegPage(1280, 1600)];
 
 let failImages = false;
 const failMediaIds = new Set();
@@ -261,7 +273,9 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     const zip = await JSZip.loadAsync(buf);
     const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
-    const expected = ["Downloads/Test/001.jpg", "Downloads/Test/002.png", "Downloads/Test/003.jpg"];
+    // Single-gallery archives are flat: pages at the root, archive named
+    // after the gallery (no Title/Title double folder).
+    const expected = ["001.jpg", "002.png", "003.jpg"];
     if (JSON.stringify(names) !== JSON.stringify(expected)) {
         fail("ZIP entries mismatch. Expected " + JSON.stringify(expected) + " got " + JSON.stringify(names));
     }
@@ -294,11 +308,41 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (JSON.stringify(rawUrls) !== JSON.stringify(expectedRaw)) {
         fail("raw mode URLs mismatch. Expected " + JSON.stringify(expectedRaw) + " got " + JSON.stringify(rawUrls));
     }
-    if (downloads.some((d) => !d.filename.startsWith("Downloads/RawTest-"))) {
-        fail("raw mode filename does not use the configured path: " +
-            downloads.map((d) => d.filename).join(", "));
+    const rawNames = downloads.map((d) => d.filename).sort();
+    const expectedRawNames = ["Downloads/RawTest/001.jpg", "Downloads/RawTest/002.png", "Downloads/RawTest/003.jpg"];
+    if (JSON.stringify(rawNames) !== JSON.stringify(expectedRawNames)) {
+        fail("raw mode filenames must be a titled folder of numbered pages, expected " +
+            JSON.stringify(expectedRawNames) + " got " + JSON.stringify(rawNames));
     }
     console.log("PASS phase 2: raw mode issued 3 per-page downloads to the runtime-configured image CDN");
+
+    // ---- Phase 2b: PDF mode (one titled file per gallery) ------------------
+    downloads.length = 0;
+    syncSettings = { useZip: "pdf", maxConcurrentDownloads: "3" };
+    fireDownload("Downloads/PdfTest", "PdfTest");
+    await waitFor(() => downloads.length === 1, "PDF mode did not deliver a file");
+    const pdfDownload = downloads[0];
+    if (pdfDownload.filename !== "Downloads/PdfTest.pdf") {
+        fail("PDF filename must be the gallery name, got " + pdfDownload.filename);
+    }
+    if (!/^data:application\/pdf;base64,/.test(pdfDownload.url)) {
+        fail("PDF download URL must be an application/pdf data URL, got " + pdfDownload.url.slice(0, 50));
+    }
+    const pdfBytes = Buffer.from(pdfDownload.url.split(",")[1], "base64");
+    const pdfText = pdfBytes.toString("latin1");
+    if (!pdfText.startsWith("%PDF-1.4")) {
+        fail("PDF header missing");
+    }
+    if (!pdfText.includes("/Count 3") || pdfText.split("/Filter /DCTDecode").length - 1 !== 3) {
+        fail("PDF must embed one JPEG per page (3 pages)");
+    }
+    if (!pdfText.includes("/MediaBox [0 0 1280 1808]")) {
+        fail("PDF page 1 must use the image dimensions");
+    }
+    if (!pdfText.endsWith("%%EOF\n")) {
+        fail("PDF trailer missing");
+    }
+    console.log("PASS phase 2b: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.filename);
 
     // ---- Phase 3: raw mode with failing downloads -------------------------
     sentMessages.length = 0;

@@ -111,7 +111,7 @@ function applyCdnServers(options: any) {
 }
 
 // Ask the service worker to hand a URL to the download manager. The URL is
-// either a blob: object URL created here (zip/folder mode) or the original
+// either a blob: object URL created here (zip/pdf mode) or the original
 // CDN URL (raw mode). Blob URLs are extension-origin, so the worker can
 // download them even though it cannot create object URLs itself.
 function saveViaServiceWorker(url: string, filename: string): Promise<void> {
@@ -220,8 +220,10 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     const signal = beginJob();
     jobRunning = true;
     let zip = new JSZip();
+    // Single-gallery jobs own their archive: pages at the root, file named
+    // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
-        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined });
+        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat" });
     currentDownloader.saveUrl = saveViaServiceWorker;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -278,6 +280,14 @@ async function downloadAllDoujinshisAsync(
     let duplicateBehaviour: string = options.duplicateBehaviour || "rename";
     let replaceSpaces: boolean = options.replaceSpaces !== undefined ? options.replaceSpaces : true;
     let downloadSeparately: boolean = !!options.downloadSeparately;
+    // Each gallery in a separate archive owns that archive (flat entries,
+    // named after the gallery); a shared batch archive keeps one folder per
+    // gallery inside.
+    const gallerySettings: any = {
+        useZip: options.useZip,
+        maxConcurrentDownloads: options.maxConcurrentDownloads,
+        archiveLayout: downloadSeparately ? "flat" : "nested"
+    };
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;
     let allKeys = Object.keys(allDoujinshis);
@@ -401,7 +411,7 @@ async function downloadAllDoujinshisAsync(
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip,
             zipName, jobAbortController ? jobAbortController.signal : null, undefined,
-            { useZip: options.useZip, maxConcurrentDownloads: options.maxConcurrentDownloads });
+            gallerySettings);
             currentDownloader.saveUrl = saveViaServiceWorker;
             if (typeof sourceTabId === "number") {
                 currentDownloader.sourceTabId = sourceTabId;
