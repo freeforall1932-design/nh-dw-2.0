@@ -834,7 +834,9 @@ async function runExtensionTests(ctx) {
                 } else if (jszip) {
                     const zip = await jszip.loadAsync(buf);
                     const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
-                    const expected = ["NHDW_E2E/123456/001.jpg", "NHDW_E2E/123456/002.png", "NHDW_E2E/123456/003.jpg"];
+                    // Single-gallery archives are flat: pages at the root,
+                    // archive named after the gallery (no NHDW_E2E/123456/001.jpg).
+                    const expected = ["001.jpg", "002.png", "003.jpg"];
                     if (JSON.stringify(names) !== JSON.stringify(expected)) {
                         fail("ZIP entries match the gallery pages", "expected " + JSON.stringify(expected) + " got " + JSON.stringify(names));
                     } else {
@@ -937,7 +939,8 @@ async function runExtensionTests(ctx) {
                     if (jszip) {
                         const zip = await jszip.loadAsync(buf);
                         const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir);
-                        if (names.length === 3 && names.every((n) => n.includes("Fixture_Gallery/"))) {
+                        // Flat single-gallery archive: numbered pages at the root.
+                        if (names.length === 3 && names.every((n) => /^[0-9]{3}\.(jpg|png)$/.test(n))) {
                             ok("popup-driven download completes", path.basename(zipPath) + " with 3 pages (UI -> SW -> offscreen -> chrome.downloads)");
                         } else {
                             fail("popup-driven download completes", "unexpected entries: " + names.join(", "));
