@@ -738,7 +738,7 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
 // other message must return false or Chrome logs "A listener indicated an
 // asynchronous response by returning true, but the message channel closed
 // before a response was received" once the sender goes away.
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (!request) {
         return false;
     }
