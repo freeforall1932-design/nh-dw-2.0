@@ -86,6 +86,15 @@ function wireActiveJobControls() {
             });
         });
     }
+    const pauseResume = document.getElementById('buttonPause') || document.getElementById('buttonResume');
+    if (pauseResume) {
+        const action = pauseResume.id === 'buttonPause' ? 'pause' : 'resume';
+        pauseResume.addEventListener('click', function() {
+            chrome.runtime.sendMessage({ action: action }, () => {
+                chrome.runtime.sendMessage({ action: 'updateProgress' });
+            });
+        });
+    }
     const clearQueue = document.getElementById('buttonClearQueue');
     if (clearQueue) {
         clearQueue.addEventListener('click', function() {
@@ -104,7 +113,7 @@ function wireActiveJobControls() {
 // progress tick, with offscreen.html as the sender.
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
-        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry, request.queued);
+        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry, request.queued, request.paused);
     } else if (request.action === "downloadError") {
         // Label the failure kind (metadata / Cloudflare / image / archive /
         // cancellation) so the user understands what went wrong at a glance.
@@ -148,7 +157,7 @@ export default class Popup
     //#endregion "singleton"
 
     // Update progress bar on the preview popup
-    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string, queued: number = 0) {
+    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string, queued: number = 0, paused: boolean = false) {
         if (isZipping && progress == 100) { // File is being downloaded
             document.getElementById('action')!.innerHTML = message.downloadDone();
             // Add event listener after updating the HTML content
@@ -165,7 +174,7 @@ export default class Popup
                 }
             }, 0);
         } else { // Download in progress
-            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry, queued);
+            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry, queued, paused);
             // Add event listeners after updating the HTML content
             setTimeout(() => {
                 const buttonBack = document.getElementById('buttonBack');
@@ -187,6 +196,7 @@ export default class Popup
                     });
                 }
             }, 0);
+            setTimeout(wireActiveJobControls, 0);
         }
     }
 

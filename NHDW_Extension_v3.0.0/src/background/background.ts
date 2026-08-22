@@ -851,7 +851,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                         doujinshiName: response.doujinshiName,
                         isZipping: response.isZipping,
                         retry: response.retry,
-                        queued: response.queued
+                        queued: response.queued,
+                        paused: response.paused
                     });
                 }
                 sendResponse({ result: "success" });

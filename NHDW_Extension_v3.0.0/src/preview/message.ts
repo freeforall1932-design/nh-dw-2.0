@@ -13,12 +13,15 @@ export module message
             'Please start the download again.</p><br/><input type="button" id="buttonDismiss" value="Got it"/>';
     }
     
-    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string, queued: number = 0): string {
+    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string, queued: number = 0, paused: boolean = false): string {
         const retryHtml = retry ? '<br/><small>Retrying (' + retry + ')...</small>' : '';
         const queueHtml = queued > 0
             ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
             : '';
-        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel current"/>`;
+        const pauseHtml = paused
+            ? '<br/><b>Paused.</b> Completed pages are kept for this browser session.<br/><input type="button" id="buttonResume" value="Resume current"/>'
+            : '<br/><input type="button" id="buttonPause" value="Pause current"/>';
+        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}${pauseHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel current"/>`;
     }
     
     export function invalidPage(): string {

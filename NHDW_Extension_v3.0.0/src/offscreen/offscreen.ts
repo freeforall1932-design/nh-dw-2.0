@@ -178,7 +178,7 @@ function errorCallback(error: string) {
 
 function broadcastQueueState() {
     if (latestProgress !== null) {
-        chrome.runtime.sendMessage(Object.assign({ from: "offscreen", action: "updateProgress", queued: queuedJobs.length }, latestProgress));
+        chrome.runtime.sendMessage(Object.assign({ from: "offscreen", action: "updateProgress", queued: queuedJobs.length, paused: jobPaused }, latestProgress));
     }
 }
 
@@ -561,7 +561,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         jobPaused = false;
         sendResponse({ result: "success", paused: false });
     } else if (request.action === "getProgress") {
-        sendResponse(Object.assign({ result: "success", queued: queuedJobs.length },
+        sendResponse(Object.assign({ result: "success", queued: queuedJobs.length, paused: jobPaused },
             latestProgress === null
                 ? { progress: undefined, doujinshiName: null, isZipping: false, retry: null }
                 : latestProgress));
