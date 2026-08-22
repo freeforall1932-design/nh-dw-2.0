@@ -834,6 +834,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
             return true;
+        } else if (request.action === "pause" || request.action === "resume") {
+            askOffscreen({ action: request.action }, (response) => sendResponse(response || { result: "error" }));
+            return true;
         } else if (request.action === "clearQueue") {
             askOffscreen({ action: "clearQueue" }, (response) => {
                 sendResponse(response || { result: "error" });

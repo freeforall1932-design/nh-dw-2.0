@@ -45,6 +45,7 @@ let jobAbortController: AbortController | null = null;
 // a batch (the last gallery's Downloader is done but the batch is not) and
 // used to make the popup misreport a running batch as finished/interrupted.
 let jobRunning = false;
+let jobPaused = false;
 
 // Jobs are serialized inside the long-lived offscreen document. Keeping this
 // queue here (rather than in the MV3 worker) means it remains available while
@@ -510,6 +511,8 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
 }
 
 function goBack() {
+    jobPaused = false;
+    if (currentDownloader) currentDownloader.resume();
     abortJob();
     jobRunning = false;
     if (currentDownloader !== null && !currentDownloader.isDone()) {
@@ -520,6 +523,7 @@ function goBack() {
 }
 
 function runQueuedJob(request: any) {
+    jobPaused = false;
     if (request.action === "downloadDoujinshi") {
         downloadDoujinshi(request.json, request.path, request.name, request.tabId, request.options);
     } else if (request.action === "downloadAllDoujinshis") {
@@ -548,6 +552,14 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     } else if (request.action === "goBack") {
         goBack();
         sendResponse({ result: "success" });
+    } else if (request.action === "pause") {
+        if (currentDownloader) currentDownloader.pause();
+        jobPaused = true;
+        sendResponse({ result: "success", paused: true });
+    } else if (request.action === "resume") {
+        if (currentDownloader) currentDownloader.resume();
+        jobPaused = false;
+        sendResponse({ result: "success", paused: false });
     } else if (request.action === "getProgress") {
         sendResponse(Object.assign({ result: "success", queued: queuedJobs.length },
             latestProgress === null
