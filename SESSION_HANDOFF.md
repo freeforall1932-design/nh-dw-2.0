@@ -1,202 +1,218 @@
 # Session handoff — nh-dw-2.0 / NHentai Downloader
 
-Written 2026-08-20 after the offscreen API-surface fix + folder output mode.
-Previous work landed via PR #12 (tab-first image fetches) — now on `main` (`c6530af`).
+Written 2026-08-26 after the optional API key mode, first-run gate, one-shot
+server archive support, and the key-persistence fix.
+Previous work landed via PR #15, #16 and #17 (SvelteKit site + API v2 gallery
+metadata, merge commit `c869d37`) — all on `main`.
 
-- Repo checkout: /home/user/nh-dw-2.0
-- Session branch (this session; never switch/push any other branch): `arena/01a01f4d-nh-dw-2-0`
-- Baseline: `main` at `c6530af` (PR #12 merged) == `fad5476`.
-- **Open PR: https://github.com/freeforall1932-design/nh-dw-2.0/pull/14**
-  ("Fix offscreen document API surface; add folder output mode"). Do NOT open
-  a second PR — push follow-ups to the session branch and the PR updates.
-- This session's commits (oldest first):
-  - `fd34186` Salvage local fixes from nh-dw-2.0-main-fixed.zip
-  - `120279d` Fix offscreen document API surface; add folder output mode; tab-session batch
-  - `7b56877` Normalize useZip to a whitelist; handoff for fresh sessions
-    (pre-merge review: useZip whitelist in Downloader so a corrupt/legacy
-    value can never make a download silently save nothing; regression test)
+## Repository
 
-## How to pick up (this sandbox often looks like a fresh clone of main)
+- Checkout: `/home/user/nh-dw-2.0`
+- Session branch (never switch/push any other branch): `arena/01a023e5-nh-dw-2-0`
+- Base: `main` at `c869d37` (merge of PR #17)
+- **PR: https://github.com/freeforall1932-design/nh-dw-2.0/pull/22**
+  ("Add optional nhentai API key mode with first-run gate and one-shot archive
+  downloads"). Opened from the session branch; merged with a **merge commit**
+  on 2026-08-26 (confirm the merge commit hash with
+  `gh pr view 22 --json mergeCommit,state`). Do NOT open another PR for this
+  work — any follow-up starts from `main` on a fresh session branch.
 
-  git fetch origin '+refs/heads/arena/01a01f4d-nh-dw-2-0:refs/remotes/origin/arena/01a01f4d-nh-dw-2-0'
-  git reset --hard origin/arena/01a01f4d-nh-dw-2-0
-  # confirm the work is present (verify by content, not a tip hash - the doc
-  # commit moves with every handoff edit). Expect, at minimum, these on the tip:
-  #   git log --oneline | grep -q 120279d        # the main fix commit
-  #   grep -q saveDownload  NHDW_Extension_v3.0.0/js/offscreen.js
-  #   grep -q "Whitelist"   NHDW_Extension_v3.0.0/src/background/Downloader.ts
-  cd NHDW_Extension_v3.0.0
-  npm ci                 # funding/audit noise is OK; NEVER npm audit fix --force
-  npm run build
-  npm test               # 76 passing, 1 pending (live API)
-  npm run test:smoke
-  npm run test:e2e
-  # after source edits: copy webpack js/*.js into NHDW_Release_v3.0.0/js/
-  # and confirm `diff -rq NHDW_Extension_v3.0.0/js NHDW_Release_v3.0.0/js` is empty
-  Commit + push ONLY to arena/01a01f4d-nh-dw-2-0 (git push origin arena/01a01f4d-nh-dw-2-0).
+## Commits on the session branch (oldest first)
 
-## CI status (as of this writing, run on the PR)
+- `91fadca` Add optional API key mode with first-run gate and one-shot archive downloads
+- `09127b7` Keep the stored API key across URL changes, restarts and disable/re-enable
+- (handoff commit) Updated session handoff + improvement log
 
-- Offline suites (fixtures + window-less VM bundles): **PASS**
-- End-to-end in real Google Chrome / real Brave: **FAIL at browser launch**
-  (~15–22s: Chrome `Runtime.enable` timeout shape / Brave SIGTRAP, no DevTools
-  port — the runner/environment issue tracked as backlog #10 since the
-  previous session; the `fad5476` harness hardening did not cure it on CI).
-  Do not "fix" the extension code for this — reproduce locally with
-  `npm run test:browser` first.
+## How to restore in a fresh sandbox
 
-## The bug found this session (real-browser report from the user)
+    cd /home/user/nh-dw-2.0
+    git fetch origin
+    git checkout arena/01a023e5-nh-dw-2-0
+    git reset --hard origin/arena/01a023e5-nh-dw-2-0
+    # If the PR is already merged, everything is also on main:
+    #   git checkout main && git reset --hard origin/main
 
-Symptoms on a real machine (Chrome, reload unpacked `NHDW_Release_v3.0.0`):
+    # Verify by markers, not by a moving tip hash:
+    grep -q "fetchNhentaiApi"            NHDW_Extension_v3.0.0/src/utils/apiAuth.ts
+    grep -q "requestArchiveDownloadUrl"  NHDW_Extension_v3.0.0/src/background/ArchiveDownload.ts
+    grep -q "ensureApiGateThen"          NHDW_Extension_v3.0.0/src/preview/popup.ts
+    grep -q 'remove("allIds"'            NHDW_Extension_v3.0.0/src/preview/preview.ts
+    grep -q '"3.1.0"'                    NHDW_Extension_v3.0.0/manifest.json
 
-- Homepage scan + selection worked; clicking Download opened temporary tabs (the
-  selected-gallery resolver) and then NOTHING downloaded.
-- Console: `Uncaught TypeError: Cannot read properties of undefined (reading 'sync')`
-  at offscreen.js module load; `Uncaught (in promise) Error: Could not establish
-  connection. Receiving end does not exist.` in background.js; repeated
-  `Unchecked runtime.lastError: A listener indicated an asynchronous response by
-  returning true, but the message channel closed before a response was received`.
+    cd NHDW_Extension_v3.0.0
+    npm ci                  # NEVER run npm audit fix --force
+    npm run build
+    npm test                # 109 passing, 1 pending (live API)
+    npm run test:smoke
+    npm run test:e2e
 
-Root cause (confirmed against the Chrome docs): **"The runtime API is the only
-extensions API supported by offscreen documents."** The offscreen bundle called
-`chrome.storage.sync.get` at module top level (offscreen.ts) → `chrome.storage`
-is undefined in a real offscreen document → module crashed BEFORE
-`chrome.runtime.onMessage.addListener` registered → every relayed download died
-with "Receiving end does not exist". The sandbox harnesses never caught it
-because `scripts/e2e-offscreen.js` (and the downloader tests) stubbed
-`chrome.storage` / `chrome.downloads` in the offscreen context.
-`chrome.scripting` (tab injections) and `chrome.downloads` (zip save, raw mode)
-are equally unavailable in offscreen documents.
+    # Keep unpacked extension bundles synchronized after every source build:
+    cp js/*.js ../NHDW_Release_v3.0.0/js/
+    diff -rq js ../NHDW_Release_v3.0.0/js
 
-Secondary bug: the worker's `onMessage` listener returned `true` for
-fire-and-forget messages (offscreen progress broadcasts, `getGalleries` from the
-content script) without ever answering → the "message channel closed" noise.
+## What this session added
 
-## What this session changed (all committed on the session branch)
+### Two-mode design (the explicit boundary)
 
-1. **Offscreen document uses only `chrome.runtime`** (`src/offscreen/offscreen.ts`):
-   - No `chrome.storage` anywhere: download options (`useZip`, `downloadName`,
-     `duplicateBehaviour`, `replaceSpaces`, `downloadSeparately`,
-     `maxConcurrentDownloads`, `htmlParsing`) arrive in the relayed command —
-     the service worker reads `chrome.storage.sync` and attaches `options`.
-   - Artifacts are saved by the worker: offscreen sends
-     `{from:"offscreen", action:"saveDownload", url, filename}` → worker calls
-     `chrome.downloads.download` (blob: URLs are extension-origin, so this
-     works; raw mode relays the CDN URL the same way).
-   - Tab injections run in the worker: `fetchInTab` (image bytes, ISOLATED then
-     MAIN) and `fetchUrlInTab` (page text, MAIN) — see `tabImageFetch.ts`
-     (`scriptingAvailable()` picks direct vs relay; new `fetchUrlInPage`,
-     `fetchUrlFromTab`, exported `fetchImageInPage` — all self-contained
-     Promise chains, no async/await).
-   - The active-job marker is owned by the worker (`setJobMarker`): set when a
-     download is relayed, cleared on goBack / offscreenIdle / fallback finish.
-2. **`Downloader`** (`src/background/Downloader.ts`):
-   - New constructor `settings` arg (`{useZip, maxConcurrentDownloads}`) — when
-     present the class never touches `chrome.storage` (storage read remains the
-     fallback for the worker path and tests; now wrapped so an unavailable
-     storage cannot silently kill a job).
-   - New `saveUrl` hook: when set (offscreen → worker relay), zip blobs,
-     folder-mode images and raw CDN URLs all go through it instead of
-     `chrome.downloads` directly.
-   - **Folder mode** (`useZip === "folder"`): no archive — each validated page
-     is saved as `Downloads/<Title>/NNN.ext` through the same tab-first fetch +
-     mirror fallback + content-type/size validation. Save failure surfaces as
-     "Failed to save image to NNN.ext (…)" (classified as `image`).
-3. **Worker** (`src/background/background.ts`):
-   - `saveDownload` / `fetchInTab` / `fetchUrlInTab` handlers; `offscreenIdle`
-     clears the job marker before closing the document.
-   - `askOffscreen` retries once (close + recreate the document) when the
-     response is "Receiving end does not exist".
-   - Listener returns `true` ONLY on branches that answer (kills the
-     lastError noise); unknown actions (e.g. `getGalleries`) return `false`.
-   - `isDownloadFinished` treats "no receiving end" as "not downloading".
-4. **Batch via the user's tab session**: unresolved batch metadata and
-   `downloadAllPages` listing fetches go through the open nhentai tab first
-   (`fetchUrlFromTab`) before the extension-origin fallback — reuses any
-   completed Cloudflare clearance. Not a bypass: a challenged tab has nothing
-   to reuse and the fallback fails as before.
-5. **Folder output option**: Options → Download format → "Images in a folder
-   (no zip)"; popup shows "(images folder)" for single downloads and no archive
-   suffix for batch. `options.html` + `popup.ts`.
-6. **Salvaged from the user's `nh-dw-2.0-main-fixed.zip`** (its PR #11-era
-   local fixes, verified identical to `d24d735` otherwise):
-   - `web_accessible_resources` narrowed from `*` / `<all_urls>` to
-     `["Icon.png","Icon-grey.png"]` / `https://nhentai.net/*` (source + release
-     manifests; nothing else needs WAR — the only `getURL` use is the
-     icon in the worker). Guarded by a new manifest test.
-   - `scripts/smoke-mv3.js`: `chrome.storage.session` mock (the worker's
-     job marker uses it).
-   - `popup.ts`: duplicate `//#region "multiple download"` removed.
-7. **Honest harnesses**: `scripts/e2e-offscreen.js` now runs with a Proxy-backed
-   chrome stub that has NO storage/downloads/scripting (exactly like real
-   Chrome) and fails if the bundle touches storage or downloads; it simulates
-   the worker side (saveDownload → downloads, fetchInTab/fetchUrlInTab → tab
-   fetch) and adds tab-first image + tab-metadata test cases.
-   `scripts/e2e-relay.js` asserts the options relay, saveDownload,
-   fetchInTab (ISOLATED world), fetchUrlInTab (MAIN world), and that
-   broadcasts / unknown actions do not keep the channel open.
+nhentai's API v2 documents API keys as the auth method for third-party
+clients (`Authorization: Key YOUR_API_KEY`). The extension now supports both,
+with a hard boundary:
+
+| Concern | API key mode | Open tab mode (no key) |
+|---|---|---|
+| Metadata route order | keyed official API → open-tab read → plain fetch | open-tab read → plain fetch (byte-for-byte the PR #17 behavior) |
+| `Authorization` header | `Key <key>` on `nhentai.net/api/` URLs only | never created |
+| `429` handling | `Retry-After` backoff (clamped 0.25–15 s, max 2 retries) | n/a |
+| Batch downloads | independent of the open tab's session | resolve through the open NHentai tab only |
+| One-shot server archives | available (opt-in) | not available (endpoint requires auth) |
+
+Unified core (identical in both modes): download engine (queue, retries,
+exponential backoff, ZIP/CBZ assembly, raw/folder outputs, object-URL
+delivery), parsing/normalisation, Cloudflare detection, content scripts,
+popup UI after the gate, progress/summary messages, hidden same-tab frame.
+
+### First-run gate
+
+On first popup open a box asks for the API key with two explicit exits:
+**Submit key** (enters API key mode) and **Continue without API key**
+(remembers the decision, continues in open tab mode). A mode badge
+(`Mode: API key (official API)` / `Mode: open tab (no API key)`) is shown in
+single and batch previews. Key management also lives in the options page
+(set / clear / status line).
+
+### Persistence (and the bug that threatened it)
+
+The key, the gate decision and the archive toggle live in
+`chrome.storage.local`: they survive closing the browser, browser restarts
+and disabling/re-enabling the extension. Only **Clear key**, uninstalling the
+extension, or wiping extension data removes them.
+
+**Bug fixed in `09127b7`:** the popup bootstrap called
+`chrome.storage.local.clear()` whenever the popup opened on a different URL
+than last time (intended to reset the checkbox selection) — that would have
+wiped the stored key. Replaced with a targeted `remove("allIds")`,
+mirroring the content script. Regression guard in `test/apiauth.test.js`
+asserts the popup bundle never contains `storage.local.clear()`.
+
+### Keyed metadata route
+
+`fetchNhentaiApi()` in `src/utils/apiAuth.ts`: attaches the header only to
+`https://nhentai.net/api/` URLs (never CDN), adds a best-effort descriptive
+`User-Agent` per the API docs (dropped automatically where the runtime
+forbids it), and backs off on `429` using `Retry-After`. Wired into the
+popup single preview, the service-worker batch loop and the offscreen batch
+loop — always as the PRIMARY keyed route with fall-through to the keyless
+routes, so an invalid key can never break a download.
+
+### One-shot server archives (experimental, opt-in)
+
+`POST /api/v2/galleries/<id>/download?format=zip|cbz` (requires the key;
+returns `DownloadResponse { url, expires_at }` per the live OpenAPI spec).
+Implemented in `src/background/ArchiveDownload.ts` + `Downloader.ts`:
+opportunistic — any failure (401/403/503/429/network/malformed body) falls
+back to page-by-page. The signed delivery URL is fetched **without** the API
+key. Applies to ZIP/CBZ output and single-gallery archives only (batch
+accumulation keeps the shared ZIP). Option in the options page, default off.
+
+### Version + docs
+
+- Extension version 3.0.0 → **3.1.0** (both manifests; new version-sync test).
+- Release README: "API key mode (optional)" section with the boundary table,
+  archive-mode docs, persistence guarantee; fixed the stale `/api/gallery`
+  reference.
 
 ## Verification done (sandbox, all offline)
 
-- webpack build OK
-- `npm test`: 76 passing (75 at PR open + 1 corrupt-settings regression test),
-  1 pending (live API, opt-in RUN_LIVE_TESTS=1)
-- `npm run test:smoke` OK (worker + offscreen)
-- `npm run test:e2e` OK (worker, offscreen with no storage/downloads/scripting,
-  relay incl. save/fetch relays, content)
-- Release `js/*` copied and diff-identical to source build
-- `test:browser`: no Chrome/Brave in this sandbox ("No browser found" is the
-  harness, not a regression)
-- CI on the PR: offline suites PASS; browser jobs fail at launch (see above)
+- `npm run build`: PASS
+- `npm test`: **109 passing**, 1 pending (was 83 before this session)
+  - new `apiauth` suite: header construction, API-URL-only attachment, gate
+    decisions, mode-state transitions, Retry-After parsing/clamping,
+    429 retry/backoff/abort, popup-bundle persistence guard
+  - new `archive` suite: request URL, auth requirement, tolerant
+    DownloadResponse parsing, failure → null fallback, key never sent to the
+    delivery URL
+- `npm run test:smoke`: PASS (5/5)
+- `npm run test:e2e`: PASS, including two new worker phases:
+  - phase 8: keyed batch resolves metadata via the official API carrying
+    `Authorization: Key test-key-123`
+  - phase 9: keyless batch sends no Authorization header
+- `js/` and `NHDW_Release_v3.0.0/js/` identical after the build
+- Archive client implemented against the live OpenAPI spec
+  (`/api/v2/openapi.json`): endpoint contract, DownloadResponse schema,
+  API Key security scheme, rate limits (zip/cbz: 10/5min per IP, 7/5min per
+  user, 10/5min per key owner; metadata GET: 45/min keyed vs 20/min anon)
+- Live endpoint probes (no sandbox egress to nhentai at TLS level; probed via
+  managed fetch): `GET /api/v2/galleries/674496` returns live JSON; legacy
+  `/api/gallery/<id>` is dead ("Use new API"); shipped parser verified
+  end-to-end against the live 674496 payload (media_id 4128713, 31 pages,
+  all `.webp` → legacy code `w`)
 
-## What is left
+## Work list (what is left)
 
-- **Real-machine re-test** (the user has a working browser; the previous
-  session's must-dos now collapse into one pass after reloading unpacked):
-  1. Toolbar icon OK, no console errors on load.
-  2. Homepage: select 2+ galleries → Download. Expect: resolver temp tabs open
-     and close, then ONE progress run and the ZIP (or folder) landing in
-     Downloads. No "Could not establish connection".
-  3. Single gallery tab (fully loaded, not a CF interstitial) → Download.
-  4. Options → folder mode → single + batch download → `Downloads/<Title>/`
-     folders filled with the images.
-  5. `cd NHDW_Extension_v3.0.0 && npm run test:browser` (sudo for :443 fixture).
-- CI: the e2e-browser workflow runs offline suites + real Chrome/Brave; the
-  previous session's Chrome `Runtime.enable` timeout / Brave SIGTRAP were being
-  re-checked — confirm on the new commits.
+Real-browser pass (no Chrome/display in the sandbox; user side only), after
+reloading unpacked from `NHDW_Release_v3.0.0`:
+
+1. **Gate**: first popup open shows the key box. **Continue without API key**
+   → everything behaves exactly as the merged PR #17 build (single + batch +
+   ZIP/raw/folder; no temp tabs; hidden same-tab frame only after direct
+   routes fail).
+2. **Keyed mode**: paste a key from *nhentai.net → account settings → API
+   keys* (options page or the gate) → badge switches to *Mode: API key*;
+   single + batch downloads work; service-worker console shows keyed
+   `/api/v2/galleries/<id>` fetches with the Authorization header. This also
+   answers the previous handoff's open question about whether direct
+   same-tab/worker fetches of `/api/v2` are challenged — with a key they use
+   the official contract.
+3. **Persistence**: close the browser completely, reopen, popup → key still
+   saved, no gate. Disable/re-enable the extension → key still saved.
+4. **Archive endpoint**: enable *Use one-shot server archive downloads*,
+   download one gallery as ZIP → check whether `POST .../download` returns a
+   usable URL for the account (may depend on nhentai's `allow_downloads`
+   feature flag / tier); on any failure it must fall back to page-by-page.
+5. **Clear key** in options → gate reappears on next popup open.
+
+Follow-up decisions (not blocking):
+
+- If the archive endpoint is gated/unavailable for the user's account, keep
+  the toggle experimental (fallback already handles it) or remove the toggle.
+- Optional: key sync across the user's own devices via `chrome.storage.sync`
+  (currently deliberately local-only; user decision required before changing).
+- The `User-Agent` courtesy header is dropped where the runtime forbids it in
+  `fetch()`; a `declarativeNetRequest` rule could force it but would add a
+  new permission — deferred.
+
+## Dependency notes (unchanged)
+
+- `@types/node` pinned at 20.12.12 (newer Node types break the TypeScript 4.9
+  toolchain).
+- Production audit: 0 vulnerabilities. Development audit: transitive Mocha
+  advisories only — do NOT run `npm audit fix --force`.
 
 ## DO NOT
 
-- npm audit fix --force
-- Onion / Tor routing (item 9, intentionally DROPPED; a Chrome MV3 extension
-  cannot route through Tor, and the user's `.onion` URL only resolves in a Tor
-  browser, which cannot run this extension)
-- Claim the extension bypasses Cloudflare
-- Treat sandbox test:browser "No browser found" as a new bug
-- Switch/push any branch other than `arena/01a01f4d-nh-dw-2-0`
-- Delete/rename repo root or .git
+- Switch or push any branch other than this session's branch (and after the
+  merge, do not revive the PR — follow-ups start from `main`).
+- Run `npm audit fix --force`.
+- Claim the extension bypasses Cloudflare — API key mode is nhentai's
+  official API contract; keyless mode is unchanged.
+- Add Tor/onion routing support.
+- Attach the API key to anything but `https://nhentai.net/api/` URLs.
+- Store the key in `chrome.storage.sync`.
+- Treat sandbox browser-launch limitations as an extension regression
+  (no Chrome binary and no DISPLAY in the sandbox).
 
-## KEY FILES
+## Key files
 
-- `NHDW_Extension_v3.0.0/src/offscreen/offscreen.ts` (runtime-only offscreen)
-- `NHDW_Extension_v3.0.0/src/background/tabImageFetch.ts` (direct/relay tab fetch)
-- `NHDW_Extension_v3.0.0/src/background/Downloader.ts` (settings, saveUrl, folder)
-- `NHDW_Extension_v3.0.0/src/background/background.ts` (save/fetch relays, options, marker, returns)
-- `NHDW_Extension_v3.0.0/src/preview/popup.ts` (tabId + folder display)
-- `NHDW_Extension_v3.0.0/src/preview/selectedGalleryResolver.ts` (temp tabs for batch metadata)
-- `NHDW_Extension_v3.0.0/src/utils/utils.ts` (classifyError incl. "failed to save image")
-- `NHDW_Extension_v3.0.0/options.html` (folder option)
-- `NHDW_Extension_v3.0.0/test/downloader.test.js` (folder-mode block)
-- `NHDW_Extension_v3.0.0/test/manifest.test.js` (WAR guard)
-- `NHDW_Extension_v3.0.0/scripts/e2e-offscreen.js` (no storage/downloads/scripting)
-- `NHDW_Extension_v3.0.0/scripts/e2e-relay.js` (options + save/fetch relays + returns)
-- `NHDW_Extension_v3.0.0/scripts/smoke-mv3.js` (session mock)
-- `NHDW_Release_v3.0.0/js/*` must match webpack output
-
-## Layout
-
-- `NHDW_Extension_v3.0.0/` — TypeScript source, webpack → js/, tests, scripts
-- `NHDW_Release_v3.0.0/` — unpacked load folder (js must stay in sync)
-- `NHDW_Source_v3.0.0/` — older snapshot, do not treat as current
-- `nh-dw-2.0-main-fixed.zip` — the user's PR #11-era local snapshot (kept for
-  reference; everything salvageable from it has been ported)
+- `NHDW_Extension_v3.0.0/src/utils/apiAuth.ts`          ← mode state, headers, 429 backoff (new)
+- `NHDW_Extension_v3.0.0/src/background/ArchiveDownload.ts` ← archive endpoint client (new)
+- `NHDW_Extension_v3.0.0/src/background/Downloader.ts`   ← archive attempt + fallback
+- `NHDW_Extension_v3.0.0/src/background/background.ts`   ← keyed batch route, options relay
+- `NHDW_Extension_v3.0.0/src/offscreen/offscreen.ts`     ← keyed batch route (relayed key)
+- `NHDW_Extension_v3.0.0/src/preview/popup.ts`           ← gate, keyed preview, mode badges
+- `NHDW_Extension_v3.0.0/src/preview/preview.ts`         ← gate bootstrap, targeted allIds reset
+- `NHDW_Extension_v3.0.0/src/preview/message.ts`         ← gate/badge strings
+- `NHDW_Extension_v3.0.0/src/options/options.ts` + `options.html` (both copies)
+- `NHDW_Extension_v3.0.0/test/apiauth.test.js`, `test/archive.test.js` (new)
+- `NHDW_Extension_v3.0.0/scripts/e2e-worker.js`          ← phases 8–9 (mode boundary)
+- `NHDW_Release_v3.0.0/README.md`                        ← API key mode docs
+- `SESSION_HANDOFF.md`, `IMPROVEMENT_BACKLOG.md`          ← this file / the log
