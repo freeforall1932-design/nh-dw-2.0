@@ -5,6 +5,45 @@ import { message } from "./message";
 
 let popup = Popup.getInstance();
 
+// Ask the service worker (which owns the CDN config and chrome.permissions)
+// whether nhentai reported image hosts the extension has no host permission
+// for. If so, offer the optional https://*.nhentai.net grant from here —
+// permissions.request requires a user gesture, which only this click gives.
+// Downloads are never blocked by this: the worker only uses permitted hosts.
+function refreshCdnNotice() {
+    try {
+        chrome.runtime.sendMessage({ action: "getCdnStatus" }, (status: any) => {
+            const notice = document.getElementById("cdnNotice");
+            if (!notice || !status || status.result !== "success"
+                || !Array.isArray(status.missingOrigins) || status.missingOrigins.length === 0) {
+                return;
+            }
+            const missingOrigins: string[] = status.missingOrigins;
+            notice.innerHTML = message.cdnNotice(missingOrigins);
+            notice.hidden = false;
+            const grantButton = document.getElementById("buttonGrantCdn");
+            if (!grantButton) {
+                return;
+            }
+            grantButton.addEventListener("click", function() {
+                const granted = (ok: boolean) => {
+                    if (ok) {
+                        notice.hidden = true;
+                    }
+                };
+                try {
+                    const result: any = (chrome as any).permissions.request({ origins: missingOrigins }, (ok: boolean) => {
+                        granted(!!ok && !chrome.runtime.lastError);
+                    });
+                    if (result && typeof result.then === "function") {
+                        result.then(granted).catch(() => { /* user dismissed the prompt */ });
+                    }
+                } catch (_) { /* permissions API unavailable: notice stays visible */ }
+            });
+        });
+    } catch (_) { /* worker unreachable: no notice */ }
+}
+
 chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
     chrome.storage.sync.get({
         darkMode: false,
@@ -19,6 +58,9 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
 
         let currUrl = tabs[0].url as string;
         popup.url = currUrl;
+        // Independent of the download state: surface the optional host grant
+        // when nhentai's CDN config reports hosts we have no permission for.
+        refreshCdnNotice();
         chrome.storage.local.get({
             lastUrl: ""
         }, function(elemsLocal) {

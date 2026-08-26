@@ -41,6 +41,80 @@ async function getGalleryFromActiveTab(id: string): Promise<any | null> {
     return readGalleryFromTab(tabId, id);
 }
 
+function getOptionalApiHeaders(): Promise<Record<string, string>> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ apiKey: "" }, (stored: any) => {
+                const apiKey = typeof stored.apiKey === "string" ? stored.apiKey.trim() : "";
+                resolve(apiKey ? { "Authorization": "Key " + apiKey } : {});
+            });
+        } catch (_) {
+            resolve({});
+        }
+    });
+}
+
+async function getRelatedGalleries(galleryId: string): Promise<Array<{ id: string; title: string; pages: number }>> {
+    const response = await fetch("https://nhentai.net/api/v2/galleries/" + encodeURIComponent(galleryId) + "/related", {
+        credentials: "include",
+        cache: "no-store",
+        headers: await getOptionalApiHeaders()
+    });
+    if (!response.ok) {
+        throw new Error("Related galleries request failed (HTTP " + response.status + ").");
+    }
+    const payload = await response.json();
+    if (!payload || !Array.isArray(payload.result)) {
+        throw new Error("Related galleries response was invalid.");
+    }
+    const galleries: Array<{ id: string; title: string; pages: number }> = [];
+    for (const gallery of payload.result) {
+        if (!gallery || !Number.isFinite(Number(gallery.id))) {
+            continue;
+        }
+        // Related cards can lack both titles (nhentai itself shows
+        // "(Non-titled)"): keep the id visible so the row stays identifiable
+        // and the resulting file remains traceable.
+        const title = String(gallery.english_title || gallery.japanese_title || "").trim()
+            || ("(Non-titled) " + gallery.id);
+        galleries.push({
+            id: String(gallery.id),
+            title: title,
+            pages: Number(gallery.num_pages) || 0
+        });
+    }
+    return galleries;
+}
+
+function wireActiveJobControls() {
+    const buttonBack = document.getElementById('buttonBack');
+    if (buttonBack) {
+        buttonBack.addEventListener('click', function() {
+            const popup = Popup.getInstance();
+            chrome.runtime.sendMessage({ action: "goBack" }, function() {
+                popup.updatePreviewAsync(popup.url);
+            });
+        });
+    }
+    const pauseResume = document.getElementById('buttonPause') || document.getElementById('buttonResume');
+    if (pauseResume) {
+        const action = pauseResume.id === 'buttonPause' ? 'pause' : 'resume';
+        pauseResume.addEventListener('click', function() {
+            chrome.runtime.sendMessage({ action: action }, () => {
+                chrome.runtime.sendMessage({ action: 'updateProgress' });
+            });
+        });
+    }
+    const clearQueue = document.getElementById('buttonClearQueue');
+    if (clearQueue) {
+        clearQueue.addEventListener('click', function() {
+            chrome.runtime.sendMessage({ action: "clearQueue" }, function() {
+                clearQueue.remove();
+            });
+        });
+    }
+}
+
 // Add message listener for progress updates and error messages
 // NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
 // must return false. Returning true kept the message channel open and made
@@ -49,7 +123,7 @@ async function getGalleryFromActiveTab(id: string): Promise<any | null> {
 // progress tick, with offscreen.html as the sender.
 chrome.runtime.onMessage.addListener(function(request) {
     if (request.action === "updateProgress") {
-        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry);
+        Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry, request.queued, request.paused);
     } else if (request.action === "downloadError") {
         // Label the failure kind (metadata / Cloudflare / image / archive /
         // cancellation) so the user understands what went wrong at a glance.
@@ -58,7 +132,8 @@ chrome.runtime.onMessage.addListener(function(request) {
     } else if (request.action === "batchProgress") {
         // Per-gallery progress while a batch download is running
         document.getElementById('action')!.innerHTML = message.batchProgress(
-            request.current, request.total, request.galleryName, request.stage || "Downloading");
+            request.current, request.total, request.galleryName, request.stage || "Downloading", request.queued || 0);
+        setTimeout(wireActiveJobControls, 0);
     } else if (request.action === "batchSummary") {
         // End-of-batch success/failure summary
         document.getElementById('action')!.innerHTML = message.batchSummary(
@@ -92,7 +167,7 @@ export default class Popup
     //#endregion "singleton"
 
     // Update progress bar on the preview popup
-    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string) {
+    updateProgress(progress: number, doujinshiName: string, isZipping: boolean, retry?: string, queued: number = 0, paused: boolean = false) {
         if (isZipping && progress == 100) { // File is being downloaded
             document.getElementById('action')!.innerHTML = message.downloadDone();
             // Add event listener after updating the HTML content
@@ -109,8 +184,8 @@ export default class Popup
                 }
             }, 0);
         } else { // Download in progress
-            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry);
-            // Add event listener after updating the HTML content
+            document.getElementById('action')!.innerHTML = message.downloadProgress(isZipping ? "Zipping" : "Downloading", doujinshiName, progress, retry, queued, paused);
+            // Add event listeners after updating the HTML content
             setTimeout(() => {
                 const buttonBack = document.getElementById('buttonBack');
                 if (buttonBack) {
@@ -122,7 +197,16 @@ export default class Popup
                         });
                     });
                 }
+                const clearQueue = document.getElementById('buttonClearQueue');
+                if (clearQueue) {
+                    clearQueue.addEventListener('click', function() {
+                        chrome.runtime.sendMessage({ action: "clearQueue" }, function() {
+                            clearQueue.remove();
+                        });
+                    });
+                }
             }, 0);
+            setTimeout(wireActiveJobControls, 0);
         }
     }
 
@@ -224,7 +308,11 @@ export default class Popup
 
         if (json === null) {
             try {
-                const resp = await fetch(this.parsing!.GetUrl(id), { credentials: "include", cache: "no-store" });
+                const resp = await fetch(this.parsing!.GetUrl(id), {
+                    credentials: "include",
+                    cache: "no-store",
+                    headers: await getOptionalApiHeaders()
+                });
                 status = resp.status;
                 statusText = resp.statusText;
                 if (resp.ok) {
@@ -256,30 +344,129 @@ export default class Popup
                     extension = ".zip";
                 else if (elems.useZip == "cbz")
                     extension = ".cbz";
-                else if (elems.useZip == "folder")
-                    extension = " (images folder)";
+                else if (elems.useZip == "pdf" || elems.useZip == "folder")
+                    // "folder" is the retired format; PDF replaced it.
+                    extension = ".pdf";
 
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
-                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(title, json.images.pages.length, extension);
+                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
-                // Add event listener after updating the HTML content
+                // Add event listeners after updating the HTML content.
                 setTimeout(() => {
+                    const selectedFormat = () => {
+                        const value = (document.getElementById('downloadFormat') as HTMLSelectElement | null)?.value;
+                        return value === 'cbz' || value === 'pdf' || value === 'raw' ? value : 'zip';
+                    };
                     const button = document.getElementById('button');
                     if (button) {
                         button.addEventListener('click', async function() {
-                            // Use message passing instead of direct background page access for Firefox private mode compatibility
                             const tabId = await getActiveTabId();
                             chrome.runtime.sendMessage({
                                 action: "downloadDoujinshi",
                                 json: json,
                                 path: (document.getElementById('path') as HTMLInputElement).value,
                                 name: title,
-                                tabId: tabId
+                                tabId: tabId,
+                                formatOverride: selectedFormat()
+                            }, (response) => {
+                                if (response && response.result === "queued") {
+                                    document.getElementById('action')!.innerHTML =
+                                        "Download queued at position " + response.position + ".";
+                                    return;
+                                }
+                                self.updateProgress(0, title, false);
                             });
-                            self.updateProgress(0, title, false);
+                        });
+                    }
+
+                    // Right column: the similar-galleries panel. The related
+                    // list loads on request; the user then picks which titles
+                    // to download and every selection becomes its own archive.
+                    const similarPanel = document.getElementById('similarPanel');
+                    const loadSimilar = document.getElementById('buttonLoadSimilar');
+                    if (similarPanel && loadSimilar) {
+                        // The fetched entries back the checkbox list so the
+                        // download message carries real titles, not DOM text.
+                        let relatedEntries: Array<{ id: string; title: string; pages: number }> = [];
+                        const updateSelectedCount = () => {
+                            const downloadButton = document.getElementById('buttonSimilar') as HTMLInputElement | null;
+                            if (!downloadButton) return;
+                            const checked = similarPanel.querySelectorAll<HTMLInputElement>('input.similarItem:checked');
+                            downloadButton.value = "Download selected (" + checked.length + ")";
+                            downloadButton.disabled = checked.length === 0;
+                        };
+                        const downloadSelected = async () => {
+                            const downloadButton = document.getElementById('buttonSimilar') as HTMLInputElement | null;
+                            if (downloadButton) downloadButton.disabled = true;
+                            const selected: Record<string, string> = {};
+                            similarPanel.querySelectorAll<HTMLInputElement>('input.similarItem:checked').forEach((box) => {
+                                const entry = relatedEntries.find((candidate) => candidate.id === box.dataset.id);
+                                selected[box.dataset.id || ""] = entry ? entry.title : String(box.dataset.id);
+                            });
+                            if (Object.keys(selected).length === 0) {
+                                updateSelectedCount();
+                                return;
+                            }
+                            const tabId = await getActiveTabId();
+                            const finalName = utils.cleanName(title + " - similar", elems.replaceSpaces, id);
+                            chrome.runtime.sendMessage({
+                                action: "downloadAllDoujinshis",
+                                allDoujinshis: selected,
+                                galleryMetadata: {},
+                                finalName: finalName,
+                                tabId: tabId,
+                                formatOverride: selectedFormat(),
+                                separate: true
+                            }, (response: any) => {
+                                if (response && response.result === "queued") {
+                                    document.getElementById('action')!.innerHTML =
+                                        "Similar-gallery download queued at position " + response.position + ".";
+                                    return;
+                                }
+                                self.updateProgress(0, finalName, false);
+                            });
+                        };
+                        const wireSimilarControls = () => {
+                            const all = document.getElementById('buttonSimilarAll');
+                            const none = document.getElementById('buttonSimilarNone');
+                            const downloadButton = document.getElementById('buttonSimilar');
+                            if (all) all.addEventListener('click', () => {
+                                similarPanel.querySelectorAll<HTMLInputElement>('input.similarItem').forEach((box) => { box.checked = true; });
+                                updateSelectedCount();
+                            });
+                            if (none) none.addEventListener('click', () => {
+                                similarPanel.querySelectorAll<HTMLInputElement>('input.similarItem').forEach((box) => { box.checked = false; });
+                                updateSelectedCount();
+                            });
+                            if (downloadButton) downloadButton.addEventListener('click', downloadSelected);
+                            similarPanel.querySelectorAll<HTMLInputElement>('input.similarItem').forEach((box) => {
+                                box.addEventListener('change', updateSelectedCount);
+                            });
+                            updateSelectedCount();
+                        };
+                        loadSimilar.addEventListener('click', async () => {
+                            loadSimilar.setAttribute("disabled", "disabled");
+                            similarPanel.innerHTML = message.similarLoading();
+                            try {
+                                const related = await getRelatedGalleries(id);
+                                if (related.length === 0) {
+                                    throw new Error("No related galleries were returned.");
+                                }
+                                relatedEntries = related;
+                                similarPanel.innerHTML = message.similarList(
+                                    related.map((entry) => ({
+                                        id: entry.id,
+                                        title: escapeHtml(entry.title),
+                                        pages: entry.pages
+                                    })));
+                                wireSimilarControls();
+                            } catch (error) {
+                                similarPanel.innerHTML = message.similarError(
+                                    "Could not load similar galleries: " + escapeHtml(String(error && error.message ? error.message : error)));
+                            }
                         });
                     }
                 }, 0);
@@ -334,10 +521,13 @@ export default class Popup
         else name = parts[parts.length - 1];
         name = name.replace("q=", ""); // Artifact when doing a search
 
-        // Appends the extension (none is raw download; folder mode produces
-        // one images folder per gallery instead of a single archive)
+        // Appends the extension (raw has none). "folder" is the retired
+        // image-folder format; PDF is its replacement.
         let extension = "";
-        if (useZip != "raw" && useZip != "folder")
+        if (useZip == "folder") {
+            useZip = "pdf";
+        }
+        if (useZip != "raw")
         {
             extension = "." + useZip;
         }

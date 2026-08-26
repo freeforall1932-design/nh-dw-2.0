@@ -137,11 +137,23 @@ const galleryById = {
     [GALLERY_ID2]: galleryJson2
 };
 
-const pageBytes = [
-    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe0]); return b; })(),
-    (() => { const b = new Uint8Array(2000); b.set([0x89, 0x50, 0x4e, 0x47, 0x0a]); return b; })(),
-    (() => { const b = new Uint8Array(2000); b.set([0xff, 0xd8, 0xff, 0xe1]); return b; })()
-];
+// Minimal JPEGs with real SOF0 frames (distinct dimensions) so the PDF path
+// can parse dimensions and embed the bytes verbatim.
+function jpegPage(width, height) {
+    const b = new Uint8Array(2000);
+    b.set([
+        0xff, 0xd8,                          // SOI
+        0xff, 0xc0, 0x00, 0x11, 0x08,        // SOF0, length 17, precision 8
+        (height >> 8) & 0xff, height & 0xff, // height
+        (width >> 8) & 0xff, width & 0xff,   // width
+        0x03,                                // 3 components (RGB)
+        0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01
+    ]);
+    b[b.length - 2] = 0xff;
+    b[b.length - 1] = 0xd9;                  // EOI
+    return b;
+}
+const pageBytes = [jpegPage(1280, 1808), jpegPage(1280, 1700), jpegPage(1280, 1600)];
 
 let failImages = false;
 const failMediaIds = new Set();
@@ -155,8 +167,13 @@ function imageBytesFor(url) {
     return pageBytes[(pageNo - 1) % pageBytes.length];
 }
 
+// All URLs the offscreen document fetched directly (no source tab): used to
+// prove which CDN host URL generation actually used.
+const fetchedUrls = [];
+
 function fetchStub(url) {
     const u = String(url);
+    fetchedUrls.push(u);
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const gallery = galleryById[apiMatch[1]];
@@ -191,6 +208,7 @@ function tabUrlTextFor(url) {
 const sandbox = {
     chrome: chromeStub,
     console,
+    __NHDW_SILENT_RETRY_LOGS__: true,
     setTimeout,
     clearTimeout,
     fetch: fetchStub,
@@ -271,24 +289,29 @@ function askOffscreen(message) {
 
     // Start a download the way the service worker would relay it (with the
     // options the worker read from chrome.storage.sync on the document's
-    // behalf — the document itself has no storage access).
-    const startAnswer = await askOffscreen({
+    // behalf — the document itself has no storage access). Run the start and
+    // the isDownloadFinished probe back-to-back synchronously so the download
+    // cannot complete in between: while the job is running, isDownloadFinished
+    // must answer false (the jobRunning flag) rather than the per-gallery
+    // isDone() that used to flip true between galleries and mislead the worker.
+    let startAnswer = null;
+    onMessageHandler({
+        target: "offscreen",
         action: "downloadDoujinshi",
         json: galleryJson,
         path: "Downloads/Test",
         name: "Test",
         options: relayedOptions
-    });
+    }, {}, (r) => { startAnswer = r; });
     if (!startAnswer || startAnswer.result !== "started") {
         fail("downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(startAnswer));
     }
-
-    // During the download, isDownloadFinished must be false and progress must flow.
-    const busyAnswer = await askOffscreen({ action: "isDownloadFinished" });
-    if (busyAnswer && busyAnswer.result === true) {
-        // The 3-page download is so fast it may already be done; that is
-        // acceptable, but then we at least expect a completed progress event.
+    let busyAnswer = null;
+    onMessageHandler({ target: "offscreen", action: "isDownloadFinished" }, {}, (r) => { busyAnswer = r; });
+    if (!busyAnswer || busyAnswer.result !== false) {
+        fail("isDownloadFinished must be false while a job is running, got " + JSON.stringify(busyAnswer));
     }
+
     const progressAnswer = await askOffscreen({ action: "getProgress" });
     if (!progressAnswer || progressAnswer.result !== "success") {
         fail("getProgress did not answer success, got " + JSON.stringify(progressAnswer));
@@ -322,7 +345,9 @@ function askOffscreen(message) {
     }
     const zip = await JSZip.loadAsync(buf);
     const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
-    const expected = ["Downloads/Test/001.jpg", "Downloads/Test/002.png", "Downloads/Test/003.jpg"];
+    // Single-gallery archives are flat: pages at the root, archive named
+    // after the gallery (no Title/Title double folder).
+    const expected = ["001.jpg", "002.png", "003.jpg"];
     if (JSON.stringify(names) !== JSON.stringify(expected)) {
         fail("ZIP entries mismatch. Expected " + JSON.stringify(expected) + " got " + JSON.stringify(names));
     }
@@ -343,6 +368,15 @@ function askOffscreen(message) {
     if (!doneAnswer || doneAnswer.result !== true) {
         fail("isDownloadFinished should be true after completion, got " + JSON.stringify(doneAnswer));
     }
+
+    // The document must tell the worker the job finished (jobFinished) so the
+    // worker clears its active-job marker promptly instead of waiting for the
+    // 60s idle close (which left the marker set and made the popup misreport a
+    // successful download as "interrupted").
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "jobFinished" && m.from === "offscreen"),
+        "the offscreen document did not send jobFinished after the download completed"
+    );
 
     console.log("PASS: ZIP (" + buf.length + " bytes) delivered via object URL " + download.url);
     console.log("PASS: entries: " + names.join(", ") + "; " + progressMessages.length + " progress broadcasts");
@@ -531,6 +565,135 @@ function askOffscreen(message) {
         fail("batchProgress must be sent for all 3 queued galleries");
     }
     console.log("PASS: three-gallery queue continues past metadata+image failures and reports 1/2/3");
+
+    // ---- Separate-files batch: one archive per gallery, no false notice -----
+    // The user's worst real-browser symptom: with "separate files per title",
+    // only the first gallery downloaded and the rest looked "interrupted".
+    // That came from the stale job marker + per-gallery isDone() misreporting
+    // between galleries. Here we prove the loop itself is sound: each gallery
+    // emits its OWN archive with its OWN name, and the whole job is reported
+    // finished exactly once at the end (so the worker clears its marker).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    tabFetches.length = 0;
+    failMediaIds.clear();
+    const separateOptions = Object.assign({}, relayedOptions, { downloadSeparately: true });
+    const separateStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/Separate",
+        options: separateOptions
+    });
+    if (!separateStart || separateStart.result !== "started") {
+        fail("separate-files batch did not answer {result:'started'}, got " + JSON.stringify(separateStart));
+    }
+    const queuedStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/Queued",
+        name: "Queued",
+        options: relayedOptions
+    });
+    if (!queuedStart || queuedStart.result !== "queued" || queuedStart.position !== 1) {
+        fail("second job must be queued at position 1, got " + JSON.stringify(queuedStart));
+    }
+    await waitFor(
+        () => downloads.length === 3,
+        "separate-files batch followed by a queued gallery must emit three archives"
+    );
+    const separateFilenames = downloads.map((d) => d.filename).sort();
+    const expectedSeparate = ["Test.zip", "Test Two.zip", "Downloads/Queued.zip"].sort();
+    if (JSON.stringify(separateFilenames) !== JSON.stringify(expectedSeparate)) {
+        fail("separate-files filenames mismatch. Expected " + JSON.stringify(expectedSeparate) +
+            " got " + JSON.stringify(separateFilenames));
+    }
+    // Each archive must be a real ZIP with its own 3 pages inside.
+    for (const d of downloads) {
+        const b = Buffer.from(await objectBlobs[d.url].arrayBuffer());
+        if (b.length < 4 || b.toString("latin1", 0, 2) !== "PK") {
+            fail("separate-files archive is not a ZIP: " + d.filename);
+        }
+        const z = await JSZip.loadAsync(b);
+        const entries = Object.keys(z.files).filter((n) => !z.files[n].dir);
+        if (entries.length !== 3) {
+            fail("separate-files archive " + d.filename + " must contain 3 pages, got " + JSON.stringify(entries));
+        }
+    }
+    // Exactly one jobFinished at the end (not one per gallery, not none).
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "separate-files batch must send exactly one jobFinished at the end"
+    );
+    const separateSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!separateSummary || separateSummary.succeeded !== 2 || separateSummary.failed !== 0) {
+        fail("separate-files batchSummary must report 2/0/2, got " + JSON.stringify(separateSummary));
+    }
+    console.log("PASS: separate-files batch emits one archive per gallery (no interruption false positive)");
+
+    // ---- Relayed CDN image servers drive URL generation --------------------
+    // The worker resolved GET /api/v2/cdn, validated the hosts, and relayed
+    // the list with the job options. A runtime-reported mirror (i7, outside
+    // the hardcoded set) must be used for the page URLs; a hostile entry the
+    // worker would never relay is still dropped by the shared sanitizer.
+    downloads.length = 0;
+    sentMessages.length = 0;
+    fetchedUrls.length = 0;
+    let cdnStartAnswer = null;
+    onMessageHandler({
+        target: "offscreen",
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/CdnTest",
+        name: "CdnTest",
+        options: Object.assign({}, relayedOptions, {
+            imageServers: ["https://i7.nhentai.net", "https://evil.example", "not a server"]
+        })
+    }, {}, (r) => { cdnStartAnswer = r; });
+    if (!cdnStartAnswer || cdnStartAnswer.result !== "started") {
+        fail("relayed-CDN downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(cdnStartAnswer));
+    }
+    await waitFor(() => downloads.length === 1, "relayed-CDN job did not deliver its ZIP");
+    const cdnPageFetches = fetchedUrls.filter((u) => u.includes("/galleries/987654/"));
+    if (cdnPageFetches.length !== 3 || !cdnPageFetches.every((u) => u.startsWith("https://i7.nhentai.net/"))) {
+        fail("page URLs must be generated from the relayed runtime server (i7) only, got: "
+            + JSON.stringify(cdnPageFetches));
+    }
+    if (fetchedUrls.some((u) => u.includes("evil.example"))) {
+        fail("an invalid relayed server must never be contacted: " + JSON.stringify(fetchedUrls));
+    }
+    console.log("PASS: relayed CDN image servers drive URL generation (runtime mirror first, invalid entries dropped)");
+
+    // ---- PDF mode: one titled PDF file per gallery --------------------------
+    downloads.length = 0;
+    sentMessages.length = 0;
+    fetchedUrls.length = 0;
+    const pdfStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/PdfTest",
+        name: "PdfTest",
+        options: Object.assign({}, relayedOptions, { useZip: "pdf" })
+    });
+    if (!pdfStart || pdfStart.result !== "started") {
+        fail("PDF downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(pdfStart));
+    }
+    await waitFor(() => downloads.length === 1, "PDF job did not deliver its file");
+    const pdfDownload = downloads[0];
+    if (pdfDownload.filename !== "Downloads/PdfTest.pdf") {
+        fail("PDF filename must be the gallery name, got " + pdfDownload.filename);
+    }
+    const pdfBytes = Buffer.from(await objectBlobs[pdfDownload.url].arrayBuffer());
+    const pdfText = pdfBytes.toString("latin1");
+    if (!pdfText.startsWith("%PDF-1.4") || !pdfText.endsWith("%%EOF\n")) {
+        fail("PDF structure invalid (header/trailer)");
+    }
+    if (!pdfText.includes("/Count 3") || pdfText.split("/Filter /DCTDecode").length - 1 !== 3) {
+        fail("PDF must embed one JPEG per page (3 pages)");
+    }
+    if (!pdfText.includes("/MediaBox [0 0 1280 1808]")) {
+        fail("PDF page 1 must use the image dimensions");
+    }
+    console.log("PASS: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.filename);
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {

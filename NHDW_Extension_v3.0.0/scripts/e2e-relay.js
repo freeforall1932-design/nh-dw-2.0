@@ -20,6 +20,10 @@ const executeScriptCalls = [];
 let createDocumentCalls = 0;
 let closeDocumentCalls = 0;
 let hasDocumentResult = false;
+// What the simulated offscreen document answers for isDownloadFinished.
+let offscreenFinished = false;
+// chrome.storage.session backing store (the active-job marker lives here).
+const sessionStore = {};
 
 const chromeStub = {
     tabs: {
@@ -31,7 +35,11 @@ const chromeStub = {
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
-        session: { get(_key, cb) { cb({}); }, set() {}, remove() {} }
+        session: {
+            get(key, cb) { cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore)); },
+            set(items) { Object.assign(sessionStore, items); },
+            remove(key) { delete sessionStore[key]; }
+        }
     },
     scripting: {
         // The worker performs tab injections on behalf of the offscreen
@@ -57,7 +65,7 @@ const chromeStub = {
                 // Simulate the offscreen document answering.
                 if (cb) {
                     const response = { result: "started" };
-                    if (message.action === "isDownloadFinished") response.result = false;
+                    if (message.action === "isDownloadFinished") response.result = offscreenFinished;
                     else if (message.action === "getProgress") {
                         response.progress = 42;
                         response.doujinshiName = "Test";
@@ -138,7 +146,8 @@ function sendToBackground(message) {
         json: { id: 123456 },
         path: "Downloads/Test",
         name: "Test",
-        tabId: 42
+        tabId: 42,
+        formatOverride: "cbz"
     });
     if (!startAnswer || startAnswer.result !== "started") {
         fail("downloadDoujinshi answered " + JSON.stringify(startAnswer));
@@ -150,10 +159,28 @@ function sendToBackground(message) {
     if (!relay || relay.target !== "offscreen" || relay.json.id !== 123456 || relay.path !== "Downloads/Test" || relay.tabId !== 42) {
         fail("downloadDoujinshi was not relayed correctly: " + JSON.stringify(relay));
     }
-    if (!relay.options || typeof relay.options.useZip !== "string" || relay.options.maxConcurrentDownloads === undefined) {
-        fail("downloadDoujinshi relay must carry the worker-read options: " + JSON.stringify(relay.options));
+    if (!relay.options || relay.options.useZip !== "cbz" || relay.options.maxConcurrentDownloads === undefined) {
+        fail("downloadDoujinshi relay must carry the worker-read options and one-job CBZ override: " + JSON.stringify(relay.options));
     }
-    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the command with options");
+    // The worker resolves the CDN image server list and relays it with the job
+    // (the offscreen document has no storage/permissions to resolve it itself).
+    if (!Array.isArray(relay.options.imageServers) || relay.options.imageServers[0] !== "https://i.nhentai.net"
+        || !relay.options.imageServers.includes("https://i4.nhentai.net")) {
+        fail("downloadDoujinshi relay must carry the resolved image server list, got: "
+            + JSON.stringify(relay.options.imageServers));
+    }
+    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the one-job format override");
+
+    // 1b. getCdnStatus: the popup asks which image hosts are active and which
+    //     need the optional host grant. With no CDN config fetched (the fetch
+    //     stub here throws) the answer is the fallback list with no gaps.
+    const cdnStatusAnswer = await sendToBackground({ action: "getCdnStatus" });
+    if (!cdnStatusAnswer || cdnStatusAnswer.result !== "success"
+        || !Array.isArray(cdnStatusAnswer.imageServers) || cdnStatusAnswer.imageServers.length === 0
+        || !Array.isArray(cdnStatusAnswer.missingOrigins)) {
+        fail("getCdnStatus answered " + JSON.stringify(cdnStatusAnswer));
+    }
+    console.log("PASS: getCdnStatus reports the image server list and host-grant gaps for the popup");
 
     // 3. updateProgress: relay getProgress and broadcast the answer to the popup.
     const progressAnswer = await sendToBackground({ action: "updateProgress" });
@@ -184,6 +211,43 @@ function sendToBackground(message) {
         fail("offscreenIdle did not close the offscreen document (closeDocument calls: " + closeDocumentCalls + ")");
     }
     console.log("PASS: offscreenIdle closes the offscreen document");
+
+    // 5b. A finished job must not be reported as interrupted. Even with a
+    //     stale active-job marker still set (the 60s idle window before the
+    //     offscreen document closes), a LIVE document that reports the job
+    //     finished means the download completed normally: the worker must
+    //     clear the marker and answer interrupted:false (the stale-marker
+    //     false positive previously made the popup claim "Download
+    //     interrupted" right after a success).
+    hasDocumentResult = true;
+    offscreenFinished = true;
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    const finishedAnswer = await sendToBackground({ action: "isDownloadFinished" });
+    if (!finishedAnswer || finishedAnswer.result !== true || finishedAnswer.interrupted !== false) {
+        fail("a finished job with a live document must answer interrupted:false, got " + JSON.stringify(finishedAnswer));
+    }
+    if (sessionStore.downloadJob !== undefined) {
+        fail("isDownloadFinished must clear a stale marker when the document reports the job finished");
+    }
+    console.log("PASS: finished job with a live document clears the marker and answers interrupted:false");
+
+    // 5c. jobFinished from the offscreen document clears the marker promptly.
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    onMessageHandler({ from: "offscreen", action: "jobFinished" }, {}, () => {});
+    if (sessionStore.downloadJob !== undefined) {
+        fail("jobFinished must clear the active-job marker, got " + JSON.stringify(sessionStore.downloadJob));
+    }
+    console.log("PASS: jobFinished clears the active-job marker");
+
+    // 5d. A genuinely interrupted job (no document, marker still set) must
+    //     still be reported as interrupted.
+    hasDocumentResult = false;
+    sessionStore.downloadJob = { active: true, startedAt: Date.now() };
+    const interruptedAnswer = await sendToBackground({ action: "isDownloadFinished" });
+    if (!interruptedAnswer || interruptedAnswer.result !== true || interruptedAnswer.interrupted !== true) {
+        fail("a missing document with a stale marker must answer interrupted:true, got " + JSON.stringify(interruptedAnswer));
+    }
+    console.log("PASS: missing document with a stale marker still answers interrupted:true");
 
     // 6. Progress broadcasts from the offscreen document must not loop back
     //    into the relay (they are consumed, not re-sent) and must not keep
@@ -224,13 +288,18 @@ function sendToBackground(message) {
 
     // 9. fetchInTab: the worker injects the image fetch into the tab
     //    (chrome.scripting is not available in the offscreen document).
+    //    executeScriptCalls[0] is the CDN config fetch the worker made when
+    //    the job started (MAIN world, /api/v2/cdn through the source tab), so
+    //    assert on the LAST injection, which is the one under test.
     const tabImageAnswer = await new Promise((resolve) => {
         onMessageHandler({ from: "offscreen", action: "fetchInTab", tabId: 42, url: "https://i.nhentai.net/galleries/987654/1.jpg", world: "ISOLATED" }, {}, resolve);
     });
     if (!tabImageAnswer || tabImageAnswer.ok !== true || !tabImageAnswer.b64) {
         fail("fetchInTab answered " + JSON.stringify(tabImageAnswer));
     }
-    if (executeScriptCalls.length < 1 || executeScriptCalls[0].world !== "ISOLATED" || !executeScriptCalls[0].target || executeScriptCalls[0].target.tabId !== 42) {
+    const imageInjection = executeScriptCalls[executeScriptCalls.length - 1];
+    if (!imageInjection || imageInjection.world !== "ISOLATED" || !imageInjection.target || imageInjection.target.tabId !== 42
+        || !String(imageInjection.args[0]).includes("/galleries/987654/1.jpg")) {
         fail("fetchInTab was not injected through chrome.scripting.executeScript: " + JSON.stringify(executeScriptCalls));
     }
     console.log("PASS: fetchInTab injects the image fetch into the tab via the worker");

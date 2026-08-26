@@ -3,7 +3,11 @@
 // The default `npm test` suite never touches the network.
 
 const assert = require('assert');
-const fetch = require('node-fetch')
+const fetch = require('node-fetch');
+
+// Fixture tests intentionally exercise retryable image failures. Keep those
+// expected warnings out of a passing test run; production bundles do not set it.
+global.__NHDW_SILENT_RETRY_LOGS__ = true;
 
 const live = process.env.RUN_LIVE_TESTS === '1' ? describe : describe.skip;
 

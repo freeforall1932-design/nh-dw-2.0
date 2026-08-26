@@ -43,9 +43,15 @@ export module message
             'Please start the download again.</p><br/><input type="button" id="buttonDismiss" value="Got it"/>';
     }
     
-    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string): string {
+    export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string, queued: number = 0, paused: boolean = false): string {
         const retryHtml = retry ? '<br/><small>Retrying (' + retry + ')...</small>' : '';
-        return `${status} ${doujinshiName}, please wait...${retryHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel"/>`;
+        const queueHtml = queued > 0
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
+            : '';
+        const pauseHtml = paused
+            ? '<br/><b>Paused.</b> Completed pages are kept for this browser session.<br/><input type="button" id="buttonResume" value="Resume current"/>'
+            : '<br/><input type="button" id="buttonPause" value="Pause current"/>';
+        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}${pauseHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel current"/>`;
     }
     
     export function invalidPage(): string {
@@ -67,10 +73,74 @@ export module message
     export function cloudflareMetadata(): string {
         return "This tab does not contain gallery metadata yet. Finish any Cloudflare challenge, wait until the gallery page itself has loaded, then open the popup again.";
     }
+
+    // nhentai's CDN config reported image hosts this extension has no host
+    // permission for. Downloads keep using the permitted hosts; the button
+    // requests the optional https://*.nhentai.net grant (user gesture required,
+    // which is why this lives in the popup).
+    export function cdnNotice(origins: string[]): string {
+        const list = origins.map((origin) => {
+            const host = /^https:\/\/([^/]+)\//.exec(origin);
+            return host ? host[1] : origin;
+        }).join(", ");
+        return '<b>New nhentai image hosts</b><br/>' +
+            '<small>nhentai now serves images from ' + list + '. Downloads keep working on the current hosts.</small><br/>' +
+            '<input type="button" id="buttonGrantCdn" value="Grant image host access"/>';
+    }
     
-    export function downloadInfo(title: string, nbOfPages: number, extension: string): string {
-        return '<h3>' + title + '</h3><div>(' + nbOfPages + ' pages)' +
-            '</div><br/><input type="button" id="button" value="Download" autofocus/><br/><br/>Downloads/<input type="text" id="path"/>' + extension;
+    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string): string {
+        const selected = (value: string) => value === selectedFormat ? ' selected' : '';
+        return '<div class="popupColumns">' +
+            '<div class="popupColumn">' +
+            '<h3>' + title + '</h3>' +
+            '<div>(' + nbOfPages + ' pages)</div><br/>' +
+            'Format: <select id="downloadFormat">' +
+            '<option value="zip"' + selected('zip') + '>ZIP</option>' +
+            '<option value="cbz"' + selected('cbz') + '>CBZ</option>' +
+            '<option value="pdf"' + selected('pdf') + '>PDF</option>' +
+            '<option value="raw"' + selected('raw') + '>Raw images</option>' +
+            '</select><br/><br/>' +
+            'Downloads/<input type="text" id="path"/>' + extension + '<br/><br/>' +
+            '<input type="button" id="button" value="Download" autofocus/>' +
+            '</div>' +
+            '<div class="popupColumn">' +
+            '<b>Similar galleries</b>' +
+            '<div id="similarPanel">' + similarIntro() + '</div>' +
+            '</div>' +
+            '</div>';
+    }
+
+    // Right column: intro state of the similar-galleries panel. The related
+    // list is only fetched on request (it costs one API call, and the panel
+    // exists so the user can PICK which related titles to download).
+    export function similarIntro(): string {
+        return '<small>Pick from nhentai\'s related recommendations — each selected gallery downloads as its own file.</small><br/>' +
+            '<input type="button" id="buttonLoadSimilar" value="Show similar galleries"/>';
+    }
+
+    export function similarLoading(): string {
+        return '<small>Finding similar galleries...</small>';
+    }
+
+    export function similarError(message: string): string {
+        return '<small>' + message + '</small><br/>' + similarIntro();
+    }
+
+    // Checkbox list of related galleries. Entries carry pre-escaped titles;
+    // data-id links each checkbox back to its gallery id.
+    export function similarList(entries: Array<{ id: string; title: string; pages: number }>): string {
+        let html = '<div class="similarList">';
+        for (const entry of entries) {
+            html += '<label><input type="checkbox" class="similarItem" data-id="' + entry.id + '" checked> ' +
+                entry.title +
+                (entry.pages > 0 ? ' <small>(' + entry.pages + 'p)</small>' : '') +
+                '</label>';
+        }
+        html += '</div>';
+        html += '<input type="button" id="buttonSimilarAll" value="All"/> ';
+        html += '<input type="button" id="buttonSimilarNone" value="None"/><br/>';
+        html += '<input type="button" id="buttonSimilar" value="Download selected"/>';
+        return html;
     }
     
     export function invalidSyntax(): string {
@@ -115,9 +185,12 @@ export module message
     };
 
     // Batch gallery progress — shown while processing a batch
-    export function batchProgress(current: number, total: number, galleryName: string, stage: string): string {
+    export function batchProgress(current: number, total: number, galleryName: string, stage: string, queued: number = 0): string {
+        const queueHtml = queued > 0
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
+            : '';
         return 'Gallery ' + current + ' of ' + total + ': ' + stage + ' ' + galleryName +
             '...<br/><progress max="100" id="progressBar" value="' + Math.round(current / total * 100) + '"></progress>' +
-            '<br/><br/><input type="button" id="buttonBack" value="Cancel"/>';
+            queueHtml + '<br/><br/><input type="button" id="buttonBack" value="Cancel current"/>';
     }
 }

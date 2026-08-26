@@ -10,6 +10,8 @@ import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../pars
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 import { fetchNhentaiApi } from "../utils/apiAuth";
+import { setImageServers } from "../sources/cdnConfig";
+import * as cdnConfigService from "./cdnConfigService";
 var JSZip = require("jszip");
 
 chrome.tabs.onUpdated.addListener(function
@@ -227,25 +229,38 @@ module background
         return currentDownloader == null || currentDownloader.isDone();
     }
 
-    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null) {
+    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string }) {
         const signal = beginJob();
-        let zip = new JSZip();
-        currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal);
-        if (typeof sourceTabId === "number") {
-            currentDownloader.sourceTabId = sourceTabId;
+        // Single-gallery jobs always own their archive: pages go to the root
+        // and the file is named after the gallery (no Title/Title double name).
+        const settings: any = { archiveLayout: "flat" };
+        if (options && options.useZip) {
+            settings.useZip = options.useZip;
         }
-        // Clear the job marker when the download finishes (success or error) and
-        // keep re-throwing so a failure still surfaces as a worker rejection (the
-        // popup has already been told via errorCallback).
-        currentDownloader.startAsync()
-            .then(() => clearJobMarker())
-            .catch(function(error) { clearJobMarker(); throw error; });
+        // Attach the API key fields up front (worker context has storage):
+        // the Downloader itself must never touch chrome.storage so the same
+        // class stays safe inside the offscreen document.
+        readLocalApiSettings().then((localApi) => {
+            settings.apiKey = localApi.apiKey || null;
+            settings.useServerArchive = localApi.useServerArchive;
+            let zip = new JSZip();
+            currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
+            if (typeof sourceTabId === "number") {
+                currentDownloader.sourceTabId = sourceTabId;
+            }
+            // Clear the job marker when the download finishes (success or error) and
+            // keep re-throwing so a failure still surfaces as a worker rejection (the
+            // popup has already been told via errorCallback).
+            currentDownloader.startAsync()
+                .then(() => clearJobMarker())
+                .catch(function(error) { clearJobMarker(); throw error; });
+        });
     }
 
-    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null) {
+    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
         beginJob();
         let zip = new JSZip();
-        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId)
+        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId, options)
             .then(() => clearJobMarker())
             .catch(function(error) {
                 clearJobMarker();
@@ -263,12 +278,14 @@ module background
         progressCallback: Function,
         downloadAtEnd: boolean,
         galleryMetadata: Record<string, any> = {},
-        sourceTabId?: number | null
+        sourceTabId?: number | null,
+        options?: { useZip?: string; downloadSeparately?: boolean }
     ) {
         let downloadName: string = "";
         let duplicateBehaviour: string = "";
         let replaceSpaces: boolean = false;
         let downloadSeparately: boolean = false;
+        let maxConcurrentDownloads: string | undefined;
         await new Promise((resolve, _reject) => {
             resolve(
                 chrome.storage.sync.get({
@@ -282,13 +299,33 @@ module background
                     duplicateBehaviour = elems.duplicateBehaviour;
                     replaceSpaces = elems.replaceSpaces;
                     downloadSeparately = elems.downloadSeparately;
+                    maxConcurrentDownloads = elems.maxConcurrentDownloads;
                 })
             );
         });
+        // A per-job override (the popup's similar-gallery panel always asks
+        // for one archive per selected gallery) beats the stored "download
+        // each file separately" option.
+        if (options && options.downloadSeparately !== undefined) {
+            downloadSeparately = !!options.downloadSeparately;
+        }
+        // Each gallery in a separate archive owns that archive: flat entries,
+        // file named after the gallery. One shared archive keeps a folder per
+        // gallery inside so titles never collide.
+        const gallerySettings: any = { archiveLayout: downloadSeparately ? "flat" : "nested" };
+        if (options && options.useZip) {
+            gallerySettings.useZip = options.useZip;
+            gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
+        }
         // API key mode lives in chrome.storage.local (secrets never sync).
         // Empty string = keyless mode, which keeps its previous route order.
         const localApi = await readLocalApiSettings();
         const apiKey = localApi.apiKey;
+        // Relay the API key fields with the per-gallery settings: the
+        // offscreen document cannot read chrome.storage, and the Downloader
+        // must not touch it either (only chrome.runtime is exposed there).
+        gallerySettings.apiKey = apiKey || null;
+        gallerySettings.useServerArchive = localApi.useServerArchive;
         let names: Array<string> = [];
         let length = Object.keys(allDoujinshis).length;
         let allKeys = Object.keys(allDoujinshis);
@@ -395,7 +432,7 @@ module background
                 }
                 currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
                 downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
-                zipName, jobAbortController ? jobAbortController.signal : null);
+                zipName, jobAbortController ? jobAbortController.signal : null, undefined, gallerySettings);
                 if (typeof sourceTabId === "number") {
                     currentDownloader.sourceTabId = sourceTabId;
                 }
@@ -442,9 +479,9 @@ module background
         }
     }
 
-    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null) {
+    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
         beginJob();
-        downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId)
+        downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId, options)
             .then(() => clearJobMarker())
             .catch(function(error) {
                 clearJobMarker();
@@ -461,7 +498,8 @@ module background
         errorCallback: Function,
         progressCallback: Function,
         url: string,
-        sourceTabId?: number | null
+        sourceTabId?: number | null,
+        options?: { useZip?: string; downloadSeparately?: boolean }
     ) {
         let downloadName: string = "";
         await new Promise((resolve, _reject) => {
@@ -525,7 +563,7 @@ module background
                     }
                     allDoujinshis[card.id] = tmpName;
                 }
-                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId);
+                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId, options);
             }
         }
     }
@@ -547,6 +585,16 @@ module background
             currentDownloader!.updateProgressLatest(updateCallback);
         }
     }
+}
+
+// Popup format choices arrive as a per-job override. "folder" is the retired
+// image-folder format: map it to its replacement (PDF) so old callers keep
+// working; unknown values return undefined and the stored default applies.
+function normalizeFormatOverride(value: any): string | undefined {
+    const normalized = value === "folder" ? "pdf" : value;
+    return (normalized === "zip" || normalized === "cbz" || normalized === "pdf" || normalized === "raw")
+        ? normalized
+        : undefined;
 }
 
 // NOTE: MV3 service workers run in a worker global scope without `window`.
@@ -719,7 +767,7 @@ function readDownloadOptions(callback: (options: any) => void) {
             });
         });
     } catch (_) {
-        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS));
+        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS, { apiKey: "", useServerArchive: false }));
     }
 }
 
@@ -764,6 +812,14 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
             .then((result: any) => sendResponse(result));
         return true;
     }
+    if (request.action === "jobFinished") {
+        // The offscreen document finished a job (success or error). Clear the
+        // active-job marker immediately instead of waiting for its 60s idle
+        // close, so a later isDownloadFinished cannot misreport a completed
+        // download as "interrupted".
+        background.clearJobMarker();
+        return false;
+    }
     if (request.action === "offscreenIdle") {
         // The job is over (or the document went idle after one): clear the
         // marker so a future "interrupted download" notice is accurate, then
@@ -781,7 +837,7 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
 // other message must return false or Chrome logs "A listener indicated an
 // asynchronous response by returning true, but the message channel closed
 // before a response was received" once the sender goes away.
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (!request) {
         return false;
     }
@@ -790,6 +846,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         background.clearJobMarker();
         sendResponse({ result: "success" });
         return false;
+    }
+    if (request.action === "getCdnStatus") {
+        // Popup asks which image CDN servers are active and whether nhentai
+        // reported hosts that still need the optional host grant. The worker
+        // owns this (chrome.permissions / storage live here, not in the popup
+        // context of every browser). Answered asynchronously.
+        cdnConfigService.getCdnStatus().then((status) => {
+            sendResponse({
+                result: "success",
+                imageServers: status.imageServers,
+                missingOrigins: status.missingOrigins
+            });
+        });
+        return true;
     }
     if (request.from === "offscreen") {
         return handleOffscreenMessage(request, sendResponse);
@@ -817,9 +887,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         sendResponse({ result: false });
                         return;
                     }
-                    background.jobInterrupted().then((interrupted) => {
-                        sendResponse({ result: true, interrupted: interrupted });
-                    });
+                    // The offscreen document is alive and reports the job
+                    // finished, so it completed normally. Clear any lingering
+                    // marker (the document only cleared it on its 60s idle
+                    // close) and never flag a finished job as interrupted:
+                    // that stale-marker false positive made the popup claim
+                    // "Download interrupted" right after a success.
+                    background.clearJobMarker();
+                    sendResponse({ result: true, interrupted: false });
                 });
             });
             return true;
@@ -829,30 +904,64 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // / goBack handlers clear it when the job is over.
         const startRelayedJob = (relayedMessage: any) => {
             readDownloadOptions((options) => {
+                const formatOverride = relayedMessage.formatOverride;
+                // "folder" is the retired image-folder format; its replacement
+                // is PDF, so old callers map across instead of failing.
+                const normalizedFormat = formatOverride === "folder" ? "pdf" : formatOverride;
+                if (normalizedFormat === "zip" || normalizedFormat === "cbz" || normalizedFormat === "pdf" || normalizedFormat === "raw") {
+                    // Popup format choices affect this job only; do not mutate
+                    // the user's persisted default in chrome.storage.sync.
+                    options.useZip = normalizedFormat;
+                }
+                if (relayedMessage.separate) {
+                    // The popup's similar-gallery selection asks for one
+                    // archive per gallery, overriding the stored default.
+                    options.downloadSeparately = true;
+                }
                 background.setJobMarker(true);
-                // options: the offscreen document cannot read chrome.storage,
-                // so the worker relays the download settings with the command.
-                askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
-                    if (response && response.result === "started") {
-                        sendResponse({ result: "started" });
-                    } else {
-                        background.clearJobMarker();
-                        relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
-                        sendResponse({ result: "error" });
-                    }
+                // Resolve the nhentai image CDN config (GET /api/v2/cdn, cached
+                // for the session) before the job starts, and relay the
+                // validated, permission-filtered server list with the job: the
+                // offscreen document cannot read storage or chrome.permissions
+                // itself. ensureImageServers never rejects — worst case it
+                // returns the cached fallback list after a short timeout.
+                cdnConfigService.ensureImageServers(relayedMessage.tabId).then((imageServers) => {
+                    options.imageServers = imageServers;
+                    // options: the offscreen document cannot read chrome.storage,
+                    // so the worker relays the download settings with the command.
+                    askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
+                        if (response && (response.result === "started" || response.result === "queued")) {
+                            // A queued job is held by the offscreen document and
+                            // will start after the active job sends jobFinished.
+                            // Keep the worker marker set across the whole queue.
+                            sendResponse({ result: response.result, position: response.position });
+                        } else {
+                            background.clearJobMarker();
+                            relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                            sendResponse({ result: "error" });
+                        }
+                    });
                 });
             });
             return true;
         };
         if (request.action === "downloadDoujinshi") {
-            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId, formatOverride: request.formatOverride });
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId, formatOverride: request.formatOverride, separate: request.separate });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId, formatOverride: request.formatOverride, separate: request.separate });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
+            return true;
+        } else if (request.action === "pause" || request.action === "resume") {
+            askOffscreen({ action: request.action }, (response) => sendResponse(response || { result: "error" }));
+            return true;
+        } else if (request.action === "clearQueue") {
+            askOffscreen({ action: "clearQueue" }, (response) => {
+                sendResponse(response || { result: "error" });
+            });
             return true;
         } else if (request.action === "updateProgress") {
             askOffscreen({ action: "getProgress" }, (response) => {
@@ -861,7 +970,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         action: "updateProgress",
                         progress: response.progress,
                         doujinshiName: response.doujinshiName,
-                        isZipping: response.isZipping
+                        isZipping: response.isZipping,
+                        retry: response.retry,
+                        queued: response.queued,
+                        paused: response.paused
                     });
                 }
                 sendResponse({ result: "success" });
@@ -882,66 +994,88 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true; // Answered asynchronously.
     } else if (request.action === "downloadDoujinshi") {
-        background.downloadDoujinshi(
-            request.json,
-            request.path,
-            (error: string) => {
-                chrome.runtime.sendMessage({ action: "downloadError", error: error });
-            },
-            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
-                chrome.runtime.sendMessage({
-                    action: "updateProgress",
-                    progress: progress,
-                    doujinshiName: doujinshiName,
-                    isZipping: isZipping,
+        // Resolve the CDN image server list (cached; falls back to the
+        // built-in mirrors) before the job starts, then run in this worker.
+        // The marker goes up synchronously (like the relayed path) so a popup
+        // opened during the resolution window still sees the active job.
+        background.setJobMarker(true);
+        cdnConfigService.ensureImageServers(request.tabId).then((imageServers) => {
+            setImageServers(imageServers);
+            background.downloadDoujinshi(
+                request.json,
+                request.path,
+                (error: string) => {
+                    chrome.runtime.sendMessage({ action: "downloadError", error: error });
+                },
+                (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
+                    chrome.runtime.sendMessage({
+                        action: "updateProgress",
+                        progress: progress,
+                        doujinshiName: doujinshiName,
+                        isZipping: isZipping,
                 retry: retry
-                });
-            },
-            request.name,
-            request.tabId
-        );
-        sendResponse({ result: "started" });
+                    });
+                },
+                request.name,
+                request.tabId,
+                { useZip: normalizeFormatOverride(request.formatOverride) }
+            );
+            sendResponse({ result: "started" });
+        });
+        return true; // sendResponse is called asynchronously.
     } else if (request.action === "downloadAllDoujinshis") {
-        background.downloadAllDoujinshis(
-            request.allDoujinshis,
-            request.finalName,
-            (error: string) => {
-                chrome.runtime.sendMessage({ action: "downloadError", error: error });
-            },
-            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
-                chrome.runtime.sendMessage({
-                    action: "updateProgress",
-                    progress: progress,
-                    doujinshiName: doujinshiName,
-                    isZipping: isZipping,
+        background.setJobMarker(true);
+        cdnConfigService.ensureImageServers(request.tabId).then((imageServers) => {
+            setImageServers(imageServers);
+            background.downloadAllDoujinshis(
+                request.allDoujinshis,
+                request.finalName,
+                (error: string) => {
+                    chrome.runtime.sendMessage({ action: "downloadError", error: error });
+                },
+                (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
+                    chrome.runtime.sendMessage({
+                        action: "updateProgress",
+                        progress: progress,
+                        doujinshiName: doujinshiName,
+                        isZipping: isZipping,
                 retry: retry
-                });
-            },
-            request.galleryMetadata || {},
-            request.tabId
-        );
-        sendResponse({ result: "started" });
+                    });
+                },
+                request.galleryMetadata || {},
+                request.tabId,
+                { useZip: normalizeFormatOverride(request.formatOverride), downloadSeparately: request.separate === undefined ? undefined : !!request.separate }
+            );
+            sendResponse({ result: "started" });
+        });
+        return true; // sendResponse is called asynchronously.
     } else if (request.action === "downloadAllPages") {
-        background.downloadAllPages(
-            request.allDoujinshis,
-            request.pages,
-            request.finalName,
-            (error: string) => {
-                chrome.runtime.sendMessage({ action: "downloadError", error: error });
-            },
-            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
-                chrome.runtime.sendMessage({
-                    action: "updateProgress",
-                    progress: progress,
-                    doujinshiName: doujinshiName,
-                    isZipping: isZipping,
+        background.setJobMarker(true);
+        cdnConfigService.ensureImageServers(request.tabId).then((imageServers) => {
+            setImageServers(imageServers);
+            background.downloadAllPages(
+                request.allDoujinshis,
+                request.pages,
+                request.finalName,
+                (error: string) => {
+                    chrome.runtime.sendMessage({ action: "downloadError", error: error });
+                },
+                (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
+                    chrome.runtime.sendMessage({
+                        action: "updateProgress",
+                        progress: progress,
+                        doujinshiName: doujinshiName,
+                        isZipping: isZipping,
                 retry: retry
-                });
-            },
-            request.url,
-            request.tabId
-        );
-        sendResponse({ result: "started" });
+                    });
+                },
+                request.url,
+                request.tabId,
+                { useZip: normalizeFormatOverride(request.formatOverride), downloadSeparately: request.separate === undefined ? undefined : !!request.separate }
+            );
+            sendResponse({ result: "started" });
+        });
+        return true; // sendResponse is called asynchronously.
     } else if (request.action === "goBack") {
         background.goBack();
         sendResponse({ result: "success" });

@@ -6,7 +6,7 @@
         <select id="useZip">
             <option value="zip">ZIP</option>
             <option value="cbz">CBZ</option>
-            <option value="folder">Images in a folder (no zip)</option>
+            <option value="pdf">PDF (one file per gallery)</option>
             <option value="raw">Raw (not recommanded)</option>
         </select>
         <br/>
@@ -41,16 +41,13 @@
         </select>
         <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
         <br/><hr/>
-        <h3>API access (optional)</h3>
-        nhentai API key:
-        <input id="apiKey" type="password" placeholder="Paste your API key" autocomplete="off"/>
-        <input id="apiKeyClear" type="button" value="Clear key"/>
-        <br/><small id="apiKeyStatus"></small>
-        <br/><small>Generate a key on nhentai.net &rarr; account settings &rarr; API keys.
-        With a key, metadata resolves through the official API (higher rate limits).
-        Without a key, metadata is read from your open NHentai tab. The key is stored only in this browser
-        and stays saved across browser restarts and disabling/re-enabling the extension;
-        use Clear key (or uninstalling the extension) to remove it.</small>
+        <h3>Optional nhentai API key</h3>
+        <p><small>Optional. Downloads work without a key. Paste a key you generated in your nhentai account settings; this extension never asks for your password or creates keys. The key is kept in this browser profile only and is not synced. It stays saved across browser restarts and disabling/re-enabling the extension; only Remove key (or uninstalling the extension) removes it.</small></p>
+        <label for="apiKey">API key:</label>
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key">
+        <button id="saveApiKey" type="button">Save &amp; verify</button>
+        <button id="removeApiKey" type="button">Remove key</button>
+        <div id="apiKeyStatus" role="status" aria-live="polite"></div>
         <br/>
         Use one-shot server archive downloads when available (requires API key):
         <input id="useServerArchive" type="checkbox"/>

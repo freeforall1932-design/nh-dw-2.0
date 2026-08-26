@@ -13,8 +13,7 @@ chrome.storage.local.get({
     }
 });
 
-// Add checkbox on pages that have multiple doujins so we can tick them here and then download everything
-// TODO: going on another doujin page and coming back will let the checked box on the page even if they aren't on the extension
+// Add checkboxes on listing pages so galleries can be queued from the popup.
 chrome.storage.sync.get({
     displayCheckbox: true
 }, function(elems) {

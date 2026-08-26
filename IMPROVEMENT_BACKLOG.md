@@ -30,6 +30,10 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Stop the service worker from keeping message channels open for fire-and-forget messages (the "A listener indicated an asynchronous response by returning true, but the message channel closed" console noise): the listener now returns true only on branches that actually answer.
 - [x] Batch metadata for unresolved gallery ids and listing-page fetches in `downloadAllPages` now go through the user's open nhentai tab session (via the worker relay) before falling back to the extension origin.
 - [x] Narrow `web_accessible_resources` to the two toolbar icons on `https://nhentai.net/*` (was `*` on `<all_urls>`, exposing every bundled file to any page); guarded by a manifest test.
+- [x] CDN configuration hardening (replace the hardcoded `i.nhentai.net`–`i4.nhentai.net` image hosts): the service worker now resolves `GET /api/v2/cdn` per session (source-tab session first, extension fetch second, short timeout, cached in memory + `chrome.storage.session` for one hour), validates every entry as a bare HTTPS `*.nhentai.net` origin, and merges the API order in front of the built-in fallback mirrors. `src/sources/cdnConfig.ts` is the single shared configuration for URL generation (`GallerySource.getImageUrls`) and allowed-image validation (`tabImageFetch.isAllowedImageUrl`), relayed to the offscreen document with each job's options. Hosts outside the static `host_permissions` are covered by `optional_host_permissions: ["https://*.nhentai.net/*"]`: jobs only use permitted hosts (so downloads never stall on CORS-blocked mirrors), and the popup shows a one-click *Grant image host access* notice (`getCdnStatus`) when nhentai reports a host the extension has not been granted yet. No `<all_urls>` anywhere; guarded by manifest and fixture tests (`test/cdn-config.test.js`, 22 cases).
+- [x] PDF output format (replacing the retired images-folder mode) via a dependency-free PDF writer (`src/utils/pdfBuilder.ts`): RGB JPEGs embed verbatim (DCTDecode), other formats re-encode through an image canvas; delivered as `<title>.pdf`. Legacy `"folder"` settings map to `"pdf"` everywhere.
+- [x] Archive naming/structure: single-gallery ZIP/CBZ/PDF named after the title with pages at the archive root (no `Title/Title` double folder); shared batch archives keep a folder per gallery; raw mode saves `Title/001.jpg`-style numbered pages inside a titled folder; last-mile filename sanitization stops Chrome from dropping names to blob-UUID/number fallbacks.
+- [x] Two-column popup: current gallery (format picker + path + Download) on the left, similar-galleries selection panel (checkbox list + All/None + Download selected) on the right; the selected related galleries each download as their own titled archive (`separate: true` per-job override).
 
 ## Priority 1: reliability and correctness
 
@@ -302,6 +306,18 @@ Chrome). Covered by `scripts/e2e-worker.js` phase 6 (marker set/cleared during a
 job, stale-marker detection, dismissible notice) and marker assertions in
 `scripts/e2e-offscreen.js`.
 
+**Follow-up fix (false "Download interrupted" after a success):** the offscreen document
+originally cleared the marker only on its 60s idle close, so for a full minute after a
+successful download the popup misreported it as "interrupted" (and a batch between
+galleries could look "finished" because `isDownloadFinished` was keyed off the
+per-gallery `isDone()`). Now the offscreen document sends `jobFinished` when a job ends
+and the worker clears the marker immediately; the offscreen `isDownloadFinished` answers
+from a whole-job `jobRunning` flag; and the worker's offscreen-branch `isDownloadFinished`
+clears the marker and answers `interrupted:false` whenever the live document reports the
+job finished. A genuine interruption (document gone, marker still set) still answers
+`interrupted:true`. Covered by `scripts/e2e-relay.js` (finished-vs-interrupted, `jobFinished`)
+and `scripts/e2e-offscreen.js` (running flag, `jobFinished` sent).
+
 ## Priority 5: product and UX
 
 ### 12. Reconcile README behavior with the implementation
@@ -368,6 +384,70 @@ flag. Aborted pages are no longer retried through the 5x/mirror fallback, queued
 galleries stop when the loop unwinds, and a user cancellation is not surfaced as a
 `downloadError` (the popup already resets its UI on Cancel). Covered by two new
 fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-abort).
+
+### 16. Bucket list: popup format selection and PDF output
+
+**16a. Choose the download format from the popup (same tab), not just the options page.**
+
+**Progress:** implemented; needs real-browser verification.
+
+The single-gallery popup has a ZIP / CBZ / PDF / raw picker in the left column of the
+two-column layout (current gallery left, similar galleries right). Its selection is sent
+as a validated one-job override through the service worker to the offscreen pipeline; it
+does **not** overwrite the user's saved Options default. The relay e2e test verifies that
+an override reaches the offscreen job options. The retired "images in a folder" format
+was replaced by PDF (16b): legacy stored/relayed `"folder"` values map to `"pdf"`
+everywhere (options select, popup pickers, format overrides, `Downloader` whitelist).
+
+**16b. Add PDF as an output format.**
+
+- Add a "Download as PDF" option alongside ZIP/CBZ/raw. — **Done.**
+- Requires converting the fetched page images into a PDF inside the offscreen document,
+  then saving through the existing `saveDownload` relay; the whitelist in
+  `Downloader.startAsync` was extended (zip/cbz/pdf/raw), not bypassed. — **Done.**
+
+**Progress:** implemented; needs real-browser verification.
+
+`src/utils/pdfBuilder.ts` is a dependency-free PDF 1.4 writer: baseline/progressive RGB
+JPEGs are embedded verbatim as DCTDecode XObjects at native size (dimensions parsed
+from the SOF frame — `jpegInfo`), and grayscale/CMYK JPEGs plus PNG/GIF/WebP pages are
+re-encoded to RGB JPEG through `createImageBitmap` + `OffscreenCanvas` where available
+(offscreen document and MV3 worker both qualify; transparent areas flatten onto white).
+Pages are collected in order during the fetch loop and assembled once at the end,
+delivered as `<gallery title>.pdf` through the same object-URL/data-URL path as ZIP.
+Covered by `test/pdf-builder.test.js` (frame parsing, structure, verbatim embedding,
+xref offset verification) and PDF phases in the worker/offscreen e2e pipelines.
+
+**Archive naming/structure hardening (same work item):** single-gallery ZIP/CBZ/PDF
+files are named after the gallery with pages at the archive **root** — no more
+`Title.zip` containing `Title/001.jpg`. Shared batch archives keep one folder per
+gallery inside. Raw mode saves numbered pages (`001.jpg`, `002.png`, …) inside a folder
+named after the gallery. A last-mile `sanitizeArtifactFilename` guard strips characters
+that make Chrome silently drop the requested filename (which is how downloads could
+land under blob-URL/number names). `separate: true` from the popup forces one archive
+per gallery for the similar-gallery selection.
+
+### 17. "More Like This" batch download
+
+**Progress:** implemented; needs real-browser verification.
+
+The popup's right column is a **similar-galleries panel**: *Show similar galleries*
+fetches `GET /api/v2/galleries/{id}/related` once, then lists every related gallery
+with a checkbox (title plus page count; untitled cards show `(Non-titled) #id` like
+nhentai itself). **All/None** toggle the selection and **Download selected (n)**
+downloads exactly the checked galleries — each as its own titled archive
+(`separate: true`), using the same per-job format picker as the current gallery.
+
+- An API key is optional; if the user has saved one it is attached to improve the
+  endpoint rate limit, otherwise the public endpoint is used.
+- The existing gallery tab is supplied to the batch pipeline for its normal
+  tab-first metadata resolution. No tabs are opened or navigated automatically.
+- Empty, malformed, and HTTP-error responses leave the panel with a clear error
+  instead of starting a download.
+
+**Remaining acceptance:** verify a real gallery in Chrome/Brave, including an
+anonymous request, a key-authenticated request, an empty related list, unselecting
+some entries, and an image/metadata failure within the related batch.
 
 ## Security and maintenance
 
@@ -453,3 +533,29 @@ fixture tests in `test/downloader.test.js` (in-flight abort and no-retry-after-a
 - **[ ] 19. Optional: force the descriptive `User-Agent`** via a
   `declarativeNetRequest` rule (fetch() forbids it in some contexts).
   Deferred: adds a new install-time permission for a courtesy header.
+
+### Integration on top of PR #21 (merged into this PR before merge)
+
+Main advanced while PR #22 was open (PRs #18–#21: queue controls, pause/resume,
+popup split + similar galleries, title-named flat archives, PDF output
+replacing folder mode, CDN configuration hardening). PR #22 was merged with
+`origin/main` and re-validated as one tree:
+
+- Kept PR #21's verified key flow (options **Save & verify** via
+  `GET /api/v2/user`, `test/api-key.test.js`) and combined it with the gate:
+  saving a key withdraws any "continue without API key" decision, removing
+  the key re-arms the gate.
+- Archive endpoint guard extended for PR #21's archive layouts: a server
+  archive is only delivered when this gallery owns the whole archive (never
+  mid-shared-batch, checked via zip contents), so shared batch archives keep
+  every gallery.
+- Offscreen API-surface rule preserved: the Downloader never touches
+  `chrome.storage` in the relayed-settings branch; the worker attaches
+  `apiKey`/`useServerArchive` to `gallerySettings` and single-download
+  settings instead (e2e-offscreen "chrome.runtime only" check passes).
+- Worker single-download path relays stored `useZip`/`maxConcurrentDownloads`
+  together with the API fields so raw/PDF/CBZ formats stay correct.
+- e2e-worker phases renumbered: CDN hardening stays phase 8; keyed batch is
+  phase 9, keyless-no-Authorization is phase 10.
+- Result: **149 passing / 1 pending** (123 from main + 26 from PR #22), all
+  smoke + e2e suites green, release `js/` in sync.
