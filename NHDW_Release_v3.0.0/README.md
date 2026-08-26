@@ -32,7 +32,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 ## How it works
 
 1. **Popup** — Clicking the extension icon on an nhentai page opens a popup that detects whether you are on a single gallery or a listing page.
-2. **Metadata** — Gallery info is fetched from `nhentai.net/api/gallery/<id>` or, if Cloudflare blocks the request, from the active browser tab's page context.
+2. **Metadata** — Gallery info comes from nhentai's API v2 (`nhentai.net/api/v2/galleries/<id>`), from the SvelteKit JSON payload embedded in the open gallery page, or from the legacy `window._gallery` embed. In **API key mode** (see below) the official keyed API is tried first; otherwise metadata resolves through the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
 4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin. The image server list is resolved per session from `nhentai.net/api/v2/cdn` (validated HTTPS `*.nhentai.net` origins, API order first), with automatic fallback through the built-in mirrors (`i.nhentai.net`, `i1`–`i4`). If nhentai reports image hosts the extension has no permission for, the popup offers a one-click **Grant image host access** (optional `https://*.nhentai.net/*` permission — downloads keep working on the permitted hosts either way). HTML challenge responses are rejected so they never end up inside a ZIP.
 5. **Archive / PDF output** — ZIP and CBZ archives are named after the gallery with the numbered pages directly at the archive root (no double `Title/Title` folder when extracting). **PDF** assembles the same pages into one `<Title>.pdf` (JPEG pages are embedded as-is; other formats are converted). In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts. Raw mode saves the numbered pages (`001.jpg`, `002.png`, …) inside a `Downloads/<Title>/` folder.
@@ -56,6 +56,41 @@ This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”,
 If you still see 403 errors:
 - Make sure you are logged into nhentai in the active tab.
 - Try again with a different VPN/proxy endpoint.
+- Or switch to **API key mode** (next section), which uses nhentai's official API authentication for third-party clients.
+
+---
+
+## API key mode (optional)
+
+nhentai's official API v2 documents API keys as the authentication method for third-party clients: generate one at **nhentai.net → account settings → API keys** and it is sent as `Authorization: Key YOUR_API_KEY`.
+
+On first use the popup shows a gate with two explicit exits:
+
+- **Submit key** — enters **API key mode**.
+- **Continue without API key** — enters **open tab mode** (the previous behaviour). The choice is remembered; the key can later be set or cleared in the extension options.
+
+### Mode boundaries
+
+| Concern | API key mode | Open tab mode (no key) |
+|---|---|---|
+| Metadata route order | keyed official API → open-tab read → plain fetch | open-tab read → plain fetch (unchanged) |
+| `Authorization` header | `Key <key>` on `nhentai.net/api/` requests only | never created |
+| `429` handling | honoured with `Retry-After` backoff | n/a |
+| Batch downloads | do not depend on reading the open tab | resolve through the open NHentai tab only |
+| One-shot server archives | available (opt-in) | not available (endpoint requires auth) |
+
+**Shared by both modes** (unified core): the download engine (page queue, retries, exponential backoff, ZIP/CBZ assembly, raw and folder outputs, object-URL delivery), parsing/normalisation, Cloudflare-challenge detection, content scripts, popup UI, progress/summary messages, and the hidden same-tab fallback frame.
+
+Notes:
+
+- The key is stored in `chrome.storage.local` only — it never syncs to other devices, never reaches content scripts, and is only ever attached to `nhentai.net/api/` URLs (never to CDN media URLs).
+- The key (and the gate decision / archive toggle) is persistent: it survives closing the browser, browser restarts, and disabling/re-enabling the extension. Only **Clear key** in the options, uninstalling the extension, or wiping the browser's extension data removes it.
+- An invalid key can never break a download: a failing keyed request falls through to the open-tab routes.
+- This is not a Cloudflare bypass; it is the site's official API contract for clients.
+
+### One-shot server archive downloads (experimental)
+
+With an API key, the extension can ask `POST /api/v2/galleries/<id>/download?format=zip|cbz` for a ready-made archive instead of fetching every page (the API docs designate this endpoint for full-gallery archives). Enable it in the options (**Use one-shot server archive downloads**). It applies to ZIP/CBZ output only, and any failure (invalid key, feature flag off, rate limit, network error) automatically falls back to the page-by-page pipeline.
 
 ---
 
@@ -85,6 +120,8 @@ The original extension supported Firefox; the MV3 version requires `chrome.offsc
 | **Download separately** | Each selected gallery as its own archive |
 | **HTML parsing** | Use page HTML instead of the API for metadata |
 | **Max concurrent downloads** | Parallel image fetches (1–15) |
+| **nhentai API key** | Optional key for API key mode (stored locally, never synced) |
+| **Server archive downloads** | Experimental one-shot ZIP/CBZ via the API (requires key) |
 | **Name template** | Filename with placeholders (see below) |
 | **Replace spaces** | Replace spaces with underscores in filenames |
 
@@ -120,7 +157,7 @@ cp -a js/. ../NHDW_Release_v3.0.0/js/
 ### Running tests
 
 ```bash
-npm test                          # 28+ fixture tests (offline)
+npm test                          # 149 fixture tests (offline)
 npm run test:smoke                # smoke checks for background + offscreen
 npm run test:e2e                  # window-less end-to-end pipeline tests
 npm run test:live                 # optional live nhentai API test

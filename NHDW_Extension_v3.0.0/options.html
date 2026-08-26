@@ -42,12 +42,17 @@
         <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
         <br/><hr/>
         <h3>Optional nhentai API key</h3>
-        <p><small>Optional. Downloads work without a key. Paste a key you generated in your nhentai account settings; this extension never asks for your password or creates keys. The key is kept in this browser profile only and is not synced.</small></p>
+        <p><small>Optional. Downloads work without a key. Paste a key you generated in your nhentai account settings; this extension never asks for your password or creates keys. The key is kept in this browser profile only and is not synced. It stays saved across browser restarts and disabling/re-enabling the extension; only Remove key (or uninstalling the extension) removes it.</small></p>
         <label for="apiKey">API key:</label>
         <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key">
         <button id="saveApiKey" type="button">Save &amp; verify</button>
         <button id="removeApiKey" type="button">Remove key</button>
         <div id="apiKeyStatus" role="status" aria-live="polite"></div>
+        <br/>
+        Use one-shot server archive downloads when available (requires API key):
+        <input id="useServerArchive" type="checkbox"/>
+        <br/><small>Experimental: asks POST /api/v2/galleries/&lt;id&gt;/download for a ready-made ZIP/CBZ instead of fetching every page.
+        Falls back to page-by-page automatically when unavailable. Applies to ZIP/CBZ format and single-gallery archives only.</small>
         <br/><hr/>
         <h3>Name template</h3>
         <input id="downloadName" type="text"/>

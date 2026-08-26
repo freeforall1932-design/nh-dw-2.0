@@ -6,6 +6,7 @@ import Downloader from "../background/Downloader";
 import { utils, classifyError } from "../utils/utils";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
+import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 var JSZip = require("jszip");
 
@@ -223,7 +224,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // Single-gallery jobs own their archive: pages at the root, file named
     // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
-        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat" });
+        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined });
     currentDownloader.saveUrl = saveViaServiceWorker;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -286,7 +287,9 @@ async function downloadAllDoujinshisAsync(
     const gallerySettings: any = {
         useZip: options.useZip,
         maxConcurrentDownloads: options.maxConcurrentDownloads,
-        archiveLayout: downloadSeparately ? "flat" : "nested"
+        archiveLayout: downloadSeparately ? "flat" : "nested",
+        apiKey: options.apiKey || null,
+        useServerArchive: !!options.useServerArchive
     };
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;
@@ -316,12 +319,37 @@ async function downloadAllDoujinshisAsync(
             queued: queuedJobs.length
         });
 
+        // Metadata route order mirrors the service worker's batch loop:
+        //   keyed mode:  pre-resolved -> keyed official API -> tab -> direct
+        //   keyless:     pre-resolved -> tab -> direct (unchanged)
+        const apiKey = options && options.apiKey ? String(options.apiKey) : "";
+        let jsonKeyed: any | null = null;
         let jsonViaTab: any | null = null;
         let resp: any = null;
         if (galleryMetadata[key]) {
             resp = { ok: true, status: 200, statusText: "resolved in browser" };
-        } else {
-            // Try via the user's tab session first (API + gallery pages)
+        } else if (apiKey) {
+            // API key mode: the official keyed API is the primary route. A
+            // failure here falls through to the tab-based routes below.
+            try {
+                const keyedParsing = new ApiParsing();
+                const keyedResp = await fetchNhentaiApi(
+                    keyedParsing.GetUrl(key),
+                    { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined },
+                    apiKey
+                );
+                if (keyedResp.ok) {
+                    jsonKeyed = await keyedParsing.GetJsonAsync(keyedResp);
+                }
+            } catch (_) {
+                // Fall through to the tab-based routes.
+            }
+            if (jsonKeyed) {
+                resp = { ok: true, status: 200, statusText: "resolved via keyed API" };
+            }
+        }
+        if (!resp) {
+            // Try via the user's tab session (API + gallery pages)
             if (typeof sourceTabId === "number") {
                 jsonViaTab = await getGalleryViaTab(sourceTabId, key);
                 if (jsonViaTab) {
@@ -367,6 +395,8 @@ async function downloadAllDoujinshisAsync(
             try {
                 if (galleryMetadata[key]) {
                     json = galleryMetadata[key];
+                } else if (jsonKeyed) {
+                    json = jsonKeyed;
                 } else if (jsonViaTab) {
                     json = jsonViaTab;
                 } else {

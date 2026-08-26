@@ -65,9 +65,16 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
             lastUrl: ""
         }, function(elemsLocal) {
             if (elemsLocal.lastUrl !== currUrl) {
-                chrome.storage.local.clear();
-                chrome.storage.local.set({
-                    lastUrl: currUrl
+                // Reset ONLY the checkbox selection when moving between pages.
+                // Never use storage.local.clear() here: it would also destroy
+                // the stored API key, the gate decision and the archive
+                // toggle, which must survive URL changes, browser restarts
+                // and disabling/re-enabling the extension. The content script
+                // resets allIds in the same targeted way.
+                chrome.storage.local.remove("allIds", function() {
+                    chrome.storage.local.set({
+                        lastUrl: currUrl
+                    });
                 });
             }
             // Use message passing instead of direct background page access for Firefox private mode compatibility
@@ -96,7 +103,10 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                     }, 0);
                     return;
                 }
-                popup.updatePreviewAsync(currUrl);
+                // Two-mode gate: ask once for an API key (Submit key /
+                // Continue without API key) before the preview renders. After
+                // a decision this is a pass-through.
+                popup.ensureApiGateThen(() => popup.updatePreviewAsync(currUrl));
             });
             return; // Early return as we're handling the async response above
         });

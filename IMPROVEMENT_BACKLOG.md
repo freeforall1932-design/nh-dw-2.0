@@ -469,3 +469,93 @@ some entries, and an image/metadata failure within the related batch.
 7. Configurable source adapters
 8. Optional onion source
 9. Chrome/Brave/Tor compatibility matrix
+
+---
+
+## Session log — 2026-08-26: optional API key mode, first-run gate, one-shot archives (PR #22)
+
+### Improvements landed this session
+
+1. **[x] Optional API key mode (official API contract).** nhentai's API v2
+   documents API keys as the third-party auth method (`Authorization: Key
+   YOUR_API_KEY`). The extension now sends it on `nhentai.net/api/` requests
+   only (never CDN URLs), with 429 `Retry-After` backoff (clamped 0.25–15 s)
+   and a best-effort descriptive `User-Agent`. Keyed metadata limits: 45/min
+   vs 20/min per IP anonymous. Implemented in `src/utils/apiAuth.ts`
+   (`fetchNhentaiApi`) and wired into the popup preview, the service-worker
+   batch loop and the offscreen batch loop.
+
+2. **[x] Two-mode boundary with a first-run gate.** Popup gate box:
+   **Submit key** (API key mode) / **Continue without API key** (open tab
+   mode, decision remembered). A mode badge shows which mode is active.
+   Keyless mode is byte-for-byte the previous behavior; a failing keyed
+   request always falls through to the keyless routes, so an invalid key can
+   never break a download. Full boundary table in `SESSION_HANDOFF.md` and
+   the release README.
+
+3. **[x] One-shot server archive downloads (experimental, opt-in).**
+   `POST /api/v2/galleries/<id>/download?format=zip|cbz` (keyed, returns
+   `{ url, expires_at }`) — implemented against the live OpenAPI spec,
+   opportunistic with automatic page-by-page fallback, and the delivery URL
+   is fetched without the key. `src/background/ArchiveDownload.ts` +
+   `Downloader.ts`.
+
+4. **[x] Persistent API key storage (and the bug that threatened it).** Key,
+   gate decision and archive toggle live in `chrome.storage.local` — they
+   survive browser restarts and disabling/re-enabling the extension. Fixed
+   `preview.ts` calling `chrome.storage.local.clear()` on every URL change
+   (which would have wiped the key); replaced with a targeted
+   `remove("allIds")` plus a regression guard asserting the popup bundle
+   never contains `storage.local.clear()`.
+
+5. **[x] Secret hygiene.** Key never in `chrome.storage.sync`, never to
+   content scripts, never attached to non-API hosts, never sent to the
+   archive delivery URL. Options page documents persistence and offers
+   Clear key.
+
+6. **[x] Version + tests.** Extension version 3.1.0 (both manifests + new
+   version-sync test). Tests 83 → 109 passing; e2e phases 8–9 prove the mode
+   boundary (keyed batch carries `Authorization: Key …`; keyless batch sends
+   none).
+
+### New backlog items
+
+- **[ ] 16. Real-browser verification of API key mode + archive endpoint**
+  (user side; steps in `SESSION_HANDOFF.md` work list). Open questions:
+  does the account get a usable URL from `POST .../download`
+  (`allow_downloads` feature flag / tier)? Confirm the keyed route wins in
+  the service-worker console.
+- **[ ] 17. Decide the fate of the archive toggle** based on item 16: keep
+  experimental (fallback already handles failure) or remove.
+- **[ ] 18. Optional: sync the API key across the user's own devices.**
+  Currently deliberately `chrome.storage.local`-only; changing to
+  `chrome.storage.sync` requires an explicit user decision (secret syncing).
+- **[ ] 19. Optional: force the descriptive `User-Agent`** via a
+  `declarativeNetRequest` rule (fetch() forbids it in some contexts).
+  Deferred: adds a new install-time permission for a courtesy header.
+
+### Integration on top of PR #21 (merged into this PR before merge)
+
+Main advanced while PR #22 was open (PRs #18–#21: queue controls, pause/resume,
+popup split + similar galleries, title-named flat archives, PDF output
+replacing folder mode, CDN configuration hardening). PR #22 was merged with
+`origin/main` and re-validated as one tree:
+
+- Kept PR #21's verified key flow (options **Save & verify** via
+  `GET /api/v2/user`, `test/api-key.test.js`) and combined it with the gate:
+  saving a key withdraws any "continue without API key" decision, removing
+  the key re-arms the gate.
+- Archive endpoint guard extended for PR #21's archive layouts: a server
+  archive is only delivered when this gallery owns the whole archive (never
+  mid-shared-batch, checked via zip contents), so shared batch archives keep
+  every gallery.
+- Offscreen API-surface rule preserved: the Downloader never touches
+  `chrome.storage` in the relayed-settings branch; the worker attaches
+  `apiKey`/`useServerArchive` to `gallerySettings` and single-download
+  settings instead (e2e-offscreen "chrome.runtime only" check passes).
+- Worker single-download path relays stored `useZip`/`maxConcurrentDownloads`
+  together with the API fields so raw/PDF/CBZ formats stay correct.
+- e2e-worker phases renumbered: CDN hardening stays phase 8; keyed batch is
+  phase 9, keyless-no-Authorization is phase 10.
+- Result: **149 passing / 1 pending** (123 from main + 26 from PR #22), all
+  smoke + e2e suites green, release `js/` in sync.

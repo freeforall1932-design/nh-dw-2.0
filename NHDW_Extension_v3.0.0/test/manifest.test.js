@@ -26,6 +26,11 @@ describe('MV3 manifest', () => {
         }
     });
 
+    it('keeps the extension version in sync between source and release', () => {
+        assert.strictEqual(releaseManifest.version, sourceManifest.version,
+            'release manifest version differs from source');
+    });
+
     it('hardens CDN host access without <all_urls>: static hosts plus an optional nhentai-only grant', () => {
         for (const manifest of [sourceManifest, releaseManifest]) {
             // chrome.permissions is required to check/request the optional grant.

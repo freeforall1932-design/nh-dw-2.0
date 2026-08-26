@@ -1,6 +1,17 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-08-23 (after popup split + per-title similar downloads + naming fixes + PDF format)
+**Updated:** 2026-08-26 (after two-mode API access: first-run gate, keyed
+metadata routes with 429 backoff, one-shot server archives, key-persistence
+fix — merged on top of the popup split / PDF / CDN work)
+
+- Session branch: `arena/01a023e5-nh-dw-2-0` (only use the current session
+  branch; check `git branch --show-current`. Earlier sessions used
+  `arena/01a027b3-…`, `arena/01a02b04-…`, `arena/01a02397-…`). Do not trust
+  older branch names in historic handoff text.
+- PR #22 ("Add optional nhentai API key mode with first-run gate and one-shot
+  archive downloads") was merged with a merge commit on 2026-08-26 — confirm
+  the hash with `gh pr view 22 --json mergeCommit,state`. Follow-up work
+  starts from `main` on a fresh session branch.
 
 ## Repository and branch
 
@@ -53,13 +64,48 @@
 
 - Options page: optional user-pasted key, verified via third-party-safe `GET /api/v2/user` with `Authorization: Key <key>` only. Stored in `chrome.storage.local`, never rendered back. Never use `/api/v2/auth/*`.
 
+### Two-mode API access (2026-08-26, PR #22)
+
+Boundary table — **API key mode** (a key is stored) vs **open tab mode**
+(no key; byte-for-byte the pre-key behaviour):
+
+| Concern | API key mode | Open tab mode |
+|---|---|---|
+| Metadata route order | keyed official API → open-tab read → plain fetch | open-tab read → plain fetch |
+| `Authorization` header | `Key <key>` on `nhentai.net/api/` URLs only | never created |
+| `429` handling | `Retry-After` backoff (clamped 0.25–15 s, max 2 retries) | n/a |
+| Batch downloads | independent of the open tab's session | resolve through the open tab only |
+| One-shot server archives | available (opt-in) | not available (endpoint requires auth) |
+
+- **First-run gate** (popup): a box asks for the key with two explicit exits,
+  **Submit key** / **Continue without API key**; the decision is remembered
+  (`apiKeyGate` in storage.local). Mode badges ("API key" / "open tab") show
+  in single and batch previews. Saving a key in options withdraws a previous
+  skip; removing the key re-arms the gate.
+- **Keyed routes**: `fetchNhentaiApi()` in `src/utils/apiAuth.ts` (headers
+  only for `https://nhentai.net/api/`, best-effort descriptive User-Agent,
+  429 backoff). Wired into popup preview, worker batch, offscreen batch —
+  always falling through to the keyless routes on failure, so an invalid key
+  can never break a download.
+- **One-shot server archives** (experimental, opt-in toggle
+  `useServerArchive`): `POST /api/v2/galleries/<id>/download?format=zip|cbz`
+  (keyed; returns `{ url, expires_at }`) — `src/background/ArchiveDownload.ts`
+  + `Downloader.#tryServerArchiveAsync()`. Runs only when this gallery owns
+  the whole archive (never mid-shared-batch), only for ZIP/CBZ, and any
+  failure (401/403/503/429/network/malformed) falls back to page-by-page.
+  The signed delivery URL is fetched **without** the key.
+- **Persistence fix**: the popup bootstrap used `storage.local.clear()` on
+  URL changes, which would wipe the key — replaced with targeted
+  `remove("allIds")`. Guarded by a test asserting the popup bundle never
+  contains `storage.local.clear()`.
+
 ## Validation
 
 ```bash
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build
-npm test              # 123 passing, 1 pending live test
+npm test              # 149 passing, 1 pending live test
 npm run test:smoke
 npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN), relay, content
 cp js/*.js ../NHDW_Release_v3.0.0/js/
@@ -85,7 +131,19 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 
 ## Next backlog
 
-- Server-side ZIP/CBZ endpoint with API key; fall back on 429/503 (`POST /api/v2/galleries/{id}/download`).
+- ~~Server-side ZIP/CBZ endpoint with API key; fall back on 429/503~~ — DONE
+  (PR #22, opt-in `useServerArchive` toggle with page-by-page fallback).
+  Remaining: real-browser check of whether the account actually gets a
+  usable URL from `POST .../download` (`allow_downloads` feature flag /
+  tier), and keep-or-remove decision for the toggle based on that result.
+- Real-browser verification of the keyed route winning in the worker console
+  (previous open question: is a same-tab/worker fetch of `/api/v2/galleries`
+  challenged? With a key it uses the official contract).
+- Optional: sync the API key across the user's own devices
+  (`chrome.storage.sync`) — deliberately local-only today; needs an explicit
+  user decision (secret syncing).
+- Optional: force the descriptive `User-Agent` via `declarativeNetRequest`
+  (fetch() forbids it in some contexts) — deferred, adds a permission.
 - Persistent restart-safe resume (checkpoint/rebuild strategy).
 - Search/favorites/blacklist/comments API UI features.
 - PDF niceties (not required): PDF/AV viewers validate fine, but consider a cover/thumbnail entry or bookmarks outline if ever requested.

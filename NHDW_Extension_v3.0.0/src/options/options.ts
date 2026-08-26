@@ -42,6 +42,8 @@ chrome.storage.sync.get({
 // API keys are deliberately stored separately from normal synced preferences:
 // they are optional credentials, user-pasted only, and must not follow browser
 // profile sync. We never display a saved key back into the page.
+// The server-archive toggle lives in the same local storage (apiAuth.ts reads
+// both for the download pipeline).
 const apiKeyInput = document.getElementById("apiKey") as HTMLInputElement;
 const apiKeyStatus = document.getElementById("apiKeyStatus") as HTMLElement;
 const saveApiKeyButton = document.getElementById("saveApiKey") as HTMLButtonElement;
@@ -67,11 +69,14 @@ saveApiKeyButton.addEventListener("click", async () => {
     }
 
     saveApiKeyButton.disabled = true;
-    setApiKeyStatus("Verifying API key…");
+    setApiKeyStatus("Verifying API key\u2026");
     // User-Agent is a forbidden browser fetch header, so Chrome supplies its
     // own. Authorization is the documented third-party API mechanism.
     const result = await verifyAndSaveApiKey(apiKey, chrome.storage.local);
     if (result.ok) {
+        // A saved key enters API key mode: withdraw any earlier
+        // "continue without API key" gate decision.
+        chrome.storage.local.remove("apiKeyGate");
         apiKeyInput.value = "";
         setApiKeyStatus("Key verified for " + result.username + ".");
     } else {
@@ -82,6 +87,19 @@ saveApiKeyButton.addEventListener("click", async () => {
 
 removeApiKeyButton.addEventListener("click", async () => {
     await removeApiKey(chrome.storage.local);
+    // Removing the key returns to open tab mode and re-arms the popup gate.
+    chrome.storage.local.remove("apiKeyGate");
     apiKeyInput.value = "";
     setApiKeyStatus("API key removed from this browser profile.");
 });
+
+// One-shot server archive downloads (experimental, keyed mode only).
+const archiveToggle = document.getElementById("useServerArchive") as HTMLInputElement | null;
+if (archiveToggle) {
+    chrome.storage.local.get({ useServerArchive: false }, (localElems: any) => {
+        archiveToggle.checked = !!localElems.useServerArchive;
+    });
+    archiveToggle.addEventListener("change", function() {
+        chrome.storage.local.set({ useServerArchive: archiveToggle.checked });
+    });
+}

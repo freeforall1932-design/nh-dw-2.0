@@ -1,9 +1,11 @@
 import AParsing from "../parsing/AParsing";
+import ApiParsing from "../parsing/ApiParsing";
 import { utils, classifyError } from "../utils/utils";
 import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl } from "../sources"
 import { getActiveTabId, readGalleryFromTab } from "./activeTabGallery"
+import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
@@ -208,6 +210,53 @@ export default class Popup
         }
     }
 
+    //#region "API key gate"
+    // First-run gate between the two modes. Shown only when no key is stored
+    // and the user has not previously chosen "Continue without API key".
+    // Submitting a key enters API key mode; skipping remembers the decision
+    // and continues in open-tab mode. Either way the preview then renders.
+    async ensureApiGateThen(continueFn: () => void): Promise<void> {
+        let state;
+        try {
+            state = await getApiModeState();
+        } catch (_) {
+            continueFn();
+            return;
+        }
+        const decision = decideGate(state);
+        if (decision !== "gate") {
+            continueFn();
+            return;
+        }
+        document.getElementById('action')!.innerHTML = message.apiKeyGate();
+        setTimeout(() => {
+            const submitButton = document.getElementById('apiKeySubmit');
+            if (submitButton) {
+                submitButton.addEventListener('click', async function() {
+                    const input = document.getElementById('apiKeyInput') as HTMLInputElement;
+                    const value = input ? input.value.trim() : "";
+                    if (value.length === 0) {
+                        const errorBox = document.getElementById('apiKeyGateError');
+                        if (errorBox) {
+                            errorBox.innerHTML = message.apiKeyGateEmptyError();
+                        }
+                        return;
+                    }
+                    await saveApiKey(value);
+                    continueFn();
+                });
+            }
+            const skipButton = document.getElementById('apiKeySkip');
+            if (skipButton) {
+                skipButton.addEventListener('click', async function() {
+                    await skipApiKeyGate();
+                    continueFn();
+                });
+            }
+        }, 0);
+    }
+    //#endregion
+
     // #region "single download"
     async updatePreviewAsync(newUrl: string) {
         let self = Popup.getInstance();
@@ -229,10 +278,33 @@ export default class Popup
         let status = 0;
         let statusText = "";
 
-        // Read the open gallery tab first. Extension-origin fetches to
-        // /api/gallery/<id> are what Cloudflare 403s; the rendered page already
-        // has window._gallery once the challenge is done.
-        json = await getGalleryFromActiveTab(id);
+        // API key mode: the official keyed API is the PRIMARY metadata route
+        // (higher limits, independent of the tab's session). Keyless mode and
+        // any keyed failure keep the original order below.
+        const modeState = await getApiModeState();
+        let keyedRejected = false;
+        if (modeState.mode === "keyed") {
+            try {
+                const keyedParsing = new ApiParsing();
+                const keyedResp = await fetchNhentaiApi(keyedParsing.GetUrl(id), { cache: "no-store" }, modeState.apiKey);
+                status = keyedResp.status;
+                statusText = keyedResp.statusText;
+                if (keyedResp.ok) {
+                    json = await keyedParsing.GetJsonAsync(keyedResp);
+                } else if (keyedResp.status === 401) {
+                    keyedRejected = true;
+                }
+            } catch (error) {
+                statusText = String(error);
+            }
+        }
+
+        // Read the open gallery tab. Extension-origin fetches to the gallery
+        // API are what Cloudflare 403s; the rendered page already carries its
+        // metadata once any challenge is done.
+        if (json === null) {
+            json = await getGalleryFromActiveTab(id);
+        }
 
         if (json === null) {
             try {
@@ -251,9 +323,13 @@ export default class Popup
             }
         }
         if (json === null) {
-            document.getElementById('action')!.innerHTML = status === 404
+            let html = status === 404
                 ? message.errorOther(status, statusText)
                 : message.cloudflareMetadata();
+            if (keyedRejected) {
+                html += '<br/><small>Your API key was rejected (HTTP 401). Check it in the extension options, or clear it there to use open-tab mode only.</small>';
+            }
+            document.getElementById('action')!.innerHTML = html;
             return;
         }
 
@@ -275,7 +351,7 @@ export default class Popup
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
-                document.getElementById('action')!.innerHTML = message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip);
+                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listeners after updating the HTML content.
@@ -412,6 +488,14 @@ export default class Popup
             return;
         }
 
+        // Fill the mode badge once the storage read finishes (non-blocking).
+        getApiModeState().then((state) => {
+            const badgeSlot = document.getElementById('modeBadgeSlot');
+            if (badgeSlot) {
+                badgeSlot.innerHTML = message.apiModeBadge(state.mode === "keyed");
+            }
+        }).catch(() => { /* badge is cosmetic; never block the list */ });
+
         // Keep titles in a plain object keyed by gallery ID instead of the DOM
         // name attribute: a title containing quotes or HTML can no longer break
         // the checkbox markup or the download message.
@@ -451,7 +535,7 @@ export default class Popup
         // Add the HTML
         let nbDownload = 0;
         let currPage = currentPage;
-        let html =  '<h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>' + finalHtml
+        let html =  '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>' + finalHtml
         + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/><br/><br/><input type="button" id="button" value="Download"/>';
         if (maxPage > 0 && currPage > 0) {
             nbDownload = maxPage - currPage + 1;

@@ -9,6 +9,7 @@ import { clearnetSource } from "../sources/GallerySource";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
+import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 import * as cdnConfigService from "./cdnConfigService";
 var JSZip = require("jszip");
@@ -230,23 +231,30 @@ module background
 
     export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string }) {
         const signal = beginJob();
-        let zip = new JSZip();
         // Single-gallery jobs always own their archive: pages go to the root
         // and the file is named after the gallery (no Title/Title double name).
         const settings: any = { archiveLayout: "flat" };
         if (options && options.useZip) {
             settings.useZip = options.useZip;
         }
-        currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
-        if (typeof sourceTabId === "number") {
-            currentDownloader.sourceTabId = sourceTabId;
-        }
-        // Clear the job marker when the download finishes (success or error) and
-        // keep re-throwing so a failure still surfaces as a worker rejection (the
-        // popup has already been told via errorCallback).
-        currentDownloader.startAsync()
-            .then(() => clearJobMarker())
-            .catch(function(error) { clearJobMarker(); throw error; });
+        // Attach the API key fields up front (worker context has storage):
+        // the Downloader itself must never touch chrome.storage so the same
+        // class stays safe inside the offscreen document.
+        readLocalApiSettings().then((localApi) => {
+            settings.apiKey = localApi.apiKey || null;
+            settings.useServerArchive = localApi.useServerArchive;
+            let zip = new JSZip();
+            currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
+            if (typeof sourceTabId === "number") {
+                currentDownloader.sourceTabId = sourceTabId;
+            }
+            // Clear the job marker when the download finishes (success or error) and
+            // keep re-throwing so a failure still surfaces as a worker rejection (the
+            // popup has already been told via errorCallback).
+            currentDownloader.startAsync()
+                .then(() => clearJobMarker())
+                .catch(function(error) { clearJobMarker(); throw error; });
+        });
     }
 
     export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
@@ -309,6 +317,15 @@ module background
             gallerySettings.useZip = options.useZip;
             gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
         }
+        // API key mode lives in chrome.storage.local (secrets never sync).
+        // Empty string = keyless mode, which keeps its previous route order.
+        const localApi = await readLocalApiSettings();
+        const apiKey = localApi.apiKey;
+        // Relay the API key fields with the per-gallery settings: the
+        // offscreen document cannot read chrome.storage, and the Downloader
+        // must not touch it either (only chrome.runtime is exposed there).
+        gallerySettings.apiKey = apiKey || null;
+        gallerySettings.useServerArchive = localApi.useServerArchive;
         let names: Array<string> = [];
         let length = Object.keys(allDoujinshis).length;
         let allKeys = Object.keys(allDoujinshis);
@@ -334,14 +351,38 @@ module background
                 stage: "Downloading"
             });
 
-            // 1. Already-resolved via selectedGalleryResolver
-            // 2. Try via the user's open tab (reuses Cloudflare clearance, tries API + gallery pages)
-            // 3. Fall back to extension-origin fetch (likely 403)
+            // Metadata route order.
+            // API key mode:
+            //   0. Official keyed API (Authorization: Key ..., 429 backoff)
+            // Keyless mode is unchanged:
+            //   1. Already-resolved via selectedGalleryResolver
+            //   2. Via the user's open tab (reuses Cloudflare clearance)
+            //   3. Extension-origin fetch (likely 403)
+            // A failing keyed request simply falls through to the keyless
+            // routes, so an invalid key can never break a download.
+            let json: any | null = galleryMetadata[key] || null;
+            if (json === null && apiKey) {
+                try {
+                    const keyedParsing = new ApiParsing();
+                    const keyedResp = await fetchNhentaiApi(
+                        keyedParsing.GetUrl(key),
+                        { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined },
+                        apiKey
+                    );
+                    if (keyedResp.ok) {
+                        json = await keyedParsing.GetJsonAsync(keyedResp);
+                    }
+                } catch (_) {
+                    // Fall through to the tab-based routes.
+                }
+            }
             let jsonFromTab: any | null = null;
-            if (!galleryMetadata[key] && typeof sourceTabId === "number") {
+            if (json === null && typeof sourceTabId === "number") {
                 jsonFromTab = await getGalleryViaTab(sourceTabId, key, parsing);
             }
-            let json: any | null = galleryMetadata[key] || jsonFromTab || null;
+            if (json === null) {
+                json = jsonFromTab;
+            }
             let resp: any = null;
             if (json) {
                 resp = { ok: true, status: 200, statusText: "resolved via tab" };
@@ -698,22 +739,35 @@ const DOWNLOAD_OPTION_DEFAULTS = {
     htmlParsing: false
 };
 
+// API key settings are stored in chrome.storage.local (a secret must never
+// sync). Read once per batch / relayed command.
+function readLocalApiSettings(): Promise<{ apiKey: string; useServerArchive: boolean }> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ apiKey: "", useServerArchive: false }, (elems: any) => {
+                resolve({
+                    apiKey: elems && elems.apiKey ? String(elems.apiKey) : "",
+                    useServerArchive: !!(elems && elems.useServerArchive)
+                });
+            });
+        } catch (_) {
+            resolve({ apiKey: "", useServerArchive: false });
+        }
+    });
+}
+
 function readDownloadOptions(callback: (options: any) => void) {
     try {
         chrome.storage.sync.get(DOWNLOAD_OPTION_DEFAULTS, (elems: any) => {
-            // Credentials intentionally live in storage.local rather than
-            // synced preferences. The offscreen document cannot read storage,
-            // so relay this optional key only with the active job options.
-            try {
-                chrome.storage.local.get({ apiKey: "" }, (local: any) => {
-                    callback(Object.assign({}, elems, { apiKey: local && local.apiKey ? local.apiKey : "" }));
-                });
-            } catch (_) {
-                callback(Object.assign({}, elems, { apiKey: "" }));
-            }
+            readLocalApiSettings().then((localApi) => {
+                callback(Object.assign({}, elems, {
+                    apiKey: localApi.apiKey,
+                    useServerArchive: localApi.useServerArchive
+                }));
+            });
         });
     } catch (_) {
-        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS, { apiKey: "" }));
+        callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS, { apiKey: "", useServerArchive: false }));
     }
 }
 
