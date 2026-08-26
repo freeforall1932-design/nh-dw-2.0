@@ -9,8 +9,13 @@ fix — merged on top of the popup split / PDF / CDN work)
   `arena/01a027b3-…`, `arena/01a02b04-…`, `arena/01a02397-…`). Do not trust
   older branch names in historic handoff text.
 - PR #22 ("Add optional nhentai API key mode with first-run gate and one-shot
-  archive downloads") was merged with a merge commit on 2026-08-26 — confirm
-  the hash with `gh pr view 22 --json mergeCommit,state`. Follow-up work
+  archive downloads") was merged on 2026-08-26T08:38:07Z as merge commit
+  `05cd7c5` (full: `05cd7c537f39d091b01a458519acdd7742051cd7`) —
+  https://github.com/freeforall1932-design/nh-dw-2.0/pull/22.
+  It incorporated the mid-flight merge of `origin/main` (PRs #18–#21: queue
+  controls, pause/resume, popup split + similar galleries, title-named
+  archives, PDF output, CDN hardening) and re-validation of the combined
+  tree (149 passing / 1 pending, all smoke + e2e green). Follow-up work
   starts from `main` on a fresh session branch.
 
 ## Repository and branch
