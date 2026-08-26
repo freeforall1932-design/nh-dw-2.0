@@ -520,11 +520,14 @@ some entries, and an image/metadata failure within the related batch.
 
 ### New backlog items
 
-- **[ ] 16. Real-browser verification of API key mode + archive endpoint**
-  (user side; steps in `SESSION_HANDOFF.md` work list). Open questions:
-  does the account get a usable URL from `POST .../download`
+- **[ ] 16. Verification of API key mode + archive endpoint**
+  (user side; browser steps in `SESSION_HANDOFF.md` work list). Open
+  questions: does the account get a usable URL from `POST .../download`
   (`allow_downloads` feature flag / tier)? Confirm the keyed route wins in
-  the service-worker console.
+  the service-worker console. The archive-availability half is now
+  answerable headlessly: `NH_API_KEY=<key> npm run test:live` (keyed checks
+  in `test/test.js`) reports AVAILABLE (200 + fetchable keyless URL + ZIP
+  magic) or the gating reason, without a browser or the extension.
 - **[ ] 17. Decide the fate of the archive toggle** based on item 16: keep
   experimental (fallback already handles failure) or remove.
 - **[ ] 18. Optional: sync the API key across the user's own devices.**

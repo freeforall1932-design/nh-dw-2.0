@@ -138,9 +138,13 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 
 - ~~Server-side ZIP/CBZ endpoint with API key; fall back on 429/503~~ — DONE
   (PR #22, opt-in `useServerArchive` toggle with page-by-page fallback).
-  Remaining: real-browser check of whether the account actually gets a
-  usable URL from `POST .../download` (`allow_downloads` feature flag /
-  tier), and keep-or-remove decision for the toggle based on that result.
+  Remaining: check of whether the account actually gets a usable URL from
+  `POST .../download` (`allow_downloads` feature flag / tier), and
+  keep-or-remove decision for the toggle based on that result. This can now
+  be answered WITHOUT a browser or the extension:
+  `NH_API_KEY=<key> npm run test:live` probes the keyed profile endpoint,
+  keyed metadata (through the real normalizer), and the archive endpoint,
+  then reports availability (200 + ZIP magic) vs gated (401/403/503/429).
 - Real-browser verification of the keyed route winning in the worker console
   (previous open question: is a same-tab/worker fetch of `/api/v2/galleries`
   challenged? With a key it uses the official contract).

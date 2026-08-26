@@ -160,7 +160,9 @@ cp -a js/. ../NHDW_Release_v3.0.0/js/
 npm test                          # 149 fixture tests (offline)
 npm run test:smoke                # smoke checks for background + offscreen
 npm run test:e2e                  # window-less end-to-end pipeline tests
-npm run test:live                 # optional live nhentai API test
+npm run test:live                 # optional live nhentai API test (anonymous)
+NH_API_KEY=<key> npm run test:live  # + keyed checks: key verification, keyed
+                                  #   metadata, archive-endpoint availability
 ```
 
 ---
