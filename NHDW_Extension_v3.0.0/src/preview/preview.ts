@@ -54,7 +54,10 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
                     }, 0);
                     return;
                 }
-                popup.updatePreviewAsync(currUrl);
+                // Two-mode gate: ask once for an API key (Submit key /
+                // Continue without API key) before the preview renders. After
+                // a decision this is a pass-through.
+                popup.ensureApiGateThen(() => popup.updatePreviewAsync(currUrl));
             });
             return; // Early return as we're handling the async response above
         });

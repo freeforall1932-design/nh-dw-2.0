@@ -1,10 +1,11 @@
 var JSZip = require("jszip");
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
+import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; apiKey?: string | null; useServerArchive?: boolean } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -72,7 +73,7 @@ export default class Downloader
         // Callers in contexts without chrome.storage (offscreen documents only
         // expose chrome.runtime) pass the options relayed by the service
         // worker; otherwise fall back to reading chrome.storage.sync.
-        if (this.#settings && (this.#settings.useZip !== undefined || this.#settings.maxConcurrentDownloads !== undefined)) {
+        if (this.#settings && (this.#settings.useZip !== undefined || this.#settings.maxConcurrentDownloads !== undefined || this.#settings.apiKey !== undefined || this.#settings.useServerArchive !== undefined)) {
             applySettings(this.#settings.useZip || "zip", this.#settings.maxConcurrentDownloads || "3");
         } else {
             try {
@@ -86,6 +87,20 @@ export default class Downloader
                         })
                     );
                 });
+                // API key settings live in chrome.storage.local (a secret is
+                // never synced). The relayed-settings branch above already
+                // carries them; here we read them directly.
+                await new Promise((resolve) => {
+                    try {
+                        chrome.storage.local.get({ apiKey: "", useServerArchive: false }, (local: any) => {
+                            this.#settings.apiKey = local && local.apiKey ? String(local.apiKey) : null;
+                            this.#settings.useServerArchive = !!(local && local.useServerArchive);
+                            resolve(undefined);
+                        });
+                    } catch (_) {
+                        resolve(undefined);
+                    }
+                });
             } catch (_) {
                 // chrome.storage is unavailable in this context; the caller
                 // should have relayed settings. Safe defaults keep the job
@@ -96,9 +111,74 @@ export default class Downloader
         await self.#downloadAsync();
     }
 
+    // Archive mode (API key mode only, opt-in): ask the official
+    // POST /api/v2/galleries/<id>/download endpoint for a ready-made ZIP/CBZ
+    // instead of walking every page on the CDN (which the API docs explicitly
+    // advise against for full archives). Returns true when the archive was
+    // delivered; false sends the caller back to the page-by-page pipeline.
+    // Never throws for a plain "unavailable" outcome — only a user abort
+    // propagates.
+    async #tryServerArchiveAsync(): Promise<boolean> {
+        const settings = this.#settings || {};
+        const apiKey = settings.apiKey ? String(settings.apiKey) : null;
+        if (apiKey === null || settings.useServerArchive !== true) {
+            return false;
+        }
+        const format = this.useZip === "zip" ? "zip" : (this.useZip === "cbz" ? "cbz" : null);
+        if (format === null) {
+            return false; // raw/folder modes have no server-archive equivalent
+        }
+        if (this.downloadName === null) {
+            // Batch accumulation mode: server archives cannot be merged into
+            // the shared ZIP, so page-by-page remains the only route.
+            return false;
+        }
+        const galleryId = this.#json ? this.#json.id : undefined;
+        if (galleryId === undefined || galleryId === null) {
+            return false;
+        }
+        try {
+            this.updateProgress(1, this.#doujinshiName, false, "requesting server archive");
+            let result = await requestArchiveDownloadUrl(galleryId, format, apiKey, { signal: this.#abortSignal || undefined });
+            if (result !== null && result.expiresAt !== Number.MAX_SAFE_INTEGER && result.expiresAt * 1000 < Date.now() + 30000) {
+                // URL would expire before we can use it; ask once for a fresh one.
+                result = await requestArchiveDownloadUrl(galleryId, format, apiKey, { signal: this.#abortSignal || undefined });
+            }
+            if (result === null) {
+                return false;
+            }
+            if (this.#isAborted()) {
+                throw "Download was aborted";
+            }
+            this.updateProgress(10, this.#doujinshiName, false, "downloading server archive");
+            const blob = await fetchArchiveBytes(result.url, { signal: this.#abortSignal || undefined });
+            if (this.#isAborted()) {
+                throw "Download was aborted";
+            }
+            this.updateProgress(90, this.#doujinshiName, true, "saving server archive");
+            await this.#downloadBlob(blob, this.downloadName + "." + format);
+            this.currentProgress = 100;
+            try {
+                this.updateProgress(100, null, true);
+            } catch (e) { } // Dead object
+            return true;
+        } catch (error) {
+            if (this.#isAborted() || error === "Download was aborted" || (error && (error as any).name === "AbortError")) {
+                throw error;
+            }
+            console.warn("Server archive unavailable for gallery " + galleryId + " (" + error + "); falling back to page-by-page download.");
+            return false;
+        }
+    }
+
     async #downloadAsync() {
         try
         {
+            // Archive mode first when available; otherwise page-by-page.
+            if (await this.#tryServerArchiveAsync()) {
+                return;
+            }
+
             // Downloading
             let maxNbOfPage = this.#json.images.pages.length;
 
@@ -464,7 +544,7 @@ export default class Downloader
     // document sets it to a relay, because chrome.downloads is not exposed in
     // offscreen documents (only chrome.runtime is).
     saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string };
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; apiKey?: string | null; useServerArchive?: boolean };
 
     // Progress info
     #progressPercent: number;

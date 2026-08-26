@@ -31,7 +31,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 ## How it works
 
 1. **Popup** — Clicking the extension icon on an nhentai page opens a popup that detects whether you are on a single gallery or a listing page.
-2. **Metadata** — Gallery info is fetched from `nhentai.net/api/gallery/<id>` or, if Cloudflare blocks the request, from the active browser tab's page context.
+2. **Metadata** — Gallery info comes from nhentai's API v2 (`nhentai.net/api/v2/galleries/<id>`), from the SvelteKit JSON payload embedded in the open gallery page, or from the legacy `window._gallery` embed. In **API key mode** (see below) the official keyed API is tried first; otherwise metadata resolves through the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
 4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin against the canonical CDN (`i.nhentai.net`) with automatic fallback through numbered mirrors (`i1`–`i4`). HTML challenge responses are rejected so they never end up inside a ZIP.
 5. **Archive / folder output** — For ZIP/CBZ formats, pages are collected in memory and archived via JSZip. In *folder* mode no archive is built at all: each page is saved as its own file into a `Downloads/<Title>/` folder in the browser's download directory. In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts.
@@ -54,6 +54,40 @@ This is **not** a Cloudflare bypass. If the tab is still “Just a moment…”,
 If you still see 403 errors:
 - Make sure you are logged into nhentai in the active tab.
 - Try again with a different VPN/proxy endpoint.
+- Or switch to **API key mode** (next section), which uses nhentai's official API authentication for third-party clients.
+
+---
+
+## API key mode (optional)
+
+nhentai's official API v2 documents API keys as the authentication method for third-party clients: generate one at **nhentai.net → account settings → API keys** and it is sent as `Authorization: Key YOUR_API_KEY`.
+
+On first use the popup shows a gate with two explicit exits:
+
+- **Submit key** — enters **API key mode**.
+- **Continue without API key** — enters **open tab mode** (the previous behaviour). The choice is remembered; the key can later be set or cleared in the extension options.
+
+### Mode boundaries
+
+| Concern | API key mode | Open tab mode (no key) |
+|---|---|---|
+| Metadata route order | keyed official API → open-tab read → plain fetch | open-tab read → plain fetch (unchanged) |
+| `Authorization` header | `Key <key>` on `nhentai.net/api/` requests only | never created |
+| `429` handling | honoured with `Retry-After` backoff | n/a |
+| Batch downloads | do not depend on reading the open tab | resolve through the open NHentai tab only |
+| One-shot server archives | available (opt-in) | not available (endpoint requires auth) |
+
+**Shared by both modes** (unified core): the download engine (page queue, retries, exponential backoff, ZIP/CBZ assembly, raw and folder outputs, object-URL delivery), parsing/normalisation, Cloudflare-challenge detection, content scripts, popup UI, progress/summary messages, and the hidden same-tab fallback frame.
+
+Notes:
+
+- The key is stored in `chrome.storage.local` only — it never syncs to other devices, never reaches content scripts, and is only ever attached to `nhentai.net/api/` URLs (never to CDN media URLs).
+- An invalid key can never break a download: a failing keyed request falls through to the open-tab routes.
+- This is not a Cloudflare bypass; it is the site's official API contract for clients.
+
+### One-shot server archive downloads (experimental)
+
+With an API key, the extension can ask `POST /api/v2/galleries/<id>/download?format=zip|cbz` for a ready-made archive instead of fetching every page (the API docs designate this endpoint for full-gallery archives). Enable it in the options (**Use one-shot server archive downloads**). It applies to ZIP/CBZ output only, and any failure (invalid key, feature flag off, rate limit, network error) automatically falls back to the page-by-page pipeline.
 
 ---
 
@@ -83,6 +117,8 @@ The original extension supported Firefox; the MV3 version requires `chrome.offsc
 | **Download separately** | Each selected gallery as its own archive |
 | **HTML parsing** | Use page HTML instead of the API for metadata |
 | **Max concurrent downloads** | Parallel image fetches (1–15) |
+| **nhentai API key** | Optional key for API key mode (stored locally, never synced) |
+| **Server archive downloads** | Experimental one-shot ZIP/CBZ via the API (requires key) |
 | **Name template** | Filename with placeholders (see below) |
 | **Replace spaces** | Replace spaces with underscores in filenames |
 
@@ -118,7 +154,7 @@ cp -a js/. ../NHDW_Release_v3.0.0/js/
 ### Running tests
 
 ```bash
-npm test                          # 28+ fixture tests (offline)
+npm test                          # 100+ fixture tests (offline)
 npm run test:smoke                # smoke checks for background + offscreen
 npm run test:e2e                  # window-less end-to-end pipeline tests
 npm run test:live                 # optional live nhentai API test

@@ -40,6 +40,20 @@
         </select>
         <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
         <br/><hr/>
+        <h3>API access (optional)</h3>
+        nhentai API key:
+        <input id="apiKey" type="password" placeholder="Paste your API key" autocomplete="off"/>
+        <input id="apiKeyClear" type="button" value="Clear key"/>
+        <br/><small id="apiKeyStatus"></small>
+        <br/><small>Generate a key on nhentai.net &rarr; account settings &rarr; API keys.
+        With a key, metadata resolves through the official API (higher rate limits).
+        Without a key, metadata is read from your open NHentai tab. The key is stored only in this browser.</small>
+        <br/>
+        Use one-shot server archive downloads when available (requires API key):
+        <input id="useServerArchive" type="checkbox"/>
+        <br/><small>Experimental: asks POST /api/v2/galleries/&lt;id&gt;/download for a ready-made ZIP/CBZ instead of fetching every page.
+        Falls back to page-by-page automatically when unavailable. Applies to ZIP/CBZ format and single-gallery archives only.</small>
+        <br/><hr/>
         <h3>Name template</h3>
         <input id="downloadName" type="text"/>
         <br/><br/>

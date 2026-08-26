@@ -26,6 +26,11 @@ describe('MV3 manifest', () => {
         }
     });
 
+    it('keeps the extension version in sync between source and release', () => {
+        assert.strictEqual(releaseManifest.version, sourceManifest.version,
+            'release manifest version differs from source');
+    });
+
     it('declares default_icon so the toolbar has an icon before setIcon runs', () => {
         assert.strictEqual(sourceManifest.action.default_icon['64'], 'Icon.png');
         assert.strictEqual(sourceManifest.action.default_icon['128'], 'Icon.png');

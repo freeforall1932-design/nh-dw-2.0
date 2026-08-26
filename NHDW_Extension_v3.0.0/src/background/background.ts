@@ -9,6 +9,7 @@ import { clearnetSource } from "../sources/GallerySource";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
+import { fetchNhentaiApi } from "../utils/apiAuth";
 var JSZip = require("jszip");
 
 chrome.tabs.onUpdated.addListener(function
@@ -284,6 +285,10 @@ module background
                 })
             );
         });
+        // API key mode lives in chrome.storage.local (secrets never sync).
+        // Empty string = keyless mode, which keeps its previous route order.
+        const localApi = await readLocalApiSettings();
+        const apiKey = localApi.apiKey;
         let names: Array<string> = [];
         let length = Object.keys(allDoujinshis).length;
         let allKeys = Object.keys(allDoujinshis);
@@ -309,14 +314,38 @@ module background
                 stage: "Downloading"
             });
 
-            // 1. Already-resolved via selectedGalleryResolver
-            // 2. Try via the user's open tab (reuses Cloudflare clearance, tries API + gallery pages)
-            // 3. Fall back to extension-origin fetch (likely 403)
+            // Metadata route order.
+            // API key mode:
+            //   0. Official keyed API (Authorization: Key ..., 429 backoff)
+            // Keyless mode is unchanged:
+            //   1. Already-resolved via selectedGalleryResolver
+            //   2. Via the user's open tab (reuses Cloudflare clearance)
+            //   3. Extension-origin fetch (likely 403)
+            // A failing keyed request simply falls through to the keyless
+            // routes, so an invalid key can never break a download.
+            let json: any | null = galleryMetadata[key] || null;
+            if (json === null && apiKey) {
+                try {
+                    const keyedParsing = new ApiParsing();
+                    const keyedResp = await fetchNhentaiApi(
+                        keyedParsing.GetUrl(key),
+                        { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined },
+                        apiKey
+                    );
+                    if (keyedResp.ok) {
+                        json = await keyedParsing.GetJsonAsync(keyedResp);
+                    }
+                } catch (_) {
+                    // Fall through to the tab-based routes.
+                }
+            }
             let jsonFromTab: any | null = null;
-            if (!galleryMetadata[key] && typeof sourceTabId === "number") {
+            if (json === null && typeof sourceTabId === "number") {
                 jsonFromTab = await getGalleryViaTab(sourceTabId, key, parsing);
             }
-            let json: any | null = galleryMetadata[key] || jsonFromTab || null;
+            if (json === null) {
+                json = jsonFromTab;
+            }
             let resp: any = null;
             if (json) {
                 resp = { ok: true, status: 200, statusText: "resolved via tab" };
@@ -662,10 +691,32 @@ const DOWNLOAD_OPTION_DEFAULTS = {
     htmlParsing: false
 };
 
+// API key settings are stored in chrome.storage.local (a secret must never
+// sync). Read once per batch / relayed command.
+function readLocalApiSettings(): Promise<{ apiKey: string; useServerArchive: boolean }> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ apiKey: "", useServerArchive: false }, (elems: any) => {
+                resolve({
+                    apiKey: elems && elems.apiKey ? String(elems.apiKey) : "",
+                    useServerArchive: !!(elems && elems.useServerArchive)
+                });
+            });
+        } catch (_) {
+            resolve({ apiKey: "", useServerArchive: false });
+        }
+    });
+}
+
 function readDownloadOptions(callback: (options: any) => void) {
     try {
         chrome.storage.sync.get(DOWNLOAD_OPTION_DEFAULTS, (elems: any) => {
-            callback(elems);
+            readLocalApiSettings().then((localApi) => {
+                callback(Object.assign({}, elems, {
+                    apiKey: localApi.apiKey,
+                    useServerArchive: localApi.useServerArchive
+                }));
+            });
         });
     } catch (_) {
         callback(Object.assign({}, DOWNLOAD_OPTION_DEFAULTS));

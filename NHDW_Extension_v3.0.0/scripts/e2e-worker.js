@@ -7,6 +7,9 @@
 //   2. Raw mode: each page is handed to chrome.downloads as a plain image URL.
 //   3. Raw mode with failing downloads: the error is reported to the popup
 //      (Promise-wrapped callback), not silently dropped.
+//   8. API key mode: a keyed batch resolves metadata through the official API
+//      with an Authorization: Key header.
+//   9. Keyless mode: batch metadata requests carry no Authorization header.
 //
 // Usage:  node test/e2e-worker.js [path/to/js/background.js]
 // Exit code 0 = all phases passed.
@@ -25,8 +28,13 @@ const sentMessages = [];
 const downloads = [];
 
 let syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
+let localSettings = {}; // chrome.storage.local (API key mode lives here)
 let downloadFails = false;
 let expectedWorkerRejection = false;
+
+// Every request the worker makes to an /api/ route, with the Authorization
+// header it carried (null when none). Phases 8/9 assert the mode boundary.
+const apiRequestLog = [];
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
@@ -39,7 +47,7 @@ const chromeStub = {
     action: { setIcon() {} },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults, syncSettings)); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
+        local: { get(defaults, cb) { cb(Object.assign({}, defaults, localSettings)); } },
         session: {
             get(key, cb) {
                 cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore));
@@ -115,10 +123,15 @@ const pageBytes = [
 let failImages = false;
 const failMediaIds = new Set();
 
-function fetchStub(url) {
+function fetchStub(url, init) {
     const u = String(url);
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
+        const headers = (init && init.headers) || {};
+        apiRequestLog.push({
+            url: u,
+            auth: headers["Authorization"] || headers["authorization"] || null
+        });
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
     }
@@ -472,6 +485,79 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("batchProgress must be sent for all 3 queued galleries, got " + queueProgress.length);
     }
     console.log("PASS phase 7: three-gallery queue continues past metadata+image failures and reports 1/2/3");
+
+    // ---- Phase 8: API key mode resolves batch metadata via the keyed API ---
+    // With a stored key (chrome.storage.local), the batch must hit the
+    // official /api/v2/galleries/<id> endpoint carrying
+    // `Authorization: Key <key>` — the API key mode boundary.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    localSettings = { apiKey: "test-key-123" };
+    onMessageHandler(
+        { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID2]: "Two" }, finalName: "Downloads/Keyed" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "no batchSummary was sent for the keyed batch"
+    );
+    const keyedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!keyedSummary || keyedSummary.succeeded !== 1 || keyedSummary.failed !== 0 || keyedSummary.total !== 1) {
+        fail("keyed batch summary must report 1/0/1, got " + JSON.stringify(keyedSummary));
+    }
+    const keyedApiCalls = apiRequestLog.filter((c) => c.url.indexOf("/api/v2/galleries/" + GALLERY_ID2) !== -1);
+    if (keyedApiCalls.length === 0) {
+        fail("keyed batch never called the official API for the gallery");
+    }
+    if (keyedApiCalls[0].auth !== "Key test-key-123") {
+        fail("keyed metadata request must carry Authorization: Key <key>, got " + JSON.stringify(keyedApiCalls[0]));
+    }
+    if (downloads.length !== 1) {
+        fail("keyed batch must deliver the ZIP, got " + downloads.length + " downloads");
+    }
+    console.log("PASS phase 8: API key mode resolves batch metadata via the keyed official API (" +
+        keyedApiCalls[0].auth + ")");
+
+    // ---- Phase 9: keyless mode never sends an Authorization header --------
+    // Same batch without a stored key: metadata goes through the plain
+    // extension-origin route and must not leak any Authorization header.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    localSettings = {};
+    onMessageHandler(
+        { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "One" }, finalName: "Downloads/Keyless" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("downloadAllDoujinshis did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "no batchSummary was sent for the keyless batch"
+    );
+    const keylessSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!keylessSummary || keylessSummary.succeeded !== 1 || keylessSummary.failed !== 0 || keylessSummary.total !== 1) {
+        fail("keyless batch summary must report 1/0/1, got " + JSON.stringify(keylessSummary));
+    }
+    const keylessApiCalls = apiRequestLog.filter((c) => c.url.indexOf("/api/v2/galleries/" + GALLERY_ID) !== -1);
+    if (keylessApiCalls.length === 0) {
+        fail("keyless batch never attempted the metadata API");
+    }
+    if (keylessApiCalls.some((c) => c.auth !== null)) {
+        fail("keyless mode must never send an Authorization header, got " + JSON.stringify(keylessApiCalls));
+    }
+    console.log("PASS phase 9: keyless batch sends no Authorization header");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

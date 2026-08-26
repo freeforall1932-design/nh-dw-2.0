@@ -9,6 +9,7 @@
         "src/parsing/**/*.ts",
         "src/utils/**/*.ts",
         "src/background/Downloader.ts",
+        "src/background/ArchiveDownload.ts",
         "src/background/tabImageFetch.ts",
         "src/preview/selectedGalleryResolver.ts",
         "src/preview/activeTabGallery.ts",

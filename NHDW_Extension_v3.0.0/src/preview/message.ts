@@ -1,5 +1,35 @@
+import { API_KEY_SETTINGS_URL } from "../utils/apiAuth";
+
 export module message
 {
+    // API key gate, shown on the first popup open when no key is stored and
+    // the user has not declined one yet. Two explicit exits keep the mode
+    // boundary visible: "Submit key" (API key mode) or "Continue without API
+    // key" (open-tab mode, the previous behaviour).
+    export function apiKeyGate(): string {
+        return '<h3>nhentai API access</h3>' +
+            '<p>Choose how the extension resolves gallery metadata:</p>' +
+            '<input type="password" id="apiKeyInput" placeholder="Paste your nhentai API key" style="width:60%"/> ' +
+            '<input type="button" id="apiKeySubmit" value="Submit key"/>' +
+            '<br/><small>With a key: the official nhentai API is used (higher rate limits; batch downloads do not depend on reading the open tab). ' +
+            'Generate one in your <a href="' + API_KEY_SETTINGS_URL + '" target="_blank">nhentai account settings</a>.</small>' +
+            '<br/><br/><input type="button" id="apiKeySkip" value="Continue without API key"/>' +
+            '<br/><small>Without a key: metadata is read from your open NHentai tab (previous behaviour).</small>' +
+            '<div id="apiKeyGateError" style="color:red"></div>';
+    }
+
+    export function apiKeyGateEmptyError(): string {
+        return "Enter a key, or choose \"Continue without API key\".";
+    }
+
+    // One-line indicator of the active mode, so real-browser checks always
+    // know which metadata route the popup expects to use.
+    export function apiModeBadge(keyed: boolean): string {
+        return keyed
+            ? '<small>Mode: API key (official API)</small><br/>'
+            : '<small>Mode: open tab (no API key)</small><br/>';
+    }
+
     export function downloadDone(): string {
         return 'Your file was downloaded, thanks for using NHentai Downloader.<br/><br/><input type="button" id="buttonBack" value="Go Back"/>'
     }
