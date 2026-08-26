@@ -42,6 +42,19 @@ describe('API access layer (apiAuth)', () => {
         delete global.chrome;
     });
 
+    it('the popup bundle must never wipe chrome.storage.local (would destroy the saved API key)', () => {
+        // Regression guard for key persistence: preview.ts used to call
+        // chrome.storage.local.clear() on every URL change, which would
+        // delete the stored API key, gate decision and archive toggle.
+        // The stored key must survive URL changes, browser restarts and
+        // disabling/re-enabling the extension (only uninstall removes it).
+        const fs = require('fs');
+        const path = require('path');
+        const bundle = fs.readFileSync(path.join(__dirname, '..', 'js', 'preview.js'), 'utf8');
+        assert.ok(!/storage\.local\.clear\s*\(/.test(bundle),
+            'storage.local.clear() in the popup bundle would delete the stored API key');
+    });
+
     describe('header construction', () => {
         it('builds "Key <key>" Authorization headers and rejects empty keys', () => {
             assert.strictEqual(apiAuth.buildAuthHeader('abc'), 'Key abc');

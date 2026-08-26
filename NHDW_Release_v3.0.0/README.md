@@ -82,6 +82,7 @@ On first use the popup shows a gate with two explicit exits:
 Notes:
 
 - The key is stored in `chrome.storage.local` only — it never syncs to other devices, never reaches content scripts, and is only ever attached to `nhentai.net/api/` URLs (never to CDN media URLs).
+- The key (and the gate decision / archive toggle) is persistent: it survives closing the browser, browser restarts, and disabling/re-enabling the extension. Only **Clear key** in the options, uninstalling the extension, or wiping the browser's extension data removes it.
 - An invalid key can never break a download: a failing keyed request falls through to the open-tab routes.
 - This is not a Cloudflare bypass; it is the site's official API contract for clients.
 
