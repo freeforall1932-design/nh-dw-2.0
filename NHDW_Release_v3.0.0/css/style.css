@@ -100,3 +100,128 @@ input[type="button"]:hover {
 #htmlDark .similarList {
     border-color: #555;
 }
+
+/* ---- Popup tabs (Download | Settings) ---- */
+.popupTabs {
+    display: flex;
+    gap: 6px;
+    margin: 0 0 8px 0;
+    border-bottom: 2px solid #e31b53;
+    padding-bottom: 0;
+}
+
+.popupTab {
+    flex: 1;
+    padding: 8px 0;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    border-radius: 5px 5px 0 0;
+}
+
+.popupTab:hover {
+    color: #e31b53;
+}
+
+.popupTab.active {
+    background-color: #e31b53;
+    color: white;
+}
+
+#htmlDark .popupTab.active {
+    background-color: #e31b53;
+    color: white;
+}
+
+/* ---- Settings pane ---- */
+#settingsPane {
+    text-align: left;
+}
+
+.psSection {
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 8px;
+    margin-bottom: 10px;
+}
+
+#htmlDark .psSection {
+    border-color: #555;
+}
+
+.psSection h4 {
+    margin: 0 0 6px 0;
+}
+
+.psSection small {
+    display: block;
+    margin-top: 6px;
+}
+
+#psApiKeyInput {
+    width: 96%;
+    padding: 6px;
+    margin: 4px 0;
+}
+
+.psButtonRow {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.psButtonRow button {
+    flex: 1;
+    padding: 7px 0;
+    border: none;
+    border-radius: 5px;
+    background-color: #e31b53;
+    color: white;
+    cursor: pointer;
+}
+
+.psButtonRow button:hover {
+    color: #e31b53;
+    background-color: white;
+}
+
+.psButtonRow button:disabled {
+    background-color: #999;
+    cursor: default;
+}
+
+.psStatus {
+    min-height: 1.2em;
+    font-size: 12px;
+    margin: 4px 0;
+}
+
+.psStatusOn {
+    color: #1a7f37;
+    font-weight: bold;
+}
+
+.psStatusOff {
+    color: #b35900;
+}
+
+#htmlDark .psStatusOn {
+    color: #4ec970;
+}
+
+#htmlDark .psStatusOff {
+    color: #e0a34e;
+}
+
+.psChecks {
+    margin: 6px 0;
+}
+
+.psInline {
+    display: block;
+    margin: 2px 0;
+    white-space: nowrap;
+}

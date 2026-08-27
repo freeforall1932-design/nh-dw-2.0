@@ -5,7 +5,14 @@
         <script src="js/preview.js"></script>
     </head>
     <body>
+        <!-- Popup tabs: Download (everything the popup renders today) and
+             Settings (API key + file-name template, editable on the fly). -->
+        <div id="popupTabs" class="popupTabs">
+            <button id="tabDownload" class="popupTab active" type="button">Download</button>
+            <button id="tabSettings" class="popupTab" type="button">Settings</button>
+        </div>
         <div id="action">Loading...</div>
+        <div id="settingsPane" hidden></div>
         <!-- CDN host-grant notice (hidden unless nhentai reports image hosts the
              extension has no host permission for; see preview.ts refreshCdnNotice). -->
         <div id="cdnNotice" class="cdnNotice" hidden></div>

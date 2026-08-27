@@ -31,7 +31,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 
 ## How it works
 
-1. **Popup** — Clicking the extension icon on an nhentai page opens a popup that detects whether you are on a single gallery or a listing page.
+1. **Popup** — Clicking the extension icon on an nhentai page opens a popup with two tabs: **Download** (detects a single gallery vs a listing page) and **Settings** (paste/save/remove the API key and set the file-name template on the fly, without opening a separate page).
 2. **Metadata** — Gallery info comes from nhentai's API v2 (`nhentai.net/api/v2/galleries/<id>`), from the SvelteKit JSON payload embedded in the open gallery page, or from the legacy `window._gallery` embed. In **API key mode** (see below) the official keyed API is tried first; otherwise metadata resolves through the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
 4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin. The image server list is resolved per session from `nhentai.net/api/v2/cdn` (validated HTTPS `*.nhentai.net` origins, API order first), with automatic fallback through the built-in mirrors (`i.nhentai.net`, `i1`–`i4`). If nhentai reports image hosts the extension has no permission for, the popup offers a one-click **Grant image host access** (optional `https://*.nhentai.net/*` permission — downloads keep working on the permitted hosts either way). HTML challenge responses are rejected so they never end up inside a ZIP.
@@ -110,6 +110,8 @@ The original extension supported Firefox; the MV3 version requires `chrome.offsc
 ---
 
 ## Options
+
+The most-used settings — the nhentai API key and the file-name template — are also available inside the popup's **Settings** tab, so you can change them on the fly. The full options page (below) stays available for everything else.
 
 | Setting | Description |
 |---|---|
