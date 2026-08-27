@@ -565,20 +565,11 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
   phase 9, keyless-no-Authorization is phase 10.
 - Result: **149 passing / 1 pending** (123 from main + 26 from PR #22), all
   smoke + e2e suites green, release `js/` in sync.
-- **[ ] 20. Settings inside the popup (two tabs: Download | Settings).**
-  Opening a new tab/page just to change a setting is inconvenient; the user
-  wants settings editable on the fly from the toolbar popup. Design sketch:
-  - `index.html` gains a tab bar above the `action` container: **Download**
-    (everything the popup renders today — preview, batch list, progress) and
-    **Settings** (the same controls as `options.html`).
-  - Reuse the option widgets (`Select`/`CheckBox`/`InputField`, the API key
-    verify flow from `src/options/apiKey.ts`, the template checkboxes from
-    `src/options/nameTemplate.ts`, the archive toggle) by rendering them into
-    the Settings tab from shared code — do NOT duplicate the logic.
-  - Storage is unchanged: `chrome.storage.sync` for shared preferences,
-    `chrome.storage.local` for the key + archive toggle (the popup has
-    storage access; the offscreen document does not and stays untouched).
-  - Keep `options.html` as the full-page fallback (deep links, browsers
-    without the popup context).
-  - Dark mode must style the tab bar; progress messages while a download
-    runs should still be visible regardless of the active tab.
+- **[x] 20. Settings inside the popup (two tabs: Download | Settings).**
+  DONE (3.2.0): `index.html` has a tab bar; the Settings tab
+  (`src/preview/popupSettings.ts`) renders the API key section (paste-aware
+  input, Save & verify via the documented `/api/v2/user` check, Remove key,
+  saved-state status line) and the file-name template checkboxes with a live
+  "Example file name" preview, reusing `options/apiKey.ts` and
+  `options/nameTemplate.ts` so behaviour is identical to the full options
+  page, which stays as the fallback.

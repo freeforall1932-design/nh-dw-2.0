@@ -2,8 +2,43 @@ import Popup from "./popup"
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { message } from "./message";
+import { renderSettings } from "./popupSettings";
 
 let popup = Popup.getInstance();
+
+// Popup tabs: "Download" (the preview/batch/progress UI rendered into #action)
+// and "Settings" (API key + file-name template, editable on the fly without
+// opening the separate options page). Switching only toggles visibility, so an
+// in-progress download keeps updating #action in the background.
+function initPopupTabs() {
+    const tabDownload = document.getElementById("tabDownload");
+    const tabSettings = document.getElementById("tabSettings");
+    const actionPane = document.getElementById("action");
+    const settingsPane = document.getElementById("settingsPane");
+    if (!tabDownload || !tabSettings || !actionPane || !settingsPane) {
+        return;
+    }
+    const show = (which: "download" | "settings") => {
+        const isSettings = which === "settings";
+        actionPane.hidden = isSettings;
+        settingsPane.hidden = !isSettings;
+        tabDownload.classList.toggle("active", !isSettings);
+        tabSettings.classList.toggle("active", isSettings);
+        if (isSettings) {
+            // Re-render on every open so the saved key state and template are
+            // always reflected accurately.
+            renderSettings(settingsPane);
+        }
+    };
+    tabDownload.addEventListener("click", () => show("download"));
+    tabSettings.addEventListener("click", () => show("settings"));
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPopupTabs);
+} else {
+    initPopupTabs();
+}
 
 // Ask the service worker (which owns the CDN config and chrome.permissions)
 // whether nhentai reported image hosts the extension has no host permission

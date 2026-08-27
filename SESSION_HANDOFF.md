@@ -82,8 +82,13 @@ fix — merged on top of the popup split / PDF / CDN work)
   (`{pretty} - {id}`) so the engine and old templates are untouched; custom
   templates fall back to the manual input (`src/options/nameTemplate.ts` +
   `test/name-template.test.js`).
-- Settings-inside-popup (Download | Settings tabs) is work-list item 20
-  (design sketch in `IMPROVEMENT_BACKLOG.md`).
+- **Settings inside the popup (3.2.0)**: the popup has two tabs, Download |
+  Settings. The Settings tab (`src/preview/popupSettings.ts`) reuses
+  `options/apiKey.ts` + `options/nameTemplate.ts`: paste-aware API key input
+  with Save & verify / Remove, a saved-state status line ("A key is saved —
+  API key mode is active"), and the name-template checkboxes with a live
+  "Example file name" preview so the naming result is visible before
+  downloading. The full options page remains as the fallback.
 
 ### Two-mode API access (2026-08-26, PR #22)
 
