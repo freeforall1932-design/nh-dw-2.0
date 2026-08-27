@@ -2,10 +2,12 @@ import CheckBox from "./CheckBox";
 import InputField from "./InputField";
 import Select from "./Select";
 import { verifyAndSaveApiKey, removeApiKey } from "./apiKey";
+import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "./nameTemplate";
 
+// downloadName is handled below by the template checkboxes (with a manual
+// fallback for custom templates), so it is NOT in this generic list.
 let options = [
     new Select("useZip"),
-    new InputField("downloadName"),
     new CheckBox("displayCheckbox"),
     new CheckBox("darkMode"),
     new Select("duplicateBehaviour"),
@@ -37,17 +39,102 @@ chrome.storage.sync.get({
             }
         })
     })
+    initNameTemplate(elems.downloadName);
 })
 
-// API keys are deliberately stored separately from normal synced preferences:
-// they are optional credentials, user-pasted only, and must not follow browser
-// profile sync. We never display a saved key back into the page.
-// The server-archive toggle lives in the same local storage (apiAuth.ts reads
-// both for the download pipeline).
+// ---- name template: checkboxes instead of manual typing --------------------
+// The stored value stays a placeholder string ("{pretty} - {id}"), so the
+// download engine and previously saved templates are unaffected.
+const TEMPLATE_LABELS: Record<string, string> = {
+    pretty: "Pretty title (short)",
+    english: "English title",
+    japanese: "Japanese title",
+    id: "Gallery ID",
+    group: "Group / circle",
+    artist: "Artist",
+    character: "Characters",
+    language: "Language"
+};
+
+function initNameTemplate(storedTemplate: string) {
+    const checksBox = document.getElementById("downloadNameChecks");
+    const preview = document.getElementById("downloadNamePreview");
+    const advancedBox = document.getElementById("downloadNameAdvanced");
+    const advancedInput = document.getElementById("downloadName") as HTMLInputElement | null;
+    if (!checksBox || !preview || !advancedBox || !advancedInput) {
+        return;
+    }
+
+    const saveTemplate = (template: string) => {
+        chrome.storage.sync.set({ downloadName: template });
+        preview.textContent = template !== ""
+            ? "File name will use: " + template
+            : "Nothing checked \u2014 the file name falls back to the gallery ID.";
+    };
+
+    if (!isTokenOnlyTemplate(storedTemplate)) {
+        // A custom template the checkboxes cannot represent: keep the manual
+        // input so nothing is lost.
+        checksBox.style.display = "none";
+        advancedBox.style.display = "";
+        advancedInput.value = storedTemplate;
+        preview.textContent = "Custom template in use: " + storedTemplate;
+        advancedInput.addEventListener("change", function() {
+            saveTemplate(advancedInput.value);
+            preview.textContent = advancedInput.value.trim() !== ""
+                ? "Custom template in use: " + advancedInput.value
+                : "Nothing checked \u2014 the file name falls back to the gallery ID.";
+        });
+        return;
+    }
+
+    advancedBox.style.display = "none";
+    const inUse = templateTokensInUse(storedTemplate);
+    for (const token of TEMPLATE_TOKENS) {
+        const id = "template_" + token;
+        const wrapper = document.createElement("label");
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.id = id;
+        box.checked = !!inUse[token];
+        wrapper.appendChild(box);
+        wrapper.appendChild(document.createTextNode(" " + TEMPLATE_LABELS[token]));
+        checksBox.appendChild(wrapper);
+        checksBox.appendChild(document.createElement("br"));
+        box.addEventListener("change", function() {
+            const checked: Record<string, boolean> = {};
+            for (const t of TEMPLATE_TOKENS) {
+                const el = document.getElementById("template_" + t) as HTMLInputElement | null;
+                checked[t] = !!(el && el.checked);
+            }
+            saveTemplate(buildTemplate(checked));
+        });
+    }
+    saveTemplate(storedTemplate); // renders the preview line
+}
+
+// ---- API key ---------------------------------------------------------------
+// API keys are optional credentials, user-pasted only, and must not follow
+// browser profile sync. We never display a saved key back into the page.
 const apiKeyInput = document.getElementById("apiKey") as HTMLInputElement;
 const apiKeyStatus = document.getElementById("apiKeyStatus") as HTMLElement;
 const saveApiKeyButton = document.getElementById("saveApiKey") as HTMLButtonElement;
 const removeApiKeyButton = document.getElementById("removeApiKey") as HTMLButtonElement;
+
+// Some browsers do not offer a right-click menu on extension pages, which
+// made pasting a long random key impossible for users who type slowly.
+// Intercept paste explicitly and fill the field from the clipboard text.
+function allowPaste(input: HTMLInputElement) {
+    input.addEventListener("paste", function(event: ClipboardEvent) {
+        const data = event.clipboardData ? event.clipboardData.getData("text") : "";
+        if (data && data.trim().length > 0) {
+            event.preventDefault();
+            input.value = data.trim();
+            input.dispatchEvent(new Event("change"));
+        }
+    });
+}
+allowPaste(apiKeyInput);
 
 function setApiKeyStatus(message: string) {
     apiKeyStatus.textContent = message;
@@ -93,7 +180,7 @@ removeApiKeyButton.addEventListener("click", async () => {
     setApiKeyStatus("API key removed from this browser profile.");
 });
 
-// One-shot server archive downloads (experimental, keyed mode only).
+// One-shot server archive downloads (optional, keyed mode only).
 const archiveToggle = document.getElementById("useServerArchive") as HTMLInputElement | null;
 if (archiveToggle) {
     chrome.storage.local.get({ useServerArchive: false }, (localElems: any) => {

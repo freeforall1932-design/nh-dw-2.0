@@ -529,7 +529,10 @@ some entries, and an image/metadata failure within the related batch.
   in `test/test.js`) reports AVAILABLE (200 + fetchable keyless URL + ZIP
   magic) or the gating reason, without a browser or the extension.
 - **[ ] 17. Decide the fate of the archive toggle** based on item 16: keep
-  experimental (fallback already handles failure) or remove.
+  or remove. Decision input: the user's `NH_API_KEY=... npm run test:live`
+  output line ("archive endpoint AVAILABLE ..." vs a gating reason). Until
+  then the toggle stays opt-in with automatic page-by-page fallback, and
+  the options text is plain-language (no "experimental programmer speak").
 - **[ ] 18. Optional: sync the API key across the user's own devices.**
   Currently deliberately `chrome.storage.local`-only; changing to
   `chrome.storage.sync` requires an explicit user decision (secret syncing).
@@ -562,3 +565,20 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
   phase 9, keyless-no-Authorization is phase 10.
 - Result: **149 passing / 1 pending** (123 from main + 26 from PR #22), all
   smoke + e2e suites green, release `js/` in sync.
+- **[ ] 20. Settings inside the popup (two tabs: Download | Settings).**
+  Opening a new tab/page just to change a setting is inconvenient; the user
+  wants settings editable on the fly from the toolbar popup. Design sketch:
+  - `index.html` gains a tab bar above the `action` container: **Download**
+    (everything the popup renders today — preview, batch list, progress) and
+    **Settings** (the same controls as `options.html`).
+  - Reuse the option widgets (`Select`/`CheckBox`/`InputField`, the API key
+    verify flow from `src/options/apiKey.ts`, the template checkboxes from
+    `src/options/nameTemplate.ts`, the archive toggle) by rendering them into
+    the Settings tab from shared code — do NOT duplicate the logic.
+  - Storage is unchanged: `chrome.storage.sync` for shared preferences,
+    `chrome.storage.local` for the key + archive toggle (the popup has
+    storage access; the offscreen document does not and stays untouched).
+  - Keep `options.html` as the full-page fallback (deep links, browsers
+    without the popup context).
+  - Dark mode must style the tab bar; progress messages while a download
+    runs should still be visible regardless of the active tab.

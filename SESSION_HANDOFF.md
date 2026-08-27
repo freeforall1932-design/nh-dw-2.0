@@ -69,6 +69,22 @@ fix — merged on top of the popup split / PDF / CDN work)
 
 - Options page: optional user-pasted key, verified via third-party-safe `GET /api/v2/user` with `Authorization: Key <key>` only. Stored in `chrome.storage.local`, never rendered back. Never use `/api/v2/auth/*`.
 
+### Options-page UX pass (2026-08-26, user live-test feedback)
+
+- API key field now supports explicit paste (intercepted `paste` event; some
+  browsers offer no right-click menu on extension pages) — in both the
+  options page and the popup gate, with a visible Ctrl+V hint.
+- Plain-language explanations for every option: what ZIP/CBZ/PDF/raw
+  produce, exactly what Duplicate rename/ignore do, what the server-archive
+  toggle does (no programmer-speak), one-line format hints.
+- Name template is now **checkboxes** (one per placeholder, canonical order,
+  " - " separator) instead of manual typing; stored format unchanged
+  (`{pretty} - {id}`) so the engine and old templates are untouched; custom
+  templates fall back to the manual input (`src/options/nameTemplate.ts` +
+  `test/name-template.test.js`).
+- Settings-inside-popup (Download | Settings tabs) is work-list item 20
+  (design sketch in `IMPROVEMENT_BACKLOG.md`).
+
 ### Two-mode API access (2026-08-26, PR #22)
 
 Boundary table — **API key mode** (a key is stored) vs **open tab mode**

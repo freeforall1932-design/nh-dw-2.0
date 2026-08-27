@@ -9,6 +9,10 @@
             <option value="pdf">PDF (one file per gallery)</option>
             <option value="raw">Raw (not recommanded)</option>
         </select>
+        <br/><small>ZIP / CBZ = one archive file containing the original images.
+        PDF = one PDF file with one image per page; images are embedded without
+        re-compression, so quality stays the same and the size is about the same
+        as all images together. Raw = each image downloaded separately (no archive).</small>
         <br/>
         Display checkboxs on NHentai:
         <input id="displayCheckbox" type="checkbox"/>
@@ -22,9 +26,16 @@
             <option value="rename">Rename</option>
             <option value="ignore">Ignore</option>
         </select>
+        <br/><small>What happens when a batch contains two galleries with the same title.
+        <b>Rename</b> = keep both files: the gallery ID is added to the duplicate's
+        file name, e.g. "Title (123456)".
+        <b>Ignore</b> = skip the duplicate: it is not downloaded again, and the file
+        already downloaded stays exactly as it is (nothing is replaced).</small>
         <br/>
         Download each file separately:
         <input id="downloadSeparately" type="checkbox"/>
+        <br/><small>Off = all selected galleries go into one shared archive.
+        On = each gallery gets its own archive file named after its title.</small>
         <br/><hr/>
         <h3>Advanced behaviour</h3>
         Use HTML to get API info:
@@ -47,25 +58,27 @@
         <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste API key">
         <button id="saveApiKey" type="button">Save &amp; verify</button>
         <button id="removeApiKey" type="button">Remove key</button>
+        <br/><small>To paste: click the box, then press Ctrl+V (pasting is supported
+        even where the right-click menu is not available).</small>
         <div id="apiKeyStatus" role="status" aria-live="polite"></div>
         <br/>
-        Use one-shot server archive downloads when available (requires API key):
+        Download whole galleries as one ready-made file from the server (requires API key):
         <input id="useServerArchive" type="checkbox"/>
-        <br/><small>Experimental: asks POST /api/v2/galleries/&lt;id&gt;/download for a ready-made ZIP/CBZ instead of fetching every page.
-        Falls back to page-by-page automatically when unavailable. Applies to ZIP/CBZ format and single-gallery archives only.</small>
+        <br/><small>When on, the extension asks the nhentai server for the complete
+        gallery as one ZIP/CBZ file instead of fetching every page itself — usually
+        faster. If the server does not offer this for your account, the extension
+        quietly falls back to downloading page by page, so nothing breaks.
+        Applies to ZIP/CBZ downloads of single galleries (not PDF, not raw).</small>
         <br/><hr/>
         <h3>Name template</h3>
-        <input id="downloadName" type="text"/>
-        <br/><br/>
-        <b>Template explanations:</b><br/>
-        <b>{pretty}:</b> Pretty title<br/>
-        <b>{japanese}:</b> Japanese title<br/>
-        <b>{english}:</b> English title<br/>
-        <b>{id}:</b> 6 digits ID<br/>
-        <b>{group}:</b> Group who made the doujin<br/>
-        <b>{artist}:</b> Artist of the doujin<br/>
-        <b>{character}:</b> Characters present<br/>
-        <b>{language}:</b> Language<br/>
+        Choose what the downloaded file name contains:
+        <div id="downloadNameChecks"></div>
+        <small id="downloadNamePreview"></small>
+        <div id="downloadNameAdvanced" style="display:none">
+            <input id="downloadName" type="text"/>
+            <br/><small>Custom template detected - you can edit it manually here.</small>
+        </div>
+        <br/>
         Replace spaces by underscores:
         <input id="replaceSpaces" type="checkbox"/>
     </body>
