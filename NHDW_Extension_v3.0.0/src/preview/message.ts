@@ -11,6 +11,7 @@ export module message
             '<p>Choose how the extension resolves gallery metadata:</p>' +
             '<input type="password" id="apiKeyInput" placeholder="Paste your nhentai API key" style="width:60%"/> ' +
             '<input type="button" id="apiKeySubmit" value="Submit key"/>' +
+            '<br/><small>To paste: click the box, then press Ctrl+V.</small>' +
             '<br/><small>With a key: the official nhentai API is used (higher rate limits; batch downloads do not depend on reading the open tab). ' +
             'Generate one in your <a href="' + API_KEY_SETTINGS_URL + '" target="_blank">nhentai account settings</a>.</small>' +
             '<br/><br/><input type="button" id="apiKeySkip" value="Continue without API key"/>' +

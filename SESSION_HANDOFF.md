@@ -69,6 +69,22 @@ fix — merged on top of the popup split / PDF / CDN work)
 
 - Options page: optional user-pasted key, verified via third-party-safe `GET /api/v2/user` with `Authorization: Key <key>` only. Stored in `chrome.storage.local`, never rendered back. Never use `/api/v2/auth/*`.
 
+### Options-page UX pass (2026-08-26, user live-test feedback)
+
+- API key field now supports explicit paste (intercepted `paste` event; some
+  browsers offer no right-click menu on extension pages) — in both the
+  options page and the popup gate, with a visible Ctrl+V hint.
+- Plain-language explanations for every option: what ZIP/CBZ/PDF/raw
+  produce, exactly what Duplicate rename/ignore do, what the server-archive
+  toggle does (no programmer-speak), one-line format hints.
+- Name template is now **checkboxes** (one per placeholder, canonical order,
+  " - " separator) instead of manual typing; stored format unchanged
+  (`{pretty} - {id}`) so the engine and old templates are untouched; custom
+  templates fall back to the manual input (`src/options/nameTemplate.ts` +
+  `test/name-template.test.js`).
+- Settings-inside-popup (Download | Settings tabs) is work-list item 20
+  (design sketch in `IMPROVEMENT_BACKLOG.md`).
+
 ### Two-mode API access (2026-08-26, PR #22)
 
 Boundary table — **API key mode** (a key is stored) vs **open tab mode**
@@ -138,9 +154,13 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 
 - ~~Server-side ZIP/CBZ endpoint with API key; fall back on 429/503~~ — DONE
   (PR #22, opt-in `useServerArchive` toggle with page-by-page fallback).
-  Remaining: real-browser check of whether the account actually gets a
-  usable URL from `POST .../download` (`allow_downloads` feature flag /
-  tier), and keep-or-remove decision for the toggle based on that result.
+  Remaining: check of whether the account actually gets a usable URL from
+  `POST .../download` (`allow_downloads` feature flag / tier), and
+  keep-or-remove decision for the toggle based on that result. This can now
+  be answered WITHOUT a browser or the extension:
+  `NH_API_KEY=<key> npm run test:live` probes the keyed profile endpoint,
+  keyed metadata (through the real normalizer), and the archive endpoint,
+  then reports availability (200 + ZIP magic) vs gated (401/403/503/429).
 - Real-browser verification of the keyed route winning in the worker console
   (previous open question: is a same-tab/worker fetch of `/api/v2/galleries`
   challenged? With a key it uses the official contract).

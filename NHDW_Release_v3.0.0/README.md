@@ -13,7 +13,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 - **Similar galleries** — On a gallery page, the popup's right column loads nhentai's related recommendations as a checkbox list; pick the ones you want and each selected gallery downloads as its own titled file (ZIP/CBZ/PDF/raw per the same format picker).
 - **Batch download** — On search, tag, artist, category, or favorites pages, check the boxes injected next to each gallery card and download them all at once.
 - **Multi-page download** — From listing pages with pagination, download galleries across several pages in one operation.
-- **Name templates** — Customise filenames with placeholders: `{pretty}`, `{english}`, `{japanese}`, `{id}`, `{artist}`, `{group}`, `{character}`, `{language}`.
+- **Name templates** — Pick what goes into filenames with simple checkboxes (pretty title, `{english}`, `{japanese}`, `{id}`, `{artist}`, `{group}`, `{character}`, `{language}`); custom placeholder strings are still supported as a manual fallback.
 - **Duplicate handling** — Choose whether to auto-rename or ignore duplicate titles in batch downloads.
 - **Concurrent downloads** — Adjust the number of parallel image fetches (1–15) to balance speed against server errors.
 - **Cloudflare resilience** — If the extension-origin API request is blocked, metadata is retrieved from the already-open browser tab (same-origin, with Cloudflare clearance cookies).
@@ -116,13 +116,13 @@ The original extension supported Firefox; the MV3 version requires `chrome.offsc
 | **Download format** | ZIP, CBZ, PDF, or Raw (numbered images in a titled folder) |
 | **Display checkboxes** | Show/hide selection checkboxes on listing pages |
 | **Dark mode** | Dark theme for the popup |
-| **Duplicate behaviour** | Rename duplicates with a suffix or ignore them |
+| **Duplicate behaviour** | Rename = keep both (adds the gallery ID to the duplicate); Ignore = skip the duplicate, existing file untouched |
 | **Download separately** | Each selected gallery as its own archive |
 | **HTML parsing** | Use page HTML instead of the API for metadata |
 | **Max concurrent downloads** | Parallel image fetches (1–15) |
 | **nhentai API key** | Optional key for API key mode (stored locally, never synced) |
 | **Server archive downloads** | Experimental one-shot ZIP/CBZ via the API (requires key) |
-| **Name template** | Filename with placeholders (see below) |
+| **Name template** | Checkboxes for each part of the filename (see below); manual input only for custom templates |
 | **Replace spaces** | Replace spaces with underscores in filenames |
 
 ### Name template placeholders
@@ -160,7 +160,9 @@ cp -a js/. ../NHDW_Release_v3.0.0/js/
 npm test                          # 149 fixture tests (offline)
 npm run test:smoke                # smoke checks for background + offscreen
 npm run test:e2e                  # window-less end-to-end pipeline tests
-npm run test:live                 # optional live nhentai API test
+npm run test:live                 # optional live nhentai API test (anonymous)
+NH_API_KEY=<key> npm run test:live  # + keyed checks: key verification, keyed
+                                  #   metadata, archive-endpoint availability
 ```
 
 ---

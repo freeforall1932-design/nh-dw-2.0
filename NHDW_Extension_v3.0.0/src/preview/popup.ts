@@ -230,6 +230,18 @@ export default class Popup
         }
         document.getElementById('action')!.innerHTML = message.apiKeyGate();
         setTimeout(() => {
+            // Some browsers offer no right-click menu on extension pages, so
+            // intercept paste explicitly: fill the box from the clipboard text.
+            const gateInput = document.getElementById('apiKeyInput') as HTMLInputElement | null;
+            if (gateInput) {
+                gateInput.addEventListener('paste', function(event: ClipboardEvent) {
+                    const data = event.clipboardData ? event.clipboardData.getData('text') : '';
+                    if (data && data.trim().length > 0) {
+                        event.preventDefault();
+                        gateInput.value = data.trim();
+                    }
+                });
+            }
             const submitButton = document.getElementById('apiKeySubmit');
             if (submitButton) {
                 submitButton.addEventListener('click', async function() {
