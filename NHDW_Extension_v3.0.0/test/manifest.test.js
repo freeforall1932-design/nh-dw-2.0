@@ -33,9 +33,13 @@ describe('MV3 manifest', () => {
 
     it('hardens CDN host access without <all_urls>: static hosts plus an optional nhentai-only grant', () => {
         for (const manifest of [sourceManifest, releaseManifest]) {
-            // chrome.permissions is required to check/request the optional grant.
-            assert.ok(manifest.permissions.includes('permissions'),
-                'the permissions API must be declared to use optional host permissions');
+            // The chrome.permissions API is available to every MV3 extension
+            // WITHOUT being declared; only optional_host_permissions must be
+            // listed. Declaring a literal "permissions" permission is invalid
+            // and makes Chrome refuse to load the extension
+            // ("Permission 'permissions' is unknown").
+            assert.ok(!manifest.permissions.includes('permissions'),
+                'manifest must not declare the invalid "permissions" permission');
 
             // Optional hosts: HTTPS, nhentai-owned only, no wildcards beyond *.nhentai.net.
             const optional = manifest.optional_host_permissions || [];
@@ -52,6 +56,25 @@ describe('MV3 manifest', () => {
                 assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?nhentai\.net\/\*$/.test(pattern),
                     'host_permissions must stay https nhentai-scoped: ' + pattern);
                 assert.ok(!pattern.includes('<all_urls>'), 'host_permissions must not contain <all_urls>');
+            }
+        }
+    });
+
+    it('declares only valid, Chrome-recognized permissions (unknown names break extension loading)', () => {
+        // Chrome rejects the entire manifest if any declared permission is not
+        // a recognized name (e.g. "Permission 'foo' is unknown"), so guard the
+        // full list against typos / invalid entries.
+        const VALID = new Set([
+            'downloads', 'tabs', 'storage', 'alarms', 'scripting', 'offscreen',
+            'activeTab', 'notifications', 'contextMenus', 'cookies', 'identity',
+            'unlimitedStorage', 'webNavigation', 'webRequest', 'declarativeNetRequest',
+            'declarativeNetRequestWithHostAccess', 'management', 'privacy', 'idle',
+            'sidePanel', 'favicon', 'search'
+        ]);
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            for (const permission of manifest.permissions) {
+                assert.ok(VALID.has(permission),
+                    'unknown permission "' + permission + '" would make Chrome refuse to load the extension');
             }
         }
     });
