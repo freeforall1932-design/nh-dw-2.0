@@ -193,7 +193,7 @@ module background
     export function setJobMarker(active: boolean) {
         try {
             (chrome.storage as any).session.set({ downloadJob: { active: active, startedAt: Date.now() } });
-        } catch (_) { /* storage.session unavailable (older Chrome) — best effort */ }
+        } catch (_) { /* storage.session unavailable (older Chrome) - best effort */ }
     }
 
     export function clearJobMarker() {
@@ -459,7 +459,7 @@ module background
                 const ct = (resp.headers.get("content-type") || "").toLowerCase();
                 const isHtml = ct.includes("html");
                 if (isCf || isHtml) {
-                    errorCallback("Can't download " + key + " — Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
+                    errorCallback("Can't download " + key + " - Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
                 } else {
                     errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
                 }
@@ -772,7 +772,7 @@ function readDownloadOptions(callback: (options: any) => void) {
 }
 
 // Messages from the offscreen document back to the service worker.
-// Returns true ONLY when sendResponse will be called asynchronously —
+// Returns true ONLY when sendResponse will be called asynchronously -
 // keeping the channel open for fire-and-forget broadcasts made Chrome log
 // "A listener indicated an asynchronous response by returning true, but the
 // message channel closed before a response was received" for every progress
@@ -923,7 +923,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 // for the session) before the job starts, and relay the
                 // validated, permission-filtered server list with the job: the
                 // offscreen document cannot read storage or chrome.permissions
-                // itself. ensureImageServers never rejects — worst case it
+                // itself. ensureImageServers never rejects - worst case it
                 // returns the cached fallback list after a short timeout.
                 cdnConfigService.ensureImageServers(relayedMessage.tabId).then((imageServers) => {
                     options.imageServers = imageServers;

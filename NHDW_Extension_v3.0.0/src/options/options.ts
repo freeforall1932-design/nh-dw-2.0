@@ -69,7 +69,7 @@ function initNameTemplate(storedTemplate: string) {
         chrome.storage.sync.set({ downloadName: template });
         preview.textContent = template !== ""
             ? "File name will use: " + template
-            : "Nothing checked \u2014 the file name falls back to the gallery ID.";
+            : "Nothing checked - the file name falls back to the gallery ID.";
     };
 
     if (!isTokenOnlyTemplate(storedTemplate)) {
@@ -83,7 +83,7 @@ function initNameTemplate(storedTemplate: string) {
             saveTemplate(advancedInput.value);
             preview.textContent = advancedInput.value.trim() !== ""
                 ? "Custom template in use: " + advancedInput.value
-                : "Nothing checked \u2014 the file name falls back to the gallery ID.";
+                : "Nothing checked - the file name falls back to the gallery ID.";
         });
         return;
     }
@@ -156,7 +156,7 @@ saveApiKeyButton.addEventListener("click", async () => {
     }
 
     saveApiKeyButton.disabled = true;
-    setApiKeyStatus("Verifying API key\u2026");
+    setApiKeyStatus("Verifying API key...");
     // User-Agent is a forbidden browser fetch header, so Chrome supplies its
     // own. Authorization is the documented third-party API mechanism.
     const result = await verifyAndSaveApiKey(apiKey, chrome.storage.local);

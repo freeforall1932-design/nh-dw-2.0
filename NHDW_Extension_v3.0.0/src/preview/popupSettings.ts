@@ -87,7 +87,7 @@ export function renderSettings(container: HTMLElement): void {
     const refreshKeyStatus = () => {
         chrome.storage.local.get({ apiKey: "" }, (stored: any) => {
             keyStatus.textContent = stored.apiKey
-                ? "A key is saved \u2014 API key mode is active."
+                ? "A key is saved - API key mode is active."
                 : "No key saved. This is optional.";
             keyStatus.className = "psStatus " + (stored.apiKey ? "psStatusOn" : "psStatusOff");
         });
@@ -101,7 +101,7 @@ export function renderSettings(container: HTMLElement): void {
             return;
         }
         saveBtn.disabled = true;
-        keyStatus.textContent = "Verifying API key\u2026";
+        keyStatus.textContent = "Verifying API key...";
         keyStatus.className = "psStatus";
         const result = await verifyAndSaveApiKey(apiKey, chrome.storage.local);
         if (result.ok) {
@@ -190,7 +190,7 @@ export function renderSettings(container: HTMLElement): void {
             const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
             const clean = utils.cleanName(rendered, spacesBox.checked, "123456");
             namePreview.textContent = template === ""
-                ? "Nothing ticked \u2014 file name falls back to the gallery ID."
+                ? "Nothing ticked - file name falls back to the gallery ID."
                 : "Example file name: " + clean + ".zip";
         };
 

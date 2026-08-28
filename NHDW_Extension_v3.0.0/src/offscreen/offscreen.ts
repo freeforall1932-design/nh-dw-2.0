@@ -24,7 +24,7 @@ var JSZip = require("jszip");
 //
 // API surface: per the Chrome docs, "The runtime API is the only extensions
 // API supported by offscreen documents". This file must therefore NEVER touch
-// chrome.storage, chrome.downloads, or chrome.scripting directly — settings
+// chrome.storage, chrome.downloads, or chrome.scripting directly - settings
 // arrive in the relayed message (`options`, read by the worker from
 // chrome.storage), finished artifacts are saved by the worker (saveDownload),
 // and tab injections are performed by the worker (fetchInTab / fetchUrlInTab,
@@ -500,7 +500,7 @@ async function downloadAllDoujinshisAsync(
             const ct = (resp.headers.get("content-type") || "").toLowerCase();
             const isHtml = ct.includes("html");
             if (isCf || isHtml) {
-                errorCallback("Can't download " + key + " — Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
+                errorCallback("Can't download " + key + " - Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
             } else {
                 errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
             }
