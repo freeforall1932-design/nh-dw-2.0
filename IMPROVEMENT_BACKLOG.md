@@ -573,3 +573,21 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
   "Example file name" preview, reusing `options/apiKey.ts` and
   `options/nameTemplate.ts` so behaviour is identical to the full options
   page, which stays as the fallback.
+- **[x] 21. Fix blob artifacts saving under a UUID instead of the gallery
+  title (3.2.1).** On some Chromium builds `chrome.downloads.download`
+  ignores its `filename` argument for `blob:` URLs, so the ZIP/CBZ/PDF landed
+  with the blob's UUID even though the content was correct (ruled out IDM:
+  the UUID appeared with download managers disabled). Fix: the offscreen
+  document now saves blob artifacts through a same-context anchor whose
+  `download` attribute carries the name — the standard HTML5 mechanism, which
+  the browser itself honors. Non-blob artifacts (raw-mode CDN URLs) still go
+  through the worker relay. `e2e-offscreen` gained a DOM stub that captures
+  the clicked anchor and asserts the requested URL + filename for the ZIP,
+  tab-ZIP, separate-files, relayed-CDN and PDF phases. `test/artifact-name.
+  test.js` pins the name-generation validity for realistic titles.
+  CAVEAT / real-browser check still needed: an offscreen document is a hidden
+  page; if a browser build blocks programmatic downloads from it, the anchor
+  click would be a silent no-op (no file). The code falls back to the worker
+  relay on DOM errors, but not on a silent no-op. Confirm a real download
+  lands with the correct title right after loading 3.2.1; if nothing lands,
+  revert to the worker relay for blobs.
