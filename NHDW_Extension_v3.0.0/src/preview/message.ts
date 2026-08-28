@@ -115,7 +115,7 @@ export module message
     // list is only fetched on request (it costs one API call, and the panel
     // exists so the user can PICK which related titles to download).
     export function similarIntro(): string {
-        return '<small>Pick from nhentai\'s related recommendations — each selected gallery downloads as its own file.</small><br/>' +
+        return '<small>Pick from nhentai\'s related recommendations - each selected gallery downloads as its own file.</small><br/>' +
             '<input type="button" id="buttonLoadSimilar" value="Show similar galleries"/>';
     }
 
@@ -185,7 +185,7 @@ export module message
         unknown: "other"
     };
 
-    // Batch gallery progress — shown while processing a batch
+    // Batch gallery progress - shown while processing a batch
     export function batchProgress(current: number, total: number, galleryName: string, stage: string, queued: number = 0): string {
         const queueHtml = queued > 0
             ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
