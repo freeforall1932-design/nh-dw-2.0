@@ -161,6 +161,46 @@ function saveViaServiceWorker(url: string, filename: string): Promise<void> {
     });
 }
 
+// Some Chromium builds ignore chrome.downloads.download's `filename` for
+// blob: URLs and save the artifact under the blob's UUID instead of the
+// gallery title (content arrives fine, the name does not). For blobs created
+// in THIS document we sidestep that entirely with the standard HTML5 download
+// mechanism: a same-context anchor whose `download` attribute carries the
+// name. The anchor resolves the blob in the context that created it, so the
+// name is applied by the browser itself rather than by chrome.downloads.
+function saveBlobViaAnchor(blobUrl: string, filename: string): void {
+    const anchor = document.createElement("a");
+    anchor.href = blobUrl;
+    anchor.download = filename;
+    anchor.style.display = "none";
+    document.body.appendChild(anchor);
+    anchor.click();
+    // Detach after the browser has picked up the download. The blob itself
+    // stays alive for revokeObjectUrlDelayMs (handled by the Downloader).
+    setTimeout(() => {
+        try {
+            document.body.removeChild(anchor);
+        } catch (_) { /* already detached */ }
+    }, 0);
+}
+
+// Route a finished artifact to the download manager. Blob artifacts
+// (zip/cbz/pdf) go through the anchor mechanism above; everything else
+// (raw-mode CDN URLs) is relayed to the service worker's
+// chrome.downloads.download, which names plain http(s) URLs correctly.
+function saveArtifactSmart(url: string, filename: string): Promise<void> {
+    if (typeof url === "string" && url.indexOf("blob:") === 0) {
+        try {
+            saveBlobViaAnchor(url, filename);
+            return Promise.resolve();
+        } catch (_) {
+            // DOM unavailable/unexpected: fall back to the worker relay.
+            return saveViaServiceWorker(url, filename);
+        }
+    }
+    return saveViaServiceWorker(url, filename);
+}
+
 // ---- idle handling -------------------------------------------------------
 // After the last job finishes, tell the service worker to close this document
 // so it does not linger forever. New jobs cancel the timer.
@@ -225,7 +265,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
         undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined });
-    currentDownloader.saveUrl = saveViaServiceWorker;
+    currentDownloader.saveUrl = saveArtifactSmart;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
     }
@@ -442,7 +482,7 @@ async function downloadAllDoujinshisAsync(
             downloadSeparately ? new JSZip() : zip,
             zipName, jobAbortController ? jobAbortController.signal : null, undefined,
             gallerySettings);
-            currentDownloader.saveUrl = saveViaServiceWorker;
+            currentDownloader.saveUrl = saveArtifactSmart;
             if (typeof sourceTabId === "number") {
                 currentDownloader.sourceTabId = sourceTabId;
             }

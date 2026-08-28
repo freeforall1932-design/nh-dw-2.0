@@ -204,6 +204,32 @@ function tabUrlTextFor(url) {
     return null;
 }
 
+// --- anchor download stub (blob artifacts save via a same-context <a> click) --
+// The offscreen document saves zip/cbz/pdf blobs through an anchor whose
+// download attribute carries the name (chrome.downloads.download ignores the
+// filename for blob: URLs on some Chromium builds). Capture the clicked
+// anchors so the test can assert the requested URL + filename.
+const anchorDownloads = []; // { href, download }
+const documentStub = {
+    createElement(tag) {
+        return {
+            tagName: String(tag).toUpperCase(),
+            href: "",
+            download: "",
+            style: {},
+            click() {
+                if (this.href) {
+                    anchorDownloads.push({ href: this.href, download: this.download });
+                }
+            }
+        };
+    },
+    body: {
+        appendChild(_node) { /* no-op */ },
+        removeChild(_node) { /* no-op */ }
+    }
+};
+
 // --- sandbox (single VM realm; document defined like an offscreen page) -----
 const sandbox = {
     chrome: chromeStub,
@@ -218,7 +244,7 @@ const sandbox = {
     AbortController,
     btoa: (s) => Buffer.from(s, "binary").toString("base64"),
     atob: (s) => Buffer.from(s, "base64").toString("binary"),
-    document: {} // offscreen documents have a DOM; Downloader then zips without web workers
+    document: documentStub // offscreen documents have a DOM; Downloader then zips without web workers
     // NOTE: do not inject host Uint8Array/ArrayBuffer/Promise built-ins; they
     // would shadow the VM's own intrinsics and break instanceof checks.
 };
@@ -317,19 +343,22 @@ function askOffscreen(message) {
         fail("getProgress did not answer success, got " + JSON.stringify(progressAnswer));
     }
 
-    // Wait for the ZIP to reach the download manager (via the save relay).
-    await waitFor(() => downloads.length === 1, "no download reached chrome.downloads");
-    const download = downloads[0];
+    // Wait for the ZIP to reach the download manager. Blob artifacts are saved
+    // via a same-context anchor click (chrome.downloads.download ignores the
+    // filename for blob: URLs on some Chromium builds), so the delivery shows
+    // up as a clicked anchor carrying the blob URL + requested name.
+    await waitFor(() => anchorDownloads.length === 1, "no blob artifact reached the download anchor");
+    const download = anchorDownloads[0];
 
-    if (!/^blob:/.test(download.url)) {
-        fail("download URL is not an object URL: " + String(download.url).slice(0, 60) +
+    if (!/^blob:/.test(download.href)) {
+        fail("anchor URL is not an object URL: " + String(download.href).slice(0, 60) +
             " (the base64 data-URL round-trip must not be used in the offscreen document)");
     }
-    if (download.filename !== "Downloads/Test.zip") {
-        fail("unexpected download filename: " + download.filename);
+    if (download.download !== "Downloads/Test.zip") {
+        fail("unexpected download filename: " + download.download);
     }
 
-    const blob = objectBlobs[download.url];
+    const blob = objectBlobs[download.href];
     if (!blob) fail("object URL was not created through URL.createObjectURL");
 
     // The popup must have received progress broadcasts marked from:"offscreen".
@@ -387,6 +416,7 @@ function askOffscreen(message) {
     // then MAIN on failure), and must NOT fall back to an extension fetch.
     sentMessages.length = 0;
     downloads.length = 0;
+    anchorDownloads.length = 0;
     tabFetches.length = 0;
     const tabStart = await askOffscreen({
         action: "downloadDoujinshi",
@@ -399,7 +429,7 @@ function askOffscreen(message) {
     if (!tabStart || tabStart.result !== "started") {
         fail("tab downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(tabStart));
     }
-    await waitFor(() => downloads.length === 1, "tab download did not reach chrome.downloads");
+    await waitFor(() => anchorDownloads.length === 1, "tab download did not reach the download anchor");
     const tabImageFetches = tabFetches.filter((t) => t.kind === "image");
     if (tabImageFetches.length === 0) {
         fail("tab image fetches were not relayed to the service worker (fetchInTab)");
@@ -407,11 +437,11 @@ function askOffscreen(message) {
     if (tabImageFetches[0].world !== "ISOLATED") {
         fail("the first tab image fetch relay must use the ISOLATED world, got " + tabImageFetches[0].world);
     }
-    const tabDownload = downloads[0];
-    if (tabDownload.filename !== "Downloads/TabTest.zip") {
-        fail("unexpected tab download filename: " + tabDownload.filename);
+    const tabDownload = anchorDownloads[0];
+    if (tabDownload.download !== "Downloads/TabTest.zip") {
+        fail("unexpected tab download filename: " + tabDownload.download);
     }
-    const tabZip = await JSZip.loadAsync(Buffer.from(await objectBlobs[tabDownload.url].arrayBuffer()));
+    const tabZip = await JSZip.loadAsync(Buffer.from(await objectBlobs[tabDownload.href].arrayBuffer()));
     if (Object.keys(tabZip.files).filter((n) => !tabZip.files[n].dir).length !== 3) {
         fail("tab-fetched ZIP must contain 3 pages, got " + JSON.stringify(Object.keys(tabZip.files)));
     }
@@ -424,6 +454,7 @@ function askOffscreen(message) {
     // A batchSummary must still be emitted with the failure counted.
     sentMessages.length = 0;
     downloads.length = 0;
+    anchorDownloads.length = 0;
     failImages = true;
     const batchStart = await askOffscreen({
         action: "downloadAllDoujinshis",
@@ -443,8 +474,8 @@ function askOffscreen(message) {
         fail("batch gallery failure must be reported exactly once, got " + errorCount +
             ": " + JSON.stringify(sentMessages.filter((m) => m.action === "downloadError")));
     }
-    if (downloads.length !== 0) {
-        fail("no ZIP must be delivered when the batch gallery fails, got " + downloads.length);
+    if (anchorDownloads.length !== 0) {
+        fail("no ZIP must be delivered when the batch gallery fails, got " + anchorDownloads.length);
     }
     const failSummary = sentMessages.find((m) => m.action === "batchSummary");
     if (!failSummary || failSummary.succeeded !== 0 || failSummary.failed !== 1 || failSummary.total !== 1) {
@@ -464,6 +495,7 @@ function askOffscreen(message) {
     // last gallery when downloadAtEnd is true).
     sentMessages.length = 0;
     downloads.length = 0;
+    anchorDownloads.length = 0;
     failImages = false;
     const mixedStart = await askOffscreen({
         action: "downloadAllDoujinshis",
@@ -485,8 +517,8 @@ function askOffscreen(message) {
     if (!mixedSummary.failedKinds || mixedSummary.failedKinds.metadata !== 1) {
         fail("the missing gallery is a metadata failure; failedKinds must be {metadata:1}, got " + JSON.stringify(mixedSummary.failedKinds));
     }
-    if (downloads.length !== 1) {
-        fail("the successful gallery in the mixed batch must deliver a ZIP, got " + downloads.length);
+    if (anchorDownloads.length !== 1) {
+        fail("the successful gallery in the mixed batch must deliver a ZIP, got " + anchorDownloads.length);
     }
     if (sentMessages.filter((m) => m.action === "batchProgress").length < 2) {
         fail("batchProgress must be sent before each gallery");
@@ -530,6 +562,7 @@ function askOffscreen(message) {
     // still emits the single final ZIP, and the summary carries per-kind counts.
     sentMessages.length = 0;
     downloads.length = 0;
+    anchorDownloads.length = 0;
     tabFetches.length = 0;
     failMediaIds.clear();
     failMediaIds.add(String(MEDIA_ID));
@@ -555,8 +588,8 @@ function askOffscreen(message) {
         || queueSummary.failedKinds.image !== 1) {
         fail("queue batch failedKinds must be {metadata:1, image:1}, got " + JSON.stringify(queueSummary.failedKinds));
     }
-    if (downloads.length !== 1) {
-        fail("exactly one ZIP must be delivered (from the last gallery), got " + downloads.length);
+    if (anchorDownloads.length !== 1) {
+        fail("exactly one ZIP must be delivered (from the last gallery), got " + anchorDownloads.length);
     }
     if (sentMessages.filter((m) => m.action === "downloadError").length !== 2) {
         fail("both failing galleries must report exactly one error each");
@@ -575,6 +608,7 @@ function askOffscreen(message) {
     // finished exactly once at the end (so the worker clears its marker).
     sentMessages.length = 0;
     downloads.length = 0;
+    anchorDownloads.length = 0;
     tabFetches.length = 0;
     failMediaIds.clear();
     const separateOptions = Object.assign({}, relayedOptions, { downloadSeparately: true });
@@ -598,25 +632,25 @@ function askOffscreen(message) {
         fail("second job must be queued at position 1, got " + JSON.stringify(queuedStart));
     }
     await waitFor(
-        () => downloads.length === 3,
+        () => anchorDownloads.length === 3,
         "separate-files batch followed by a queued gallery must emit three archives"
     );
-    const separateFilenames = downloads.map((d) => d.filename).sort();
+    const separateFilenames = anchorDownloads.map((d) => d.download).sort();
     const expectedSeparate = ["Test.zip", "Test Two.zip", "Downloads/Queued.zip"].sort();
     if (JSON.stringify(separateFilenames) !== JSON.stringify(expectedSeparate)) {
         fail("separate-files filenames mismatch. Expected " + JSON.stringify(expectedSeparate) +
             " got " + JSON.stringify(separateFilenames));
     }
     // Each archive must be a real ZIP with its own 3 pages inside.
-    for (const d of downloads) {
-        const b = Buffer.from(await objectBlobs[d.url].arrayBuffer());
+    for (const d of anchorDownloads) {
+        const b = Buffer.from(await objectBlobs[d.href].arrayBuffer());
         if (b.length < 4 || b.toString("latin1", 0, 2) !== "PK") {
-            fail("separate-files archive is not a ZIP: " + d.filename);
+            fail("separate-files archive is not a ZIP: " + d.download);
         }
         const z = await JSZip.loadAsync(b);
         const entries = Object.keys(z.files).filter((n) => !z.files[n].dir);
         if (entries.length !== 3) {
-            fail("separate-files archive " + d.filename + " must contain 3 pages, got " + JSON.stringify(entries));
+            fail("separate-files archive " + d.download + " must contain 3 pages, got " + JSON.stringify(entries));
         }
     }
     // Exactly one jobFinished at the end (not one per gallery, not none).
@@ -636,6 +670,7 @@ function askOffscreen(message) {
     // the hardcoded set) must be used for the page URLs; a hostile entry the
     // worker would never relay is still dropped by the shared sanitizer.
     downloads.length = 0;
+    anchorDownloads.length = 0;
     sentMessages.length = 0;
     fetchedUrls.length = 0;
     let cdnStartAnswer = null;
@@ -652,7 +687,7 @@ function askOffscreen(message) {
     if (!cdnStartAnswer || cdnStartAnswer.result !== "started") {
         fail("relayed-CDN downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(cdnStartAnswer));
     }
-    await waitFor(() => downloads.length === 1, "relayed-CDN job did not deliver its ZIP");
+    await waitFor(() => anchorDownloads.length === 1, "relayed-CDN job did not deliver its ZIP");
     const cdnPageFetches = fetchedUrls.filter((u) => u.includes("/galleries/987654/"));
     if (cdnPageFetches.length !== 3 || !cdnPageFetches.every((u) => u.startsWith("https://i7.nhentai.net/"))) {
         fail("page URLs must be generated from the relayed runtime server (i7) only, got: "
@@ -665,6 +700,7 @@ function askOffscreen(message) {
 
     // ---- PDF mode: one titled PDF file per gallery --------------------------
     downloads.length = 0;
+    anchorDownloads.length = 0;
     sentMessages.length = 0;
     fetchedUrls.length = 0;
     const pdfStart = await askOffscreen({
@@ -677,12 +713,12 @@ function askOffscreen(message) {
     if (!pdfStart || pdfStart.result !== "started") {
         fail("PDF downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(pdfStart));
     }
-    await waitFor(() => downloads.length === 1, "PDF job did not deliver its file");
-    const pdfDownload = downloads[0];
-    if (pdfDownload.filename !== "Downloads/PdfTest.pdf") {
-        fail("PDF filename must be the gallery name, got " + pdfDownload.filename);
+    await waitFor(() => anchorDownloads.length === 1, "PDF job did not deliver its file");
+    const pdfDownload = anchorDownloads[0];
+    if (pdfDownload.download !== "Downloads/PdfTest.pdf") {
+        fail("PDF filename must be the gallery name, got " + pdfDownload.download);
     }
-    const pdfBytes = Buffer.from(await objectBlobs[pdfDownload.url].arrayBuffer());
+    const pdfBytes = Buffer.from(await objectBlobs[pdfDownload.href].arrayBuffer());
     const pdfText = pdfBytes.toString("latin1");
     if (!pdfText.startsWith("%PDF-1.4") || !pdfText.endsWith("%%EOF\n")) {
         fail("PDF structure invalid (header/trailer)");
@@ -693,7 +729,7 @@ function askOffscreen(message) {
     if (!pdfText.includes("/MediaBox [0 0 1280 1808]")) {
         fail("PDF page 1 must use the image dimensions");
     }
-    console.log("PASS: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.filename);
+    console.log("PASS: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.download);
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {
