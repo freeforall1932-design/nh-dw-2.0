@@ -26,7 +26,8 @@ chrome.storage.sync.get({
     replaceSpaces: true,
     htmlParsing: false,
     downloadSeparately: false,
-    maxConcurrentDownloads: "3"
+    maxConcurrentDownloads: "3",
+    rawMasterFolder: "NHDW"
 }, function(elems) {
     options.forEach(o => {
         o.init(elems);
@@ -40,6 +41,17 @@ chrome.storage.sync.get({
         })
     })
     initNameTemplate(elems.downloadName);
+
+    // Master folder for raw downloads. Saved verbatim — the empty string is
+    // meaningful ("no master folder"), so this cannot ride the generic
+    // InputField wiring (which treats an empty field as "no change").
+    const rawMasterInput = document.getElementById("rawMasterFolder") as HTMLInputElement | null;
+    if (rawMasterInput) {
+        rawMasterInput.value = String((elems as any).rawMasterFolder);
+        rawMasterInput.addEventListener("change", () => {
+            chrome.storage.sync.set({ rawMasterFolder: rawMasterInput.value.trim() });
+        });
+    }
 })
 
 // ---- name template: checkboxes instead of manual typing --------------------

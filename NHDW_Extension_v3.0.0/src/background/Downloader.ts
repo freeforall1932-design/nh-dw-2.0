@@ -6,7 +6,7 @@ import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -18,6 +18,9 @@ export default class Downloader
         this.#abortSignal = signal;
         this.#source = source;
         this.#settings = settings;
+        // Relayed/absent settings both end up normalized: undefined means the
+        // default master folder, an explicit empty string disables it.
+        this.#rawMasterFolder = normalizeRawMasterFolder(settings ? settings.rawMasterFolder : undefined);
 
         // @ts-ignore
         if (typeof browser !== "undefined") { // Firefox
@@ -28,6 +31,9 @@ export default class Downloader
 
         this.#mediaId = this.#json.media_id;
     }
+
+    // Top-level folder that collects raw (loose image) downloads; "" = off.
+    #rawMasterFolder: string = DEFAULT_RAW_MASTER_FOLDER;
 
     isPaused: boolean = false;
     #resumePaused: (() => void) | null = null;
@@ -105,9 +111,13 @@ export default class Downloader
                     resolve(
                         chrome.storage.sync.get({
                             useZip: "zip",
-                            maxConcurrentDownloads: "3"
+                            maxConcurrentDownloads: "3",
+                            rawMasterFolder: DEFAULT_RAW_MASTER_FOLDER
                         }, function (elems) {
                             applySettings(elems.useZip, elems.maxConcurrentDownloads);
+                            // The empty string is meaningful: it disables the
+                            // master folder for raw downloads.
+                            self.#rawMasterFolder = normalizeRawMasterFolder(elems.rawMasterFolder);
                         })
                     );
                 });
@@ -480,12 +490,16 @@ export default class Downloader
             // download. Use the canonical original-image URL and report startup
             // errors through the downloads API callback (routed through
             // #saveArtifact so the offscreen document can relay to the worker).
-            // Pages are numbered (001.jpg…) inside a folder named after the
-            // gallery so the download manager groups them like every other
-            // format does.
             const imageUrl = imageUrls[0];
             try {
-                await this.#saveArtifact(imageUrl, this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
+                // Pages are numbered (001.jpg…) inside a folder named after
+                // the gallery, itself inside the master folder (default
+                // "NHDW") so hundreds of galleries group tidily. An empty
+                // master folder disables the extra level; slashes in the
+                // value nest deeper. sanitizeArtifactFilename cleans every
+                // segment independently at save time.
+                const masterPrefix = this.#rawMasterFolder !== "" ? this.#rawMasterFolder + "/" : "";
+                await this.#saveArtifact(imageUrl, masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
             } catch (error) {
                 throw "Failed to download original image (" + error + ").";
             }
@@ -723,4 +737,19 @@ export function sanitizeArtifactFilename(filename: string, fallbackStem: string)
         joined = sanitizeArtifactFilename(String(fallbackStem || "download"), "download");
     }
     return joined;
+}
+
+// Master folder for raw (loose image) downloads: every gallery's titled
+// folder of pages lands inside it (NHDW/<Title>/001.jpg…), keeping the
+// download directory tidy once hundreds of titles pile up. An explicit empty
+// or whitespace-only setting disables it (the historical behavior);
+// undefined means "use the default". Relayed through the settings bag so the
+// offscreen document never needs chrome.storage.
+export const DEFAULT_RAW_MASTER_FOLDER = "NHDW";
+
+export function normalizeRawMasterFolder(value: any): string {
+    if (value === undefined || value === null) {
+        return DEFAULT_RAW_MASTER_FOLDER;
+    }
+    return String(value).trim();
 }

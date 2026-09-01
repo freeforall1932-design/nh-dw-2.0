@@ -307,7 +307,7 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
 
     // ---- Phase 2: raw mode (per-page downloads) ---------------------------
     downloads.length = 0;
-    syncSettings = { useZip: "raw", maxConcurrentDownloads: "3" };
+    syncSettings = { useZip: "raw", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW" };
     fireDownload("Downloads/RawTest", "RawTest");
     await waitFor(() => downloads.length === 3, "raw mode did not issue 3 per-page downloads");
 
@@ -324,12 +324,12 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("raw mode URLs mismatch. Expected " + JSON.stringify(expectedRaw) + " got " + JSON.stringify(rawUrls));
     }
     const rawNames = downloads.map((d) => d.filename).sort();
-    const expectedRawNames = ["Downloads/RawTest/001.jpg", "Downloads/RawTest/002.png", "Downloads/RawTest/003.jpg"];
+    const expectedRawNames = ["NHDW/Downloads/RawTest/001.jpg", "NHDW/Downloads/RawTest/002.png", "NHDW/Downloads/RawTest/003.jpg"];
     if (JSON.stringify(rawNames) !== JSON.stringify(expectedRawNames)) {
-        fail("raw mode filenames must be a titled folder of numbered pages, expected " +
+        fail("raw mode filenames must be a titled folder of numbered pages inside the master folder, expected " +
             JSON.stringify(expectedRawNames) + " got " + JSON.stringify(rawNames));
     }
-    console.log("PASS phase 2: raw mode issued 3 per-page downloads to the runtime-configured image CDN");
+    console.log("PASS phase 2: raw mode issued 3 per-page downloads to the runtime-configured image CDN (master-folder paths)");
 
     // ---- Phase 2b: PDF mode (one titled file per gallery) ------------------
     downloads.length = 0;
@@ -364,7 +364,9 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     downloads.length = 0;
     downloadFails = true;
     expectedWorkerRejection = true; // startAsync() re-throws after errorCallback
-    syncSettings = { useZip: "raw", maxConcurrentDownloads: "3" };
+    // Empty rawMasterFolder disables the master folder (pre-3.3.0 layout): the
+    // retry/error path must behave identically with the master folder off.
+    syncSettings = { useZip: "raw", maxConcurrentDownloads: "3", rawMasterFolder: "" };
     fireDownload("Downloads/FailTest", "FailTest");
     await waitFor(
         () => sentMessages.some((m) => m.action === "downloadError"),

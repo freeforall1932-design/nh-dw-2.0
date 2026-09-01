@@ -35,12 +35,12 @@ const pageBytes = [
 const CANONICAL = 'https://i.nhentai.net/galleries/987654/';
 const MIRRORS = [1, 2, 3, 4].map((n) => `https://i${n}.nhentai.net/galleries/987654/`);
 
-function makeChromeStub(useZip, maxConcurrentDownloads = '3') {
+function makeChromeStub(useZip, maxConcurrentDownloads = '3', extra = {}) {
     const stub = {
         storage: {
             sync: {
                 get(defaults, cb) {
-                    cb(Object.assign({}, defaults, { useZip, maxConcurrentDownloads }));
+                    cb(Object.assign({}, defaults, { useZip, maxConcurrentDownloads }, extra));
                 }
             }
         },
@@ -275,12 +275,48 @@ describe('Downloader (raw mode)', () => {
         ]);
         const filenames = chrome.downloads.calls.map((c) => c.filename);
         assert.deepStrictEqual(filenames, [
+            'NHDW/Downloads/RawTest/001.jpg',
+            'NHDW/Downloads/RawTest/002.png',
+            'NHDW/Downloads/RawTest/003.jpg'
+        ]);
+        // Raw mode must not fetch anything itself (Chrome does the download).
+        assert.strictEqual(fetchStub.attempted.length, 0);
+    });
+
+    it('groups raw pages under the master folder by default and honors a custom one', async () => {
+        const customChrome = makeChromeStub('raw', '3', { rawMasterFolder: 'Stash' });
+        globalThis.chrome = customChrome;
+        const custom = new Downloader(gallery, 'Downloads/RawTest', () => {}, () => {}, 'RawTest', new JSZip(), null);
+        await custom.startAsync();
+        assert.deepStrictEqual(customChrome.downloads.calls.map((c) => c.filename), [
+            'Stash/Downloads/RawTest/001.jpg',
+            'Stash/Downloads/RawTest/002.png',
+            'Stash/Downloads/RawTest/003.jpg'
+        ]);
+    });
+
+    it('saves straight into the titled folder when the master folder setting is empty', async () => {
+        const offChrome = makeChromeStub('raw', '3', { rawMasterFolder: '' });
+        globalThis.chrome = offChrome;
+        const off = new Downloader(gallery, 'Downloads/RawTest', () => {}, () => {}, 'RawTest', new JSZip(), null);
+        await off.startAsync();
+        assert.deepStrictEqual(offChrome.downloads.calls.map((c) => c.filename), [
             'Downloads/RawTest/001.jpg',
             'Downloads/RawTest/002.png',
             'Downloads/RawTest/003.jpg'
         ]);
-        // Raw mode must not fetch anything itself (Chrome does the download).
-        assert.strictEqual(fetchStub.attempted.length, 0);
+    });
+
+    it('sanitizes a user-typed master folder per path segment', async () => {
+        const weirdChrome = makeChromeStub('raw', '3', { rawMasterFolder: 'My:Folder* ' });
+        globalThis.chrome = weirdChrome;
+        const weird = new Downloader(gallery, 'Downloads/RawTest', () => {}, () => {}, 'RawTest', new JSZip(), null);
+        await weird.startAsync();
+        assert.deepStrictEqual(weirdChrome.downloads.calls.map((c) => c.filename), [
+            'MyFolder/Downloads/RawTest/001.jpg',
+            'MyFolder/Downloads/RawTest/002.png',
+            'MyFolder/Downloads/RawTest/003.jpg'
+        ]);
     });
 
     it('retries and reports errors through the callback instead of dropping them', async () => {

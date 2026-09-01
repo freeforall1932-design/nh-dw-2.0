@@ -8,7 +8,7 @@ A Chrome extension for batch downloading full-size image archives directly from 
 * **Batch Download:** Grabs all full-size images from a gallery (not just thumbnails).
 * **Seamless Integration:** Injects selection checkboxes directly onto nhentai.net listing pages.
 * **Smart Scraping:** Automatically converts thumbnail URLs to high-quality, full-size images.
-* **Client-Side Zipping:** Creates `.zip` archives locally without relying on external servers — or, if you prefer the old-school layout, **one folder of images per gallery** (Options → *Download format: Images in a folder*).
+* **Client-Side Archiving:** Creates `.zip`/`.cbz` archives or a single high-quality `.pdf` locally without relying on external servers — or get the loose images instead: **raw mode** saves each gallery as numbered pages (`001.jpg`…) in a titled folder, grouped under one configurable master folder (Options → *Folder for raw downloads*, default `NHDW/`).
 * **Large-gallery safe:** the finished archive is handed to Chrome through an MV3 *offscreen document* (real object URL), so huge galleries no longer go through a memory-hungry base64 round-trip in the service worker.
 * **Manifest V3 Compliant:** Fully updated for the latest Chrome extension requirements.
 
@@ -31,7 +31,7 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
 1. Navigate to a gallery page (e.g., `https://nhentai.net/g/123456/`).
 2. Click the extension icon. The popup shows the detected title and page count.
 3. Optionally edit the save name/path, then click **Download**.
-4. The extension fetches the full-size images, zips them locally, and hands the archive to Chrome's download manager (`[Title].zip`, `.cbz`, or a `[Title]/` folder of images if configured in Options).
+4. The extension fetches the full-size images, packs them locally, and hands the result to Chrome's download manager (`[Title].zip`, `[Title].cbz`, `[Title].pdf`, or numbered raw pages under `NHDW/[Title]/` if configured in Options).
 
 ### Search / category pages (batch)
 1. On a search, tag, artist, or category page, each thumbnail caption gets an
@@ -101,7 +101,8 @@ so no real nhentai account or Cloudflare clearance is needed.
   `@sparticuz/chromium` have extensions compiled out and will fail the first check).
 * Run with elevated privileges so the script can bind its local nhentai fixture to port 443
   (otherwise the content-script and real-fetch sections are skipped with a hint).
-* CI: a ready-to-use GitHub Actions workflow that runs the offline suites plus the browser
-  suite in real Google Chrome and real Brave on GitHub-hosted runners is included in
-  `SESSION_HANDOFF.md` (the sandbox token cannot write `.github/workflows` files — copy
-  the YAML to `.github/workflows/e2e-browser.yml` to enable it).
+* CI: GitHub Actions runs only the offline suites (`.github/workflows/extension-tests.yml`).
+  The real-browser suite is local-only — GitHub-hosted runners cannot launch the MV3
+  extension harness (Chrome `Runtime.enable` timeout / Brave SIGTRAP, on every run since it
+  was introduced; see `IMPROVEMENT_BACKLOG.md` item 10). Run `npm run test:browser` on a
+  machine with a full Chrome/Brave build instead.
