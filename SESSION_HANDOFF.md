@@ -1,13 +1,31 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-08-26 (after two-mode API access: first-run gate, keyed
-metadata routes with 429 backoff, one-shot server archives, key-persistence
-fix — merged on top of the popup split / PDF / CDN work)
+**Updated:** 2026-09-01 (after the CI cleanup landed: the failing
+real-browser GitHub Actions jobs were removed via the web UI, replaced by
+`.github/workflows/extension-tests.yml` — first run **green** (~1m, 163
+mocha fixtures + smoke + VM e2e); docs companion PR #29 merged; README CI
+bullet fixed in PR #30)
 
-- Session branch: `arena/01a023e5-nh-dw-2-0` (only use the current session
-  branch; check `git branch --show-current`. Earlier sessions used
-  `arena/01a027b3-…`, `arena/01a02b04-…`, `arena/01a02397-…`). Do not trust
-  older branch names in historic handoff text.
+- Session branch of the current session: `arena/01a05a41-nh-dw-2-0`. Always
+  use the current session branch (check `git branch --show-current`). The
+  previous session branch `arena/01a023e5-nh-dw-2-0` is **merged and closed**
+  (final PR #29); before that sessions used `arena/01a027b3-…`,
+  `arena/01a02b04-…`, `arena/01a02397-…`. Do not trust older branch names in
+  historic handoff text.
+- Merged since the 2026-08-26 update: PR #23 (handoff records PR #22's merge
+  commit), PR #24 (keyed live-API probes in the opt-in suite — archive
+  availability is headlessly checkable), PR #25 (**hotfix 3.1.1** — remove
+  the invalid `permissions` permission that made the extension fail to
+  load), PR #26 (**3.2.0** settings inside the popup), PR #27 (**3.2.1**
+  title-named blob saves instead of UUID), PR #28 (**3.2.2** mojibake fix in
+  UI strings: charset + ASCII-safe text), PR #29 (document the real-browser
+  CI removal). Current extension version: **3.2.2** (both manifests).
+- CI state: the only workflow is `.github/workflows/extension-tests.yml`
+  (offline suites: webpack build → mocha fixtures → smoke → window-less VM
+  e2e; triggers on pushes touching the extension/release dirs or the
+  workflow itself, plus manual `workflow_dispatch`). The real-browser suite
+  stays **local-only** (`npm run test:browser`) — see backlog item 10 for why
+  a GitHub-hosted real-browser job can never work.
 - PR #22 ("Add optional nhentai API key mode with first-run gate and one-shot
   archive downloads") was merged on 2026-08-26T08:38:07Z as merge commit
   `05cd7c5` (full: `05cd7c537f39d091b01a458519acdd7742051cd7`) —
@@ -131,7 +149,7 @@ Boundary table — **API key mode** (a key is stored) vs **open tab mode**
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build
-npm test              # 149 passing, 1 pending live test
+npm test              # 163 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
 npm run test:smoke
 npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN), relay, content
 cp js/*.js ../NHDW_Release_v3.0.0/js/
@@ -155,28 +173,45 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 8. Keep the source gallery tab backgrounded on another site; confirm completion.
 9. CDN hardening: `/api/v2/cdn` fetched once per session (worker console); `chrome.storage.session.get("cdnConfig")` shows the merged list; grant-notice flow when a host lacks permission.
 
-## Next backlog
+## Next backlog (worklist — statuses as of 2026-09-01)
 
-- ~~Server-side ZIP/CBZ endpoint with API key; fall back on 429/503~~ — DONE
+- [x] ~~Server-side ZIP/CBZ endpoint with API key; fall back on 429/503~~ — DONE
   (PR #22, opt-in `useServerArchive` toggle with page-by-page fallback).
-  Remaining: check of whether the account actually gets a usable URL from
-  `POST .../download` (`allow_downloads` feature flag / tier), and
-  keep-or-remove decision for the toggle based on that result. This can now
-  be answered WITHOUT a browser or the extension:
-  `NH_API_KEY=<key> npm run test:live` probes the keyed profile endpoint,
-  keyed metadata (through the real normalizer), and the archive endpoint,
-  then reports availability (200 + ZIP magic) vs gated (401/403/503/429).
-- Real-browser verification of the keyed route winning in the worker console
+- [ ] **Server-archive availability check (pending — user side, no browser
+  needed):** does the account actually get a usable URL from
+  `POST .../download` (`allow_downloads` feature flag / tier)? Answer with
+  `NH_API_KEY=<key> npm run test:live` — it probes the keyed profile
+  endpoint, keyed metadata (through the real normalizer), and the archive
+  endpoint, then reports availability (200 + ZIP magic) vs gated
+  (401/403/503/429). Then make the keep-or-remove decision for the
+  `useServerArchive` toggle (backlog item 17).
+- [ ] **Real-browser run of `npm run test:browser`** on a machine with a
+  full Chrome/Brave build (`sudo` so the fixture binds port 443) — the only
+  remaining blocker for flipping backlog item 10 from `[~]` to `[x]`.
+- [ ] **Real-browser regression pass after 3.2.1/3.2.2** — confirm a real
+  blob save lands with the title-based name (the 3.2.1 anchor-`download`
+  fix could be a silent no-op in a browser build that blocks programmatic
+  downloads from hidden offscreen pages; nothing lands → revert to the
+  worker relay) and spot-check that UI strings render clean after the 3.2.2
+  mojibake fix.
+- [ ] Real-browser verification of the keyed route winning in the worker console
   (previous open question: is a same-tab/worker fetch of `/api/v2/galleries`
   challenged? With a key it uses the official contract).
-- Optional: sync the API key across the user's own devices
+- [ ] Optional: sync the API key across the user's own devices
   (`chrome.storage.sync`) — deliberately local-only today; needs an explicit
   user decision (secret syncing).
-- Optional: force the descriptive `User-Agent` via `declarativeNetRequest`
+- [ ] Optional: force the descriptive `User-Agent` via `declarativeNetRequest`
   (fetch() forbids it in some contexts) — deferred, adds a permission.
-- Persistent restart-safe resume (checkpoint/rebuild strategy).
-- Search/favorites/blacklist/comments API UI features.
-- PDF niceties (not required): PDF/AV viewers validate fine, but consider a cover/thumbnail entry or bookmarks outline if ever requested.
+- [ ] Persistent restart-safe resume (checkpoint/rebuild strategy).
+- [ ] Search/favorites/blacklist/comments API UI features.
+- [ ] PDF niceties (not required): PDF/AV viewers validate fine, but consider a
+  cover/thumbnail entry or bookmarks outline if ever requested.
+- [x] ~~Enable a GitHub Actions workflow for the real-browser suite~~ —
+  RESOLVED by removal (2026-09-01): GitHub-hosted runners cannot launch the
+  MV3 harness (Chrome `Runtime.enable` timeout / Brave SIGTRAP, failed on
+  every run since introduction). CI is offline-suites-only
+  (`extension-tests.yml`); the real-browser suite stays local
+  (`npm run test:browser`). See backlog item 10.
 
 ## Do not
 
@@ -188,3 +223,4 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 - Do not expand web-accessible resources.
 - Do not add `<all_urls>` (or any non-nhentai host) to host/optional-host permissions; all image hosts must validate as HTTPS `*.nhentai.net` origins.
 - Do not reintroduce the "folder" output mode; PDF replaced it (legacy `"folder"` values must keep mapping to `"pdf"`).
+- Do not re-add real-browser (real Chrome / real Brave) jobs to GitHub Actions — they failed on 100% of runs because hosted runners cannot launch the MV3 extension harness (backlog item 10). CI is offline-suites-only; real-browser verification is local `npm run test:browser`.
