@@ -22,7 +22,7 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Replace the base64 ZIP download path: downloads now run in an MV3 offscreen document (`src/offscreen/offscreen.ts` + `offscreen.html`) that delivers the archive through a real `URL.createObjectURL`; the in-worker base64 path remains only as a fallback for browsers without `chrome.offscreen`. The service worker relays commands (`scripts/e2e-relay.js` verifies relay, idle-close, and no message loops).
 - [x] Include the MV3 `offscreen` permission in both source and release manifests so real Chrome/Brave expose `chrome.offscreen` and use the intended object-URL ZIP path.
 - [x] Replace the live-only API test with deterministic fixture tests: `test/parsing.test.js` (API/HTML parsers incl. `\u0022` embeds, malformed/Cloudflare HTML rejection, filename utils) and `test/downloader.test.js` (image URL order and CDN fallback, ZIP entry names and original-page bytes, raw mode, object-URL delivery). The live nhentai check is opt-in behind `RUN_LIVE_TESTS=1` (`npm run test:live`).
-- [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`, plus a ready-to-run CI workflow for real Chrome and Brave included in `SESSION_HANDOFF.md`) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10).
+- [~] Chrome and Brave end-to-end download test: the automated real-browser suite exists (`scripts/e2e-browser.js`, runnable via `npm run test:browser`) and its harness plumbing was validated live; executing the suite itself in an unrestricted environment is still pending (see item 10). The real-browser CI jobs were removed on 2026-08-28 (GitHub Actions runners cannot launch the MV3 harness), leaving only the offline suites in CI.
 - [x] Replace the search-page regex flow with DOM extraction: `js/getGalleries.js` extracts gallery cards + pagination from the live DOM (id from each card's own cover link, title from the caption inside the same link), the popup consumes structured cards, and the network path (`downloadAllPagesAsync`) uses the shared `parseGalleryCardsFromHtml` parser (see item 5).
 - [x] Selected-gallery queue: unique-by-construction `Record<id, title>`, per-gallery progress, continue-after-failure, and a final summary with per-kind failure counts (see item 6).
 - [x] Fix the offscreen document for the API surface Chrome actually exposes there (only `chrome.runtime`): the document no longer touches `chrome.storage` / `chrome.downloads` / `chrome.scripting` (the old code crashed at load in real Chrome with `Cannot read properties of undefined (reading 'sync')` before its message listener registered, so every download failed with "Could not establish connection"). Settings are relayed in the download command, artifacts are saved by the service worker (`saveDownload`), and tab injections run in the worker (`fetchInTab` / `fetchUrlInTab`). Proven by `scripts/e2e-offscreen.js`, which now runs with no storage/downloads/scripting on the chrome stub at all.
@@ -265,8 +265,15 @@ Record browser version, operating system, page type, and result.
 **Progress:** the manual test is automated as `scripts/e2e-browser.js` (`npm run test:browser`):
 it loads `NHDW_Release_v3.0.0` in a real Chromium-family browser over the DevTools Protocol
 and verifies the service worker, popup, content scripts, offscreen-document ZIP pipeline, and
-the ZIP on disk (nhentai.net is simulated locally, see the script header). A GitHub Actions workflow for real Google Chrome + real Brave is at
-`.github/workflows/e2e-browser.yml`.
+the ZIP on disk (nhentai.net is simulated locally, see the script header).
+
+**CI resolution (2026-08-28):** the real-Google-Chrome and real-Brave jobs in
+`.github/workflows/e2e-browser.yml` failed on **every** run since they were added
+(Chrome `Runtime.enable` timeout, Brave SIGTRAP before a DevTools port opens) — GitHub
+Actions runners cannot launch the MV3 extension harness, regardless of code changes. They
+were removed so CI is green; the offline suites now run alone in
+`.github/workflows/extension-tests.yml`. The real-browser suite remains available locally
+via `npm run test:browser` on a machine with a full Chrome/Brave build.
 
 Environment note (why it is still `[~]` rather than `[x]`): the development sandbox could not
 execute the suite itself —
@@ -274,15 +281,13 @@ execute the suite itself —
    mirrors, storage.googleapis.com, and GitHub release assets are all unreachable), and
 2. the only browser binary obtainable through those channels, `@sparticuz/chromium`, is a
    serverless build with extension support compiled out (verified: even a minimal MV3 test
-   extension produces no service worker target), and
-3. the sandbox's GitHub token lacks the `workflows` permission, so the CI workflow file
-   cannot be pushed from here.
+   extension produces no service worker target).
 
 What was verified in the sandbox: the harness's riskiest plumbing — the local HTTPS
 nhentai.net fixture, `--host-resolver-rules` remapping, and the certificate bypass — works in
 headless Chromium (the browser loaded the fixture page at `https://nhentai.net/`). To close
 this item, run `npm run test:browser` on a machine with Chrome and/or Brave installed
-(prefixed with `sudo` so the fixture can bind port 443), or enable the CI workflow.
+(prefixed with `sudo` so the fixture can bind port 443).
 
 ### 11. Verify MV3 lifecycle behavior
 

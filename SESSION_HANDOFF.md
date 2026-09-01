@@ -139,7 +139,7 @@ diff -rq js ../NHDW_Release_v3.0.0/js
 # also diff index.html / options.html / css / manifest.json when they change
 ```
 
-`npm run test:browser` needs a full Chrome/Brave build (serverless `@sparticuz/chromium` has extensions compiled out). `NHDW_CHROME_EXTRA_ARGS` exists as an escape hatch. CI (`.github/workflows/e2e-browser.yml`) runs the real-Chrome suite.
+`npm run test:browser` needs a full Chrome/Brave build (serverless `@sparticuz/chromium` has extensions compiled out). `NHDW_CHROME_EXTRA_ARGS` exists as an escape hatch. The real-browser CI jobs were **removed** (they could never launch on GitHub Actions runners — Chrome `Runtime.enable` timeout / Brave SIGTRAP); CI now runs only the offline suites via `.github/workflows/extension-tests.yml`, and the real-browser suite stays a manual `npm run test:browser` on a developer machine.
 
 ## Required real-browser verification before PR
 
