@@ -243,17 +243,30 @@ module background
         readLocalApiSettings().then((localApi) => {
             settings.apiKey = localApi.apiKey || null;
             settings.useServerArchive = localApi.useServerArchive;
-            let zip = new JSZip();
-            currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
-            if (typeof sourceTabId === "number") {
-                currentDownloader.sourceTabId = sourceTabId;
+            const startWithSettings = () => {
+                let zip = new JSZip();
+                currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
+                if (typeof sourceTabId === "number") {
+                    currentDownloader.sourceTabId = sourceTabId;
+                }
+                // Clear the job marker when the download finishes (success or error) and
+                // keep re-throwing so a failure still surfaces as a worker rejection (the
+                // popup has already been told via errorCallback).
+                currentDownloader.startAsync()
+                    .then(() => clearJobMarker())
+                    .catch(function(error) { clearJobMarker(); throw error; });
+            };
+            try {
+                // The raw master folder is a sync (non-secret) setting; read it
+                // here so the Downloader never touches chrome.storage itself
+                // (same class runs inside the offscreen document).
+                chrome.storage.sync.get({ rawMasterFolder: "NHDW" }, (elems: any) => {
+                    settings.rawMasterFolder = elems && elems.rawMasterFolder !== undefined ? String(elems.rawMasterFolder) : "NHDW";
+                    startWithSettings();
+                });
+            } catch (_) {
+                startWithSettings(); // keep the default master folder
             }
-            // Clear the job marker when the download finishes (success or error) and
-            // keep re-throwing so a failure still surfaces as a worker rejection (the
-            // popup has already been told via errorCallback).
-            currentDownloader.startAsync()
-                .then(() => clearJobMarker())
-                .catch(function(error) { clearJobMarker(); throw error; });
         });
     }
 
@@ -286,6 +299,7 @@ module background
         let replaceSpaces: boolean = false;
         let downloadSeparately: boolean = false;
         let maxConcurrentDownloads: string | undefined;
+        let rawMasterFolder: string = "NHDW";
         await new Promise((resolve, _reject) => {
             resolve(
                 chrome.storage.sync.get({
@@ -293,13 +307,15 @@ module background
                     duplicateBehaviour: "rename",
                     replaceSpaces: true,
                     downloadSeparately: false,
-                    maxConcurrentDownloads: "3"
+                    maxConcurrentDownloads: "3",
+                    rawMasterFolder: "NHDW"
                 }, function(elems) {
                     downloadName = elems.downloadName;
                     duplicateBehaviour = elems.duplicateBehaviour;
                     replaceSpaces = elems.replaceSpaces;
                     downloadSeparately = elems.downloadSeparately;
                     maxConcurrentDownloads = elems.maxConcurrentDownloads;
+                    rawMasterFolder = elems.rawMasterFolder;
                 })
             );
         });
@@ -313,6 +329,7 @@ module background
         // file named after the gallery. One shared archive keeps a folder per
         // gallery inside so titles never collide.
         const gallerySettings: any = { archiveLayout: downloadSeparately ? "flat" : "nested" };
+        gallerySettings.rawMasterFolder = rawMasterFolder;
         if (options && options.useZip) {
             gallerySettings.useZip = options.useZip;
             gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
@@ -736,7 +753,8 @@ const DOWNLOAD_OPTION_DEFAULTS = {
     replaceSpaces: true,
     downloadSeparately: false,
     maxConcurrentDownloads: "3",
-    htmlParsing: false
+    htmlParsing: false,
+    rawMasterFolder: "NHDW"
 };
 
 // API key settings are stored in chrome.storage.local (a secret must never

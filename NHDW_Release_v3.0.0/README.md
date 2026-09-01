@@ -35,7 +35,7 @@ Updated for **Manifest V3** with an offscreen document for reliable ZIP download
 2. **Metadata** — Gallery info comes from nhentai's API v2 (`nhentai.net/api/v2/galleries/<id>`), from the SvelteKit JSON payload embedded in the open gallery page, or from the legacy `window._gallery` embed. In **API key mode** (see below) the official keyed API is tried first; otherwise metadata resolves through the active browser tab's page context.
 3. **Checkboxes** — On listing pages the content script injects checkboxes next to each gallery card. Tick the ones you want and press **Download** in the popup.
 4. **Download engine** — Images are fetched through the open nhentai tab when a tab id is available (page origin and cookies), then from the extension origin. The image server list is resolved per session from `nhentai.net/api/v2/cdn` (validated HTTPS `*.nhentai.net` origins, API order first), with automatic fallback through the built-in mirrors (`i.nhentai.net`, `i1`–`i4`). If nhentai reports image hosts the extension has no permission for, the popup offers a one-click **Grant image host access** (optional `https://*.nhentai.net/*` permission — downloads keep working on the permitted hosts either way). HTML challenge responses are rejected so they never end up inside a ZIP.
-5. **Archive / PDF output** — ZIP and CBZ archives are named after the gallery with the numbered pages directly at the archive root (no double `Title/Title` folder when extracting). **PDF** assembles the same pages into one `<Title>.pdf` (JPEG pages are embedded as-is; other formats are converted). In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts. Raw mode saves the numbered pages (`001.jpg`, `002.png`, …) inside a `Downloads/<Title>/` folder.
+5. **Archive / PDF output** — ZIP and CBZ archives are named after the gallery with the numbered pages directly at the archive root (no double `Title/Title` folder when extracting). **PDF** assembles the same pages into one `<Title>.pdf` (JPEG pages are embedded as-is; other formats are converted). In supported browsers an **offscreen document** assembles the result (and creates the real object URLs, no base64 memory blow-up) and survives service-worker idle timeouts. Raw mode saves the numbered pages (`001.jpg`, `002.png`, …) inside a per-gallery folder grouped under one master folder — `Downloads/NHDW/<Title>/…` by default. The master folder name is configurable in Options (*Folder for raw downloads*; empty it to get plain `Downloads/<Title>/…`, or use slashes for deeper nesting like `NHDW/raw`).
 6. **Saving** — The offscreen document only uses the APIs Chrome actually exposes there (`chrome.runtime`); finished objects are saved by the **service worker** via `chrome.downloads` (raw mode hands the original CDN URL to the same download manager).
 
 ---
@@ -115,7 +115,7 @@ The most-used settings — the nhentai API key and the file-name template — ar
 
 | Setting | Description |
 |---|---|
-| **Download format** | ZIP, CBZ, PDF, or Raw (numbered images in a titled folder) |
+| **Download format** | ZIP, CBZ, PDF, or Raw (numbered images in a titled folder, grouped under a configurable master folder) |
 | **Display checkboxes** | Show/hide selection checkboxes on listing pages |
 | **Dark mode** | Dark theme for the popup |
 | **Duplicate behaviour** | Rename = keep both (adds the gallery ID to the duplicate); Ignore = skip the duplicate, existing file untouched |

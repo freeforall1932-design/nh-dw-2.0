@@ -264,7 +264,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // Single-gallery jobs own their archive: pages at the root, file named
     // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
-        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined });
+        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined });
     currentDownloader.saveUrl = saveArtifactSmart;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -329,7 +329,8 @@ async function downloadAllDoujinshisAsync(
         maxConcurrentDownloads: options.maxConcurrentDownloads,
         archiveLayout: downloadSeparately ? "flat" : "nested",
         apiKey: options.apiKey || null,
-        useServerArchive: !!options.useServerArchive
+        useServerArchive: !!options.useServerArchive,
+        rawMasterFolder: typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined
     };
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;

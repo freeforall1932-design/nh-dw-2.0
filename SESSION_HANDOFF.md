@@ -19,7 +19,8 @@ bullet fixed in PR #30)
   load), PR #26 (**3.2.0** settings inside the popup), PR #27 (**3.2.1**
   title-named blob saves instead of UUID), PR #28 (**3.2.2** mojibake fix in
   UI strings: charset + ASCII-safe text), PR #29 (document the real-browser
-  CI removal). Current extension version: **3.2.2** (both manifests).
+  CI removal). Version on `main`: **3.2.2**; this session branch carries **3.3.0**
+  (raw master-folder option — see "Archive naming and structure") pending the PR merge.
 - CI state: the only workflow is `.github/workflows/extension-tests.yml`
   (offline suites: webpack build → mocha fixtures → smoke → window-less VM
   e2e; triggers on pushes touching the extension/release dirs or the
@@ -57,7 +58,7 @@ bullet fixed in PR #30)
 
 - **Single-gallery ZIP/CBZ/PDF**: named `<clean title>.zip|.cbz|.pdf` with pages at the archive **root** (`001.jpg`, `002.png`, …) — no `Title/Title` double folder. Implemented via `Downloader` setting `archiveLayout: "flat"`.
 - **Shared batch archive** (listing-page batches, multi-page batches, non-separate similar): unchanged shape — one folder per gallery inside the single archive (`archiveLayout: "nested"`, the default when unset).
-- **Raw mode**: pages now save as `Downloads/<Title>/001.jpg` (titled folder + zero-padded numbering) instead of flat `Title-001.jpg`.
+- **Raw mode**: pages now save as `Downloads/<Title>/001.jpg` (titled folder + zero-padded numbering) instead of flat `Title-001.jpg`. Since **3.3.0** the titled folder lives inside a master folder by default — `Downloads/NHDW/<Title>/001.jpg` — via the `rawMasterFolder` option (Options → "Folder for raw downloads"; empty string disables, slashes nest deeper, sanitized per segment).
 - **Last-mile filename hardening**: `sanitizeArtifactFilename` (exported from `Downloader.ts`) runs inside `#saveArtifact` for every artifact — strips control/reserved characters per path segment, leading dots, trailing dots/spaces, caps segment length, never returns empty. This addresses downloads landing under blob-UUID/number names when Chrome discards an invalid requested filename.
 
 ### PDF output format (replaced the folder mode)
@@ -149,7 +150,7 @@ Boundary table — **API key mode** (a key is stored) vs **open tab mode**
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build
-npm test              # 163 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
+npm test              # 166 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
 npm run test:smoke
 npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN), relay, content
 cp js/*.js ../NHDW_Release_v3.0.0/js/
@@ -165,7 +166,7 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 
 1. Single-gallery ZIP download: file named exactly the gallery title, pages at the ZIP root (no inner title folder). Repeat for CBZ.
 2. **PDF**: same title naming; open the produced PDF — every page present, correct order, correct orientation/aspect.
-3. Raw: pages land in `Downloads/<Title>/` as `001.jpg`… — no bare-number filenames anywhere.
+3. Raw: pages land in `Downloads/NHDW/<Title>/` as `001.jpg`… (3.3.0 master folder; emptying the Options "Folder for raw downloads" box restores plain `Downloads/<Title>/`) — no bare-number filenames anywhere.
 4. Popup layout: left column downloads the current gallery; right column *Show similar galleries* lists related titles with checkboxes; uncheck a few; *Download selected (n)* produces one titled file per selected gallery.
 5. Similar download with an untitled related gallery → file shows `(Non-titled) #id`-derived name, not a bare random number.
 6. Queue two or more jobs; serial order, queue count, Clear queue, Cancel current; pause/resume across popup close/reopen.

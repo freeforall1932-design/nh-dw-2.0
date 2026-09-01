@@ -618,11 +618,22 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
   `extension-tests` run on `main` **green** (~1m). `SESSION_HANDOFF.md`,
   this backlog, and the README now all describe the same setup: CI = offline
   suites only; real-browser verification = local `npm run test:browser`.
+- **[x] 25. Raw master folder (this branch, version 3.3.0):** raw-mode pages
+  now land in `Downloads/NHDW/<Title>/001.jpg…` — the per-gallery titled
+  folder grouped under one configurable master folder so hundreds of titles
+  stay tidy. New `rawMasterFolder` option (chrome.storage.sync; **empty
+  string disables**; slashes nest deeper; user input sanitized per path
+  segment by the existing `sanitizeArtifactFilename`). Relayed to the
+  offscreen document through the relayed settings bag (no chrome.storage
+  offscreen — invariant kept); worker contexts read storage directly when
+  the bag omits it. Covered by 3 new mocha cases (default/custom/empty/
+  sanitize) and e2e-worker phase 2 (on) / phase 3 (off).
 
 ### State as of this entry
 
-- Version **3.2.2** (source + release manifests, in sync).
-- Tests: **163 passing / 4 pending** mocha fixtures (was 149/1 in the
+- Version **3.3.0** on this branch (raw master folder); `main` is 3.2.2 until
+  the merge. Source + release manifests in sync.
+- Tests: **166 passing / 4 pending** mocha fixtures (was 149/1 in the
   2026-08-26 entry); all smoke + window-less VM e2e suites green; release
   `js/` in sync with source.
 - Workflows on `main`: only `extension-tests.yml`. The historical
