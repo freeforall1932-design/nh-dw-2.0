@@ -101,7 +101,8 @@ so no real nhentai account or Cloudflare clearance is needed.
   `@sparticuz/chromium` have extensions compiled out and will fail the first check).
 * Run with elevated privileges so the script can bind its local nhentai fixture to port 443
   (otherwise the content-script and real-fetch sections are skipped with a hint).
-* CI: a ready-to-use GitHub Actions workflow that runs the offline suites plus the browser
-  suite in real Google Chrome and real Brave on GitHub-hosted runners is included in
-  `SESSION_HANDOFF.md` (the sandbox token cannot write `.github/workflows` files — copy
-  the YAML to `.github/workflows/e2e-browser.yml` to enable it).
+* CI: GitHub Actions runs only the offline suites (`.github/workflows/extension-tests.yml`).
+  The real-browser suite is local-only — GitHub-hosted runners cannot launch the MV3
+  extension harness (Chrome `Runtime.enable` timeout / Brave SIGTRAP, on every run since it
+  was introduced; see `IMPROVEMENT_BACKLOG.md` item 10). Run `npm run test:browser` on a
+  machine with a full Chrome/Brave build instead.
