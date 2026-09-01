@@ -649,7 +649,12 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
 - **[ ] Real-browser verification batch:** item 10 (`npm run test:browser`
   with a full Chrome/Brave build → flip item 10 `[~]`→`[x]`), the item-21
   caveat (real blob save lands title-named), the 3.2.2 string spot-check,
-  and the keyed-route-wins check in the worker console.
+  the keyed-route-wins check in the worker console, and the 3.3.0 step
+  (raw master folder ON → `Downloads/NHDW/<Title>/001…`, OFF → `<Title>/`).
+- **[ ] 26. Optional: master folder for single-file archives** (ZIP/CBZ/PDF
+  save one file per gallery into the download-folder root today; same
+  prefixing trick would apply — user decision whether archives should also
+  group under `NHDW/`).
 - **[ ] 18/19 optional:** API key via `chrome.storage.sync` (user decision),
   `declarativeNetRequest` User-Agent (deferred — extra permission).
 - **[ ] Product backlog:** restart-safe resume; search/favorites/blacklist/

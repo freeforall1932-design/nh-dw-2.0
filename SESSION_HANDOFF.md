@@ -58,7 +58,7 @@ bullet fixed in PR #30)
 
 - **Single-gallery ZIP/CBZ/PDF**: named `<clean title>.zip|.cbz|.pdf` with pages at the archive **root** (`001.jpg`, `002.png`, …) — no `Title/Title` double folder. Implemented via `Downloader` setting `archiveLayout: "flat"`.
 - **Shared batch archive** (listing-page batches, multi-page batches, non-separate similar): unchanged shape — one folder per gallery inside the single archive (`archiveLayout: "nested"`, the default when unset).
-- **Raw mode**: pages now save as `Downloads/<Title>/001.jpg` (titled folder + zero-padded numbering) instead of flat `Title-001.jpg`. Since **3.3.0** the titled folder lives inside a master folder by default — `Downloads/NHDW/<Title>/001.jpg` — via the `rawMasterFolder` option (Options → "Folder for raw downloads"; empty string disables, slashes nest deeper, sanitized per segment).
+- **Raw mode**: pages now save as `Downloads/<Title>/001.jpg` (titled folder + zero-padded numbering) instead of flat `Title-001.jpg`. Since **3.3.0** the titled folder lives inside a master folder by default — `Downloads/NHDW/<Title>/001.jpg` — via the `rawMasterFolder` option (Options → "Folder for raw downloads"; empty string disables, slashes nest deeper, sanitized per segment). Scope notes from review: raw only — ZIP/CBZ/PDF archives still land directly in the download folder (one file per gallery doesn't pile up the same way; a matching archive master folder is tracked as backlog item 26); `replaceSpaces` intentionally does not rewrite the user-typed folder name.
 - **Last-mile filename hardening**: `sanitizeArtifactFilename` (exported from `Downloader.ts`) runs inside `#saveArtifact` for every artifact — strips control/reserved characters per path segment, leading dots, trailing dots/spaces, caps segment length, never returns empty. This addresses downloads landing under blob-UUID/number names when Chrome discards an invalid requested filename.
 
 ### PDF output format (replaced the folder mode)
@@ -198,6 +198,10 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 - [ ] Real-browser verification of the keyed route winning in the worker console
   (previous open question: is a same-tab/worker fetch of `/api/v2/galleries`
   challenged? With a key it uses the official contract).
+- [ ] **Optional: master folder for single-file archives (backlog 26)** — user
+  to decide whether ZIP/CBZ/PDF should also group under `NHDW/` (they save one
+  file per gallery straight into the download folder today, e.g.
+  `Downloads/<Title>.zip`).
 - [ ] Optional: sync the API key across the user's own devices
   (`chrome.storage.sync`) — deliberately local-only today; needs an explicit
   user decision (secret syncing).
