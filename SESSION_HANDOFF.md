@@ -51,6 +51,36 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
+### Folder-naming guard (3.3.1 — newest)
+
+User report: "the folder naming system doesn't work". Investigation method:
+the deprecated RAR archives in `old deprecated source code/` were unpacked
+(node-unrar-js; NHentaiDownloader 2.2.0, NHxD, nhentai_archivist) and the
+Chromium docs/bug tracker consulted. Root cause: **Chromium bug 579563** —
+`chrome.downloads.download()`'s `filename` is *ignored* whenever ANY other
+extension registers an `onDeterminingFilename` listener (download managers,
+antivirus, cloud-drive helpers), so raw pages fell into the Downloads root as
+`1.jpg`, `2.jpg`… instead of `NHDW/<Title>/001.jpg`. Full study:
+`FOLDER_NAMING_STUDY.md`.
+
+Fix (v3.3.1): `src/background/downloadNaming.ts` records every requested
+artifact name (worker `saveDownload` relay, worker fallback `#saveArtifact`,
+offscreen anchor saves via the new `recordDownloadName` message) BEFORE the
+download starts and re-asserts it through the extension's own
+`onDeterminingFilename` listener, registered synchronously at worker top
+level. Foreign-extension downloads are never touched; blob:/data: matches are
+always asserted; entries live in chrome.storage.session (worker-restart safe)
+and are pruned on completion (600-entry FIFO). `conflictAction: "uniquify"` is
+now uniform (re-downloads produce `Title (1).zip` instead of overwriting).
+Firefox: no-op (the event doesn't exist there and the bug doesn't either).
+Known limit: a download manager installed AFTER this extension that actively
+suggests names still wins per Chrome's "last installed" rule — documented in
+README troubleshooting.
+
+Tests: `test/download-naming.test.js` (+10 cases, 176 total). All suites
+green (fixtures, smoke, e2e). Both release folders re-synced from source
+(`diff -rq` clean); manifests bumped to 3.3.1 (source, release, Firefox).
+
 ### Popup split + similar-gallery selection (newest)
 
 - Single-gallery popup is two columns: **left** = current gallery (title, page count, ZIP/CBZ/PDF/raw picker, path input, Download); **right** = **Similar galleries** panel.
@@ -170,6 +200,7 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 
 1. Single-gallery ZIP download: file named exactly the gallery title, pages at the ZIP root (no inner title folder). Repeat for CBZ.
 2. **PDF**: same title naming; open the produced PDF — every page present, correct order, correct orientation/aspect.
+   2b. **3.3.1 naming guard (new)**: with a download-manager extension installed and enabled, raw-download a gallery — pages must still land in `Downloads/NHDW/<Title>/` as `001.jpg`… (guard re-asserts names; see `FOLDER_NAMING_STUDY.md`). If the manager was installed after NHDW and still wins, note it — Chrome's "last installed listener wins" rule is documented as a known limit, not a bug to chase.
 3. Raw: pages land in `Downloads/NHDW/<Title>/` as `001.jpg`… (3.3.0 master folder; emptying the Options "Folder for raw downloads" box restores plain `Downloads/<Title>/`) — no bare-number filenames anywhere.
 4. Popup layout: left column downloads the current gallery; right column *Show similar galleries* lists related titles with checkboxes; uncheck a few; *Download selected (n)* produces one titled file per selected gallery.
 5. Similar download with an untitled related gallery → file shows `(Non-titled) #id`-derived name, not a bare random number.

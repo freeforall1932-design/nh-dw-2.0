@@ -3,6 +3,7 @@ import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
+import { recordDownloadRequest, bindDownloadId } from "./downloadNaming";
 
 export default class Downloader
 {
@@ -420,10 +421,17 @@ export default class Downloader
             return;
         }
         await new Promise<void>((resolve, reject) => {
-            chrome.downloads.download({ url: url, filename: safeName }, function(downloadId) {
+            // Record the requested name for the onDeterminingFilename guard
+            // before starting (see downloadNaming.ts — another extension's
+            // listener makes Chrome ignore `filename` entirely), then bind
+            // the downloadId once known. uniquify keeps re-downloads of the
+            // same gallery from silently overwriting the first one.
+            recordDownloadRequest(url, safeName);
+            chrome.downloads.download({ url: url, filename: safeName, conflictAction: "uniquify" }, function(downloadId) {
                 if (downloadId === undefined) {
                     reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
                 } else {
+                    bindDownloadId(url, downloadId);
                     resolve();
                 }
             });

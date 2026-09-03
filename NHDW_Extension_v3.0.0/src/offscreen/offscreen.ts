@@ -169,6 +169,13 @@ function saveViaServiceWorker(url: string, filename: string): Promise<void> {
 // name. The anchor resolves the blob in the context that created it, so the
 // name is applied by the browser itself rather than by chrome.downloads.
 function saveBlobViaAnchor(blobUrl: string, filename: string): void {
+    // Tell the worker which name this blob carries BEFORE the click: the
+    // worker's onDeterminingFilename guard re-asserts it if any other
+    // extension's listener would rename the download (Chromium bug 579563).
+    // Fire-and-forget — the save must proceed even if the worker is gone.
+    try {
+        chrome.runtime.sendMessage({ from: "offscreen", action: "recordDownloadName", url: blobUrl, filename: filename });
+    } catch (_) { /* bookkeeping only */ }
     const anchor = document.createElement("a");
     anchor.href = blobUrl;
     anchor.download = filename;

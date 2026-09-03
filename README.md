@@ -59,11 +59,14 @@ Open a page on nhentai.net, then click the **NHentai Downloader** icon in your C
 | **"Service worker registration failed"** | Ensure you loaded the `NHDW_Release_v3.0.0` folder directly, not a subfolder. Check the Chrome console (F12) for specific errors. |
 | **Popup shows "not on nhentai.net"** | The active tab must be on `nhentai.net` (gallery, search, tag, artist, or category page) when you open the popup. |
 | **Download fails or empty ZIP** | Check your internet connection. Ad-blockers may block images; try disabling them for nhentai.net. |
+| **Files land in the Downloads root as `1.jpg`, `2.jpg`… or under random UUID names** | Another extension (download manager, antivirus, cloud-drive helper) that hooks Chrome's download naming makes Chrome ignore the requested file names/folders (Chromium bug 579563). v3.3.1 adds a filename guard that re-asserts the requested names for this extension's downloads. If a download manager installed *after* this extension still wins, disable it — Chrome gives the last-installed extension's listener the final say. |
 | **Cloudflare / 403 errors** | Complete the browser challenge on the site first, then retry. Logging in to nhentai sometimes helps. |
 | **Extension icon missing** | Click the "Puzzle Piece" icon in the Chrome toolbar and pin "NHentai Downloader". |
 
 ## 📝 Version History
-* **v3.0.0 (current):** Manifest V3 rewrite. Tab-first gallery metadata and tab-first image fetches (your open gallery tab is used for both), offscreen-document downloads that only ever use the APIs Chrome actually exposes there (object URLs in the document, `chrome.downloads` in the service worker), folder-of-images output option, CDN mirror fallback, and a real-browser e2e suite.
+* **v3.3.1 (current):** Folder-naming guard. When any other extension hooks Chrome's download naming (`onDeterminingFilename`, Chromium bug 579563), Chrome used to silently discard the requested names — raw pages fell into the Downloads root as `1.jpg`, `2.jpg`… and archives could land under blob UUIDs. The new guard (`src/background/downloadNaming.ts`) records every requested name before the download starts and re-asserts it via the extension's own `onDeterminingFilename` listener (session-mirror-backed, restart-safe; no-op on Firefox where the bug doesn't exist). Re-downloads now uniquify (`Title (1).zip`) instead of overwriting.
+* **v3.3.0:** Raw master folder (Options → *Folder for raw downloads*, default `NHDW/`), settings inside the popup (3.2.0–3.2.2 line), PDF output, API key mode with first-run gate.
+* **v3.0.0:** Manifest V3 rewrite. Tab-first gallery metadata and tab-first image fetches (your open gallery tab is used for both), offscreen-document downloads that only ever use the APIs Chrome actually exposes there (object URLs in the document, `chrome.downloads` in the service worker), folder-of-images output option, CDN mirror fallback, and a real-browser e2e suite.
 * **v3.0.0 (initial):** Complete rewrite for Manifest V3. Fixed service worker errors, added batch downloading, integrated JSZip locally, and removed deprecated APIs.
 * **v2.2.0:** *(Deprecated)* Original source code base.
 
