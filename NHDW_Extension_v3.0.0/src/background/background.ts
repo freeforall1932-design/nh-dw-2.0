@@ -12,7 +12,15 @@ import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFet
 import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 import * as cdnConfigService from "./cdnConfigService";
+import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId } from "./downloadNaming";
 var JSZip = require("jszip");
+
+// Folder-naming guard: re-asserts the filename/folder structure we request
+// for our own downloads when another extension's onDeterminingFilename
+// listener would suppress it (Chromium bug 579563 — the reason raw pages can
+// land as "1.jpg" in Downloads instead of "NHDW/<Title>/001.jpg"). MUST run
+// synchronously during worker evaluation (MV3 event registration rule).
+installDownloadFilenameGuard();
 
 chrome.tabs.onUpdated.addListener(function
     (_tabId, changeInfo, _tab) {
@@ -803,11 +811,20 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         // chrome.runtime is available there). The worker performs the actual
         // download; blob: URLs are extension-origin so this works. Raw mode
         // relays the original CDN URL instead.
+        //
+        // The requested name is recorded BEFORE download() starts: the
+        // onDeterminingFilename guard (installDownloadFilenameGuard) reads
+        // the map to re-assert the name/folder when another extension's
+        // listener would otherwise suppress it (Chromium bug 579563).
         try {
-            chrome.downloads.download({ url: request.url, filename: request.filename }, (downloadId: number) => {
+            if (typeof request.filename === "string" && request.filename !== "") {
+                recordDownloadRequest(String(request.url), request.filename);
+            }
+            chrome.downloads.download({ url: request.url, filename: request.filename, conflictAction: "uniquify" }, (downloadId: number) => {
                 if (downloadId === undefined) {
                     sendResponse({ result: false, error: String(chrome.runtime.lastError || "Unable to start download") });
                 } else {
+                    bindDownloadId(String(request.url), downloadId);
                     sendResponse({ result: downloadId });
                 }
             });
@@ -815,6 +832,20 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
             sendResponse({ result: false, error: String(error) });
         }
         return true;
+    }
+    if (request.action === "recordDownloadName") {
+        // Fire-and-forget bookkeeping from the offscreen document: blob saves
+        // that go through the anchor mechanism never reach chrome.downloads
+        // here, but the onDeterminingFilename guard still sees them (the
+        // event fires for every download in the profile), so the mapping is
+        // recorded to keep their title-based name stable too.
+        try {
+            if (typeof request.filename === "string" && request.filename !== "") {
+                recordDownloadRequest(String(request.url), request.filename);
+            }
+        } catch (_) { /* bookkeeping must never break the save */ }
+        sendResponse({ result: true });
+        return false; // answered synchronously
     }
     if (request.action === "fetchInTab") {
         // The offscreen document cannot call chrome.scripting; the worker
