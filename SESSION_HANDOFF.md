@@ -1,5 +1,9 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-03 — worklist extended with backlog item 27
+(Firefox port; docs-only change). Feasibility audit:
+`NHDW_Firefox_v1.0.0/PORTING_AUDIT.md`.
+
 **Updated:** 2026-09-01 (after the CI cleanup landed: the failing
 real-browser GitHub Actions jobs were removed via the web UI, replaced by
 `.github/workflows/extension-tests.yml` — first run **green** (~1m, 163
@@ -174,8 +178,21 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 8. Keep the source gallery tab backgrounded on another site; confirm completion.
 9. CDN hardening: `/api/v2/cdn` fetched once per session (worker console); `chrome.storage.session.get("cdnConfig")` shows the merged list; grant-notice flow when a host lacks permission.
 
-## Next backlog (worklist — statuses as of 2026-09-01)
+## Next backlog (worklist — statuses as of 2026-09-03)
 
+- [ ] **27. Port the extension to Firefox (added 2026-09-03; working folder
+  `NHDW_Firefox_v1.0.0/`).** Feasibility audit done — port is possible.
+  Evidence table and required-change list:
+  `NHDW_Firefox_v1.0.0/PORTING_AUDIT.md`. Work order: (1) Firefox manifest
+  (`background.scripts` event page, drop `offscreen` permission, add
+  `browser_specific_settings.gecko`, min Firefox 128) → (2) close
+  fallback-path parity gaps (pause/resume/clearQueue exist only on the
+  offscreen branch, `background.ts:976-982`; the non-offscreen fallback at
+  `background.ts:~1052` never answers them) → (3) repoint test path
+  assumptions + extend `.github/workflows/extension-tests.yml` paths →
+  (4) `web-ext lint` + real-Firefox load → (5) real-browser pass
+  (blob download naming, queue controls, batch, PDF, raw, CDN grant flow).
+  Full task definition: IMPROVEMENT_BACKLOG.md session log 2026-09-03.
 - [x] ~~Server-side ZIP/CBZ endpoint with API key; fall back on 429/503~~ — DONE
   (PR #22, opt-in `useServerArchive` toggle with page-by-page fallback).
 - [ ] **Server-archive availability check (pending — user side, no browser

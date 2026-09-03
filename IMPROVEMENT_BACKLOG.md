@@ -659,3 +659,99 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
   `declarativeNetRequest` User-Agent (deferred — extra permission).
 - **[ ] Product backlog:** restart-safe resume; search/favorites/blacklist/
   comments UI; PDF cover/bookmarks niceties.
+
+---
+
+## Session log — 2026-09-03: Firefox port scoped (item 27 added)
+
+### New backlog item
+
+- **[ ] 27. Port the extension to Firefox.** Working folder:
+  `NHDW_Firefox_v1.0.0/` (working copy of `NHDW_Extension_v3.0.0`, created
+  2026-09-03). Verdict: **feasible with targeted changes**; the code already
+  contains the main architectural fallback needed (see facts below).
+  Evidence + required-change list: `NHDW_Firefox_v1.0.0/PORTING_AUDIT.md`.
+
+### Facts found by the audit (each with evidence)
+
+1. **`chrome.offscreen` does not exist in Firefox** (Chromium-only API).
+   The code gates on it: `USE_OFFSCREEN` (background.ts:627) — in Firefox
+   the existing full worker-fallback path runs instead
+   (`background.ts:~1052`, "Fallback path for browsers without
+   chrome.offscreen": downloadDoujinshi / downloadAllDoujinshis /
+   downloadAllPages / goBack / updateProgress / isDownloadFinished).
+   Therefore no offscreen re-architecture is required for the port;
+   `js/offscreen.js` + `offscreen.html` simply stay unused in the Firefox
+   package.
+2. **Firefox MV3 has no `background.service_worker`** (MDN manifest
+   background docs; bugzilla 1573659). Firefox runs `background.scripts` as
+   an event page (document context), and from Firefox 121 it starts that
+   page even when the manifest also carries `service_worker` (bug
+   1860304). Required manifest change: `"background": {"scripts":
+   ["js/background.js"]}`. The bundle is context-safe: grep shows no
+   `window.`/`document.` references in background code (deliberate — the
+   MV3 service-worker rewrite removed them), so the same bundle runs in a
+   document context.
+3. **Artifact delivery already feature-detects.** Downloader.ts:388-404:
+   uses `URL.createObjectURL` when present, else base64 data URL. In the
+   Firefox event-page (document) context `createObjectURL` exists, so the
+   blob-object-URL path is used. Firefox's `downloads.download` accepts
+   `blob:` URLs created in an extension background context (bugzilla
+   1696174 workaround; MDN "Work with files" documents
+   `URL.createObjectURL` for downloads). Data-URL download support is the
+   historical weak spot (bug 1622986) — the base64 path should not be the
+   primary FF delivery; runtime-verify blob naming in a real Firefox.
+4. **Parity gaps in the non-offscreen fallback:** `pause`/`resume`/
+   `clearQueue` are answered only on the offscreen branch
+   (background.ts:976-982, relayed to offscreen.ts:653-666). The fallback
+   branch has no handlers for them, so in Firefox those popup queue
+   controls would be silent no-ops. Also `queued` + `position` responses
+   exist only in the relayed (`startRelayedJob`) path; the fallback answers
+   `{ result: "started" }`. Port work must add these to the fallback path
+   (or route through a Firefox helper page).
+5. **`scripting.executeScript` `world: "MAIN"` is Firefox 128+** (bugzilla
+   1736575, landed FF128; Mozilla blog 2024-07-10). Code injects ISOLATED
+   first and MAIN as fallback (tabImageFetch.ts:206-216); injection
+   failures fall through to the extension-origin fetch. Target Firefox 128+
+   (`strict_min_version: "128.0"`).
+6. **`optional_host_permissions` is Firefox 128+** (bugzilla 1766026; MDN
+   optional_permissions note). Manifest already uses the key; the popup
+   grant flow uses the permissions API. Also Firefox ≤126 did not grant
+   MV3 `host_permissions` at install and ≤126 host-permission semantics
+   differed (Extension Workshop migration guide) — another reason for the
+   Firefox 128 minimum.
+7. **`storage.session` is Firefox 115+** (bugzilla 1823713). Code uses it
+   for the CDN-config cache and the job marker and already degrades when
+   the area is unavailable — no change needed.
+8. **API style is portable as-is.** grep found no promise-only
+   `chrome.*` calls (no `await chrome.x` / `chrome.x(...).then`): every
+   call is callback-style, fire-and-forget, or wrapped in a dual
+   callback/promise adapter. Firefox's `chrome` namespace with callbacks is
+   therefore sufficient; `webextension-polyfill` is not required for this
+   codebase.
+9. **Permissions:** the `offscreen` permission name is unknown to Firefox
+   and must be removed from the Firefox manifest. Remaining set
+   (downloads/tabs/storage/alarms/scripting) is Firefox-valid.
+10. **Tests/CI:** offline suites are browser-free (VM chrome stubs) so they
+    run unchanged; `test/manifest.test.js` reads `../../NHDW_Release_v3.0.0`
+    (repo-root relative) and must be repointed for the new folder.
+    `.github/workflows/extension-tests.yml` triggers do not include
+    `NHDW_Firefox_v1.0.0/**` — extend when port code lands.
+    `scripts/e2e-browser.js` is Chrome-CDP-specific; a real-Firefox check
+    needs a manual pass or a Marionette/BiDi harness (out of scope for this
+    item's first step).
+
+### Work order (as recorded in SESSION_HANDOFF.md worklist)
+
+1. Firefox manifest (`background.scripts`; drop `offscreen`; add gecko id +
+   strict_min_version 128.0; draft at
+   `NHDW_Firefox_v1.0.0/manifest.firefox.json`).
+2. Close fallback-path parity gaps (pause/resume/clearQueue + queue
+   position answers).
+3. Repoint test paths; extend CI trigger paths.
+4. `web-ext lint`; temporary load via `about:debugging`.
+5. Real-browser pass: blob download filename, queue controls, batch +
+   similar galleries, PDF, raw + master folder, CDN optional-host grant
+   flow, tab-first fetch under Firefox.
+6. AMO distribution decision separately (store policy is outside this
+   repo audit).
