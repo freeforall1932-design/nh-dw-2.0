@@ -1,5 +1,19 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-04 — **3.5.0 follow-up complete and reviewed: verify-before-skip
++ merged date/part naming.** The user's settled decisions (verify-then-redownload
+toggle for separate mode default ON; merged mode warns only and never skips;
+`_DDMMYYYY` + `_partN` merged naming with verify deciding name reuse vs part
+growth) are implemented end-to-end, reviewed, and shipped from this session
+branch as a merge-commit PR. Final verification before the merge: webpack build
+clean, `tsc` test config clean, `npm test` **233 passing / 4 pending**, smoke
+**7 PASS**, `npm run test:e2e` **73 PASS / 0 FAIL**, and the push-triggered
+`extension-tests` GitHub Action passed the same offline suites. Commits on
+`arena/01a06b6f-nh-dw-2-0`: `57c5a87` (base history feature), `8fde409` (review
+pass), `7d429c5` (this follow-up). Main was at `7aa438e` (3.4.1, PR #33) when
+the branch started; the docs below intentionally remove none of the earlier
+decisions.
+
 **Updated:** 2026-09-04 — **3.5.0: persistent download history landed.** The
 extension now remembers every successfully downloaded gallery (keyed by gallery
 ID in `chrome.storage.local`) and skips it when the same listing is re-run, so
