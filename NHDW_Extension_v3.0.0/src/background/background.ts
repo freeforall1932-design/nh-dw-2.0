@@ -12,15 +12,68 @@ import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFet
 import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 import * as cdnConfigService from "./cdnConfigService";
-import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId } from "./downloadNaming";
+import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId, discardDownloadRequest } from "./downloadNaming";
+import { normalizeFormat, DownloadFormat } from "../utils/downloadFormats";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
 // for our own downloads when another extension's onDeterminingFilename
 // listener would suppress it (Chromium bug 579563 — the reason raw pages can
-// land as "1.jpg" in Downloads instead of "NHDW/<Title>/001.jpg"). MUST run
-// synchronously during worker evaluation (MV3 event registration rule).
+// land as "1.jpg" in Downloads instead of "NHDW/<Title>/001.jpg").
+//
+// This installs the bookkeeping half only. The global onDeterminingFilename
+// listener is attached on demand, while our own downloads are in flight, and
+// detached the moment they drain — see the lifetime notes in
+// downloadNaming.ts. An idle worker must NOT be a participant in the
+// browser-wide filename chain, or Chrome can blame this extension for
+// unrelated downloads started by other extensions.
 installDownloadFilenameGuard();
+
+// ---- toolbar UI mode: side panel or popup -------------------------------
+// The user's other extension uses a side panel and the hovering popup cannot
+// be repositioned, so the panel is now the shipping default with the popup
+// kept as a fallback. Both render the SAME document (index.html), so there is
+// no duplicated markup: only what the toolbar click opens changes.
+//
+// chrome.sidePanel is Chrome 114+. Everything below is feature-detected so
+// older Chromium builds (and Firefox, where the API does not exist) silently
+// keep the popup.
+const UI_MODE_DEFAULT = "sidepanel";
+
+function applyUiMode(mode: string) {
+    const useSidePanel = mode === "sidepanel";
+    const sidePanelApi: any = (chrome as any).sidePanel;
+    if (!sidePanelApi || typeof sidePanelApi.setPanelBehavior !== "function") {
+        // No side panel support: make sure the popup is the toolbar action.
+        try {
+            chrome.action.setPopup({ popup: "index.html" });
+        } catch (_) { /* chrome.action may be missing in tests */ }
+        return;
+    }
+    try {
+        const behavior = sidePanelApi.setPanelBehavior({ openPanelOnActionClick: useSidePanel });
+        if (behavior && typeof behavior.catch === "function") {
+            behavior.catch(() => { /* unsupported build: popup stays */ });
+        }
+    } catch (_) { /* unsupported build: popup stays */ }
+    try {
+        // An action popup always wins over openPanelOnActionClick, so it has
+        // to be cleared for the panel to open and restored for popup mode.
+        chrome.action.setPopup({ popup: useSidePanel ? "" : "index.html" });
+    } catch (_) { /* chrome.action may be missing in tests */ }
+}
+
+try {
+    chrome.storage.sync.get({ uiMode: UI_MODE_DEFAULT }, (elems: any) => {
+        applyUiMode(elems && elems.uiMode ? String(elems.uiMode) : UI_MODE_DEFAULT);
+    });
+    chrome.storage.onChanged.addListener((changes: any, area: string) => {
+        if (area === "sync" && changes && changes.uiMode) {
+            applyUiMode(String(changes.uiMode.newValue || UI_MODE_DEFAULT));
+        }
+    });
+} catch (_) { /* storage unavailable in some test harnesses */ }
+
 
 chrome.tabs.onUpdated.addListener(function
     (_tabId, changeInfo, _tab) {
@@ -237,13 +290,17 @@ module background
         return currentDownloader == null || currentDownloader.isDone();
     }
 
-    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string }) {
+    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }) {
         const signal = beginJob();
         // Single-gallery jobs always own their archive: pages go to the root
         // and the file is named after the gallery (no Title/Title double name).
         const settings: any = { archiveLayout: "flat" };
         if (options && options.useZip) {
             settings.useZip = options.useZip;
+        }
+        // Optional master folder (the wrap is a user choice, never forced).
+        if (options && typeof options.archiveMasterFolder === "string") {
+            settings.archiveMasterFolder = options.archiveMasterFolder;
         }
         // Attach the API key fields up front (worker context has storage):
         // the Downloader itself must never touch chrome.storage so the same
@@ -268,6 +325,12 @@ module background
                 // The raw master folder is a sync (non-secret) setting; read it
                 // here so the Downloader never touches chrome.storage itself
                 // (same class runs inside the offscreen document).
+                if (options && typeof options.rawMasterFolder === "string") {
+                    // The caller already resolved the folder for this job.
+                    settings.rawMasterFolder = options.rawMasterFolder;
+                    startWithSettings();
+                    return;
+                }
                 chrome.storage.sync.get({ rawMasterFolder: "NHDW" }, (elems: any) => {
                     settings.rawMasterFolder = elems && elems.rawMasterFolder !== undefined ? String(elems.rawMasterFolder) : "NHDW";
                     startWithSettings();
@@ -278,7 +341,7 @@ module background
         });
     }
 
-    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
+    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }) {
         beginJob();
         let zip = new JSZip();
         downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId, options)
@@ -300,7 +363,7 @@ module background
         downloadAtEnd: boolean,
         galleryMetadata: Record<string, any> = {},
         sourceTabId?: number | null,
-        options?: { useZip?: string; downloadSeparately?: boolean }
+        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }
     ) {
         let downloadName: string = "";
         let duplicateBehaviour: string = "";
@@ -333,11 +396,23 @@ module background
         if (options && options.downloadSeparately !== undefined) {
             downloadSeparately = !!options.downloadSeparately;
         }
+        // List mode carries its own filename template and its own (optional)
+        // master folder. Without the template override the batch fell back to
+        // the listing page's URL for the produced file name.
+        if (options && typeof options.downloadName === "string") {
+            downloadName = options.downloadName;
+        }
+        if (options && typeof options.rawMasterFolder === "string") {
+            rawMasterFolder = options.rawMasterFolder;
+        }
         // Each gallery in a separate archive owns that archive: flat entries,
         // file named after the gallery. One shared archive keeps a folder per
         // gallery inside so titles never collide.
         const gallerySettings: any = { archiveLayout: downloadSeparately ? "flat" : "nested" };
         gallerySettings.rawMasterFolder = rawMasterFolder;
+        if (options && typeof options.archiveMasterFolder === "string") {
+            gallerySettings.archiveMasterFolder = options.archiveMasterFolder;
+        }
         if (options && options.useZip) {
             gallerySettings.useZip = options.useZip;
             gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
@@ -451,7 +526,10 @@ module background
                 names.push(title);
                 let zipName = null;
                 if (downloadSeparately) {
-                    zipName = title;
+                    // Separate files are named from the (list-mode) template
+                    // and the gallery's OWN metadata, cleaned exactly like a
+                    // single-title download - never from the page URL.
+                    zipName = utils.cleanName(title, replaceSpaces, key);
                 } else if (downloadAtEnd && i == length - 1) {
                     zipName = finalName;
                 }
@@ -504,7 +582,7 @@ module background
         }
     }
 
-    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean }) {
+    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }) {
         beginJob();
         downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId, options)
             .then(() => clearJobMarker())
@@ -524,7 +602,7 @@ module background
         progressCallback: Function,
         url: string,
         sourceTabId?: number | null,
-        options?: { useZip?: string; downloadSeparately?: boolean }
+        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }
     ) {
         let downloadName: string = "";
         await new Promise((resolve, _reject) => {
@@ -615,11 +693,56 @@ module background
 // Popup format choices arrive as a per-job override. "folder" is the retired
 // image-folder format: map it to its replacement (PDF) so old callers keep
 // working; unknown values return undefined and the stored default applies.
-function normalizeFormatOverride(value: any): string | undefined {
-    const normalized = value === "folder" ? "pdf" : value;
-    return (normalized === "zip" || normalized === "cbz" || normalized === "pdf" || normalized === "raw")
-        ? normalized
-        : undefined;
+// Downloads can be triggered from the popup / side panel (which knows the
+// gallery tab id) or from the in-page card controls (a content script, whose
+// own tab is the source tab). Resolving both here keeps the source-tab
+// requirement - metadata and images are read through the user's tab - working
+// for every entry point.
+// Per-job overrides shared by the offscreen relay and the in-worker fallback
+// path, so both honour the list-mode format, output mode, filename template
+// and optional master folder identically.
+function jobOverridesFromRequest(request: any): {
+    useZip?: string;
+    downloadSeparately?: boolean;
+    downloadName?: string;
+    rawMasterFolder?: string;
+    archiveMasterFolder?: string;
+} {
+    const overrides: any = { useZip: normalizeFormatOverride(request.formatOverride) };
+    if (request.separate !== undefined) {
+        overrides.downloadSeparately = !!request.separate;
+    }
+    if (typeof request.nameTemplate === "string") {
+        overrides.downloadName = request.nameTemplate;
+    }
+    if (typeof request.masterFolder === "string") {
+        overrides.rawMasterFolder = request.masterFolder;
+        overrides.archiveMasterFolder = request.masterFolder;
+    }
+    return overrides;
+}
+
+function resolveTabId(request: any, sender: any): number | undefined {
+    if (typeof request.tabId === "number") {
+        return request.tabId;
+    }
+    if (sender && sender.tab && typeof sender.tab.id === "number") {
+        return sender.tab.id;
+    }
+    return undefined;
+}
+
+function normalizeFormatOverride(value: any): DownloadFormat | undefined {
+    // Shared registry (utils/downloadFormats): one definition of the four
+    // formats and of the retired "folder" -> "pdf" mapping, so list mode and
+    // single-title mode can never disagree about what a format means.
+    if (value === undefined || value === null || value === "") {
+        return undefined;
+    }
+    const normalized = normalizeFormat(value, "zip");
+    // An unrecognized value must stay undefined (fall back to the stored
+    // default) rather than silently becoming zip.
+    return (value === "folder" || normalized === value) ? normalized : undefined;
 }
 
 // NOTE: MV3 service workers run in a worker global scope without `window`.
@@ -822,6 +945,9 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
             }
             chrome.downloads.download({ url: request.url, filename: request.filename, conflictAction: "uniquify" }, (downloadId: number) => {
                 if (downloadId === undefined) {
+                    // Release the recorded name: nothing will complete for it
+                    // and a stuck entry would pin the global listener.
+                    discardDownloadRequest(String(request.url));
                     sendResponse({ result: false, error: String(chrome.runtime.lastError || "Unable to start download") });
                 } else {
                     bindDownloadId(String(request.url), downloadId);
@@ -953,19 +1079,33 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         // / goBack handlers clear it when the job is over.
         const startRelayedJob = (relayedMessage: any) => {
             readDownloadOptions((options) => {
+                // One shared format registry: list mode, single-title mode and
+                // the in-page card controls all send the same values, and the
+                // retired "folder" format still maps to PDF.
                 const formatOverride = relayedMessage.formatOverride;
-                // "folder" is the retired image-folder format; its replacement
-                // is PDF, so old callers map across instead of failing.
-                const normalizedFormat = formatOverride === "folder" ? "pdf" : formatOverride;
-                if (normalizedFormat === "zip" || normalizedFormat === "cbz" || normalizedFormat === "pdf" || normalizedFormat === "raw") {
+                if (formatOverride !== undefined && formatOverride !== null && formatOverride !== "") {
                     // Popup format choices affect this job only; do not mutate
                     // the user's persisted default in chrome.storage.sync.
-                    options.useZip = normalizedFormat;
+                    options.useZip = normalizeFormat(formatOverride, options.useZip);
                 }
-                if (relayedMessage.separate) {
-                    // The popup's similar-gallery selection asks for one
-                    // archive per gallery, overriding the stored default.
-                    options.downloadSeparately = true;
+                if (relayedMessage.separate !== undefined) {
+                    // Explicit output mode from the caller (list mode defaults
+                    // to separate files; the similar-gallery panel always asks
+                    // for one archive per gallery). Both true AND false must
+                    // win over the stored default, otherwise "batch" could
+                    // never be requested from a UI whose default is separate.
+                    options.downloadSeparately = !!relayedMessage.separate;
+                }
+                if (typeof relayedMessage.nameTemplate === "string") {
+                    // List mode has its own filename template. Without this the
+                    // batch fell back to the listing page's URL for the name.
+                    options.downloadName = relayedMessage.nameTemplate;
+                }
+                if (typeof relayedMessage.masterFolder === "string") {
+                    // Optional (not forced) master folder, applied to both raw
+                    // folders and finished archives.
+                    options.rawMasterFolder = relayedMessage.masterFolder;
+                    options.archiveMasterFolder = relayedMessage.masterFolder;
                 }
                 background.setJobMarker(true);
                 // Resolve the nhentai image CDN config (GET /api/v2/cdn, cached
@@ -995,11 +1135,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             return true;
         };
         if (request.action === "downloadDoujinshi") {
-            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: request.tabId, formatOverride: request.formatOverride });
+            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: request.tabId, formatOverride: request.formatOverride, separate: request.separate });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: request.tabId, formatOverride: request.formatOverride, separate: request.separate });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
@@ -1066,8 +1206,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     });
                 },
                 request.name,
-                request.tabId,
-                { useZip: normalizeFormatOverride(request.formatOverride) }
+                resolveTabId(request, _sender),
+                jobOverridesFromRequest(request)
             );
             sendResponse({ result: "started" });
         });
@@ -1092,8 +1232,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     });
                 },
                 request.galleryMetadata || {},
-                request.tabId,
-                { useZip: normalizeFormatOverride(request.formatOverride), downloadSeparately: request.separate === undefined ? undefined : !!request.separate }
+                resolveTabId(request, _sender),
+                jobOverridesFromRequest(request)
             );
             sendResponse({ result: "started" });
         });
@@ -1119,8 +1259,8 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     });
                 },
                 request.url,
-                request.tabId,
-                { useZip: normalizeFormatOverride(request.formatOverride), downloadSeparately: request.separate === undefined ? undefined : !!request.separate }
+                resolveTabId(request, _sender),
+                jobOverridesFromRequest(request)
             );
             sendResponse({ result: "started" });
         });

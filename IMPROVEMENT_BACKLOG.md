@@ -755,3 +755,193 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
    flow, tab-first fetch under Firefox.
 6. AMO distribution decision separately (store policy is outside this
    repo audit).
+
+---
+
+## Session log — 2026-09-04: list-mode parity, side panel, in-page card controls (3.4.0)
+
+### The report this session answers
+
+Verbatim from the user: single-title pages "can do 4 zip cbz pdf and raw", but
+"when I go to homepage or search or any artist or genre it's all about the list
+with a default of zip and the naming system is the website url itself"; the
+folder naming "work just like the other but I want that to be optional"; "I
+don't like the extension pop up is hovering with no flexibility to be hovered
+elsewhere because my other repo we have side panel instead of pop up"; and
+"can you make a feature to have download and or select button around the post
+when I'm in list mode". The stated must-haves were the format choice and the
+separate-file option; everything else was explicitly optional.
+
+### Root causes found
+
+1. **List mode was ZIP-only** because the listing panel never rendered a format
+   picker; the only format input was the stored `useZip`, and the popup's own
+   `formatOverride` was sent from the single-title branch only.
+2. **List files were named after the page URL** because list mode could only do
+   the *merged* output, whose archive name is `finalName` — and `finalName` was
+   derived in `Popup.updatePreviewAll` from `self.url`. The per-gallery template
+   path already existed but was reachable only through the
+   `downloadSeparately` option, which no list UI exposed.
+3. **`separate` was a one-way switch.** `background.ts` had
+   `if (relayedMessage.separate) options.downloadSeparately = true;` — an
+   explicit `false` was indistinguishable from "not specified", so a UI whose
+   default is separate could never ask for a merge.
+4. **Separate-mode names skipped `cleanName`.** `zipName = title` (raw title)
+   in both `background.ts` and `offscreen.ts`, while single-title downloads used
+   the cleaned path. `replaceSpaces` therefore silently did not apply to batch
+   output.
+5. **The folder wrap was raw-only and forced.** `rawMasterFolder` defaulted to
+   `NHDW` with no per-job switch, and archives had no equivalent at all.
+
+### Landed
+
+| Area | Change |
+|---|---|
+| Shared registry | New `src/utils/downloadFormats.ts`: formats, labels, `normalizeFormat` (incl. the retired `folder -> pdf` map), extensions, output mode, `effectiveOutputMode`, `outputModeToSeparate`, `shouldWarnPdfMerge`, list-template inheritance sentinel, list-mode storage defaults. Imported by the panel, the content script, the options page, the worker and the offscreen document. |
+| List settings | New `src/utils/listSettings.ts` (`buildListSettings` is a pure, unit-tested mapper). Keys: `listFormat`, `listOutputMode`, `listMasterFolder`, `listDownloadName`. |
+| Panel | `Popup.updatePreviewAll` now renders `message.listDownloadOptions()`: format picker, output picker, optional master-folder checkbox, merged-archive name row (only in batch mode) and a live resolved-filename preview. Both entry points (**Download selected** and **Download all (N pages)**) share one `buildJobOptions()` so neither can skip the merge guard. |
+| Pipeline | Per-job relay options extended with `nameTemplate` -> `options.downloadName`, `masterFolder` -> `options.rawMasterFolder` + `options.archiveMasterFolder`, and an explicit `separate` (true AND false). Same overrides applied on the non-offscreen fallback path via `jobOverridesFromRequest()`. |
+| Downloader | New `archiveMasterFolder` setting applied in `#downloadBlob` (the single funnel for server archives, zip/cbz and pdf) through `#archiveArtifactName()`; `normalizeArchiveMasterFolder` defaults to `""` so single-title behaviour is unchanged. |
+| PDF guard | `src/preview/pdfMergeWarning.ts` modal, safe path focused, dismissal scoped to `pdf + batch + >1 title` and only recorded when the user proceeds. Stacks after the existing page-count confirmation. |
+| Side panel | `sidePanel` permission + `side_panel.default_path`. `uiMode` setting, applied by the worker with `setPanelBehavior` + `action.setPopup`. Same document for both. `preview.ts` re-bootstraps on tab change and drops the fixed popup width in panel mode. |
+| In-page controls | `src/content/listControls.ts` + `css/content.css`. Per-card Download/Select, floating bar, idempotent MutationObserver injection, shared `allIds` selection, `sender.tab.id` fallback in the worker, `inPageControls` toggle, legacy checkbox hidden via `.nhdw-legacy-check`. |
+
+### Deliberate non-goals this session
+
+- **P3 queue UI with thumbnails** — specified in the worklist, not implemented.
+  The blocker is structural, not cosmetic: the queue currently lives entirely
+  inside the offscreen document (`queuedJobs`) and is only surfaced as a count.
+  A per-item UI needs the worker to mirror the queue into
+  `chrome.storage.session` (worker-restart safe) with per-item state, and the
+  offscreen document to report `queued -> fetching metadata -> downloading
+  (x/y) -> packaging -> done/failed` transitions instead of one global
+  progress number.
+- **Raw remains labelled "(testing)"** until a real browser confirms the folder
+  creation end to end.
+- **Firefox port** untouched; `chrome.sidePanel` has no Firefox equivalent
+  (`sidebar_action` is the analogue) and the new content script must be added
+  to that manifest.
+
+### Backlog items closed
+
+- **26. Master folder for single-file archives** — done (`archiveMasterFolder`,
+  driven by the list-mode checkbox; off by default for single titles).
+
+### Follow-up — 2026-09-04: workflow trigger paths (manual commit owed)
+
+The 3.4.0 push initially carried a widened `on.push.paths` for
+`.github/workflows/extension-tests.yml`. The remote rejected it: the GitHub App
+an agent session pushes as has no `workflows` permission, and the rejection
+takes the entire push with it, so the hunk was reverted and PR #33 went out
+without it.
+
+Workflow files in this repo are, and always have been, a **manual commit**. The
+complete intended file now lives at
+`NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml`, with the
+rationale, the one-hunk diff and the apply/verify steps in
+`NHDW_Extension_v3.0.0/ci/README.md` and a pending-table row in
+`SESSION_HANDOFF.md`.
+
+Why it is worth applying: `on.push.paths` covers only `NHDW_Release_v3.0.0/**`
+and the extension's `scripts/`, `test/` and `src/` subtrees, so a commit
+touching only `manifest.json`, `index.html`, `options.html`, `css/**`,
+`webpack.config.js` or the tsconfigs never triggers CI — and `manifest.json`
+plus `css/**` are exactly where the 3.4.0 side-panel registration and card
+styling live. `test/manifest.test.js` would never run against a manifest-only
+regression.
+
+## Session log — 2026-09-04: onDeterminingFilename cross-extension audit (3.4.1)
+
+**Symptom (user, multi-extension Chrome profile):**
+
+```
+This extension failed to name the download "Kodomo_Idol.pdf"
+because another extension determined a different filename ""
+```
+
+The extension Chrome blamed was a downloader for a different site. Question
+put to this audit: does *this* extension leak filename authority outside its
+own domain?
+
+**Verdict: LEAK CONFIRMED, fixed.** Not a hypothetical — the 3.3.1 guard
+registered `chrome.downloads.onDeterminingFilename` during service-worker
+module evaluation and never removed it.
+
+Why that is a defect even though the listener never renamed a foreign file:
+the event is a profile-wide naming decision. Registering it makes the
+extension a participant for every download in the browser. `host_permissions`
+and content-script `matches` do not scope it, and returning early for a
+foreign item does not withdraw participation — which is precisely what lets
+Chrome name an extension in the error above.
+
+**Every registration and removal site (before → after):**
+
+| Location | Before | After |
+| --- | --- | --- |
+| `src/background/background.ts:30` `installDownloadFilenameGuard()` | added the naming listener at module eval, permanently | installs only the `onChanged` bookkeeping listener; re-attaches naming **only** if the session mirror shows work in flight |
+| `src/background/downloadNaming.ts` `attachListener()` | did not exist | called from `recordDownloadRequest` when pending goes 0 → 1 |
+| `src/background/downloadNaming.ts` `detachListener()` | did not exist | called from `syncListener()` whenever pending reaches 0 |
+
+**Every `chrome.downloads.download` / filename-construction path reviewed:**
+
+| Path | Filename built by | Cleanup added |
+| --- | --- | --- |
+| `Downloader.ts:439` raw CDN pages + blob artifacts | `sanitizeArtifactFilename` + `#archiveArtifactName` (master folder) | `discardDownloadRequest(url)` when `downloadId === undefined` |
+| `background.ts:940` `saveDownload` relay from the offscreen document | name supplied by the offscreen packer | `discardDownloadRequest(url)` when `downloadId === undefined` |
+| `background.ts` `recordDownloadName` relay (offscreen anchor saves) | offscreen packer; never reaches `downloads.download` | covered by TTL + FIFO |
+
+**Drain paths now covered:** suggestion consumed, `onChanged` → `complete`,
+`onChanged` → `interrupted`/cancelled, failed download creation, 30-minute
+per-entry TTL, 600-entry FIFO eviction, and `resetTrackedNamesForTests`.
+
+**Invariants enforced:** `suggest()` is called exactly once per event; a
+foreign or unknown item always gets a bare `suggest()`; `""` is never
+suggested and never stored (empty names are rejected at record time).
+
+**Product behaviour preserved unchanged:** master folder, per-title raw
+folders, single-title and list-mode templates, archive names, blob/data URL
+handling, `conflictAction: "uniquify"`, and the offscreen relay.
+
+**Tests:** `test/download-naming.test.js` gained a `global listener lifetime`
+block asserting listener presence/absence directly rather than only checking
+that foreign names survive — a permanently registered listener passes the
+latter while still being the bug. `scripts/smoke-mv3.js` asserts the shipped
+bundle registers zero naming listeners at load, for every worker variant.
+
+**Session mirror** moved to `{ v: 2, pending: {url: {filename, at}}, idToUrl,
+order }`, still reading the legacy `{ byId, byUrl }` shape.
+
+**Not cleared:** `NHDW_Firefox_v1.0.0` still ships the 3.3.1 guard in its built
+`js/background.js`. Firefox does not implement the event so it is inert, but
+that port received no independent audit. No other repository was examined.
+
+**Unrelated issues checked and found clean during the sweep:** object URLs are
+revoked by the `revoke` closure returned alongside each one; manifest
+permissions (`downloads`, `tabs`, `storage`, `alarms`, `scripting`,
+`offscreen`, `sidePanel`) all correspond to live API use; host permissions
+remain the six nhentai origins with no `<all_urls>`; web-accessible resources
+stay scoped to `https://nhentai.net/*`.
+
+### Open questions carried out of 3.4.1 (for whoever picks this up next)
+
+None of these block the release; each is a judgement call that a reviewer
+should either accept or overturn.
+
+| # | Question | Why it is open | Where to resolve it |
+| --- | --- | --- | --- |
+| A | Is one mis-named file per service-worker restart acceptable? | The naming listener re-attaches only after an async `storage.session` read. Registering synchronously at startup would reintroduce the leak, so the race is deliberate. | Real-browser step 0E |
+| B | Is a 30-minute entry TTL right? | Too short loses the name on a very slow gallery; too long keeps the global listener attached on a stuck entry. The value was never measured. | Time the slowest realistic gallery |
+| C | Can listener participation be observed more strongly than `hasListeners()`? | Chrome exposes no API for "who is in the naming chain", so verification proves our own state only. | Research / accept |
+| D | URL-keyed pending map assumes one artifact per URL | True today for CDN page URLs and blob URLs; a future change that reuses a URL across concurrent jobs would cross names. | Guard only if that design appears |
+| E | Does raw actually create one folder per title? | Never confirmed in a browser; still ships behind the "(testing)" label. | Real-browser step 0f |
+| F | Does Download All walk every page of a paginated listing, and does the 2-page warning fire? | Asserted by e2e stubs only. | Real-browser steps |
+| G | Is the user's original cross-extension naming clash gone? | Two independent fixes (shared list pipeline + non-participating idle guard) are expected to close it, but they have never been observed together on a real profile. | Real-browser steps 0A/0D |
+| H | Should `@types/chrome` be unpinned from 0.0.154 (2021)? | `chrome.sidePanel` and `chrome.storage.session` are both reached via `(chrome as any)`. A bump restores type safety but risks unrelated type churn. | Dependency decision |
+
+Also still open and unchanged: **P3 queue UI** (thumbnails, per-item progress
+and states, cancel/retry, concurrency limit, retry-with-backoff),
+**`NHDW_Firefox_v1.0.0`** (lags at 3.3.1, still carries the old guard in its
+built worker, never audited), and the fact that **`npm run test:browser` has
+never run in this environment** — every real-browser claim in these documents
+is an expectation, not an observation. No other repository was audited.
+

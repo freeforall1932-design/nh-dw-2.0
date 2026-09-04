@@ -271,7 +271,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // Single-gallery jobs own their archive: pages at the root, file named
     // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal,
-        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined });
+        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined, archiveMasterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined });
     currentDownloader.saveUrl = saveArtifactSmart;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -337,7 +337,10 @@ async function downloadAllDoujinshisAsync(
         archiveLayout: downloadSeparately ? "flat" : "nested",
         apiKey: options.apiKey || null,
         useServerArchive: !!options.useServerArchive,
-        rawMasterFolder: typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined
+        rawMasterFolder: typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined,
+        // Optional master folder for finished archives too - the wrap is a
+        // user choice in list mode, not something forced on every download.
+        archiveMasterFolder: typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined
     };
     let names: Array<string> = [];
     let length = Object.keys(allDoujinshis).length;
@@ -482,7 +485,10 @@ async function downloadAllDoujinshisAsync(
             names.push(title);
             let zipName = null;
             if (downloadSeparately) {
-                zipName = title;
+                // Separate files are named from the (list-mode) template and
+                // the gallery's OWN metadata, cleaned exactly like a
+                // single-title download - never from the page URL.
+                zipName = utils.cleanName(title, replaceSpaces, key);
             } else if (downloadAtEnd && i == length - 1) {
                 zipName = finalName;
             }

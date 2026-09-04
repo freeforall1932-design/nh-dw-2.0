@@ -1,4 +1,6 @@
 import { API_KEY_SETTINGS_URL } from "../utils/apiAuth";
+import { DOWNLOAD_FORMATS, formatExtension, formatLabel, effectiveOutputMode } from "../utils/downloadFormats";
+import { ListModeSettings } from "../utils/listSettings";
 
 export module message
 {
@@ -111,8 +113,42 @@ export module message
             '</div>';
     }
 
-    // Right column: intro state of the similar-galleries panel. The related
-    // list is only fetched on request (it costs one API call, and the panel
+    // ---- list mode (homepage / search / artist / tag / genre windows) ----
+    // Same four formats as a single title, plus the explicit output mode that
+    // makes "one file per title" possible at all. Separate files is the
+    // default; the merged single-file behaviour is the opt-in.
+    export function listDownloadOptions(settings: ListModeSettings): string {
+        const selected = (value: string) => value === settings.format ? ' selected' : '';
+        const modeSelected = (value: string) => value === settings.outputMode ? ' selected' : '';
+        const effective = effectiveOutputMode(settings.format, settings.outputMode);
+        let html = '<div class="listOptions">';
+        html += '<div class="listOptionRow"><label for="listFormat">Format</label>' +
+            '<select id="listFormat">';
+        for (const format of DOWNLOAD_FORMATS) {
+            html += '<option value="' + format + '"' + selected(format) + '>' + formatLabel(format) + '</option>';
+        }
+        html += '</select></div>';
+        html += '<div class="listOptionRow"><label for="listOutputMode">Output</label>' +
+            '<select id="listOutputMode">' +
+            '<option value="separate"' + modeSelected('separate') + '>Separate files (one per title)</option>' +
+            '<option value="batch"' + modeSelected('batch') + '>Single merged file (all titles)</option>' +
+            '</select></div>';
+        html += '<div class="listOptionRow"><label class="listInline" for="listMasterFolder">' +
+            '<input type="checkbox" id="listMasterFolder"' + (settings.masterFolder ? ' checked' : '') + '/> ' +
+            'Put everything in the ' +
+            (settings.masterFolderName === "" ? 'master folder' : 'Downloads/' + settings.masterFolderName + '/ folder') +
+            '</label></div>';
+        html += '<small id="listRawNote" class="listNote"' + (settings.format === "raw" ? '' : ' hidden') + '>' +
+            'Raw is still under test: it writes loose images into one folder per title and always behaves as separate files.' +
+            '</small>';
+        html += '<div id="batchNameRow" class="listOptionRow"' + (effective === "batch" ? '' : ' hidden') + '>' +
+            'Downloads/<input type="text" id="path"/><span id="batchExtension">' + formatExtension(settings.format) + '</span></div>';
+        html += '<div id="listNamePreview" class="listPreview"></div>';
+        html += '</div>';
+        return html;
+    }
+
+    // Right column: intro state of the similar-galleries panel. The related    // list is only fetched on request (it costs one API call, and the panel
     // exists so the user can PICK which related titles to download).
     export function similarIntro(): string {
         return '<small>Pick from nhentai\'s related recommendations - each selected gallery downloads as its own file.</small><br/>' +

@@ -3,6 +3,7 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { message } from "./message";
 import { renderSettings } from "./popupSettings";
+import { readListSettings } from "../utils/listSettings";
 
 let popup = Popup.getInstance();
 
@@ -39,6 +40,28 @@ if (document.readyState === "loading") {
 } else {
     initPopupTabs();
 }
+
+// index.html is rendered BOTH as the toolbar popup and as the chrome.sidePanel
+// view (one document, no duplicated markup). A popup needs the fixed 500px
+// width from style.css; a side panel is resized by the user, so the fixed
+// width is dropped there. The active UI mode is the source of truth: when it
+// is "sidepanel" the toolbar click opens the panel, so this document is one.
+function applyUiModeClass() {
+    try {
+        chrome.storage.sync.get({ uiMode: "sidepanel" }, (elems: any) => {
+            const root = document.documentElement;
+            if (!root) {
+                return;
+            }
+            if (elems && elems.uiMode === "sidepanel") {
+                root.classList.add("nhdwPanel");
+            } else {
+                root.classList.remove("nhdwPanel");
+            }
+        });
+    } catch (_) { /* cosmetic only */ }
+}
+applyUiModeClass();
 
 // Ask the service worker (which owns the CDN config and chrome.permissions)
 // whether nhentai reported image hosts the extension has no host permission
@@ -79,7 +102,14 @@ function refreshCdnNotice() {
     } catch (_) { /* worker unreachable: no notice */ }
 }
 
-chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+// Last URL the view was rendered for (side-panel mode re-renders on change).
+let lastBootstrappedUrl: string | null = null;
+
+function bootstrapForActiveTab() {
+    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+    if (!tabs || !tabs[0]) {
+        return;
+    }
     chrome.storage.sync.get({
         darkMode: false,
         htmlParsing: false
@@ -93,6 +123,7 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
 
         let currUrl = tabs[0].url as string;
         popup.url = currUrl;
+        lastBootstrappedUrl = currUrl;
         // Independent of the download state: surface the optional host grant
         // when nhentai's CDN config reports hosts we have no permission for.
         refreshCdnNotice();
@@ -146,23 +177,45 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
             return; // Early return as we're handling the async response above
         });
     });
-});
+    });
+}
+
+bootstrapForActiveTab();
+
+// Side-panel mode: the same document stays open while the user switches tabs
+// and navigates, so the view must follow the active tab instead of rendering
+// once at open time. In popup mode these events effectively never fire (the
+// popup is destroyed as soon as focus leaves it), so registering them is free.
+function rebootstrapIfUrlChanged() {
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        const url = tabs && tabs[0] ? String(tabs[0].url || "") : "";
+        if (url === "" || url === lastBootstrappedUrl) {
+            return;
+        }
+        lastBootstrappedUrl = url;
+        bootstrapForActiveTab();
+    });
+}
+try {
+    chrome.tabs.onActivated.addListener(() => rebootstrapIfUrlChanged());
+    chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+        if (changeInfo.status === "complete" || changeInfo.url !== undefined) {
+            if (tab && tab.active) {
+                rebootstrapIfUrlChanged();
+            }
+        }
+    });
+} catch (_) { /* chrome.tabs events unavailable: single-shot popup behaviour */ }
 
 // Display popup for many doujinshis
 chrome.runtime.onMessage.addListener(function(request, _) {
     if (request.action == "getGalleries") {
-        chrome.storage.sync.get({
-            useZip: "zip",
-            downloadName: "{pretty}",
-            replaceSpaces: true
-        }, function(elems) {
+        readListSettings().then((listSettings) => {
             popup.updatePreviewAll(
                 request.galleries || [],
                 request.currentPage || 0,
                 request.maxPage || 0,
-                elems.downloadName,
-                elems.useZip,
-                elems.replaceSpaces
+                listSettings
             );
         });
     }
