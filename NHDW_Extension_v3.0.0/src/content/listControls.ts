@@ -32,6 +32,7 @@ import {
     LIST_MODE_DEFAULTS,
     PDF_MERGE_WARNING_KEY
 } from "../utils/downloadFormats";
+import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 
 interface CardInfo {
     id: string;
@@ -53,6 +54,19 @@ let settings = {
 
 const selected = new Set<string>();
 const titleById: Record<string, string> = {};
+
+// Persistent download history (chrome.storage.local), shared with the panel:
+// already-downloaded cards are labelled and skipped on re-run unless the user
+// explicitly re-downloads them (per-card confirmation / bar checkbox).
+let history: DownloadHistory = {};
+const forcedIds = new Set<string>();
+let includeAlready = false;
+
+function readHistoryState(): Promise<void> {
+    return readHistory().then((stored) => {
+        history = stored;
+    });
+}
 
 // ---- storage helpers -----------------------------------------------------
 
@@ -181,20 +195,35 @@ function buildCardControls(info: CardInfo): HTMLElement {
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.className = "nhdw-download";
-    downloadButton.textContent = "Download";
-    downloadButton.title = "Download this gallery with the current list-mode settings";
+    const recorded = history[info.id];
+    downloadButton.textContent = recorded ? "Downloaded" : "Download";
+    downloadButton.title = recorded
+        ? "Already downloaded as " + recorded.filename + ". Click to download it again."
+        : "Download this gallery with the current list-mode settings";
     downloadButton.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        downloadButton.disabled = true;
-        downloadButton.textContent = "Queued";
         const single: Record<string, string> = {};
         single[info.id] = info.title || info.id;
+        // Per-download "download anyway": an already-downloaded card asks for
+        // an explicit confirmation instead of silently re-downloading.
+        if (history[info.id]) {
+            const again = window.confirm(
+                "Already downloaded as:\n" + history[info.id].filename +
+                "\n\nDownload it again?");
+            if (!again) {
+                flashStatus("Already downloaded - cancel again to re-download");
+                return;
+            }
+            forcedIds.add(info.id);
+        }
+        downloadButton.disabled = true;
+        downloadButton.textContent = "Queued";
         // A single card is always one title: no merge risk, so no warning.
-        startDownload(single, "separate");
+        startDownload(single, "separate", forcedIds.has(info.id) ? [info.id] : []);
         setTimeout(() => {
             downloadButton.disabled = false;
-            downloadButton.textContent = "Download";
+            downloadButton.textContent = history[info.id] ? "Downloaded" : "Download";
         }, 2500);
     });
     box.appendChild(downloadButton);
@@ -214,10 +243,14 @@ function injectCardControls(): void {
     const cards = findCards();
     for (const info of cards) {
         if (info.card.getAttribute(MARKER_ATTR) === info.id) {
-            // Already decorated; only refresh the checkbox state.
+            // Already decorated: refresh checkbox AND history-driven label.
             const existing = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-select-box") as HTMLInputElement | null;
             if (existing) {
                 existing.checked = selected.has(info.id);
+            }
+            const existingButton = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-download") as HTMLButtonElement | null;
+            if (existingButton) {
+                existingButton.textContent = history[info.id] ? "Downloaded" : "Download";
             }
             continue;
         }
@@ -283,6 +316,22 @@ function buildActionBar(): HTMLElement {
     });
     bar.appendChild(modeSelect);
 
+    // Bulk "download anyway": only visible while the selection contains
+    // already-downloaded galleries. Per-card confirmations remain available.
+    const redownloadRow = document.createElement("label");
+    redownloadRow.className = "nhdw-redownload-row";
+    redownloadRow.id = "nhdw-redownload-row";
+    const redownloadBox = document.createElement("input");
+    redownloadBox.type = "checkbox";
+    redownloadBox.id = "nhdw-redownload";
+    redownloadBox.addEventListener("change", () => {
+        includeAlready = redownloadBox.checked;
+        renderActionBar();
+    });
+    redownloadRow.appendChild(redownloadBox);
+    redownloadRow.appendChild(document.createTextNode(" Include already downloaded"));
+    bar.appendChild(redownloadRow);
+
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.id = "nhdw-download-selected";
@@ -296,7 +345,14 @@ function buildActionBar(): HTMLElement {
         if (Object.keys(chosen).length === 0) {
             return;
         }
-        startDownload(chosen, settings.outputMode);
+        // "Download anyway" ids: per-card confirmations plus the bulk toggle.
+        const forced: string[] = [];
+        selected.forEach((id) => {
+            if (forcedIds.has(id) || (includeAlready && history[id])) {
+                forced.push(id);
+            }
+        });
+        startDownload(chosen, settings.outputMode, forced);
     });
     bar.appendChild(downloadButton);
 
@@ -325,8 +381,32 @@ function renderActionBar(): void {
         return;
     }
     const count = document.getElementById("nhdw-count");
+    const selectedIds = Array.from(selected);
+    const alreadySelected = selectedIds.filter((id) => !!history[id]);
+    const skipped = alreadySelected.filter((id) => !forcedIds.has(id) && !includeAlready);
+    const mode = effectiveOutputMode(settings.format, settings.outputMode);
     if (count) {
-        count.textContent = selected.size + " selected";
+        if (skipped.length > 0) {
+            count.textContent = mode === "batch"
+                ? selectedIds.length + " selected · " + skipped.length + " already downloaded (merged re-downloads them into one file)"
+                : selectedIds.length + " selected · " + skipped.length + " already downloaded · "
+                    + (selectedIds.length - skipped.length) + " will download";
+        } else if (alreadySelected.length > 0 && mode === "batch") {
+            count.textContent = selectedIds.length + " selected · " + alreadySelected.length
+                + " already downloaded (merged re-downloads them into one file)";
+        } else {
+            count.textContent = selectedIds.length + " selected";
+        }
+    }
+    const redownloadRow = document.getElementById("nhdw-redownload-row");
+    if (redownloadRow) {
+        // Merged mode never skips (one archive needs every selected title), so
+        // the bulk override would be meaningless there.
+        redownloadRow.hidden = alreadySelected.length === 0 || mode === "batch";
+        const box = document.getElementById("nhdw-redownload") as HTMLInputElement | null;
+        if (box) {
+            box.checked = includeAlready;
+        }
     }
     const modeSelect = document.getElementById("nhdw-output") as HTMLSelectElement | null;
     if (modeSelect) {
@@ -340,8 +420,32 @@ function renderActionBar(): void {
 
 // ---- download ------------------------------------------------------------
 
-function startDownload(galleries: Record<string, string>, outputMode: OutputMode): void {
-    const titleCount = Object.keys(galleries).length;
+function startDownload(galleries: Record<string, string>, outputMode: OutputMode, redownload: string[] = []): void {
+    const force = new Set(redownload.map(String));
+    const effective = effectiveOutputMode(settings.format, outputMode);
+    // Persistent history: separate mode drops already-downloaded galleries
+    // (minus the per-download "download anyway" picks) BEFORE sending, so the
+    // skipped ones cost zero API calls. Merged mode keeps every title (the one
+    // archive needs them all; it re-records everything only when the whole
+    // job succeeds).
+    let toDownload: Record<string, string> = {};
+    let redownloadIds: string[] = [];
+    let skippedCount = 0;
+    if (effective === "separate") {
+        const download = partitionKnown(history, Object.keys(galleries), redownload).download;
+        for (const id of download) {
+            toDownload[id] = galleries[id];
+        }
+        skippedCount = Object.keys(galleries).length - download.length;
+    } else {
+        toDownload = galleries;
+    }
+    redownloadIds = Object.keys(galleries).filter((id) => force.has(id));
+    const titleCount = Object.keys(toDownload).length;
+    if (titleCount === 0) {
+        flashStatus("All selected are already downloaded - use Download anyway to re-fetch");
+        return;
+    }
     let mode = effectiveOutputMode(settings.format, outputMode);
     if (shouldWarnPdfMerge(settings.format, mode, titleCount) && !settings.pdfMergeWarnDismissed) {
         // Same guard as the panel: never merge different titles into one PDF
@@ -359,27 +463,50 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
     }
     const message: any = {
         action: "downloadAllDoujinshis",
-        allDoujinshis: galleries,
+        allDoujinshis: toDownload,
         galleryMetadata: {},
         finalName: document.title.replace(/[\\/:*?"<>|]/g, "").trim() || "nhentai",
         formatOverride: settings.format,
         separate: outputModeToSeparate(settings.format, mode),
         masterFolder: settings.masterFolder ? settings.masterFolderName : "",
-        nameTemplate: settings.template
+        nameTemplate: settings.template,
+        redownloadIds: redownloadIds
     };
     try {
-        chrome.runtime.sendMessage(message, () => {
+        chrome.runtime.sendMessage(message, (response: any) => {
             // The worker answers { result: "started" | "queued" }; the panel
             // shows the progress. Reading lastError keeps Chrome quiet when
             // the worker is mid-restart.
-            void chrome.runtime.lastError;
-            flashStatus(titleCount);
+            try { void chrome.runtime.lastError; } catch (_) { /* no runtime */ }
+            if (response && response.result === "existing" && response.filename) {
+                // Merged re-run: the same merged file still exists. Warn (the
+                // user chose warn-only for merged jobs), then re-send with
+                // existingConfirmed so it becomes _part2/_part3...
+                const again = window.confirm(
+                    "You already have:\n" + response.filename +
+                    "\n\nThis download creates a NEW copy (the name gets _part2, _part3 ...).\n\nContinue?");
+                if (again) {
+                    message.existingConfirmed = true;
+                    chrome.runtime.sendMessage(message, () => {
+                        try { void chrome.runtime.lastError; } catch (_) { /* no runtime */ }
+                        flashStatus(skippedCount > 0
+                            ? titleCount + " will download (" + skippedCount + " already downloaded skipped)"
+                            : titleCount === 1 ? "Sent 1 gallery to the downloader" : "Sent " + titleCount + " galleries to the downloader");
+                    });
+                } else {
+                    flashStatus("Already downloaded - keeping the existing file");
+                }
+                return;
+            }
+            flashStatus(skippedCount > 0
+                ? titleCount + " will download (" + skippedCount + " already downloaded skipped)"
+                : titleCount === 1 ? "Sent 1 gallery to the downloader" : "Sent " + titleCount + " galleries to the downloader");
         });
     } catch (_) { /* worker unreachable; nothing else to do from a page */ }
 }
 
 let statusTimer: any = null;
-function flashStatus(count: number): void {
+function flashStatus(text: string): void {
     if (actionBar === null) {
         return;
     }
@@ -390,9 +517,7 @@ function flashStatus(count: number): void {
         status.className = "nhdw-status";
         actionBar.appendChild(status);
     }
-    status.textContent = count === 1
-        ? "Sent 1 gallery to the downloader"
-        : "Sent " + count + " galleries to the downloader";
+    status.textContent = text;
     if (statusTimer !== null) {
         clearTimeout(statusTimer);
     }
@@ -433,8 +558,19 @@ function start(): void {
     // the page so the two views never disagree.
     try {
         chrome.storage.onChanged.addListener((changes: any, area: string) => {
-            if (area === "local" && changes && changes.allIds) {
+            if (area !== "local" || !changes) {
+                return;
+            }
+            if (changes.allIds) {
                 readSelection().then(() => {
+                    injectCardControls();
+                    renderActionBar();
+                });
+            }
+            if (changes[DOWNLOAD_HISTORY_KEY]) {
+                // History changed (a download completed / was cleared): refresh
+                // card labels and the bar counts.
+                readHistoryState().then(() => {
                     injectCardControls();
                     renderActionBar();
                 });
@@ -450,11 +586,13 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") 
             return;
         }
         readSelection().then(() => {
-            if (document.readyState === "loading") {
-                document.addEventListener("DOMContentLoaded", start);
-            } else {
-                start();
-            }
+            readHistoryState().then(() => {
+                if (document.readyState === "loading") {
+                    document.addEventListener("DOMContentLoaded", start);
+                } else {
+                    start();
+                }
+            });
         });
     });
 }

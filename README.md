@@ -15,6 +15,7 @@ A Chrome extension for batch downloading full-size image archives directly from 
 * **Never an accidental tankoubon (3.4.0):** merging several *different* titles into one PDF always asks for confirmation first, with "one PDF per title" as the default answer.
 * **Side panel (3.4.0):** the toolbar button opens a dockable, resizable side panel instead of the hovering popup. The popup is kept as a fallback and you can switch back in Settings.
 * **In-page Download / Select buttons (3.4.0):** every gallery card on a listing page gets its own Download button and Select box, plus a floating bar showing "N selected -> format -> Download" — so you never have to open the extension.
+* **Remembers what you downloaded (3.5.0):** re-running the same listing (search / tag / artist / homepage) skips galleries that finished downloading before, so you stop getting "Title (1).zip", "Title (2).zip" duplicates. Already-downloaded rows show a ✓ badge with the saved file name and their own *Download anyway* link; the in-page bar shows "N selected · M already downloaded · K will download" and skipped galleries cost **zero** API calls. Skipping is **verify-then-redownload**: a recorded gallery is only skipped while its file still exists on disk (Settings → *Verify downloaded files exist*, default ON), so a deleted file is fetched again on the next run. A single-file (merged) job never skips — one archive needs every selected title — and it is remembered only when the whole job finished; if the merged file already exists it warns first and then saves a new copy as `_part2`, `_part3` …. Merged / batch names carry the date stamp (`search_31082026.zip`, Settings → *Date in merged names*, default ON) and the history records that exact dated file name. The list lives in this browser only, and Settings has a *Clear history* button.
 * **Manifest V3 Compliant:** Fully updated for the latest Chrome extension requirements.
 
 ## 📦 Prerequisites
@@ -104,6 +105,7 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
 | **Toolbar click opens nothing / I want the old popup back** | Settings -> *Interface* -> **Toolbar click opens**. `Side panel` needs Chrome 114+; on older builds the popup is used automatically. |
 | **Two checkboxes on each gallery card** | The legacy caption checkbox is hidden while the in-page card controls are on. If both show, reload the nhentai page; to keep only the old one, turn off Settings -> *Download / Select buttons on listing cards*. |
 | **A list download is named after the page URL** | That was the pre-3.4.0 behaviour of the merged single-file mode. Switch **Output** to *Separate files* (the new default) — each file is then named from the list-mode template and that gallery's own metadata. |
+| **Re-running a search re-downloads everything I already got (or makes "Title (1).zip")** | Fixed in v3.5.0: the extension remembers every gallery that downloaded successfully in this browser and skips it on listing pages. Each already-downloaded row has a ✓ badge with its file name and a *Download anyway* link if you want it again; Settings → *Download history* → *Clear history* forgets everything. Galleries downloaded before v3.5.0 are not remembered automatically — the first run after updating still downloads them. Skipping is *verify-then-redownload* by default: the file is only treated as already-downloaded while it still exists on disk, so a deleted file is fetched again on the next run (Settings → *Verify downloaded files exist* to turn that off). A *Single merged file* job never skips; when the dated merged file already exists it asks first and then saves `_part2`, `_part3` …. |
 
 ## Known limitations and things still under review
 
@@ -125,9 +127,46 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   none of the 3.4.0 list-mode or 3.4.1 naming work.
 * **The queue list is still name-only.** Thumbnails, per-item progress, and
   per-item cancel/retry are planned, not built.
+* **Download history is local and starts empty.** The remembered list lives
+  in `chrome.storage.local` of this browser (never synced) and only knows
+  downloads that finished after v3.5.0 was installed. Re-installing the
+  extension or clearing site data clears it too. With *Verify downloaded
+  files exist* on, `chrome.downloads` can only see files this browser profile
+  downloaded: a file copied in by hand, moved after Chrome recorded its path,
+  or a cleared browser download history counts as missing and is downloaded
+  again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.4.1 (current):** Cross-extension naming-leak fix. The 3.3.1 folder-naming guard registered Chrome's global `onDeterminingFilename` event at worker startup and never released it. That event is profile-wide: registering it made this extension a participant in the filename decision for **every** download, so Chrome could blame it for files started by unrelated extensions (*"failed to name the download ... because another extension determined a different filename"*). Returning early for a foreign download does not help — participation is what counts. The listener is now reference-counted against this extension's own pending downloads: attached when the first filename is recorded, detached as soon as the pending set drains (suggestion consumed, download complete, interrupted, cancelled, failed to start, 30-minute TTL, or FIFO eviction). An idle worker is no longer in the chain at all, and while it is, downloads it did not start get an untouched pass-through — never an empty name. Own filenames, folders, master-folder wrapping and `uniquify` behaviour are unchanged.
+* **v3.5.0 (current): Persistent download history — "already downloaded" is skipped.**
+  The extension now remembers every gallery that downloaded successfully
+  (keyed by gallery ID, in `chrome.storage.local`) and skips it when the same
+  listing is re-run (search / tag / artist / homepage). The panel shows a ✓
+  badge with the saved file name per row, live counts ("N selected · M already
+  downloaded · K will download") before committing, and a per-row *Download
+  anyway* override; the in-page floating bar shows the same counts and a bulk
+  *Include already downloaded* toggle. Skipped galleries cost zero metadata or
+  API calls — the UI filters them out before enqueuing, and the offscreen
+  pipeline re-checks the same recorded list as an authoritative guard (via the
+  worker, which owns `chrome.storage.local`; the offscreen document still
+  touches `chrome.runtime` only). Records are written on successful completion
+  only, never on enqueue: per-gallery records in separate mode, and a merged
+  single-file job records all of its titles only when the whole job succeeded
+  (a failed or cancelled merge records nothing, so it can be re-run cleanly).
+  Partial galleries (any failed page) are never recorded — nhentai publishes no
+  content hash, so byte identity cannot be verified. *Clear history* lives in
+  Settings (popup tab and options page). Two refinements follow the user's
+  decisions: **separate-mode verify-before-skip** (default ON, Settings →
+  *Verify downloaded files exist*) only skips a recorded gallery when
+  `chrome.downloads.search` still finds its file — deleted files are
+  downloaded again automatically, and the toggle OFF restores record-only
+  skipping; **merged mode never skips** — one archive needs every title, so
+  when the file already exists it warns first, then proceeds on confirmation
+  (no automatic overwrite). **Merged/batch names get the date** (*Settings →
+  *Date in merged names*, default ON): a merged listing save is
+  `search_31082026.zip`, the history records that dated name, and the same
+  title+date again becomes `_part2`, `_part3` … (a deleted file's old name is
+  reused instead of growing part numbers forever).
+* **v3.4.1:** Cross-extension naming-leak fix. The 3.3.1 folder-naming guard registered Chrome's global `onDeterminingFilename` event at worker startup and never released it. That event is profile-wide: registering it made this extension a participant in the filename decision for **every** download, so Chrome could blame it for files started by unrelated extensions (*"failed to name the download ... because another extension determined a different filename"*). Returning early for a foreign download does not help — participation is what counts. The listener is now reference-counted against this extension's own pending downloads: attached when the first filename is recorded, detached as soon as the pending set drains (suggestion consumed, download complete, interrupted, cancelled, failed to start, 30-minute TTL, or FIFO eviction). An idle worker is no longer in the chain at all, and while it is, downloads it did not start get an untouched pass-through — never an empty name. Own filenames, folders, master-folder wrapping and `uniquify` behaviour are unchanged.
 * **v3.4.0:** List mode gets everything single-title mode had. The four formats (ZIP/CBZ/PDF/raw) come from one shared registry used by the panel, the in-page card buttons and the download pipeline, so the two paths cannot drift. New explicit **output mode** — *Separate files* (one archive, or one folder for raw, per title) is the default and *Single merged file* is the opt-in. List mode has its **own file-name template** (defaults to following the single-title one) resolved per gallery instead of falling back to the page URL, and the master-folder wrap became an **optional checkbox** that now also applies to archives, not just raw. A **PDF-merge confirmation** blocks accidentally concatenating different titles into one tankoubon-style document. UI: a dockable **side panel** (`chrome.sidePanel`) sharing one rendered view with the popup fallback, plus **Download / Select buttons on every listing card** with a floating selection bar.
 * **v3.3.1:** Folder-naming guard. When any other extension hooks Chrome's download naming (`onDeterminingFilename`, Chromium bug 579563), Chrome used to silently discard the requested names — raw pages fell into the Downloads root as `1.jpg`, `2.jpg`… and archives could land under blob UUIDs. The new guard (`src/background/downloadNaming.ts`) records every requested name before the download starts and re-asserts it via the extension's own `onDeterminingFilename` listener (session-mirror-backed, restart-safe; no-op on Firefox where the bug doesn't exist). Re-downloads now uniquify (`Title (1).zip`) instead of overwriting.
 * **v3.3.0:** Raw master folder (Options → *Folder for raw downloads*, default `NHDW/`), settings inside the popup (3.2.0–3.2.2 line), PDF output, API key mode with first-run gate.

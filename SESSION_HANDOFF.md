@@ -1,5 +1,27 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-04 — **3.5.0 follow-up complete and reviewed: verify-before-skip
++ merged date/part naming.** The user's settled decisions (verify-then-redownload
+toggle for separate mode default ON; merged mode warns only and never skips;
+`_DDMMYYYY` + `_partN` merged naming with verify deciding name reuse vs part
+growth) are implemented end-to-end, reviewed, and shipped from this session
+branch as a merge-commit PR. Final verification before the merge: webpack build
+clean, `tsc` test config clean, `npm test` **233 passing / 4 pending**, smoke
+**7 PASS**, `npm run test:e2e` **73 PASS / 0 FAIL**, and the push-triggered
+`extension-tests` GitHub Action passed the same offline suites. Commits on
+`arena/01a06b6f-nh-dw-2-0`: `57c5a87` (base history feature), `8fde409` (review
+pass), `7d429c5` (this follow-up). Main was at `7aa438e` (3.4.1, PR #33) when
+the branch started; the docs below intentionally remove none of the earlier
+decisions.
+
+**Updated:** 2026-09-04 — **3.5.0: persistent download history landed.** The
+extension now remembers every successfully downloaded gallery (keyed by gallery
+ID in `chrome.storage.local`) and skips it when the same listing is re-run, so
+re-downloads no longer produce `Title (1).zip`, `Title (2).zip` ... See
+"Download history (3.5.0 — newest)" below. Manifest version bumped to 3.5.0.
+Session branch: `arena/01a06b6f-nh-dw-2-0` (from `main` 7aa438e — the 3.4.1
+work, PR #33 merged).
+
 **Updated:** 2026-09-04 — **3.4.1: cross-extension naming leak closed.** The
 3.3.1 folder-naming guard registered Chrome's profile-wide
 `onDeterminingFilename` at worker startup and never released it, so this
@@ -75,6 +97,109 @@ bullet fixed in PR #30)
 - These are distinct folders. Source contains TypeScript/tests; release is the browser-loadable package. After every build: `cp js/*.js ../NHDW_Release_v3.0.0/js/`, verify `diff -rq js ../NHDW_Release_v3.0.0/js`, and also sync `index.html`, `options.html`, `css/*`, `manifest.json` when they change (the release README intentionally differs).
 
 ## Current implemented work
+
+### Download history (3.5.0 — newest)
+
+Skipping already-downloaded galleries when a listing is re-run (search / tag /
+artist / homepage), instead of downloading everything again and uniquifying
+into "Title (1).zip", "Title (2).zip" ...
+
+- **Storage:** `chrome.storage.local`, one key `downloadHistory`, shaped
+  `{ [galleryId]: { filename, when } }`. Sync is unusable (100 KB / 512 items).
+  Keyed on ID, never title: it survives template changes, title/language
+  edits, uniquify renames and browser-history clears. Only weakness: starts
+  empty, so pre-3.5.0 downloads are not remembered.
+- **Module:** `src/utils/downloadHistory.ts`. Pure helpers (normalize,
+  `historyIds`, `countHistory`, `partitionKnown`, `artifactRecordFilename`,
+  `historyRecords` + `BatchOutcome`) are imported by the offscreen document;
+  the storage functions (`readHistory`, `recordHistory`, `clearHistory`) are
+  **worker / popup / options only** — the offscreen document still touches
+  `chrome.runtime` alone, as `e2e-offscreen.js` enforces with its forbidden
+  storage/downloads/scripting counter.
+- **Recording:** on SUCCESSFUL completion only, never on enqueue. Separate
+  mode records each gallery that fully succeeded (raw counts as separate — no
+  container to merge). Merged mode records ALL of the job's ids together ONLY
+  if the whole job succeeded (every gallery + the artifact save); a failed or
+  cancelled merge records nothing, so the merge can be re-run. Partial
+  galleries (any page failed) are never recorded — nhentai publishes no
+  content hash, so byte identity cannot be verified, and a broken file would
+  otherwise be skipped forever (user's decision; not re-litigate).
+- **Hook points (both, per user):**
+  1. UI pre-check: popup rows get a ✓ badge + file name and a per-row
+     *Download anyway* link (`redl_<id>`); summary line "N selected · M
+     already downloaded · K will download" and the Download button shows the
+     real count; skipped ids are removed before metadata resolution so they
+     cost ZERO API calls. In-page bar (`listControls.ts`) shows the same
+     counts, per-card "Downloaded" labels (clicking an already-downloaded
+     card asks *Download again?*), and a bulk `Include already downloaded`
+     checkbox.
+  2. Authoritative pipeline guard (offscreen + worker fallback): the worker
+     reads history and relays `alreadyDownloadedIds` + `redownloadIds` with
+     each job; the pipeline skips recorded galleries (separate mode) before
+     fetching metadata and counts them in `batchSummary.skipped`.
+- **Escape hatches:** per-download override (per-row link / per-card
+  confirmation / bulk include) and *Clear history* in popup Settings and the
+  options page. No export/import (user declined). No new permissions.
+- **Verify before skip (separate mode, 3.5.0 follow-up):** a recorded gallery
+  is skipped only when `chrome.downloads.search` confirms the artifact still
+  exists on disk (default ON, `verifyDownloadedFiles` in `chrome.storage.sync`
+  — checkbox in popup Settings + options page). Copying a file in by hand,
+  moving it after Chrome recorded its path, or clearing the browser's download
+  history counts as missing, so that gallery is downloaded again; the record
+  itself is the durable link. Toggle OFF = record-only skip (pre-3.5.0
+  semantics, fastest). Worker-side only: `src/utils/downloadVerify.ts` is
+  **never imported by the offscreen document** (no chrome.downloads there).
+- **Merged mode: never skip, warn only.** A merged job always keeps every
+  selected title; when its (dated) artifact already exists on disk and the
+  user has not confirmed yet, the worker answers `{result:"existing",
+  filename}` instead of starting, the UI `window.confirm`s ("you already have
+  … creates a NEW copy / gets _part2…") and re-sends with
+  `existingConfirmed: true` (user's explicit choice, do not re-litigate).
+  Both pipelines (offscreen relay + worker fallback, `downloadAllDoujinshis` +
+  `downloadAllPages`) resolve the name via `resolveMergedBatchName` before
+  starting and clear the job marker on the "existing" stop.
+- **Merged naming (default ON, `batchNameDate` in sync):** the base name gets
+  `_DDMMYYYY` (`search_31082026.zip`; `applyBatchDate` never double-stamps),
+  history records the dated name, and the same title+date again becomes
+  `_part2`, `_part3` … (`batchCandidateNames` caps at 10, Chrome
+  `conflictAction` uniquifies beyond). With verify ON a deleted file REUSES
+  its old name instead of growing part numbers forever; with verify OFF the
+  history record decides. Multi-page merged jobs keep the part number on the
+  base, before the trailing ` (lastPage)` marker
+  (`PagesAll_31082026_part2 (2).zip`) and record that exact artifact name.
+- **Recording transport:** offscreen accumulates `pendingHistoryRecords` and
+  sends them with the FINAL `jobFinished` (queued jobs ride along); the
+  worker's `jobFinished` branch writes them. `downloadAllPages` aggregates
+  per-page outcomes; merged mode requires every page fetched and clean.
+- **Tests:** `test/download-history.test.js` (18 cases: normalize/count/
+  partition/record-filename/clean-vs-dirty merged/record+clear via a
+  `chrome.storage.local` stub, plus date-stamp / no-double-stamp /
+  part-candidates / record-only-vs-verify picker / multi-page suffix).
+  Worker e2e adds phases 1b/1c (record on success, never on failure), 5b–5e
+  (unclean merged records nothing, clean merged records all, skip with zero
+  API calls, redownload override) and 5f–5h (verify-before-skip re-downloads
+  the deleted file; merged date stamp + part-2 + warn-first; multi-page
+  merged naming keeps `_part2` on the base). Offscreen e2e adds the guard
+  phase (skip before fetch, `skipped:1`, records in `jobFinished`, merged
+  never skips) and a multi-page merged phase (clean pages 1+2 → one artifact
+  `path (2)` + both ids recorded — the regression that caught the
+  `finalSaveOk`-on-every-page bug). List-controls e2e adds counts/labels/
+  bulk override/per-card confirmation/merged-keeps-all. `npm test` now 233
+  passing / 4 pending; smoke 7 PASS; `npm run test:e2e` 73 PASS, 0 FAIL.
+  Known review bug fixed along the way: `formatExtension` returns ".zip"
+  (with the dot), so merged disk candidates were double-dotted and warn-first
+  could never fire — `resolveMergedBatchName` strips the dot before handing
+  the extension to the naming helpers.
+- **Review fixes after the first pass:** merged `downloadAllPages` in both
+  pipelines required `finalSaveOk` on EVERY page, so a fully clean multi-page
+  merged job could never be recorded (only the final page owns the save) —
+  now `clean = failed===0 && batchKeys>0 && (!downloadAtEnd || finalSaveOk)`.
+  Popup merged-mode button count used `willDownload` (subtracting already-
+  downloaded) although merged never skips — now the full selection count.
+  `partitionKnown` is now actually used by both UI pre-checks (popup +
+  listControls) instead of existing only for tests.
+- **Version:** manifest 3.5.0 in source + release; README feature bullet,
+  FAQ row and changelog entry added; backlog marked `[x]`.
 
 ### Filename-guard listener lifetime (3.4.1 — newest)
 

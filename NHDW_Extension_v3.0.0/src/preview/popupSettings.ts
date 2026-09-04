@@ -11,6 +11,7 @@
 import { verifyAndSaveApiKey, removeApiKey } from "../options/apiKey";
 import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "../options/nameTemplate";
 import { utils } from "../utils/utils";
+import { clearHistory, countHistory, readHistory } from "../utils/downloadHistory";
 import {
     DOWNLOAD_FORMATS,
     formatExtension,
@@ -218,8 +219,101 @@ export function renderSettings(container: HTMLElement): void {
         renderNamePreview();
     });
 
+    renderHistorySection(container);
     renderListModeSection(container);
     renderInterfaceSection(container);
+}
+
+// ---- download history ---------------------------------------------------
+// The extension remembers every gallery it downloaded successfully (in this
+// browser only — never synced) so listing pages skip them on re-runs. The
+// only way to re-fetch a gallery without it is the per-row "Download anyway"
+// override or clearing this history.
+function renderHistorySection(container: HTMLElement): void {
+    const section = el("div");
+    section.className = "psSection";
+
+    const heading = el("h4");
+    heading.textContent = "Download history";
+    section.appendChild(heading);
+
+    const status = el("div");
+    status.className = "psStatus";
+    status.id = "psHistoryStatus";
+    section.appendChild(status);
+
+    const hint = el("small");
+    hint.textContent = "Galleries downloaded successfully are remembered in this browser and skipped on listing pages, so re-running a search does not download everything a second time. Each already-downloaded row has its own \"Download anyway\" link; this button forgets the whole list.";
+    section.appendChild(hint);
+
+    // Verify before skip (default on): a record alone is not proof the file
+    // survived, so the worker checks chrome.downloads and re-downloads the
+    // galleries whose file is gone. Off = record-only skip (fastest).
+    const verifyRow = el("label");
+    verifyRow.className = "psOptionRow";
+    const verifyBox = el("input");
+    verifyBox.type = "checkbox";
+    verifyBox.id = "psVerifyDownloaded";
+    verifyRow.appendChild(verifyBox);
+    verifyRow.appendChild(document.createTextNode(" Check the file still exists before skipping (re-download if deleted)"));
+    section.appendChild(verifyRow);
+
+    // Date stamp for merged/batch names (default on): re-runs of the same
+    // listing get search_31082026.zip instead of the same plain name; same-day
+    // repeats become _part2, _part3 ...
+    const dateRow = el("label");
+    dateRow.className = "psOptionRow";
+    const dateBox = el("input");
+    dateBox.type = "checkbox";
+    dateBox.id = "psBatchNameDate";
+    dateRow.appendChild(dateBox);
+    dateRow.appendChild(document.createTextNode(" Add the download date to merged file names (search_31082026.zip, _part2, _part3...)"));
+    section.appendChild(dateRow);
+
+    const buttonRow = el("div");
+    buttonRow.className = "psButtonRow";
+    const clearButton = el("button");
+    clearButton.type = "button";
+    clearButton.id = "psHistoryClear";
+    clearButton.textContent = "Clear history";
+    buttonRow.appendChild(clearButton);
+    section.appendChild(buttonRow);
+
+    container.appendChild(section);
+
+    chrome.storage.sync.get({ verifyDownloadedFiles: true, batchNameDate: true }, (stored: any) => {
+        verifyBox.checked = !stored || stored.verifyDownloadedFiles !== false;
+        dateBox.checked = !stored || stored.batchNameDate !== false;
+    });
+    verifyBox.addEventListener("change", () => {
+        chrome.storage.sync.set({ verifyDownloadedFiles: verifyBox.checked });
+    });
+    dateBox.addEventListener("change", () => {
+        chrome.storage.sync.set({ batchNameDate: dateBox.checked });
+    });
+
+    const refreshStatus = () => {
+        readHistory().then((history) => {
+            const n = countHistory(history);
+            status.textContent = n === 0
+                ? "No downloads recorded yet."
+                : n + " gallery" + (n === 1 ? "" : "s") + " recorded in this browser.";
+            status.className = "psStatus " + (n === 0 ? "psStatusOff" : "psStatusOn");
+        });
+    };
+
+    clearButton.addEventListener("click", async () => {
+        if (!window.confirm("Clear the download history?\n\nEvery gallery will be downloaded again from the next listing, including ones you still have.")) {
+            return;
+        }
+        clearButton.disabled = true;
+        await clearHistory();
+        status.textContent = "Download history cleared.";
+        status.className = "psStatus psStatusOff";
+        clearButton.disabled = false;
+    });
+
+    refreshStatus();
 }
 
 // ---- list mode (homepage / search / artist / tag / genre windows) -------

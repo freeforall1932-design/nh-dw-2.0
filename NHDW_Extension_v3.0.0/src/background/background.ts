@@ -13,7 +13,25 @@ import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId, discardDownloadRequest } from "./downloadNaming";
-import { normalizeFormat, DownloadFormat } from "../utils/downloadFormats";
+import { normalizeFormat, formatExtension, DownloadFormat } from "../utils/downloadFormats";
+// The worker OWNS the persistent download history (chrome.storage.local): it
+// reads it for the pipeline guard, writes it when jobs report success and
+// clears it on user request. The offscreen document never touches storage.
+import {
+    BatchOutcome,
+    DownloadHistory,
+    applyBatchDate,
+    artifactRecordFilename,
+    batchCandidateNames,
+    historyIds,
+    historyRecords,
+    pickFreeBatchFilename,
+    readHistory,
+    recordHistory
+} from "../utils/downloadHistory";
+// The offscreen document must never see this module: chrome.downloads is a
+// worker-only capability and it is what makes "verify before skip" possible.
+import { presentBatchFilenames, verifyHistoryOnDisk } from "../utils/downloadVerify";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
@@ -317,8 +335,26 @@ module background
                 // Clear the job marker when the download finishes (success or error) and
                 // keep re-throwing so a failure still surfaces as a worker rejection (the
                 // popup has already been told via errorCallback).
-                currentDownloader.startAsync()
-                    .then(() => clearJobMarker())
+                const downloader = currentDownloader;
+                downloader.startAsync()
+                    .then(() => {
+                        clearJobMarker();
+                        // Record history ONLY after a fully successful download.
+                        // The Downloader resolved the effective format from its
+                        // settings by now, so the record always matches the file.
+                        const format = normalizeFormat(downloader.useZip || settings.useZip || "zip", "zip");
+                        const masterFolder = format === "raw"
+                            ? String(settings.rawMasterFolder || "NHDW")
+                            : String(settings.archiveMasterFolder || "");
+                        recordHistory([{
+                            id: String(jsonTmp.id),
+                            filename: artifactRecordFilename({
+                                format: format,
+                                name: String(downloader.downloadName || path),
+                                masterFolder: masterFolder
+                            })
+                        }]);
+                    })
                     .catch(function(error) { clearJobMarker(); throw error; });
             };
             try {
@@ -341,11 +377,27 @@ module background
         });
     }
 
-    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }) {
+    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }) {
         beginJob();
         let zip = new JSZip();
         downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId, options)
-            .then(() => clearJobMarker())
+            .then((outcome: BatchOutcome) => {
+                clearJobMarker();
+                // Record on SUCCESS only: separate mode per successful gallery;
+                // merged mode records every title only when the whole job is clean.
+                const jobOptions = options || {};
+                const format = normalizeFormat(jobOptions.useZip || "zip", "zip");
+                const effectiveSeparate = !!(jobOptions.downloadSeparately || format === "raw");
+                const resolved = historyRecords(outcome, {
+                    effectiveSeparate: effectiveSeparate,
+                    format: format,
+                    finalName: finalName,
+                    archiveMasterFolder: typeof jobOptions.archiveMasterFolder === "string" ? jobOptions.archiveMasterFolder : ""
+                });
+                if (resolved.length > 0) {
+                    recordHistory(resolved);
+                }
+            })
             .catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
@@ -363,8 +415,8 @@ module background
         downloadAtEnd: boolean,
         galleryMetadata: Record<string, any> = {},
         sourceTabId?: number | null,
-        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }
-    ) {
+        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }
+    ): Promise<BatchOutcome> {
         let downloadName: string = "";
         let duplicateBehaviour: string = "";
         let replaceSpaces: boolean = false;
@@ -432,7 +484,26 @@ module background
         // Per-gallery tally for the end-of-batch summary.
         let succeeded = 0;
         let failed = 0;
+        let skipped = 0;
         const failedKinds: Record<string, number> = {};
+
+        // Persistent history guard (authoritative safety net behind the UI
+        // pre-check): skip already-recorded galleries BEFORE any metadata
+        // fetch, minus the user's "download anyway" picks. The worker read
+        // chrome.storage.local at enqueue time; the recorded set is relayed in
+        // options to the offscreen document when this runs there.
+        const format: string = normalizeFormat(options ? options.useZip : "zip", "zip");
+        const effectiveSeparate: boolean = !!(options && (options.downloadSeparately || format === "raw"));
+        const alreadySet = new Set<string>(
+            options && Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map(String) : []
+        );
+        const redownloadSet = new Set<string>(
+            options && Array.isArray(options.redownloadIds) ? options.redownloadIds.map(String) : []
+        );
+        // History records produced by this invocation.
+        const records: Array<{ id: string; filename: string }> = [];
+        const batchKeys: string[] = [];
+        let finalSaveOk = false;
 
         function countFailure(error: any) {
             failed++;
@@ -442,6 +513,13 @@ module background
 
         for (let i = 0; i < length; i++) {
             let key = allKeys[i];
+            // Only per-title (separate) output can skip a gallery: a merged
+            // archive must contain every selected title, so batch jobs never
+            // skip (they re-record everything only when the whole job succeeds).
+            if (effectiveSeparate && alreadySet.has(key) && !redownloadSet.has(key)) {
+                skipped++;
+                continue;
+            }
             // Tell the popup which gallery the batch is working on.
             chrome.runtime.sendMessage({
                 action: "batchProgress",
@@ -525,7 +603,7 @@ module background
                 }
                 names.push(title);
                 let zipName = null;
-                if (downloadSeparately) {
+                if (effectiveSeparate) {
                     // Separate files are named from the (list-mode) template
                     // and the gallery's OWN metadata, cleaned exactly like a
                     // single-title download - never from the page URL.
@@ -533,19 +611,42 @@ module background
                 } else if (downloadAtEnd && i == length - 1) {
                     zipName = finalName;
                 }
+                // Batch mode: the merged archive is saved by the LAST gallery's
+                // Downloader. Its success is what makes the job "clean".
+                const isFinalSave = !effectiveSeparate && downloadAtEnd && i === length - 1;
                 currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
-                downloadSeparately ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
+                effectiveSeparate ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
                 zipName, jobAbortController ? jobAbortController.signal : null, undefined, gallerySettings);
                 if (typeof sourceTabId === "number") {
                     currentDownloader.sourceTabId = sourceTabId;
                 }
                 // We download the ZIP file in the following cases:
-                // downloadSeparately is true (set in extension options)
+                // downloadSeparately is true / raw (effective separate)
                 // OR downloadAtEnd is true (can be false if downloading many pages) AND we are at the doujin of the current list
 
                 try {
                     await currentDownloader.startAsync();
                     succeeded++;
+                    if (isFinalSave) {
+                        finalSaveOk = true;
+                    }
+                    if (effectiveSeparate) {
+                        // Only a fully successful gallery is recorded; a
+                        // partial gallery (any page failed) stays un-recorded
+                        // so the next run re-fetches it cleanly.
+                        records.push({
+                            id: key,
+                            filename: artifactRecordFilename({
+                                format: format,
+                                name: zipName || utils.cleanName(title, replaceSpaces, key),
+                                masterFolder: format === "raw"
+                                    ? String(rawMasterFolder || "NHDW")
+                                    : (options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "")
+                            })
+                        });
+                    } else {
+                        batchKeys.push(key);
+                    }
                 } catch (error) {
                     // The Downloader already surfaced its own failure through
                     // errorCallback (and intentionally stays silent on abort).
@@ -576,16 +677,40 @@ module background
                 action: "batchSummary",
                 succeeded: succeeded,
                 failed: failed,
+                skipped: skipped,
                 total: length,
                 failedKinds: failedKinds
             });
         }
+        // Batch mode is all-or-nothing: every gallery must have succeeded AND
+        // the merged artifact must have been saved (the last gallery carries
+        // the save). A merged file only records its title set when the run is
+        // fully clean, so a failure part-way leaves all of them re-downloadable.
+        // Multi-page "Download all" runs this per page with downloadAtEnd true
+        // ONLY on the final page: earlier pages must be failure-free but the
+        // save belongs to the last page, so finalSaveOk is required only when
+        // this invocation owns the merge.
+        const clean = effectiveSeparate
+            ? true
+            : (failed === 0 && batchKeys.length > 0 && (!downloadAtEnd || finalSaveOk));
+        return {
+            records: records,
+            clean: clean,
+            batchKeys: batchKeys,
+            skipped: skipped
+        } as BatchOutcome;
     }
 
-    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }) {
+    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }) {
         beginJob();
         downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId, options)
-            .then(() => clearJobMarker())
+            .then((outcome: BatchOutcome) => {
+                clearJobMarker();
+                // Records are already resolved (merged mode is all-or-nothing).
+                if (outcome.records.length > 0) {
+                    recordHistory(outcome.records);
+                }
+            })
             .catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
@@ -602,8 +727,8 @@ module background
         progressCallback: Function,
         url: string,
         sourceTabId?: number | null,
-        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }
-    ) {
+        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }
+    ): Promise<BatchOutcome> {
         let downloadName: string = "";
         await new Promise((resolve, _reject) => {
             resolve(
@@ -615,6 +740,17 @@ module background
                 })
             );
         });
+        const format: string = normalizeFormat(options ? options.useZip : "zip", "zip");
+        const effectiveSeparate: boolean = !!(options && (options.downloadSeparately || format === "raw"));
+
+        // Aggregate every page's outcome: separate mode keeps per-gallery
+        // records (they are real, independent files); merged mode records every
+        // title only when EVERY page succeeded and the artifact was saved.
+        const allRecords: Array<{ id: string; filename: string }> = [];
+        const allBatchKeys: string[] = [];
+        let allClean = true;
+        let skippedTotal = 0;
+        let pagesFetched = 0;
 
         let zip = new JSZip();
         for (let i = 0; i < pagesArr.length; i++) {
@@ -666,9 +802,45 @@ module background
                     }
                     allDoujinshis[card.id] = tmpName;
                 }
-                await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId, options);
+                const outcome = await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId, options);
+                allRecords.push.apply(allRecords, outcome.records);
+                allBatchKeys.push.apply(allBatchKeys, outcome.batchKeys);
+                skippedTotal += outcome.skipped;
+                if (!outcome.clean) {
+                    allClean = false;
+                }
+                pagesFetched++;
+            } else {
+                // A page that could not be fetched contributes nothing: a
+                // merged job is never clean without it, so no batch titles
+                // are recorded.
+                allClean = false;
             }
         }
+
+        const clean = effectiveSeparate
+            ? true
+            : (allClean && pagesFetched === pagesArr.length && pagesArr.length > 0);
+        if (!effectiveSeparate && clean) {
+            const finalName = path + " (" + String(pagesArr[pagesArr.length - 1]) + ")";
+            const filename = artifactRecordFilename({
+                format: format,
+                name: finalName,
+                masterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : ""
+            });
+            return {
+                records: allBatchKeys.map((id) => ({ id: id, filename: filename })),
+                clean: true,
+                batchKeys: [],
+                skipped: skippedTotal
+            } as BatchOutcome;
+        }
+        return {
+            records: effectiveSeparate ? allRecords : [],
+            clean: clean,
+            batchKeys: [],
+            skipped: skippedTotal
+        } as BatchOutcome;
     }
 
     export function goBack() {
@@ -707,6 +879,7 @@ function jobOverridesFromRequest(request: any): {
     downloadName?: string;
     rawMasterFolder?: string;
     archiveMasterFolder?: string;
+    redownloadIds?: string[];
 } {
     const overrides: any = { useZip: normalizeFormatOverride(request.formatOverride) };
     if (request.separate !== undefined) {
@@ -719,7 +892,112 @@ function jobOverridesFromRequest(request: any): {
         overrides.rawMasterFolder = request.masterFolder;
         overrides.archiveMasterFolder = request.masterFolder;
     }
+    // Per-download "download anyway" override: recorded galleries in this list
+    // are exempt from the history guard.
+    overrides.redownloadIds = Array.isArray(request.redownloadIds) ? request.redownloadIds.map(String) : [];
     return overrides;
+}
+
+// "Verify before skip" preference: default ON. When on, a recorded gallery is
+// skipped only if its file can be confirmed on disk; when off, the record list
+// is the truth (pre-3.5.0 semantics, fastest).
+function readVerificationSetting(): Promise<boolean> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.sync.get({ verifyDownloadedFiles: true }, (elems: any) => {
+                resolve(!elems || elems.verifyDownloadedFiles !== false);
+            });
+        } catch (_) {
+            resolve(true);
+        }
+    });
+}
+
+// The persistent history guard needs the recorded ID list. The worker owns
+// chrome.storage.local; the offscreen document receives the list relayed
+// inside its job options (it has no storage of its own).
+function attachHistoryOverrides(overrides: any): Promise<any> {
+    return readHistory().then((history) => readVerificationSetting().then((verify) => {
+        const apply = (ids: string[]) => {
+            overrides.alreadyDownloadedIds = ids;
+            if (!Array.isArray(overrides.redownloadIds)) {
+                overrides.redownloadIds = [];
+            }
+            return overrides;
+        };
+        if (!verify || Object.keys(history).length === 0) {
+            return apply(historyIds(history));
+        }
+        // Verify before skip: only ids whose artifact is still on disk are
+        // skipped; deleted files fall through and are downloaded again.
+        return verifyHistoryOnDisk(history).then((present) => {
+            return apply(historyIds(history).filter((id) => present.has(id)));
+        });
+    }));
+}
+
+// Merged-job naming for listing re-runs (settled with the user):
+//  * batchNameDate (default ON) appends _DDMMYYYY to the base name, so
+//    homepage / search / artist / tag / genre re-runs get distinguishable
+//    merged files ("search_31082026.zip") and the history records THAT name.
+//  * The same title+date again becomes _part2, _part3 ... (part numbering).
+//  * Merged jobs are NEVER skipped, but when the name is already occupied and
+//    the user has not confirmed yet, the worker answers {result:"existing",
+//    filename} instead of starting — the UI warns and re-sends with
+//    existingConfirmed (the user chose "warn only" for merged re-runs).
+// Runs only for merged jobs: separate saves and raw folders are named from the
+// per-gallery template, and single-title downloads never pass through here.
+async function resolveMergedBatchName(
+    relayedMessage: any,
+    confirmExisting: boolean
+): Promise<{ finalName: string } | { existing: string }> {
+    const format = normalizeFormat(relayedMessage.formatOverride || "zip", "zip");
+    if (relayedMessage.separate === true || format === "raw" || relayedMessage.action === "downloadDoujinshi") {
+        return { finalName: String(relayedMessage.finalName || "") };
+    }
+    const settings = await new Promise<any>((resolve) => {
+        try {
+            chrome.storage.sync.get({ batchNameDate: true, verifyDownloadedFiles: true }, (elems) => resolve(elems || {}));
+        } catch (_) {
+            resolve({});
+        }
+    });
+    const dateOn = settings.batchNameDate !== false;
+    const verify = settings.verifyDownloadedFiles !== false;
+    // formatExtension returns ".zip" (with the dot); the naming helpers expect
+    // the bare extension ("zip") and append the dot themselves.
+    const extension = formatExtension(format as DownloadFormat).replace(/^\./, "");
+    const pages = Array.isArray(relayedMessage.pages) ? relayedMessage.pages : [];
+    const pageSuffix = pages.length > 0 ? " (" + String(pages[pages.length - 1]) + ")" : "";
+    let base = String(relayedMessage.finalName || "download");
+    if (dateOn) {
+        base = applyBatchDate(base, Date.now());
+    }
+    // The part number belongs on the base name; the page marker is appended by
+    // the downloadAllPages pipeline AFTER it ("<base>[_partN] (N)"), so the
+    // disk candidates carry the page suffix last.
+    const candidates = batchCandidateNames(base).map((n) => n + pageSuffix + "." + extension);
+    const present = verify
+        ? await presentBatchFilenames(candidates)
+        : new Set<string>();
+    const history: DownloadHistory = await readHistory();
+    const first = candidates[0];
+    const firstOccupied = verify
+        ? present.has(first)
+        : Object.keys(history).some((id) => history[id].filename === first);
+    if (firstOccupied && !confirmExisting) {
+        return { existing: first };
+    }
+    const chosen = pickFreeBatchFilename(history, base, extension, {
+        verify: verify,
+        presentFilenames: present,
+        suffix: pageSuffix
+    });
+    // Strip "<pageSuffix><extension>" from the chosen candidate; what remains
+    // is the finalName the pipelines save (single page: "<base>[_partN]", multi
+    // page: "<base>[_partN]" and downloadAllPages appends " (lastPage)").
+    const finalName = chosen.slice(0, -(pageSuffix.length + extension.length + 1));
+    return { finalName: finalName };
 }
 
 function resolveTabId(request: any, sender: any): number | undefined {
@@ -993,6 +1271,13 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         // close, so a later isDownloadFinished cannot misreport a completed
         // download as "interrupted".
         background.clearJobMarker();
+        // Persistent download history: the offscreen document reports the
+        // galleries that fully succeeded (never enqueues/failures); the worker
+        // writes them to chrome.storage.local. recordHistory is best-effort
+        // and must never reject (storage failure cannot fail the download).
+        if (Array.isArray(request.records) && request.records.length > 0) {
+            recordHistory(request.records);
+        }
         return false;
     }
     if (request.action === "offscreenIdle") {
@@ -1107,28 +1392,74 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     options.rawMasterFolder = relayedMessage.masterFolder;
                     options.archiveMasterFolder = relayedMessage.masterFolder;
                 }
-                background.setJobMarker(true);
-                // Resolve the nhentai image CDN config (GET /api/v2/cdn, cached
-                // for the session) before the job starts, and relay the
-                // validated, permission-filtered server list with the job: the
-                // offscreen document cannot read storage or chrome.permissions
-                // itself. ensureImageServers never rejects - worst case it
-                // returns the cached fallback list after a short timeout.
-                cdnConfigService.ensureImageServers(relayedMessage.tabId).then((imageServers) => {
-                    options.imageServers = imageServers;
-                    // options: the offscreen document cannot read chrome.storage,
-                    // so the worker relays the download settings with the command.
-                    askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
-                        if (response && (response.result === "started" || response.result === "queued")) {
-                            // A queued job is held by the offscreen document and
-                            // will start after the active job sends jobFinished.
-                            // Keep the worker marker set across the whole queue.
-                            sendResponse({ result: response.result, position: response.position });
-                        } else {
-                            background.clearJobMarker();
-                            relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
-                            sendResponse({ result: "error" });
-                        }
+                if (Array.isArray(relayedMessage.redownloadIds)) {
+                    options.redownloadIds = relayedMessage.redownloadIds.map(String);
+                }
+                // Relay the persistent history with the job: the offscreen
+                // guard (and Download all across pages) needs the recorded ID
+                // list to skip already-downloaded galleries without fetching
+                // their metadata.
+                attachHistoryOverrides(options).then((optionsWithHistory) => {
+                    const jobOptions = optionsWithHistory;
+                    const startRelay = () => {
+                        background.setJobMarker(true);
+                        // Resolve the nhentai image CDN config (GET /api/v2/cdn, cached
+                        // for the session) before the job starts, and relay the
+                        // validated, permission-filtered server list with the job: the
+                        // offscreen document cannot read storage or chrome.permissions
+                        // itself. ensureImageServers never rejects - worst case it
+                        // returns the cached fallback list after a short timeout.
+                        cdnConfigService.ensureImageServers(relayedMessage.tabId).then((imageServers) => {
+                            jobOptions.imageServers = imageServers;
+                            // options: the offscreen document cannot read chrome.storage,
+                            // so the worker relays the download settings with the command.
+                            askOffscreen(Object.assign({}, relayedMessage, { options: jobOptions }), (response) => {
+                                if (response && (response.result === "started" || response.result === "queued")) {
+                                    // A queued job is held by the offscreen document and
+                                    // will start after the active job sends jobFinished.
+                                    // Keep the worker marker set across the whole queue.
+                                    sendResponse({ result: response.result, position: response.position });
+                                } else {
+                                    background.clearJobMarker();
+                                    relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                                    sendResponse({ result: "error" });
+                                }
+                            });
+                        });
+                    };
+                    // Merged re-runs: date stamp + part numbering + the "you
+                    // already have this file" warning (the user chose warn-only
+                    // for merged jobs). Resolution must never block a download.
+                    if (relayedMessage.action === "downloadAllDoujinshis" || relayedMessage.action === "downloadAllPages") {
+                        resolveMergedBatchName(relayedMessage, !!relayedMessage.existingConfirmed)
+                            .then((resolved: any) => {
+                                if (resolved && resolved.existing) {
+                                    sendResponse({ result: "existing", filename: resolved.existing });
+                                    return;
+                                }
+                                relayedMessage = Object.assign({}, relayedMessage, { finalName: resolved.finalName });
+                                startRelay();
+                            })
+                            .catch(() => { startRelay(); });
+                        return;
+                    }
+                    startRelay();
+                }).catch(() => {
+                    // History read failure must never block a download: relay
+                    // with an empty history list (nothing is skipped).
+                    background.setJobMarker(true);
+                    cdnConfigService.ensureImageServers(relayedMessage.tabId).then((imageServers) => {
+                        options.imageServers = imageServers;
+                        options.alreadyDownloadedIds = [];
+                        askOffscreen(Object.assign({}, relayedMessage, { options: options }), (response) => {
+                            if (response && (response.result === "started" || response.result === "queued")) {
+                                sendResponse({ result: response.result, position: response.position });
+                            } else {
+                                background.clearJobMarker();
+                                relayDownloadError(response && response.error ? response.error : "Unable to start the offscreen download document.");
+                                sendResponse({ result: "error" });
+                            }
+                        });
                     });
                 });
             });
@@ -1137,9 +1468,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         if (request.action === "downloadDoujinshi") {
             return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
@@ -1216,53 +1547,108 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         background.setJobMarker(true);
         cdnConfigService.ensureImageServers(request.tabId).then((imageServers) => {
             setImageServers(imageServers);
-            background.downloadAllDoujinshis(
-                request.allDoujinshis,
-                request.finalName,
-                (error: string) => {
-                    chrome.runtime.sendMessage({ action: "downloadError", error: error });
-                },
-                (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
-                    chrome.runtime.sendMessage({
-                        action: "updateProgress",
-                        progress: progress,
-                        doujinshiName: doujinshiName,
-                        isZipping: isZipping,
-                retry: retry
+            // Persistent history guard: the same worker-side read the relay
+            // path uses, so the fallback pipeline skips recorded galleries
+            // (minus the per-download "download anyway" ids) identically.
+            attachHistoryOverrides(jobOverridesFromRequest(request)).then((overrides) => {
+                // Merged re-runs: date + part numbering + "you already have
+                // this file" warning (same behaviour as the relay path).
+                resolveMergedBatchName(request, !!request.existingConfirmed)
+                    .then((resolved: any) => {
+                        if (resolved && resolved.existing) {
+                            background.clearJobMarker();
+                            sendResponse({ result: "existing", filename: resolved.existing });
+                            return;
+                        }
+                        const requestWithName = Object.assign({}, request, { finalName: resolved.finalName });
+                        background.downloadAllDoujinshis(
+                            requestWithName.allDoujinshis,
+                            requestWithName.finalName,
+                            (error: string) => {
+                                chrome.runtime.sendMessage({ action: "downloadError", error: error });
+                            },
+                            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
+                                chrome.runtime.sendMessage({
+                                    action: "updateProgress",
+                                    progress: progress,
+                                    doujinshiName: doujinshiName,
+                                    isZipping: isZipping,
+                    retry: retry
+                                });
+                            },
+                            requestWithName.galleryMetadata || {},
+                            resolveTabId(requestWithName, _sender),
+                            overrides
+                        );
+                        sendResponse({ result: "started" });
+                    })
+                    .catch(() => {
+                        // Name resolution must never block a download.
+                        background.downloadAllDoujinshis(
+                            request.allDoujinshis,
+                            request.finalName,
+                            (error: string) => {
+                                chrome.runtime.sendMessage({ action: "downloadError", error: error });
+                            },
+                            (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
+                                chrome.runtime.sendMessage({
+                                    action: "updateProgress",
+                                    progress: progress,
+                                    doujinshiName: doujinshiName,
+                                    isZipping: isZipping,
+                    retry: retry
+                                });
+                            },
+                            request.galleryMetadata || {},
+                            resolveTabId(request, _sender),
+                            overrides
+                        );
+                        sendResponse({ result: "started" });
                     });
-                },
-                request.galleryMetadata || {},
-                resolveTabId(request, _sender),
-                jobOverridesFromRequest(request)
-            );
-            sendResponse({ result: "started" });
+            });
         });
         return true; // sendResponse is called asynchronously.
     } else if (request.action === "downloadAllPages") {
         background.setJobMarker(true);
         cdnConfigService.ensureImageServers(request.tabId).then((imageServers) => {
             setImageServers(imageServers);
-            background.downloadAllPages(
-                request.allDoujinshis,
-                request.pages,
-                request.finalName,
-                (error: string) => {
-                    chrome.runtime.sendMessage({ action: "downloadError", error: error });
-                },
-                (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
-                    chrome.runtime.sendMessage({
-                        action: "updateProgress",
-                        progress: progress,
-                        doujinshiName: doujinshiName,
-                        isZipping: isZipping,
-                retry: retry
-                    });
-                },
-                request.url,
-                resolveTabId(request, _sender),
-                jobOverridesFromRequest(request)
-            );
-            sendResponse({ result: "started" });
+            attachHistoryOverrides(jobOverridesFromRequest(request)).then((overrides) => {
+                const startPages = (withName: any) => {
+                    background.downloadAllPages(
+                        withName.allDoujinshis,
+                        withName.pages,
+                        withName.finalName,
+                        (error: string) => {
+                            chrome.runtime.sendMessage({ action: "downloadError", error: error });
+                        },
+                        (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
+                            chrome.runtime.sendMessage({
+                                action: "updateProgress",
+                                progress: progress,
+                                doujinshiName: doujinshiName,
+                                isZipping: isZipping,
+                    retry: retry
+                            });
+                        },
+                        withName.url,
+                        resolveTabId(withName, _sender),
+                        overrides
+                    );
+                    sendResponse({ result: "started" });
+                };
+                // Merged re-runs: date + part numbering + "you already have
+                // this file" warning (same behaviour as the relay path).
+                resolveMergedBatchName(request, !!request.existingConfirmed)
+                    .then((resolved: any) => {
+                        if (resolved && resolved.existing) {
+                            background.clearJobMarker();
+                            sendResponse({ result: "existing", filename: resolved.existing });
+                            return;
+                        }
+                        startPages(Object.assign({}, request, { finalName: resolved.finalName }));
+                    })
+                    .catch(() => { startPages(request); });
+            });
         });
         return true; // sendResponse is called asynchronously.
     } else if (request.action === "goBack") {
