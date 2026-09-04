@@ -12,15 +12,21 @@ import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFet
 import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 import * as cdnConfigService from "./cdnConfigService";
-import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId } from "./downloadNaming";
+import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId, discardDownloadRequest } from "./downloadNaming";
 import { normalizeFormat, DownloadFormat } from "../utils/downloadFormats";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
 // for our own downloads when another extension's onDeterminingFilename
 // listener would suppress it (Chromium bug 579563 — the reason raw pages can
-// land as "1.jpg" in Downloads instead of "NHDW/<Title>/001.jpg"). MUST run
-// synchronously during worker evaluation (MV3 event registration rule).
+// land as "1.jpg" in Downloads instead of "NHDW/<Title>/001.jpg").
+//
+// This installs the bookkeeping half only. The global onDeterminingFilename
+// listener is attached on demand, while our own downloads are in flight, and
+// detached the moment they drain — see the lifetime notes in
+// downloadNaming.ts. An idle worker must NOT be a participant in the
+// browser-wide filename chain, or Chrome can blame this extension for
+// unrelated downloads started by other extensions.
 installDownloadFilenameGuard();
 
 // ---- toolbar UI mode: side panel or popup -------------------------------
@@ -939,6 +945,9 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
             }
             chrome.downloads.download({ url: request.url, filename: request.filename, conflictAction: "uniquify" }, (downloadId: number) => {
                 if (downloadId === undefined) {
+                    // Release the recorded name: nothing will complete for it
+                    // and a stuck entry would pin the global listener.
+                    discardDownloadRequest(String(request.url));
                     sendResponse({ result: false, error: String(chrome.runtime.lastError || "Unable to start download") });
                 } else {
                     bindDownloadId(String(request.url), downloadId);

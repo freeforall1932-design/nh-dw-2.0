@@ -3,7 +3,7 @@ import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
-import { recordDownloadRequest, bindDownloadId } from "./downloadNaming";
+import { recordDownloadRequest, bindDownloadId, discardDownloadRequest } from "./downloadNaming";
 
 export default class Downloader
 {
@@ -438,6 +438,10 @@ export default class Downloader
             recordDownloadRequest(url, safeName);
             chrome.downloads.download({ url: url, filename: safeName, conflictAction: "uniquify" }, function(downloadId) {
                 if (downloadId === undefined) {
+                    // Nothing will ever complete for this URL, so release the
+                    // recorded name immediately: a stuck entry would keep the
+                    // global onDeterminingFilename listener attached.
+                    discardDownloadRequest(url);
                     reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
                 } else {
                     bindDownloadId(url, downloadId);

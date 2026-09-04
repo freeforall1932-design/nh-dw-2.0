@@ -1,5 +1,13 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-04 — **3.4.1: cross-extension naming leak closed.** The
+3.3.1 folder-naming guard registered Chrome's profile-wide
+`onDeterminingFilename` at worker startup and never released it, so this
+extension sat in the filename-decision chain for every download in the browser
+and could be blamed for other extensions' files. The listener is now
+reference-counted against our own pending downloads — see "Filename-guard
+listener lifetime (3.4.1 — newest)" below. Manifest version bumped to 3.4.1.
+
 **Updated:** 2026-09-04 — **3.4.0 landed: list mode reaches parity with
 single-title mode.** Format choice (zip/cbz/pdf/raw) + explicit output mode
 (separate files vs one merged file, separate is now the default) + list-mode
@@ -68,7 +76,69 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
-### List mode parity (3.4.0 — newest)
+### Filename-guard listener lifetime (3.4.1 — newest)
+
+Symptom reported by the user, from a multi-extension Chrome profile:
+
+```
+This extension failed to name the download "Kodomo_Idol.pdf"
+because another extension determined a different filename ""
+```
+
+The blamed extension was a downloader for a *different* site. The audit asked
+whether THIS extension leaks naming authority across products. **It did.**
+
+`chrome.downloads.onDeterminingFilename` is a global naming-decision event.
+Registering it puts the extension into the filename chain for **every** download
+in the profile. `host_permissions` and content-script `matches` do not scope it,
+and returning early for a foreign item does **not** remove you from the chain —
+participation itself is what lets Chrome name you in that error.
+
+Up to 3.4.0, `installDownloadFilenameGuard()` ran at worker module evaluation
+and added the listener unconditionally, forever. Classification: **LEAK**
+(criteria: registered at startup and never removed; remains registered after
+its own work finishes; participates globally even when the UI is nowhere near
+nhentai).
+
+Fix in `src/background/downloadNaming.ts` — reference-counted lifetime:
+
+- `recordDownloadRequest(url, name)` attaches the listener when the pending map
+  goes from empty to non-empty.
+- The listener is detached the instant the map drains. Every drain path is
+  covered: suggestion consumed, `onChanged` complete, `onChanged` interrupted /
+  cancelled, `discardDownloadRequest()` when `downloads.download()` fails to
+  produce an id, a 30-minute per-entry TTL, and the 600-entry FIFO cap.
+- Idle worker ⇒ not in the chain at all.
+- While attached, an item that is not ours gets a bare `suggest()` — never a
+  filename, never `""`. `suggest()` is called exactly once per event.
+- `installDownloadFilenameGuard()` now installs only the `onChanged`
+  bookkeeping listener (no naming authority) and re-attaches the naming
+  listener after a worker restart **only if** the session mirror still lists
+  work in flight.
+- New exports: `discardDownloadRequest`, `isFilenameListenerRegistered`,
+  `pendingDownloadNameCount`. Session mirror moved to
+  `{ v: 2, pending: {url: {filename, at}}, idToUrl, order }`; the legacy
+  `{ byId, byUrl }` shape from 3.3.1/3.4.0 is still read on load.
+
+Product behaviour deliberately unchanged: master folder, per-title folders,
+list/single templates, archive names, `conflictAction: "uniquify"`, blob and
+raw-CDN paths, and the offscreen `recordDownloadName` relay all behave exactly
+as in 3.4.0.
+
+Regression coverage: `test/download-naming.test.js` now has a
+`global listener lifetime` block (idle ⇒ no listener; lazy attach on first own
+download; stays attached while any is pending; detach on complete, on
+interrupted, on failed creation, on consumption; restart re-attaches only with
+outstanding work; TTL sweep releases a stuck entry; Firefox no-op). 19 tests in
+that file. `scripts/smoke-mv3.js` additionally asserts that the **shipped
+bundle** registers zero `onDeterminingFilename` listeners at load time, for
+every worker variant it loads.
+
+Not cleared: `NHDW_Firefox_v1.0.0/js/background.js` still contains the 3.3.1
+guard. Firefox does not implement `onDeterminingFilename`, so it is inert
+there, but that port has not been audited.
+
+### List mode parity (3.4.0)
 
 User report, in their words: single-title pages could do "4 zip cbz pdf and
 raw", but "when I go to homepage or search or any artist or genre it's all
@@ -350,7 +420,7 @@ move its row out of this table.
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build
-npm test              # 205 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
+npm test              # 214 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
 npm run test:smoke
 npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN),
                       # relay (incl. list-mode option relay + UI mode), content,
@@ -493,6 +563,13 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 ## Do not
 
 - Do not switch branches or push to a branch other than the current session branch.
+- Do not register `chrome.downloads.onDeterminingFilename` at worker startup or
+  leave it registered while idle. It is a profile-wide event: participation
+  alone makes Chrome able to blame this extension for other extensions'
+  downloads. Attach it only while our own filenames are pending and detach on
+  every drain path (see "Filename-guard listener lifetime"). Never call
+  `suggest({ filename: "" })`, and never call `suggest` more than once per
+  event.
 - Do not edit `.github/workflows/**` from an agent session. The push will be
   rejected for the whole branch (`without \`workflows\` permission`). Put the
   intended file in `NHDW_Extension_v3.0.0/ci/pending-workflows/` and record it

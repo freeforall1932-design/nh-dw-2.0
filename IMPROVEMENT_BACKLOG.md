@@ -849,3 +849,76 @@ touching only `manifest.json`, `index.html`, `options.html`, `css/**`,
 plus `css/**` are exactly where the 3.4.0 side-panel registration and card
 styling live. `test/manifest.test.js` would never run against a manifest-only
 regression.
+
+## Session log — 2026-09-04: onDeterminingFilename cross-extension audit (3.4.1)
+
+**Symptom (user, multi-extension Chrome profile):**
+
+```
+This extension failed to name the download "Kodomo_Idol.pdf"
+because another extension determined a different filename ""
+```
+
+The extension Chrome blamed was a downloader for a different site. Question
+put to this audit: does *this* extension leak filename authority outside its
+own domain?
+
+**Verdict: LEAK CONFIRMED, fixed.** Not a hypothetical — the 3.3.1 guard
+registered `chrome.downloads.onDeterminingFilename` during service-worker
+module evaluation and never removed it.
+
+Why that is a defect even though the listener never renamed a foreign file:
+the event is a profile-wide naming decision. Registering it makes the
+extension a participant for every download in the browser. `host_permissions`
+and content-script `matches` do not scope it, and returning early for a
+foreign item does not withdraw participation — which is precisely what lets
+Chrome name an extension in the error above.
+
+**Every registration and removal site (before → after):**
+
+| Location | Before | After |
+| --- | --- | --- |
+| `src/background/background.ts:30` `installDownloadFilenameGuard()` | added the naming listener at module eval, permanently | installs only the `onChanged` bookkeeping listener; re-attaches naming **only** if the session mirror shows work in flight |
+| `src/background/downloadNaming.ts` `attachListener()` | did not exist | called from `recordDownloadRequest` when pending goes 0 → 1 |
+| `src/background/downloadNaming.ts` `detachListener()` | did not exist | called from `syncListener()` whenever pending reaches 0 |
+
+**Every `chrome.downloads.download` / filename-construction path reviewed:**
+
+| Path | Filename built by | Cleanup added |
+| --- | --- | --- |
+| `Downloader.ts:439` raw CDN pages + blob artifacts | `sanitizeArtifactFilename` + `#archiveArtifactName` (master folder) | `discardDownloadRequest(url)` when `downloadId === undefined` |
+| `background.ts:940` `saveDownload` relay from the offscreen document | name supplied by the offscreen packer | `discardDownloadRequest(url)` when `downloadId === undefined` |
+| `background.ts` `recordDownloadName` relay (offscreen anchor saves) | offscreen packer; never reaches `downloads.download` | covered by TTL + FIFO |
+
+**Drain paths now covered:** suggestion consumed, `onChanged` → `complete`,
+`onChanged` → `interrupted`/cancelled, failed download creation, 30-minute
+per-entry TTL, 600-entry FIFO eviction, and `resetTrackedNamesForTests`.
+
+**Invariants enforced:** `suggest()` is called exactly once per event; a
+foreign or unknown item always gets a bare `suggest()`; `""` is never
+suggested and never stored (empty names are rejected at record time).
+
+**Product behaviour preserved unchanged:** master folder, per-title raw
+folders, single-title and list-mode templates, archive names, blob/data URL
+handling, `conflictAction: "uniquify"`, and the offscreen relay.
+
+**Tests:** `test/download-naming.test.js` gained a `global listener lifetime`
+block asserting listener presence/absence directly rather than only checking
+that foreign names survive — a permanently registered listener passes the
+latter while still being the bug. `scripts/smoke-mv3.js` asserts the shipped
+bundle registers zero naming listeners at load, for every worker variant.
+
+**Session mirror** moved to `{ v: 2, pending: {url: {filename, at}}, idToUrl,
+order }`, still reading the legacy `{ byId, byUrl }` shape.
+
+**Not cleared:** `NHDW_Firefox_v1.0.0` still ships the 3.3.1 guard in its built
+`js/background.js`. Firefox does not implement the event so it is inert, but
+that port received no independent audit. No other repository was examined.
+
+**Unrelated issues checked and found clean during the sweep:** object URLs are
+revoked by the `revoke` closure returned alongside each one; manifest
+permissions (`downloads`, `tabs`, `storage`, `alarms`, `scripting`,
+`offscreen`, `sidePanel`) all correspond to live API use; host permissions
+remain the six nhentai origins with no `<all_urls>`; web-accessible resources
+stay scoped to `https://nhentai.net/*`.
+
