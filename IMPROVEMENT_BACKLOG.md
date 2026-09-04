@@ -827,3 +827,25 @@ separate-file option; everything else was explicitly optional.
 - **26. Master folder for single-file archives** — done (`archiveMasterFolder`,
   driven by the list-mode checkbox; off by default for single titles).
 
+### Follow-up — 2026-09-04: workflow trigger paths (manual commit owed)
+
+The 3.4.0 push initially carried a widened `on.push.paths` for
+`.github/workflows/extension-tests.yml`. The remote rejected it: the GitHub App
+an agent session pushes as has no `workflows` permission, and the rejection
+takes the entire push with it, so the hunk was reverted and PR #33 went out
+without it.
+
+Workflow files in this repo are, and always have been, a **manual commit**. The
+complete intended file now lives at
+`NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml`, with the
+rationale, the one-hunk diff and the apply/verify steps in
+`NHDW_Extension_v3.0.0/ci/README.md` and a pending-table row in
+`SESSION_HANDOFF.md`.
+
+Why it is worth applying: `on.push.paths` covers only `NHDW_Release_v3.0.0/**`
+and the extension's `scripts/`, `test/` and `src/` subtrees, so a commit
+touching only `manifest.json`, `index.html`, `options.html`, `css/**`,
+`webpack.config.js` or the tsconfigs never triggers CI — and `manifest.json`
+plus `css/**` are exactly where the 3.4.0 side-panel registration and card
+styling live. `test/manifest.test.js` would never run against a manifest-only
+regression.

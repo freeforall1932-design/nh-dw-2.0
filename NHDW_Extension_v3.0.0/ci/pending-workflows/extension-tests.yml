@@ -1,0 +1,45 @@
+name: extension-tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'NHDW_Release_v3.0.0/**'
+      - 'NHDW_Extension_v3.0.0/scripts/**'
+      - 'NHDW_Extension_v3.0.0/test/**'
+      - 'NHDW_Extension_v3.0.0/src/**'
+      - 'NHDW_Extension_v3.0.0/manifest.json'
+      - 'NHDW_Extension_v3.0.0/package.json'
+      - 'NHDW_Extension_v3.0.0/package-lock.json'
+      - 'NHDW_Extension_v3.0.0/index.html'
+      - 'NHDW_Extension_v3.0.0/options.html'
+      - 'NHDW_Extension_v3.0.0/offscreen.html'
+      - 'NHDW_Extension_v3.0.0/css/**'
+      - 'NHDW_Extension_v3.0.0/webpack.config.js'
+      - 'NHDW_Extension_v3.0.0/tsconfig*.json'
+      - '.github/workflows/extension-tests.yml'
+
+jobs:
+  unit:
+    name: Offline suites (fixtures + window-less VM bundles)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Build (webpack)
+        run: npm run build
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Fixture tests
+        run: npm test
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Window-less VM smoke tests
+        run: npm run test:smoke
+        working-directory: NHDW_Extension_v3.0.0
+      - name: Window-less VM e2e pipelines
+        run: npm run test:e2e
+        working-directory: NHDW_Extension_v3.0.0

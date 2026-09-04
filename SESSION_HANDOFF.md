@@ -5,7 +5,12 @@ single-title mode.** Format choice (zip/cbz/pdf/raw) + explicit output mode
 (separate files vs one merged file, separate is now the default) + list-mode
 file-name template + PDF-merge confirmation, plus the P1 side panel and the P2
 in-page card controls. Details in "List mode parity (3.4.0 — newest)" below.
-Session branch: `arena/01a06a75-nh-dw-2-0`.
+Session branch: `arena/01a06a75-nh-dw-2-0`. Landed as PR #33 (CI green).
+**One change from that session could not be pushed and is waiting for a human:**
+a broader `on.push.paths` list for `.github/workflows/extension-tests.yml`. The
+complete intended file is parked in
+`NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml` — see
+"CI and workflow files (manual-commit only)" below.
 
 **Updated:** 2026-09-03 — worklist extended with backlog item 27
 (Firefox port; docs-only change). Feasibility audit:
@@ -38,6 +43,11 @@ bullet fixed in PR #30)
   workflow itself, plus manual `workflow_dispatch`). The real-browser suite
   stays **local-only** (`npm run test:browser`) — see backlog item 10 for why
   a GitHub-hosted real-browser job can never work.
+  **Workflow files are always a manual commit** — the agent's GitHub App has no
+  `workflows` permission, so any push touching `.github/workflows/**` is
+  rejected outright and takes the whole push with it. Agents must write the
+  intended workflow into `NHDW_Extension_v3.0.0/ci/pending-workflows/` instead;
+  see "CI and workflow files (manual-commit only)" below.
 - PR #22 ("Add optional nhentai API key mode with first-run gate and one-shot
   archive downloads") was merged on 2026-08-26T08:38:07Z as merge commit
   `05cd7c5` (full: `05cd7c537f39d091b01a458519acdd7742051cd7`) —
@@ -287,6 +297,53 @@ Boundary table — **API key mode** (a key is stored) vs **open tab mode**
   `remove("allIds")`. Guarded by a test asserting the popup bundle never
   contains `storage.local.clear()`.
 
+## CI and workflow files (manual-commit only)
+
+`.github/workflows/**` is **outside what any agent session can push.** The
+GitHub App used for `git push` in Arena sessions is not granted the `workflows`
+permission, so the remote rejects the push before anything lands:
+
+```
+! [remote rejected] arena/<session> -> arena/<session>
+  (refusing to allow a GitHub App to create or update workflow
+   `.github/workflows/extension-tests.yml` without `workflows` permission)
+```
+
+It rejects the **entire push**, not just that file, so a workflow edit sitting
+in a session commit blocks every other change too. This is permanent, not
+flaky. Workflow changes in this repository have always been made by hand —
+through the GitHub web editor or a local clone with a normal user credential
+(that is how the 2026-09-01 real-browser-job removal was done).
+
+**Procedure for agents:** never edit `.github/workflows/`. Write the complete
+intended workflow file into `NHDW_Extension_v3.0.0/ci/pending-workflows/`,
+describe it in `NHDW_Extension_v3.0.0/ci/README.md`, and list it here. If a
+workflow edit has already been committed, drop it with
+`git checkout HEAD~1 -- .github/workflows/<file>` and amend before pushing.
+
+### Pending, waiting for a human
+
+| File | What it changes | Queued |
+| --- | --- | --- |
+| `NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml` | adds `manifest.json`, `package.json`, `package-lock.json`, `index.html`, `options.html`, `offscreen.html`, `css/**`, `webpack.config.js` and `tsconfig*.json` to `on.push.paths` so asset-only commits still run CI | 2026-09-04 (PR #33) |
+
+Why it matters: today a commit touching only `manifest.json` or `css/**` never
+triggers the workflow, and those files carry the side-panel registration, the
+panel DOM and the card-control styling — `test/manifest.test.js` would simply
+never run on them. Apply with:
+
+```bash
+cp NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml \
+   .github/workflows/extension-tests.yml
+git add .github/workflows/extension-tests.yml
+git commit -m "ci: broaden extension-tests trigger paths"
+git push
+```
+
+Then push a css-only commit and confirm a run appears in the Actions tab. Once
+applied, keep the copy in `ci/pending-workflows/` in sync with the live file and
+move its row out of this table.
+
 ## Validation
 
 ```bash
@@ -436,6 +493,10 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 ## Do not
 
 - Do not switch branches or push to a branch other than the current session branch.
+- Do not edit `.github/workflows/**` from an agent session. The push will be
+  rejected for the whole branch (`without \`workflows\` permission`). Put the
+  intended file in `NHDW_Extension_v3.0.0/ci/pending-workflows/` and record it
+  under "CI and workflow files (manual-commit only)" so a human can commit it.
 - Do not fork the download logic for list mode. List mode must keep calling the
   same `downloadAllDoujinshis` pipeline with per-job options; the formats and
   the output mode must keep coming from `src/utils/downloadFormats.ts`. Two
