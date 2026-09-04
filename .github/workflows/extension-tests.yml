@@ -8,6 +8,15 @@ on:
       - 'NHDW_Extension_v3.0.0/scripts/**'
       - 'NHDW_Extension_v3.0.0/test/**'
       - 'NHDW_Extension_v3.0.0/src/**'
+      - 'NHDW_Extension_v3.0.0/manifest.json'
+      - 'NHDW_Extension_v3.0.0/package.json'
+      - 'NHDW_Extension_v3.0.0/package-lock.json'
+      - 'NHDW_Extension_v3.0.0/index.html'
+      - 'NHDW_Extension_v3.0.0/options.html'
+      - 'NHDW_Extension_v3.0.0/offscreen.html'
+      - 'NHDW_Extension_v3.0.0/css/**'
+      - 'NHDW_Extension_v3.0.0/webpack.config.js'
+      - 'NHDW_Extension_v3.0.0/tsconfig*.json'
       - '.github/workflows/extension-tests.yml'
 
 jobs:
