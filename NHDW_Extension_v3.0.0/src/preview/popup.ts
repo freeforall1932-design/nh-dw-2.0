@@ -16,7 +16,7 @@ import {
     shouldWarnPdfMerge
 } from "../utils/downloadFormats"
 import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
-import { readHistory, partitionKnown, DownloadHistory } from "../utils/downloadHistory"
+import { readHistory, partitionKnown, applyBatchDate, DownloadHistory } from "../utils/downloadHistory"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
@@ -601,7 +601,15 @@ export default class Popup
             html += '<br/><input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/><br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
         }
         document.getElementById('action')!.innerHTML = html;
-        (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(name, settings.replaceSpaces);
+        // Merged re-runs of the same listing would reuse one base name; the
+        // date stamp (settings.batchNameDate, default on) tells them apart.
+        // The worker adds _part2/_part3 on same-day repeats before saving.
+        const pathInput = document.getElementById('path') as HTMLInputElement;
+        let defaultBatchName = utils.cleanName(name, settings.replaceSpaces);
+        if (effectiveOutputMode(settings.format, settings.outputMode) === "batch" && settings.batchNameDate) {
+            defaultBatchName = applyBatchDate(defaultBatchName, Date.now());
+        }
+        pathInput.value = defaultBatchName;
         if (maxPage > 0 && currPage > 0) {
             (document.getElementById('downloadInput') as HTMLInputElement).value = currPage + "-" + maxPage;
             document.getElementById('buttonHelp')!.addEventListener('click', function() {
@@ -786,6 +794,30 @@ export default class Popup
             };
         };
 
+        // Send a list job, handling the merged "you already have this file"
+        // answer: the worker refuses to start, the UI warns, then re-sends with
+        // existingConfirmed (user chose warn-only for merged re-runs).
+        const sendListJob = (message: any) => {
+            try {
+                chrome.runtime.sendMessage(message, (response: any) => {
+                    try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                    if (response && response.result === "existing" && response.filename) {
+                        const again = window.confirm(
+                            "You already have:\n" + response.filename +
+                            "\n\nThis download creates a NEW copy (the name gets _part2, _part3 ...).\n\nContinue?");
+                        if (again) {
+                            message.existingConfirmed = true;
+                            chrome.runtime.sendMessage(message, () => {
+                                try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                            });
+                        }
+                        return;
+                    }
+                    self.updateProgress(0, message.finalName, false);
+                });
+            } catch (_) { /* worker unreachable */ }
+        };
+
         // Invert all checkbox - add event listener after updating the HTML content
         setTimeout(() => {
             const invertButton = document.getElementById('invert');
@@ -873,7 +905,7 @@ export default class Popup
                                 return;
                             }
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
-                            chrome.runtime.sendMessage({
+                            sendListJob({
                                 action: "downloadAllDoujinshis",
                                 allDoujinshis: allDoujinshis,
                                 galleryMetadata: galleryMetadata,
@@ -885,7 +917,6 @@ export default class Popup
                                 nameTemplate: job.nameTemplate,
                                 redownloadIds: Array.from(forceIds)
                             });
-                            self.updateProgress(0, finalName, false);
                         }
                     } else {
                         document.getElementById('action')!.innerHTML = "Every selected gallery is already downloaded. Click <i>Download anyway</i> on a row to re-download it (or Clear history in Settings).";
@@ -976,7 +1007,7 @@ export default class Popup
                                         }
                                     }
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
-                                    chrome.runtime.sendMessage({
+                                    sendListJob({
                                         action: "downloadAllPages",
                                         allDoujinshis: allDoujinshis,
                                         galleryMetadata: galleryMetadata,
@@ -990,7 +1021,6 @@ export default class Popup
                                         nameTemplate: job.nameTemplate,
                                         redownloadIds: Array.from(forceIds)
                                     });
-                                    self.updateProgress(0, finalName, false);
                                 }
                             }
                         }

@@ -151,6 +151,85 @@ export function historyRecords(
     return outcome.batchKeys.map((id) => ({ id: id, filename: filename }));
 }
 
+// ---- batch/merged naming: date stamp + part numbering ---------------------
+// Re-running the same listing (homepage / search / artist / tag / genre)
+// produces the SAME base name, so merged files need a way to tell runs apart.
+// Settled with the user: append _DDMMYYYY (e.g. _31082026) to the merged base
+// name, and when the same title+date is downloaded again use _part2, _part3 ...
+// The history records the EXACT merged filename, which ties every title in the
+// batch to a specific file even after chrome.downloads history is pruned (the
+// record is the durable part; the disk check is the verification).
+
+export function batchDateStamp(now: number): string {
+    const d = new Date(now);
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const yyyy = String(d.getFullYear());
+    return dd + mm + yyyy;
+}
+
+// Append today's stamp unless the base already carries one (the UI pre-fills
+// it; the worker must never double-stamp). Also recognises resolved part
+// names (search_31082026_part2) the user may have typed into the name box.
+export function applyBatchDate(base: string, now: number): string {
+    const name = String(base || "");
+    if (/_\d{8}(?:_part\d+)?$/.test(name)) {
+        return name;
+    }
+    return name === "" ? batchDateStamp(now) : name + "_" + batchDateStamp(now);
+}
+
+// [base, base_part2, base_part3, ...] — the "part 2, part 3" naming the user
+// asked for when the same merged title+date is downloaded again. Kept short:
+// 10 parts is plenty, and every further duplicate falls back to Chrome's own
+// conflictAction uniquify instead of 99 disk checks per merged job.
+export function batchCandidateNames(base: string, limit: number = 10): string[] {
+    const names: string[] = [String(base)];
+    for (let i = 2; i <= limit; i++) {
+        names.push(String(base) + "_part" + i);
+    }
+    return names;
+}
+
+// Choose the filename for a merged artifact:
+//  * verify=false (record-only): a name is free when the history has no record
+//    for it — the record is the truth (current skip semantics).
+//  * verify=true: a name is free when the file is NOT on disk. A deleted file
+//    therefore REUSES its old name instead of growing part numbers forever; a
+//    file that still exists moves the new copy to _part2/_part3...
+//  * suffix: text the download pipeline appends AFTER the base (and therefore
+//    AFTER the part number). Multi-page merged jobs save "<base>[_partN] (N)"
+//    — the page marker comes last, so the part number always sits on the base
+//    name itself, exactly like single-page merged re-runs.
+// presentFilenames comes from chrome.downloads.search (worker side) so this
+// helper stays pure and unit-testable.
+export function pickFreeBatchFilename(
+    history: DownloadHistory,
+    base: string,
+    extension: string,
+    options: { verify: boolean; presentFilenames: Set<string>; suffix?: string }
+): string {
+    const suffix = options.suffix || "";
+    const recorded = new Set<string>();
+    for (const id of Object.keys(history)) {
+        if (history[id] && history[id].filename) {
+            recorded.add(history[id].filename);
+        }
+    }
+    const candidates = batchCandidateNames(base).map((n) => n + suffix + "." + extension);
+    for (const candidate of candidates) {
+        const occupied = options.verify
+            ? options.presentFilenames.has(candidate)
+            : recorded.has(candidate);
+        if (!occupied) {
+            return candidate;
+        }
+    }
+    // Every candidate is occupied (e.g. 99 parts): let Chrome's conflictAction
+    // uniquify the last one rather than blocking the download.
+    return candidates[candidates.length - 1];
+}
+
 // ---- storage (worker / popup / content script contexts only) -------------
 
 export function readHistory(): Promise<DownloadHistory> {

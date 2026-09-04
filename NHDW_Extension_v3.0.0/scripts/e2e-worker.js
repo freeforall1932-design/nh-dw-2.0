@@ -33,6 +33,8 @@ let syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
 let localSettings = {}; // chrome.storage.local (API key mode lives here)
 let downloadFails = false;
 let expectedWorkerRejection = false;
+// Files chrome.downloads.search sees on the fake disk: saved filename -> exists.
+const diskFiles = new Map();
 
 // Every request the worker makes to an /api/ route, with the Authorization
 // header it carried (null when none). Phases 8/9 assert the mode boundary.
@@ -85,9 +87,25 @@ const chromeStub = {
             if (downloadFails) {
                 chromeStub.runtime.lastError = { message: "download failed (test)" };
                 if (cb) cb(undefined);
-            } else if (cb) {
-                cb(1); // success, downloadId = 1
+            } else {
+                diskFiles.set(String(opts.filename), true);
+                if (cb) cb(1); // success, downloadId = 1
             }
+        },
+        // Verify-before-skip + merged part-numbering ask chrome.downloads
+        // whether a recorded artifact still exists.
+        search(query, cb) {
+            const queries = Array.isArray(query) ? query : [query || {}];
+            const items = [];
+            for (const filename of diskFiles.keys()) {
+                for (const q of queries) {
+                    if (q && q.filenameRegex && new RegExp(String(q.filenameRegex)).test(filename)) {
+                        items.push({ filename: filename, exists: diskFiles.get(filename) === true });
+                        break;
+                    }
+                }
+            }
+            if (cb) cb(items);
         }
     }
 };
@@ -158,6 +176,20 @@ function fetchStub(url, init) {
     if (u.includes("/api/v2/cdn")) {
         cdnConfigFetches++;
         return Promise.resolve(new Response(CDN_CONFIG_FIXTURE, { status: 200 }));
+    }
+    // Listing-page HTML for the multi-page merged-naming phase: page 1 shows
+    // gallery 123456, page 2 shows 654321, in nhentai's card markup.
+    const pageMatch = /[?&]page=([0-9]+)/.exec(u);
+    if (pageMatch && u.includes("nhentai.net/search/")) {
+        const pageNo = parseInt(pageMatch[1], 10);
+        const id = pageNo === 1 ? GALLERY_ID : pageNo === 2 ? GALLERY_ID2 : 0;
+        const title = pageNo === 1 ? "One" : pageNo === 2 ? "Two" : "Unknown";
+        if (id !== 0) {
+            return Promise.resolve(new Response(
+                '<a href="/g/' + id + '/1/"><div class="caption">' + title + '<br>language 1</div></a>',
+                { status: 200 }
+            ));
+        }
     }
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
@@ -532,6 +564,10 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     console.log("PASS phase 5b: an unclean merged batch records NO ids (the merge can be re-run)");
 
     // ---- Phase 5c: a fully clean merged batch records every id ONCE --------
+    // Date stamp and disk verification are exercised in phases 5f/5g; keep this
+    // phase deterministic on the plain name.
+    syncSettings.verifyDownloadedFiles = false;
+    syncSettings.batchNameDate = false;
     localSettings.downloadHistory = {};
     sentMessages.length = 0;
     downloads.length = 0;
@@ -623,6 +659,175 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         "the re-downloaded gallery must be recorded again"
     );
     console.log("PASS phase 5e: redownloadIds overrides the history guard and re-records");
+
+    // ---- Phase 5f: verify-before-skip re-downloads a DELETED file ----------
+    // The history record is not proof the file survived: with the verify
+    // setting on, the worker checks chrome.downloads.search and only skips
+    // records whose artifact is still on disk. 123456 (Test.zip) is still
+    // there from phase 1; 654321 points at NHDW/Gone.zip which is not.
+    syncSettings.verifyDownloadedFiles = true;
+    syncSettings.batchNameDate = false;
+    localSettings.downloadHistory = {
+        [String(GALLERY_ID)]: { filename: "Downloads/Test.zip", when: 1 },
+        [String(GALLERY_ID2)]: { filename: "NHDW/Gone.zip", when: 1 }
+    };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/Verify",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("verify batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary" && m.skipped === 1),
+        "verify batch must report skipped:1 (the present file), not 2"
+    );
+    await waitFor(() => sessionStore.downloadJob === undefined, "verify batch marker must clear");
+    if (downloads.length !== 1 || downloads[0].filename !== "Test_Two.zip") {
+        fail("only the deleted gallery must be re-downloaded, got " + JSON.stringify(downloads.map((d) => d.filename)));
+    }
+    if (apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID))) {
+        fail("a file still on disk must not be re-fetched: " + JSON.stringify(apiRequestLog));
+    }
+    if (!apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID2))) {
+        fail("a deleted file must be fetched again: " + JSON.stringify(apiRequestLog));
+    }
+    console.log("PASS phase 5f: verify-before-skip keeps the file that exists and re-downloads the deleted one");
+
+    // ---- Phase 5g: merged date stamp + part numbering + warn-first ---------
+    // Listing re-runs get search_31082026.zip; the same title+date again warns
+    // ("existing") and, once confirmed, saves search_31082026_part2.zip. Both
+    // ids are recorded under the EXACT dated artifact name.
+    syncSettings.batchNameDate = true;
+    syncSettings.verifyDownloadedFiles = true;
+    const now = new Date();
+    const today = String(now.getDate()).padStart(2, "0")
+        + String(now.getMonth() + 1).padStart(2, "0")
+        + String(now.getFullYear());
+    const datedName = "Downloads/DateRun_" + today + ".zip";
+    const part2Name = "Downloads/DateRun_" + today + "_part2.zip";
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    const dateRun = {
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/DateRun"
+    };
+    onMessageHandler(dateRun, {}, (result) => {
+        if (!result || result.result !== "started") {
+            fail("dated merge did not answer {result:'started'}, got " + JSON.stringify(result));
+        }
+    });
+    await waitFor(() => downloads.length === 1, "dated merge must deliver one archive");
+    if (downloads[0].filename !== datedName) {
+        fail("merged name must carry the date stamp, got " + downloads[0].filename + " (expected " + datedName + ")");
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "dated merge marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === datedName,
+        "the dated merge must record both ids under the dated name"
+    );
+    // Same batch again WITHOUT confirmation: warn-only answer, no job started.
+    const existingAnswer = await new Promise((resolve) => {
+        onMessageHandler(dateRun, {}, resolve);
+    });
+    if (!existingAnswer || existingAnswer.result !== "existing" || existingAnswer.filename !== datedName) {
+        fail("a re-run of the same merged name must answer existing, got " + JSON.stringify(existingAnswer));
+    }
+    if (sessionStore.downloadJob && sessionStore.downloadJob.active) {
+        fail("the existing answer must NOT start a job");
+    }
+    // Confirmed -> part 2, recorded under part 2.
+    downloads.length = 0;
+    const confirmedAnswer = await new Promise((resolve) => {
+        onMessageHandler(Object.assign({}, dateRun, { existingConfirmed: true }), {}, resolve);
+    });
+    if (!confirmedAnswer || confirmedAnswer.result !== "started") {
+        fail("confirmed re-run must start, got " + JSON.stringify(confirmedAnswer));
+    }
+    await waitFor(() => downloads.length === 1 && downloads[0].filename === part2Name,
+        "confirmed re-run must save the part-2 name, got " + JSON.stringify(downloads.map((d) => d.filename)));
+    await waitFor(() => sessionStore.downloadJob === undefined, "part-2 merge marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === part2Name,
+        "confirmed re-run must re-record both ids under the part-2 name"
+    );
+    console.log("PASS phase 5g: merged date stamp + part-2 numbering + warn-first, recorded under the exact name");
+
+    // ---- Phase 5h: multi-page merged naming keeps part numbers on the base --
+    // downloadAllPages appends " (lastPage)" itself, so the resolved base must
+    // be "<name>_DDMMYYYY[_partN]" and the artifact lands as
+    // "<base> (2).zip"; the disk candidates and history records must use THAT
+    // exact spelling, or a re-run would never detect the existing file.
+    syncSettings.verifyDownloadedFiles = true;
+    syncSettings.batchNameDate = true;
+    const pageRunName = "Downloads/PageRun_" + today + " (2).zip";
+    const pageRunPart2 = "Downloads/PageRun_" + today + "_part2 (2).zip";
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    const pageRun = {
+        action: "downloadAllPages",
+        allDoujinshis: {},
+        pages: [1, 2],
+        finalName: "Downloads/PageRun",
+        url: "https://nhentai.net/search/?q=test"
+    };
+    onMessageHandler(pageRun, {}, (result) => {
+        if (!result || result.result !== "started") {
+            fail("multi-page merged run did not answer {result:'started'}, got " + JSON.stringify(result));
+        }
+    });
+    await waitFor(() => downloads.length === 1 && downloads[0].filename === pageRunName,
+        "multi-page merge must save the dated name with the page marker, got " +
+        JSON.stringify(downloads.map((d) => d.filename)));
+    await waitFor(() => sessionStore.downloadJob === undefined, "multi-page merge marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === pageRunName,
+        "the multi-page merge must record both ids under the dated artifact name"
+    );
+    const pageExistingAnswer = await new Promise((resolve) => {
+        onMessageHandler(pageRun, {}, resolve);
+    });
+    if (!pageExistingAnswer || pageExistingAnswer.result !== "existing" || pageExistingAnswer.filename !== pageRunName) {
+        fail("a re-run of the same multi-page merge must answer existing, got " + JSON.stringify(pageExistingAnswer));
+    }
+    downloads.length = 0;
+    const pageConfirmedAnswer = await new Promise((resolve) => {
+        onMessageHandler(Object.assign({}, pageRun, { existingConfirmed: true }), {}, resolve);
+    });
+    if (!pageConfirmedAnswer || pageConfirmedAnswer.result !== "started") {
+        fail("confirmed multi-page re-run must start, got " + JSON.stringify(pageConfirmedAnswer));
+    }
+    await waitFor(() => downloads.length === 1 && downloads[0].filename === pageRunPart2,
+        "confirmed multi-page re-run must keep _part2 on the base, got " +
+        JSON.stringify(downloads.map((d) => d.filename)));
+    await waitFor(() => sessionStore.downloadJob === undefined, "multi-page part-2 marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === pageRunPart2,
+        "the multi-page part-2 merge must re-record both ids under the part-2 artifact name"
+    );
+    console.log("PASS phase 5h: multi-page merged naming keeps _part2 on the base (artifact + record + warn)");
+    // Keep the remaining phases deterministic.
+    syncSettings.verifyDownloadedFiles = false;
+    syncSettings.batchNameDate = false;
 
     // ---- Phase 6: interrupted-job detection --------------------------------
     // A job marker without an active downloader means a previous download died

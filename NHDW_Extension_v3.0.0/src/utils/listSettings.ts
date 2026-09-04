@@ -35,6 +35,10 @@ export interface ListModeSettings {
     replaceSpaces: boolean;
     /** "don't warn me again" for pdf + batch + several titles ONLY. */
     pdfMergeWarnDismissed: boolean;
+    /** Verify the recorded file still exists before skipping (default on). */
+    verifyDownloadedFiles: boolean;
+    /** Add _DDMMYYYY to merged/batch names (default on). */
+    batchNameDate: boolean;
 }
 
 const SYNC_DEFAULTS = Object.assign({
@@ -42,7 +46,10 @@ const SYNC_DEFAULTS = Object.assign({
     useZip: "zip",
     downloadName: "{pretty}",
     replaceSpaces: true,
-    rawMasterFolder: "NHDW"
+    rawMasterFolder: "NHDW",
+    // History verification + merged-name date stamp (see downloadHistory.ts).
+    verifyDownloadedFiles: true,
+    batchNameDate: true
 }, LIST_MODE_DEFAULTS);
 
 // Pure mapper: stored values -> resolved list-mode settings. Exported for the
@@ -65,7 +72,9 @@ export function buildListSettings(stored: any, pdfMergeWarnDismissed: boolean = 
         template: resolveListTemplate(storedTemplate, singleTemplate),
         singleTemplate: singleTemplate,
         replaceSpaces: source.replaceSpaces === undefined ? true : !!source.replaceSpaces,
-        pdfMergeWarnDismissed: !!pdfMergeWarnDismissed
+        pdfMergeWarnDismissed: !!pdfMergeWarnDismissed,
+        verifyDownloadedFiles: source.verifyDownloadedFiles === undefined ? true : !!source.verifyDownloadedFiles,
+        batchNameDate: source.batchNameDate === undefined ? true : !!source.batchNameDate
     };
 }
 
@@ -101,6 +110,8 @@ export function saveListSettings(patch: Partial<{
     listOutputMode: OutputMode;
     listMasterFolder: boolean;
     listDownloadName: string;
+    verifyDownloadedFiles: boolean;
+    batchNameDate: boolean;
 }>): void {
     try {
         chrome.storage.sync.set(patch as any);

@@ -167,6 +167,18 @@ input[type="button"]:hover {
     margin: 4px 0;
 }
 
+.psOptionRow {
+    display: block;
+    margin: 4px 0;
+    cursor: pointer;
+}
+
+.psOptionRow input[type="checkbox"] {
+    zoom: 1.2;
+    vertical-align: middle;
+    margin-right: 2px;
+}
+
 .psButtonRow {
     display: flex;
     gap: 6px;

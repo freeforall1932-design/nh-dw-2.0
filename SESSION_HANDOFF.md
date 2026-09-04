@@ -126,22 +126,56 @@ into "Title (1).zip", "Title (2).zip" ...
 - **Escape hatches:** per-download override (per-row link / per-card
   confirmation / bulk include) and *Clear history* in popup Settings and the
   options page. No export/import (user declined). No new permissions.
+- **Verify before skip (separate mode, 3.5.0 follow-up):** a recorded gallery
+  is skipped only when `chrome.downloads.search` confirms the artifact still
+  exists on disk (default ON, `verifyDownloadedFiles` in `chrome.storage.sync`
+  — checkbox in popup Settings + options page). Copying a file in by hand,
+  moving it after Chrome recorded its path, or clearing the browser's download
+  history counts as missing, so that gallery is downloaded again; the record
+  itself is the durable link. Toggle OFF = record-only skip (pre-3.5.0
+  semantics, fastest). Worker-side only: `src/utils/downloadVerify.ts` is
+  **never imported by the offscreen document** (no chrome.downloads there).
+- **Merged mode: never skip, warn only.** A merged job always keeps every
+  selected title; when its (dated) artifact already exists on disk and the
+  user has not confirmed yet, the worker answers `{result:"existing",
+  filename}` instead of starting, the UI `window.confirm`s ("you already have
+  … creates a NEW copy / gets _part2…") and re-sends with
+  `existingConfirmed: true` (user's explicit choice, do not re-litigate).
+  Both pipelines (offscreen relay + worker fallback, `downloadAllDoujinshis` +
+  `downloadAllPages`) resolve the name via `resolveMergedBatchName` before
+  starting and clear the job marker on the "existing" stop.
+- **Merged naming (default ON, `batchNameDate` in sync):** the base name gets
+  `_DDMMYYYY` (`search_31082026.zip`; `applyBatchDate` never double-stamps),
+  history records the dated name, and the same title+date again becomes
+  `_part2`, `_part3` … (`batchCandidateNames` caps at 10, Chrome
+  `conflictAction` uniquifies beyond). With verify ON a deleted file REUSES
+  its old name instead of growing part numbers forever; with verify OFF the
+  history record decides. Multi-page merged jobs keep the part number on the
+  base, before the trailing ` (lastPage)` marker
+  (`PagesAll_31082026_part2 (2).zip`) and record that exact artifact name.
 - **Recording transport:** offscreen accumulates `pendingHistoryRecords` and
   sends them with the FINAL `jobFinished` (queued jobs ride along); the
   worker's `jobFinished` branch writes them. `downloadAllPages` aggregates
   per-page outcomes; merged mode requires every page fetched and clean.
-- **Tests:** `test/download-history.test.js` (12 cases: normalize/count/
+- **Tests:** `test/download-history.test.js` (18 cases: normalize/count/
   partition/record-filename/clean-vs-dirty merged/record+clear via a
-  `chrome.storage.local` stub). Worker e2e adds phases 1b/1c (record on
-  success, never on failure) and 5b–5e (unclean merged records nothing, clean
-  merged records all, skip with zero API calls, redownload override).
-  Offscreen e2e adds the guard phase (skip before fetch, `skipped:1`,
-  records in `jobFinished`, merged never skips) and a multi-page merged
-  phase (clean pages 1+2 → one artifact `path (2)` + both ids recorded —
-  the regression that caught the `finalSaveOk`-on-every-page bug). List-
-  controls e2e adds counts/labels/bulk override/per-card confirmation/
-  merged-keeps-all. `npm test` now 226 passing / 4 pending; smoke 7 PASS;
-  `npm run test:e2e` 70 PASS, 0 FAIL.
+  `chrome.storage.local` stub, plus date-stamp / no-double-stamp /
+  part-candidates / record-only-vs-verify picker / multi-page suffix).
+  Worker e2e adds phases 1b/1c (record on success, never on failure), 5b–5e
+  (unclean merged records nothing, clean merged records all, skip with zero
+  API calls, redownload override) and 5f–5h (verify-before-skip re-downloads
+  the deleted file; merged date stamp + part-2 + warn-first; multi-page
+  merged naming keeps `_part2` on the base). Offscreen e2e adds the guard
+  phase (skip before fetch, `skipped:1`, records in `jobFinished`, merged
+  never skips) and a multi-page merged phase (clean pages 1+2 → one artifact
+  `path (2)` + both ids recorded — the regression that caught the
+  `finalSaveOk`-on-every-page bug). List-controls e2e adds counts/labels/
+  bulk override/per-card confirmation/merged-keeps-all. `npm test` now 233
+  passing / 4 pending; smoke 7 PASS; `npm run test:e2e` 73 PASS, 0 FAIL.
+  Known review bug fixed along the way: `formatExtension` returns ".zip"
+  (with the dot), so merged disk candidates were double-dotted and warn-first
+  could never fire — `resolveMergedBatchName` strips the dot before handing
+  the extension to the naming helpers.
 - **Review fixes after the first pass:** merged `downloadAllPages` in both
   pipelines required `finalSaveOk` on EVERY page, so a fully clean multi-page
   merged job could never be recorded (only the final page owns the save) —

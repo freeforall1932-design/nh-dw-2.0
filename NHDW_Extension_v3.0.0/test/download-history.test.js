@@ -16,6 +16,10 @@ const {
     partitionKnown,
     artifactRecordFilename,
     historyRecords,
+    batchDateStamp,
+    applyBatchDate,
+    batchCandidateNames,
+    pickFreeBatchFilename,
     readHistory,
     recordHistory,
     clearHistory
@@ -125,6 +129,100 @@ describe('download history (pure)', () => {
         assert.deepStrictEqual(
             historyRecords(outcome, { effectiveSeparate: false, format: "zip", finalName: "Merged", archiveMasterFolder: "" }),
             []
+        );
+    });
+});
+
+describe('merge naming: date stamp + part numbering', () => {
+    // 2026-08-31 local time.
+    const NOW = new Date(2026, 7, 31, 12, 0, 0).getTime();
+
+    it('stamps DDMMYYYY (31082026 style, no separators)', () => {
+        assert.strictEqual(batchDateStamp(NOW), "31082026");
+        assert.strictEqual(batchDateStamp(new Date(2026, 0, 5).getTime()), "05012026");
+    });
+
+    it('appends the date once and never double-stamps', () => {
+        assert.strictEqual(applyBatchDate("search", NOW), "search_31082026");
+        assert.strictEqual(applyBatchDate("search_31082026", NOW), "search_31082026");
+        assert.strictEqual(applyBatchDate("search_31082026_part2", NOW), "search_31082026_part2");
+        assert.strictEqual(applyBatchDate("", NOW), "31082026");
+    });
+
+    it('builds base, base_part2, base_part3 ... candidates', () => {
+        assert.deepStrictEqual(batchCandidateNames("x", 4), ["x", "x_part2", "x_part3", "x_part4"]);
+        assert.deepStrictEqual(batchCandidateNames("x", 1), ["x"]);
+    });
+
+    it('record-only mode: a recorded name moves to the next part', () => {
+        const history = normalizeHistory({ "1": { filename: "x.zip", when: 1 } });
+        assert.strictEqual(
+            pickFreeBatchFilename(history, "x", "zip", { verify: false, presentFilenames: new Set() }),
+            "x_part2.zip"
+        );
+        const history2 = normalizeHistory({
+            "1": { filename: "x.zip", when: 1 },
+            "2": { filename: "x_part2.zip", when: 2 }
+        });
+        assert.strictEqual(
+            pickFreeBatchFilename(history2, "x", "zip", { verify: false, presentFilenames: new Set() }),
+            "x_part3.zip"
+        );
+    });
+
+    it('verify mode: a present file moves to the next part; a deleted file reuses its name', () => {
+        // Recorded AND still on disk -> the new copy must not overwrite it.
+        const history = normalizeHistory({ "1": { filename: "x.zip", when: 1 } });
+        const present = new Set(["x.zip"]);
+        assert.strictEqual(
+            pickFreeBatchFilename(history, "x", "zip", { verify: true, presentFilenames: present }),
+            "x_part2.zip"
+        );
+        // Recorded but deleted -> the old name is free again (no part growth).
+        assert.strictEqual(
+            pickFreeBatchFilename(history, "x", "zip", { verify: true, presentFilenames: new Set() }),
+            "x.zip"
+        );
+        // First two parts present -> part 3.
+        assert.strictEqual(
+            pickFreeBatchFilename(history, "x", "zip", { verify: true, presentFilenames: new Set(["x.zip", "x_part2.zip"]) }),
+            "x_part3.zip"
+        );
+        // A file on disk WITHOUT a record (pre-3.5.0 run) still blocks the name.
+        assert.strictEqual(
+            pickFreeBatchFilename({}, "x", "zip", { verify: true, presentFilenames: new Set(["x.zip"]) }),
+            "x_part2.zip"
+        );
+    });
+
+    it('multi-page suffix: the part number sits on the base, before the page marker', () => {
+        // downloadAllPages saves "<base>[_partN] (lastPage)"; the page marker
+        // must never move between the base and the part number.
+        const base = "Pages_31082026";
+        const suffix = " (2)";
+        assert.strictEqual(
+            pickFreeBatchFilename({}, base, "zip", { verify: false, presentFilenames: new Set(), suffix: suffix }),
+            "Pages_31082026 (2).zip"
+        );
+        const present = new Set(["Pages_31082026 (2).zip"]);
+        assert.strictEqual(
+            pickFreeBatchFilename({}, base, "zip", { verify: true, presentFilenames: present, suffix: suffix }),
+            "Pages_31082026_part2 (2).zip"
+        );
+        // A deleted part-2 file is reused, with the page marker intact.
+        assert.strictEqual(
+            pickFreeBatchFilename({}, base, "zip", { verify: true, presentFilenames: new Set(), suffix: suffix }),
+            "Pages_31082026 (2).zip"
+        );
+    });
+
+    it('falls back to the last candidate rather than blocking when every part is occupied', () => {
+        // Default candidate count is 10; every one present -> the last is
+        // returned and Chrome's conflictAction uniquifies from there.
+        const present = new Set(batchCandidateNames("x").map((n) => n + ".zip"));
+        assert.strictEqual(
+            pickFreeBatchFilename({}, "x", "zip", { verify: true, presentFilenames: present }),
+            "x_part10.zip"
         );
     });
 });

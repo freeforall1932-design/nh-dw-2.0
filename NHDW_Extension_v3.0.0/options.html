@@ -165,6 +165,10 @@
         <i>Download anyway</i> link; this button forgets the whole list (the
         per-row override stops working, and everything downloads again).</small></p>
         <div id="historyStatus" role="status" aria-live="polite"></div>
+        <label><input id="verifyDownloadedFiles" type="checkbox"/>
+        Check the file still exists before skipping (re-download if deleted)</label><br/>
+        <label><input id="batchNameDate" type="checkbox"/>
+        Add the download date to merged file names (search_31082026.zip, _part2, _part3...)</label><br/>
         <button id="clearHistory" type="button">Clear history</button>
     </body>
     <script src="js/options.js"></script>

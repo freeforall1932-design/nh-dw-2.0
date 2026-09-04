@@ -473,11 +473,31 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
         redownloadIds: redownloadIds
     };
     try {
-        chrome.runtime.sendMessage(message, () => {
+        chrome.runtime.sendMessage(message, (response: any) => {
             // The worker answers { result: "started" | "queued" }; the panel
             // shows the progress. Reading lastError keeps Chrome quiet when
             // the worker is mid-restart.
-            void chrome.runtime.lastError;
+            try { void chrome.runtime.lastError; } catch (_) { /* no runtime */ }
+            if (response && response.result === "existing" && response.filename) {
+                // Merged re-run: the same merged file still exists. Warn (the
+                // user chose warn-only for merged jobs), then re-send with
+                // existingConfirmed so it becomes _part2/_part3...
+                const again = window.confirm(
+                    "You already have:\n" + response.filename +
+                    "\n\nThis download creates a NEW copy (the name gets _part2, _part3 ...).\n\nContinue?");
+                if (again) {
+                    message.existingConfirmed = true;
+                    chrome.runtime.sendMessage(message, () => {
+                        try { void chrome.runtime.lastError; } catch (_) { /* no runtime */ }
+                        flashStatus(skippedCount > 0
+                            ? titleCount + " will download (" + skippedCount + " already downloaded skipped)"
+                            : titleCount === 1 ? "Sent 1 gallery to the downloader" : "Sent " + titleCount + " galleries to the downloader");
+                    });
+                } else {
+                    flashStatus("Already downloaded - keeping the existing file");
+                }
+                return;
+            }
             flashStatus(skippedCount > 0
                 ? titleCount + " will download (" + skippedCount + " already downloaded skipped)"
                 : titleCount === 1 ? "Sent 1 gallery to the downloader" : "Sent " + titleCount + " galleries to the downloader");

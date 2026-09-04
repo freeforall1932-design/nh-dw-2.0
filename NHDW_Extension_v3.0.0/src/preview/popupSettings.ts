@@ -246,6 +246,30 @@ function renderHistorySection(container: HTMLElement): void {
     hint.textContent = "Galleries downloaded successfully are remembered in this browser and skipped on listing pages, so re-running a search does not download everything a second time. Each already-downloaded row has its own \"Download anyway\" link; this button forgets the whole list.";
     section.appendChild(hint);
 
+    // Verify before skip (default on): a record alone is not proof the file
+    // survived, so the worker checks chrome.downloads and re-downloads the
+    // galleries whose file is gone. Off = record-only skip (fastest).
+    const verifyRow = el("label");
+    verifyRow.className = "psOptionRow";
+    const verifyBox = el("input");
+    verifyBox.type = "checkbox";
+    verifyBox.id = "psVerifyDownloaded";
+    verifyRow.appendChild(verifyBox);
+    verifyRow.appendChild(document.createTextNode(" Check the file still exists before skipping (re-download if deleted)"));
+    section.appendChild(verifyRow);
+
+    // Date stamp for merged/batch names (default on): re-runs of the same
+    // listing get search_31082026.zip instead of the same plain name; same-day
+    // repeats become _part2, _part3 ...
+    const dateRow = el("label");
+    dateRow.className = "psOptionRow";
+    const dateBox = el("input");
+    dateBox.type = "checkbox";
+    dateBox.id = "psBatchNameDate";
+    dateRow.appendChild(dateBox);
+    dateRow.appendChild(document.createTextNode(" Add the download date to merged file names (search_31082026.zip, _part2, _part3...)"));
+    section.appendChild(dateRow);
+
     const buttonRow = el("div");
     buttonRow.className = "psButtonRow";
     const clearButton = el("button");
@@ -256,6 +280,17 @@ function renderHistorySection(container: HTMLElement): void {
     section.appendChild(buttonRow);
 
     container.appendChild(section);
+
+    chrome.storage.sync.get({ verifyDownloadedFiles: true, batchNameDate: true }, (stored: any) => {
+        verifyBox.checked = !stored || stored.verifyDownloadedFiles !== false;
+        dateBox.checked = !stored || stored.batchNameDate !== false;
+    });
+    verifyBox.addEventListener("change", () => {
+        chrome.storage.sync.set({ verifyDownloadedFiles: verifyBox.checked });
+    });
+    dateBox.addEventListener("change", () => {
+        chrome.storage.sync.set({ batchNameDate: dateBox.checked });
+    });
 
     const refreshStatus = () => {
         readHistory().then((history) => {

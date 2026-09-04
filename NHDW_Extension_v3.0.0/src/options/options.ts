@@ -316,3 +316,27 @@ if (clearHistoryButton) {
     });
     refreshHistoryStatus();
 }
+
+// Verify-before-skip + merged-name date stamp (same keys the worker reads).
+const verifyBox = document.getElementById("verifyDownloadedFiles") as HTMLInputElement | null;
+const dateBox = document.getElementById("batchNameDate") as HTMLInputElement | null;
+if (verifyBox || dateBox) {
+    chrome.storage.sync.get({ verifyDownloadedFiles: true, batchNameDate: true }, (stored: any) => {
+        if (verifyBox) {
+            verifyBox.checked = !stored || stored.verifyDownloadedFiles !== false;
+        }
+        if (dateBox) {
+            dateBox.checked = !stored || stored.batchNameDate !== false;
+        }
+    });
+    if (verifyBox) {
+        verifyBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ verifyDownloadedFiles: verifyBox.checked });
+        });
+    }
+    if (dateBox) {
+        dateBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ batchNameDate: dateBox.checked });
+        });
+    }
+}
