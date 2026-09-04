@@ -393,50 +393,51 @@ workflow edit has already been committed, drop it with
 
 ### Pending, waiting for a human
 
-| File | What it changes | Queued |
-| --- | --- | --- |
-| `NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml` | adds `manifest.json`, `package.json`, `package-lock.json`, `index.html`, `options.html`, `offscreen.html`, `css/**`, `webpack.config.js` and `tsconfig*.json` to `on.push.paths` so asset-only commits still run CI | 2026-09-04 (PR #33) |
-
-Why it matters: today a commit touching only `manifest.json` or `css/**` never
-triggers the workflow, and those files carry the side-panel registration, the
-panel DOM and the card-control styling — `test/manifest.test.js` would simply
-never run on them. Apply with:
-
-```bash
-cp NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml \
-   .github/workflows/extension-tests.yml
-git add .github/workflows/extension-tests.yml
-git commit -m "ci: broaden extension-tests trigger paths"
-git push
-```
-
-Then push a css-only commit and confirm a run appears in the Actions tab. Once
-applied, keep the copy in `ci/pending-workflows/` in sync with the live file and
-move its row out of this table.
-
-## Validation
-
-```bash
-cd NHDW_Extension_v3.0.0
-npm ci
-npm run build
-npm test              # 214 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
-npm run test:smoke
-npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN),
-                      # relay (incl. list-mode option relay + UI mode), content,
-                      # list controls (in-page Download/Select buttons)
-cp js/*.js ../NHDW_Release_v3.0.0/js/
-diff -rq js ../NHDW_Release_v3.0.0/js
-# also diff index.html / options.html / css / manifest.json when they change
-```
-
-`npm run test:browser` needs a full Chrome/Brave build (serverless `@sparticuz/chromium` has extensions compiled out). `NHDW_CHROME_EXTRA_ARGS` exists as an escape hatch. The real-browser CI jobs were **removed** (they could never launch on GitHub Actions runners — Chrome `Runtime.enable` timeout / Brave SIGTRAP); CI now runs only the offline suites via `.github/workflows/extension-tests.yml`, and the real-browser suite stays a manual `npm run test:browser` on a developer machine.
+**Nothing pending.** The queued trigger-paths change was applied by the user
+through the GitHub web editor on 2026-09-04 as commit `840d79e` ("Add
+additional files to extension tests workflow"); the live workflow and
+`NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml` are now
+byte-identical, and the run it triggered passed in 1m19s. Keep the copy in
+`ci/pending-workflows/` in sync whenever the live workflow changes, and add a
+row back to this table for any future workflow edit.
 
 ## Required real-browser verification before PR
 
 Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://extensions`.
 
-### 3.4.0 additions (do these first — they are what this release is about)
+### 3.4.1 — cross-extension naming leak (do these FIRST: they need a second
+### extension installed, and they are the only checks that can regress silently)
+
+0A. **The blame message is gone.** Install at least one other downloader or
+    download manager that hooks Chrome's naming (the user's original report
+    involved a downloader for another site). Download something with that
+    other extension while NHDW is installed but idle. The Chrome notification
+    *"This extension failed to name the download ... because another extension
+    determined a different filename"* must no longer name NHDW. If it names
+    the other extension, that is the other extension's own bug, not ours.
+0B. **Idle worker holds no listener.** `chrome://extensions` -> NHDW ->
+    "service worker" -> Console. With no download running, the worker must not
+    be in the filename chain. `chrome.downloads.onDeterminingFilename.hasListeners()`
+    should report `false`.
+0C. **Listener appears and disappears around a job.** Start a raw gallery
+    download; re-run the `hasListeners()` check mid-download -> `true`. Let it
+    finish, wait for the shelf to settle, re-run -> `false` again. Repeat for a
+    ZIP job (blob artifact path) and for a cancelled job (cancel from the
+    Downloads shelf -> must return to `false`).
+0D. **Naming still correct under a competing extension.** With the other
+    extension still installed, run a raw gallery: pages must land in
+    `NHDW/<Title>/001.jpg`, not as `1.jpg` in the Downloads root. Run a ZIP:
+    it must be `<Title>.zip`, not a blob UUID. This is the 3.3.1 behaviour the
+    3.4.1 refactor must not have broken.
+0E. **Worker-restart recovery.** Start a large gallery, then stop the service
+    worker from `chrome://extensions` mid-download. The browser keeps
+    downloading. Remaining files must still get their proper names (the guard
+    re-attaches from the session mirror). Known and accepted gap: a
+    determining-filename event that fires in the few milliseconds before the
+    async `storage.session` read completes will get Chrome's default name for
+    that one file — see "Open questions and things that still need review".
+
+### 3.4.0 additions
 
 0a. **List mode, separate files (the headline fix).** On a search / artist /
     tag page: select several galleries, Format = ZIP, Output = *Separate files*
@@ -479,6 +480,70 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 7. API key: valid, invalid, remove; saved key never appears in the input. Download similar anonymously and with the key.
 8. Keep the source gallery tab backgrounded on another site; confirm completion.
 9. CDN hardening: `/api/v2/cdn` fetched once per session (worker console); `chrome.storage.session.get("cdnConfig")` shows the merged list; grant-notice flow when a host lacks permission.
+
+## Open questions and things that still need review
+
+Nothing here is known to be broken. These are the places where the current
+implementation rests on a judgement call, an untested assumption, or a
+deliberate trade-off, and a reviewer should decide whether they are acceptable.
+
+### From the 3.4.1 naming-guard rewrite
+
+1. **Restart race (accepted trade-off, unverified in a real browser).** When the
+   MV3 worker restarts mid-gallery the naming listener is re-attached only
+   after an async `chrome.storage.session` read. An event firing inside that
+   window is not intercepted and that single file keeps Chrome's default name.
+   The alternative — registering synchronously at startup — is precisely the
+   leak that was just removed, so the race was chosen deliberately. Open
+   question: how wide is the window in practice, and is one mis-named file per
+   worker restart acceptable? Verification step 0E probes it.
+2. **TTL value is a guess.** `ENTRY_TTL_MS` is 30 minutes. Too short and a very
+   slow download loses its name; too long and a stuck entry keeps the global
+   listener attached. Nobody has measured the slowest realistic gallery. Needs
+   a real-world data point, not a debate.
+3. **`hasListeners()` is the only observation method.** There is no supported
+   API for "which extensions are in the naming chain", so 0B/0C rely on
+   `chrome.downloads.onDeterminingFilename.hasListeners()` from the worker's
+   own console. That proves our own state, not that Chrome has dropped us from
+   its chain. If someone knows a stronger check, use it.
+4. **Manual saves of an in-flight image.** If the user manually saves the exact
+   image URL we are downloading, our recorded name wins for that save. Judged
+   harmless (`uniquify` prevents overwrites, the entry clears on completion)
+   but never observed in practice.
+5. **The URL-keyed map assumes URLs are unique per artifact.** True for CDN page
+   URLs and blob URLs today. If a future change ever reuses a URL across two
+   concurrent jobs, the second would inherit the first's name. No guard exists
+   for that.
+
+### Carried over from 3.4.0, still unverified
+
+6. **raw format** ships behind a "(testing)" label. Folder creation
+   (one folder of loose images per title) has never been confirmed in a real
+   browser. Until step 0f passes, the label stays.
+7. **Download All across paginated listings** — that it walks every page and
+   that the 2-page count warning fires is asserted by e2e stubs only.
+8. **The original naming clash** with the user's other extension is expected to
+   be gone now that list mode shares the single pipeline *and* the guard no
+   longer participates when idle, but the two fixes have never been observed
+   together on a real profile.
+
+### Structural
+
+9. **`NHDW_Firefox_v1.0.0` is not cleared.** It still ships the 3.3.1 guard in
+   its built `js/background.js` and lags at 3.3.1 overall. Firefox does not
+   implement `onDeterminingFilename`, so the guard is inert there and this is
+   not a live bug — but that port has had no independent audit and none of the
+   3.4.0/3.4.1 work has been ported.
+10. **No other repository was audited or cleared.** The naming audit covered
+    this workspace only.
+11. **P3 queue UI is untouched.** Thumbnails, per-item progress and states,
+    cancel/retry, concurrency limit, retry-with-backoff — all still backlog.
+12. **`@types/chrome` is pinned at 0.0.154 (2021).** `chrome.sidePanel` and
+    `chrome.storage.session` are both reached through `(chrome as any)`. A
+    dependency bump would restore type safety on those paths but risks
+    unrelated type churn.
+13. **`npm run test:browser` has never run in this environment.** Every
+    real-browser claim in this document is an expectation, not an observation.
 
 ## Next backlog (worklist — statuses as of 2026-09-04)
 

@@ -922,3 +922,26 @@ permissions (`downloads`, `tabs`, `storage`, `alarms`, `scripting`,
 remain the six nhentai origins with no `<all_urls>`; web-accessible resources
 stay scoped to `https://nhentai.net/*`.
 
+### Open questions carried out of 3.4.1 (for whoever picks this up next)
+
+None of these block the release; each is a judgement call that a reviewer
+should either accept or overturn.
+
+| # | Question | Why it is open | Where to resolve it |
+| --- | --- | --- | --- |
+| A | Is one mis-named file per service-worker restart acceptable? | The naming listener re-attaches only after an async `storage.session` read. Registering synchronously at startup would reintroduce the leak, so the race is deliberate. | Real-browser step 0E |
+| B | Is a 30-minute entry TTL right? | Too short loses the name on a very slow gallery; too long keeps the global listener attached on a stuck entry. The value was never measured. | Time the slowest realistic gallery |
+| C | Can listener participation be observed more strongly than `hasListeners()`? | Chrome exposes no API for "who is in the naming chain", so verification proves our own state only. | Research / accept |
+| D | URL-keyed pending map assumes one artifact per URL | True today for CDN page URLs and blob URLs; a future change that reuses a URL across concurrent jobs would cross names. | Guard only if that design appears |
+| E | Does raw actually create one folder per title? | Never confirmed in a browser; still ships behind the "(testing)" label. | Real-browser step 0f |
+| F | Does Download All walk every page of a paginated listing, and does the 2-page warning fire? | Asserted by e2e stubs only. | Real-browser steps |
+| G | Is the user's original cross-extension naming clash gone? | Two independent fixes (shared list pipeline + non-participating idle guard) are expected to close it, but they have never been observed together on a real profile. | Real-browser steps 0A/0D |
+| H | Should `@types/chrome` be unpinned from 0.0.154 (2021)? | `chrome.sidePanel` and `chrome.storage.session` are both reached via `(chrome as any)`. A bump restores type safety but risks unrelated type churn. | Dependency decision |
+
+Also still open and unchanged: **P3 queue UI** (thumbnails, per-item progress
+and states, cancel/retry, concurrency limit, retry-with-backoff),
+**`NHDW_Firefox_v1.0.0`** (lags at 3.3.1, still carries the old guard in its
+built worker, never audited), and the fact that **`npm run test:browser` has
+never run in this environment** — every real-browser claim in these documents
+is an expectation, not an observation. No other repository was audited.
+

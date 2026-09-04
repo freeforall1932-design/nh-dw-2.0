@@ -105,6 +105,27 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
 | **Two checkboxes on each gallery card** | The legacy caption checkbox is hidden while the in-page card controls are on. If both show, reload the nhentai page; to keep only the old one, turn off Settings -> *Download / Select buttons on listing cards*. |
 | **A list download is named after the page URL** | That was the pre-3.4.0 behaviour of the merged single-file mode. Switch **Output** to *Separate files* (the new default) — each file is then named from the list-mode template and that gallery's own metadata. |
 
+## Known limitations and things still under review
+
+* **`raw` format is labelled "(testing)".** It writes one folder of loose
+  images per title and always behaves as *Separate files*, but folder creation
+  has not yet been confirmed across every platform. Prefer ZIP/CBZ/PDF if you
+  need certainty.
+* **Service-worker restarts during a very large gallery.** Chrome may shut the
+  extension's worker down mid-download and the browser keeps downloading
+  without it. Names are restored from a session mirror when the worker wakes,
+  but a file that Chrome names in the split second before that happens can keep
+  its default name. Re-downloading that one page fixes it.
+* **Filenames while another download manager is installed.** Since v3.4.1 this
+  extension only takes part in Chrome's filename decision while its own
+  downloads are running. If a download manager installed *after* it still wins
+  a name, Chrome gives the last-installed extension the final say — disable it
+  for the duration of the download.
+* **The Firefox port lags.** `NHDW_Firefox_v1.0.0` is still at 3.3.1 and has
+  none of the 3.4.0 list-mode or 3.4.1 naming work.
+* **The queue list is still name-only.** Thumbnails, per-item progress, and
+  per-item cancel/retry are planned, not built.
+
 ## 📝 Version History
 * **v3.4.1 (current):** Cross-extension naming-leak fix. The 3.3.1 folder-naming guard registered Chrome's global `onDeterminingFilename` event at worker startup and never released it. That event is profile-wide: registering it made this extension a participant in the filename decision for **every** download, so Chrome could blame it for files started by unrelated extensions (*"failed to name the download ... because another extension determined a different filename"*). Returning early for a foreign download does not help — participation is what counts. The listener is now reference-counted against this extension's own pending downloads: attached when the first filename is recorded, detached as soon as the pending set drains (suggestion consumed, download complete, interrupted, cancelled, failed to start, 30-minute TTL, or FIFO eviction). An idle worker is no longer in the chain at all, and while it is, downloads it did not start get an untouched pass-through — never an empty name. Own filenames, folders, master-folder wrapping and `uniquify` behaviour are unchanged.
 * **v3.4.0:** List mode gets everything single-title mode had. The four formats (ZIP/CBZ/PDF/raw) come from one shared registry used by the panel, the in-page card buttons and the download pipeline, so the two paths cannot drift. New explicit **output mode** — *Separate files* (one archive, or one folder for raw, per title) is the default and *Single merged file* is the opt-in. List mode has its **own file-name template** (defaults to following the single-title one) resolved per gallery instead of falling back to the page URL, and the master-folder wrap became an **optional checkbox** that now also applies to archives, not just raw. A **PDF-merge confirmation** blocks accidentally concatenating different titles into one tankoubon-style document. UI: a dockable **side panel** (`chrome.sidePanel`) sharing one rendered view with the popup fallback, plus **Download / Select buttons on every listing card** with a floating selection bar.
