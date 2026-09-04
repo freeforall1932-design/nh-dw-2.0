@@ -1,5 +1,12 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-04 — **3.4.0 landed: list mode reaches parity with
+single-title mode.** Format choice (zip/cbz/pdf/raw) + explicit output mode
+(separate files vs one merged file, separate is now the default) + list-mode
+file-name template + PDF-merge confirmation, plus the P1 side panel and the P2
+in-page card controls. Details in "List mode parity (3.4.0 — newest)" below.
+Session branch: `arena/01a06a75-nh-dw-2-0`.
+
 **Updated:** 2026-09-03 — worklist extended with backlog item 27
 (Firefox port; docs-only change). Feasibility audit:
 `NHDW_Firefox_v1.0.0/PORTING_AUDIT.md`.
@@ -10,7 +17,7 @@ real-browser GitHub Actions jobs were removed via the web UI, replaced by
 mocha fixtures + smoke + VM e2e); docs companion PR #29 merged; README CI
 bullet fixed in PR #30)
 
-- Session branch of the current session: `arena/01a05a41-nh-dw-2-0`. Always
+- Session branch of the current session: `arena/01a06a75-nh-dw-2-0`. Always
   use the current session branch (check `git branch --show-current`). The
   previous session branch `arena/01a023e5-nh-dw-2-0` is **merged and closed**
   (final PR #29); before that sessions used `arena/01a027b3-…`,
@@ -51,7 +58,109 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
-### Folder-naming guard (3.3.1 — newest)
+### List mode parity (3.4.0 — newest)
+
+User report, in their words: single-title pages could do "4 zip cbz pdf and
+raw", but "when I go to homepage or search or any artist or genre it's all
+about the list with a default of zip and the naming system is the website url
+itself"; the folder wrap "work just like the other but I want that to be
+optional"; and the hovering popup could not be repositioned unlike their other
+repo's side panel. Everything below is the answer to that report.
+
+**Shared registry (the anti-drift rule).** `src/utils/downloadFormats.ts` is now
+the single definition of the four formats, of the retired `"folder" -> "pdf"`
+mapping, of the output mode, and of the PDF-merge condition. The panel, the
+in-page card controls, the options page, `background.ts` (`normalizeFormatOverride`)
+and the offscreen document all import it. List mode does **not** fork the
+download logic: it calls the same `downloadAllDoujinshis` pipeline with per-job
+options, so single-title and list mode cannot diverge again.
+
+**1. Format selection in list mode.** The listing panel, the in-page floating
+bar and the options page all expose zip/cbz/pdf/raw. The last-used list format
+is persisted under its own key (`listFormat`) — never `useZip`, which stays the
+single-title default. Raw is shipped enabled but labelled *"(testing)"* via
+`formatLabel()` rather than silently missing (it is still on the open-items
+list below).
+
+**2. Separate files vs. batch — the actual must-have.** New explicit output
+mode, independent of the format:
+- `separate` (**the default in list mode**) — one archive, or one folder for
+  raw, per title.
+- `batch` — the previous behaviour, every title merged into one file. Opt-in.
+Raw can never merge (no container), so `effectiveOutputMode()` forces it to
+`separate` and the merge option is disabled in the UI. Relay fix: the worker
+used to honour only `separate: true` (`if (relayedMessage.separate)`), which
+made "batch" unrequestable from a UI whose default is separate; it now honours
+an explicit `false` as well.
+
+**3. List-mode filenames.** Root cause of "the naming system is the website url
+itself": in batch mode the produced archive is named `finalName`, which the
+popup derived from `document.location`, and batch was the only available mode.
+Two fixes: separate mode is now the default (each file is named from the
+gallery's OWN metadata through the template), and list mode got its own
+template setting `listDownloadName`, defaulting to the sentinel `@inherit`
+= "follow the single-title template". The resolved template is relayed as
+`options.downloadName` for that job only. Also fixed: separate-mode archive
+names now go through `utils.cleanName(...)` exactly like single-title
+downloads (they previously used the raw title, so `replaceSpaces` did not
+apply — `Test Two.zip` instead of `Test_Two.zip`).
+
+**4. PDF-merge warning (hard requirement).** `shouldWarnPdfMerge(format, mode,
+titleCount)` is true only for `pdf` + effective `batch` + more than one title.
+The panel shows a modal (`src/preview/pdfMergeWarning.ts`) whose focused,
+default button is **Switch to separate files**; the other buttons are *Merge
+anyway* and *Cancel*. The "don't warn me again" checkbox writes
+`pdfMergeWarnDismissed` in storage.local and is scoped to this exact
+combination only (and only when the user actually proceeded). The existing
+large-batch "you are going to download N pages" confirmation is untouched and
+fires first — the two stack. The in-page bar has no room for the modal, so it
+uses a native confirm with the same copy, defaulting to separate files.
+
+**5. Optional folder wrap.** `listMasterFolder` (default on) decides whether
+list downloads are wrapped. It drives BOTH `rawMasterFolder` (existing
+behaviour) and the new `archiveMasterFolder`, so zip/cbz/pdf can finally be
+grouped the same way raw is — this also closes backlog item 26. `""` means no
+wrap. `Downloader.#archiveArtifactName()` applies it in `#downloadBlob`, the
+single funnel for every archive artifact (server archive, zip/cbz, pdf).
+
+**6. Side panel (P1).** `sidePanel` permission + `side_panel.default_path:
+"index.html"`. The panel and the popup render the SAME document — one rendered
+view, no duplicated markup. A `uiMode` setting (default `sidepanel`) picks what
+a toolbar click opens; the worker applies it with
+`chrome.sidePanel.setPanelBehavior({openPanelOnActionClick})` plus
+`chrome.action.setPopup("")`/`("index.html")` (an action popup always beats the
+panel behaviour, so it must be cleared). Everything is feature-detected: on
+Chrome < 114 and on Firefox the popup simply stays. `preview.ts` re-bootstraps
+on tab activation/navigation because the panel outlives a tab switch, and adds
+an `.nhdwPanel` class that drops the popup's fixed 500px width.
+
+**7. In-page card controls (P2).** New content script
+`src/content/listControls.ts` (+ `css/content.css`) puts a **Download** button
+and a **Select** box on every listing card and a floating bar with
+`N selected -> format -> output -> Download / Clear`. Injection is idempotent
+(`data-nhdw-controls` marker) and driven by a debounced `MutationObserver`, so
+infinite scroll and pagination are covered. Selection uses the SAME
+`chrome.storage.local.allIds` list the panel reads, and `storage.onChanged`
+mirrors panel changes back into the page. Content-script jobs carry no tab id,
+so `resolveTabId()` in the worker falls back to `sender.tab.id` — the
+source-tab requirement still holds. The legacy caption checkbox is wrapped in
+`.nhdw-legacy-check` and hidden while these controls are on; the toggle is
+`inPageControls` (default on).
+
+New/changed settings keys (all `chrome.storage.sync` unless noted):
+`listFormat`, `listOutputMode`, `listMasterFolder`, `listDownloadName`,
+`uiMode`, `inPageControls`; `pdfMergeWarnDismissed` in `chrome.storage.local`.
+
+Tests: `test/list-mode.test.js` (+27 cases), archive-master-folder cases in
+`test/downloader.test.js` (+5), side-panel/content-script cases in
+`test/manifest.test.js` (+2), new relay phases in `scripts/e2e-relay.js`
+(list-mode option relay, explicit `separate:false`, sender-tab fallback,
+UI-mode popup fallback) and a whole new VM suite
+`scripts/e2e-list-controls.js`. `scripts/e2e-offscreen.js` expectation updated
+to the corrected `cleanName` behaviour. Totals: **205 mocha passing / 4
+pending**, smoke green, e2e green (57 PASS lines).
+
+### Folder-naming guard (3.3.1)
 
 User report: "the folder naming system doesn't work". Investigation method:
 the deprecated RAR archives in `old deprecated source code/` were unpacked
@@ -184,9 +293,11 @@ Boundary table — **API key mode** (a key is stored) vs **open tab mode**
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build
-npm test              # 166 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
+npm test              # 205 passing, 4 pending (pending = live checks; opt in with RUN_LIVE_TESTS=1 / NH_API_KEY=<key>)
 npm run test:smoke
-npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN), relay, content
+npm run test:e2e      # worker (incl. PDF + CDN phases), offscreen (incl. PDF + CDN),
+                      # relay (incl. list-mode option relay + UI mode), content,
+                      # list controls (in-page Download/Select buttons)
 cp js/*.js ../NHDW_Release_v3.0.0/js/
 diff -rq js ../NHDW_Release_v3.0.0/js
 # also diff index.html / options.html / css / manifest.json when they change
@@ -197,6 +308,39 @@ diff -rq js ../NHDW_Release_v3.0.0/js
 ## Required real-browser verification before PR
 
 Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://extensions`.
+
+### 3.4.0 additions (do these first — they are what this release is about)
+
+0a. **List mode, separate files (the headline fix).** On a search / artist /
+    tag page: select several galleries, Format = ZIP, Output = *Separate files*
+    -> one `.zip` per title, each named from the template and the gallery's own
+    metadata, NOT from the page URL. Repeat with CBZ and PDF.
+0b. **List mode, merged file.** Output = *Single merged file* -> exactly one
+    archive named after the box under the picker.
+0c. **PDF-merge guard.** Format = PDF, Output = *Single merged file*, more than
+    one title selected -> the modal appears, **Switch to separate files** is
+    focused and pressing Enter produces one PDF per title. Check *Merge anyway*
+    still merges, *Cancel* does nothing, and that "don't warn me again" only
+    silences this exact combination (zip batch and single-title PDF must be
+    unaffected). With a multi-page listing, confirm the count warning appears
+    FIRST and the merge warning after it.
+0d. **Optional folder wrap.** Ticked -> `Downloads/NHDW/<name>.zip` and
+    `Downloads/NHDW/<Title>/001.jpg`. Unticked -> straight into Downloads for
+    both. Emptying the folder name in Options behaves like unticked.
+0e. **List-mode template.** Settings -> List mode -> untick "same as single
+    title", change the tokens, confirm the live preview and then the real file
+    name follow it while single-title downloads keep the old template.
+0f. **Raw in list mode.** Still the open item below: confirm one real folder per
+    title with loose `001.jpg…` inside, and that the merge option stays disabled.
+0g. **Side panel.** Toolbar click opens the docked panel; it resizes; it follows
+    tab switches and navigation (gallery page <-> listing page). Switch
+    Settings -> Interface -> Popup and confirm the toolbar click goes back to the
+    hovering popup. On a Chrome < 114 build confirm the popup is used silently.
+0h. **In-page card controls.** Download button on a card downloads that gallery;
+    Select boxes raise the floating bar with the right count; the count survives
+    scrolling to newly loaded cards (infinite scroll); selection made in the page
+    shows up in the panel and vice versa; turning the setting off removes both
+    the buttons and the bar after a reload, leaving the legacy checkbox.
 
 1. Single-gallery ZIP download: file named exactly the gallery title, pages at the ZIP root (no inner title folder). Repeat for CBZ.
 2. **PDF**: same title naming; open the produced PDF — every page present, correct order, correct orientation/aspect.
@@ -209,7 +353,30 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 8. Keep the source gallery tab backgrounded on another site; confirm completion.
 9. CDN hardening: `/api/v2/cdn` fetched once per session (worker console); `chrome.storage.session.get("cdnConfig")` shows the merged list; grant-notice flow when a host lacks permission.
 
-## Next backlog (worklist — statuses as of 2026-09-03)
+## Next backlog (worklist — statuses as of 2026-09-04)
+
+- [ ] **P3 — queue UI with thumbnails (carried over from the user's brief, not
+  started).** Replace the name-only queue list with a Twitter/X- or
+  rule34-style list: thumbnail, title, per-item progress bar, status and
+  cancel/retry per item. Per-item states: `queued`, `fetching metadata`,
+  `downloading (x/y pages)`, `packaging`, `done`, `failed`. Needs a concurrency
+  limit and retry-with-backoff at the queue level (the per-image retry already
+  exists in `Downloader`). Today the queue lives in the offscreen document
+  (`queuedJobs` in `src/offscreen/offscreen.ts`) and only reports a count plus
+  "Clear queue" — a real UI needs the worker to mirror queue entries into
+  `chrome.storage.session` so the panel can render them after a worker restart.
+  Thumbnails are available without extra requests: `t.nhentai.net` covers are
+  derivable from `media_id`, and the listing cards already have them in the DOM.
+- [ ] **Raw list-mode verification (blocks flipping the "(testing)" label).**
+  `formatLabel("raw")` currently returns "Raw images (testing)". Once a real
+  browser confirms one real folder per title with loose images, drop
+  `RAW_IS_EXPERIMENTAL` in `src/utils/downloadFormats.ts`.
+- [ ] **Firefox port folder is now behind (item 27).** `NHDW_Firefox_v1.0.0/`
+  still carries 3.3.1 and none of the 3.4.0 work. Extra porting notes:
+  `chrome.sidePanel` does not exist in Firefox — the equivalent is
+  `sidebar_action` (different manifest key, different open semantics, no
+  `setPanelBehavior`), so `applyUiMode()` needs a Firefox branch; and the new
+  `js/listControls.js` content script has to be added to the Firefox manifest.
 
 - [ ] **27. Port the extension to Firefox (added 2026-09-03; working folder
   `NHDW_Firefox_v1.0.0/`).** Feasibility audit done — port is possible.
@@ -246,10 +413,10 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 - [ ] Real-browser verification of the keyed route winning in the worker console
   (previous open question: is a same-tab/worker fetch of `/api/v2/galleries`
   challenged? With a key it uses the official contract).
-- [ ] **Optional: master folder for single-file archives (backlog 26)** — user
-  to decide whether ZIP/CBZ/PDF should also group under `NHDW/` (they save one
-  file per gallery straight into the download folder today, e.g.
-  `Downloads/<Title>.zip`).
+- [x] ~~**Optional: master folder for single-file archives (backlog 26)**~~ —
+  DONE in 3.4.0 via `archiveMasterFolder` + the `listMasterFolder` checkbox.
+  Single-title downloads still default to no wrap; list mode wraps by default
+  and the checkbox turns it off.
 - [ ] Optional: sync the API key across the user's own devices
   (`chrome.storage.sync`) — deliberately local-only today; needs an explicit
   user decision (secret syncing).
@@ -269,6 +436,17 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 ## Do not
 
 - Do not switch branches or push to a branch other than the current session branch.
+- Do not fork the download logic for list mode. List mode must keep calling the
+  same `downloadAllDoujinshis` pipeline with per-job options; the formats and
+  the output mode must keep coming from `src/utils/downloadFormats.ts`. Two
+  copies of "what a format is" is exactly how list mode ended up stuck on ZIP.
+- Do not make the master-folder wrap mandatory again, and do not let list mode
+  fall back to the page URL for a file name in separate mode.
+- Do not remove or weaken the PDF-merge confirmation, and do not widen its
+  "don't warn me again" flag beyond `pdf + batch + more than one title`.
+- Do not drop `action.default_popup` from the manifest: the popup is the
+  documented fallback for builds without `chrome.sidePanel` and for users who
+  prefer it.
 - Do not put `chrome.storage`, `chrome.downloads`, `chrome.scripting`, or `chrome.permissions` in the offscreen document.
 - Do not use `/api/v2/auth/*` or `/api/v2/user/keys`.
 - Do not remove tab-first fetching or claim Cloudflare bypass.

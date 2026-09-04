@@ -6,6 +6,17 @@ import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl } from "../sources"
 import { getActiveTabId, readGalleryFromTab } from "./activeTabGallery"
 import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
+import {
+    DownloadFormat,
+    effectiveOutputMode,
+    formatExtension,
+    normalizeFormat,
+    normalizeOutputMode,
+    outputModeToSeparate,
+    shouldWarnPdfMerge
+} from "../utils/downloadFormats"
+import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
+import { confirmPdfMerge } from "./pdfMergeWarning"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
@@ -492,13 +503,23 @@ export default class Popup
     // caption inside the same link). No HTML serialization / regex parsing:
     // quotes, entities, markup changes, or duplicate titles cannot break the
     // id <-> title pairing.
-    updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, downloadName: string, useZip: string, replaceSpaces: boolean) {
+    //
+    // List mode is no longer a stripped-down cousin of the single-title popup:
+    // it offers the same four formats, an explicit separate-files/batch output
+    // mode (separate is the default), an optional master folder, and its own
+    // filename template. Every download from here goes through exactly the
+    // same pipeline as a single-title download, so the two cannot drift.
+    updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, listSettings: ListModeSettings) {
         let self = Popup.getInstance();
 
         if (galleries.length === 0) {
             document.getElementById('action')!.innerHTML = message.invalidPage();
             return;
         }
+
+        // Working copy of the list-mode settings: every picker writes here and
+        // persists to storage, so the choice survives closing the panel.
+        let settings: ListModeSettings = listSettings;
 
         // Fill the mode badge once the storage read finishes (non-blocking).
         getApiModeState().then((state) => {
@@ -516,7 +537,7 @@ export default class Popup
         let finalHtml = "";
         for (const card of galleries) {
             let tmpName;
-            if (downloadName === "{pretty}") {
+            if (settings.template === "{pretty}") {
                 tmpName = card.title.replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
             } else {
                 tmpName = card.title.trim();
@@ -526,36 +547,30 @@ export default class Popup
             allIds.push(card.id);
         }
 
-        // Use URL for default download name
+        // Default name for the MERGED archive only. Batch is opt-in, so this
+        // page-derived name is no longer what most downloads are called: in
+        // separate mode every file is named from the list-mode template and
+        // the gallery's own metadata.
         let parts = self.url.split('/')
-        let name;
+        let name: string;
         if (parts[parts.length - 1] === "" || parts[parts.length - 1].startsWith("?page=")) name = parts[parts.length - 2];
         else name = parts[parts.length - 1];
         name = name.replace("q=", ""); // Artifact when doing a search
 
-        // Appends the extension (raw has none). "folder" is the retired
-        // image-folder format; PDF is its replacement.
-        let extension = "";
-        if (useZip == "folder") {
-            useZip = "pdf";
-        }
-        if (useZip != "raw")
-        {
-            extension = "." + useZip;
-        }
-
         // Add the HTML
         let nbDownload = 0;
         let currPage = currentPage;
-        let html =  '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>' + finalHtml
-        + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/><br/><br/><input type="button" id="button" value="Download"/>';
+        let html = '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>'
+            + '<div class="listGalleries">' + finalHtml + '</div>'
+            + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/>'
+            + message.listDownloadOptions(settings)
+            + '<input type="button" id="button" value="Download selected"/>';
         if (maxPage > 0 && currPage > 0) {
             nbDownload = maxPage - currPage + 1;
             html += '<br/><input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/><br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
         }
-        html += '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;
         document.getElementById('action')!.innerHTML = html;
-        (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(name, replaceSpaces);
+        (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(name, settings.replaceSpaces);
         if (maxPage > 0 && currPage > 0) {
             (document.getElementById('downloadInput') as HTMLInputElement).value = currPage + "-" + maxPage;
             document.getElementById('buttonHelp')!.addEventListener('click', function() {
@@ -563,6 +578,116 @@ export default class Popup
                 + "Example: 2,4,6-10 will download the pages 2, 4 and 6 to 10 (included)");
             });
         }
+
+        // ---- list-mode option pickers -------------------------------------
+        // The pickers persist immediately (separate keys from the single-title
+        // settings) and re-render the parts of the panel that depend on them:
+        // the merged-archive name row only makes sense in batch mode, and the
+        // filename preview must always show what the next download produces.
+        const sampleTitle = galleries.length > 0 ? (titleById[galleries[0].id] || galleries[0].title) : "Sample Title";
+        const sampleId = galleries.length > 0 ? galleries[0].id : "123456";
+
+        const refreshListOptionUi = () => {
+            const effective = effectiveOutputMode(settings.format, settings.outputMode);
+            const batchRow = document.getElementById('batchNameRow');
+            if (batchRow) {
+                batchRow.hidden = effective !== "batch";
+            }
+            const batchExt = document.getElementById('batchExtension');
+            if (batchExt) {
+                batchExt.textContent = formatExtension(settings.format);
+            }
+            const rawNote = document.getElementById('listRawNote');
+            if (rawNote) {
+                rawNote.hidden = settings.format !== "raw";
+            }
+            const preview = document.getElementById('listNamePreview');
+            if (preview) {
+                const rendered = utils.getDownloadName(settings.template, sampleTitle, sampleTitle, "", sampleId, []);
+                const clean = utils.cleanName(rendered, settings.replaceSpaces, sampleId);
+                const folder = settings.masterFolder && settings.masterFolderName !== ""
+                    ? settings.masterFolderName + "/"
+                    : "";
+                preview.textContent = effective === "batch"
+                    ? "One merged file: Downloads/" + folder
+                        + ((document.getElementById('path') as HTMLInputElement | null)?.value || utils.cleanName(name, settings.replaceSpaces))
+                        + formatExtension(settings.format)
+                    : (settings.format === "raw"
+                        ? "One folder per title: Downloads/" + folder + clean + "/001.jpg"
+                        : "One file per title: Downloads/" + folder + clean + formatExtension(settings.format));
+            }
+        };
+
+        setTimeout(() => {
+            const formatSelect = document.getElementById('listFormat') as HTMLSelectElement | null;
+            if (formatSelect) {
+                formatSelect.addEventListener('change', () => {
+                    settings.format = normalizeFormat(formatSelect.value, settings.format);
+                    saveListSettings({ listFormat: settings.format });
+                    refreshListOptionUi();
+                });
+            }
+            const outputSelect = document.getElementById('listOutputMode') as HTMLSelectElement | null;
+            if (outputSelect) {
+                outputSelect.addEventListener('change', () => {
+                    settings.outputMode = normalizeOutputMode(outputSelect.value, settings.outputMode);
+                    saveListSettings({ listOutputMode: settings.outputMode });
+                    refreshListOptionUi();
+                });
+            }
+            const masterBox = document.getElementById('listMasterFolder') as HTMLInputElement | null;
+            if (masterBox) {
+                masterBox.addEventListener('change', () => {
+                    settings.masterFolder = masterBox.checked;
+                    saveListSettings({ listMasterFolder: settings.masterFolder });
+                    refreshListOptionUi();
+                });
+            }
+            const pathInput = document.getElementById('path') as HTMLInputElement | null;
+            if (pathInput) {
+                pathInput.addEventListener('input', refreshListOptionUi);
+            }
+            refreshListOptionUi();
+        }, 0);
+
+        // Build the job payload shared by "Download selected" and "Download
+        // all (N pages)". Applying the PDF-merge guard here means neither
+        // entry point can bypass it.
+        const buildJobOptions = async (titleCount: number): Promise<{
+            format: DownloadFormat;
+            separate: boolean;
+            masterFolder: string;
+            nameTemplate: string;
+        } | null> => {
+            let outputMode = effectiveOutputMode(settings.format, settings.outputMode);
+            if (shouldWarnPdfMerge(settings.format, outputMode, titleCount) && !settings.pdfMergeWarnDismissed) {
+                const answer = await confirmPdfMerge(titleCount);
+                if (answer.dismissed) {
+                    // Honour "don't warn me again" for the rest of this session
+                    // too, not only after the panel is reopened.
+                    settings.pdfMergeWarnDismissed = true;
+                }
+                if (answer.choice === "cancel") {
+                    return null;
+                }
+                if (answer.choice === "separate") {
+                    outputMode = "separate";
+                    settings.outputMode = "separate";
+                    saveListSettings({ listOutputMode: "separate" });
+                    const outputSelect = document.getElementById('listOutputMode') as HTMLSelectElement | null;
+                    if (outputSelect) {
+                        outputSelect.value = "separate";
+                    }
+                    refreshListOptionUi();
+                }
+            }
+            return {
+                format: settings.format,
+                separate: outputModeToSeparate(settings.format, outputMode),
+                masterFolder: resolveMasterFolder(settings),
+                nameTemplate: settings.template
+            };
+        };
 
         // Invert all checkbox - add event listener after updating the HTML content
         setTimeout(() => {
@@ -622,6 +747,10 @@ export default class Popup
                     if (Object.keys(allDoujinshis).length > 0) { // There is at least one element selected, we launch download
                         const pathElement = document.getElementById('path') as HTMLInputElement;
                         if (pathElement) {
+                            const job = await buildJobOptions(Object.keys(allDoujinshis).length);
+                            if (job === null) {
+                                return; // user cancelled the PDF-merge warning
+                            }
                             let finalName = pathElement.value;
                             document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                             const tabId = await getActiveTabId();
@@ -638,7 +767,11 @@ export default class Popup
                                 allDoujinshis: allDoujinshis,
                                 galleryMetadata: galleryMetadata,
                                 finalName: finalName,
-                                tabId: tabId
+                                tabId: tabId,
+                                formatOverride: job.format,
+                                separate: job.separate,
+                                masterFolder: job.masterFolder,
+                                nameTemplate: job.nameTemplate
                             });
                             self.updateProgress(0, finalName, false);
                         }
@@ -686,10 +819,20 @@ export default class Popup
                                 downloadInput.value = currPage + "-" + nbDownload;
                             }
                         } else {
+                            // The large-batch count warning stays exactly as it
+                            // was; the PDF-merge warning is independent and is
+                            // shown after it (they can stack).
                             let choice = confirm("You are going to download " + pages.length + " pages of doujinshi. Are you sure you want to continue?");
                             if (choice) {
                                 const pathElement = document.getElementById('path') as HTMLInputElement;
                                 if (pathElement) {
+                                    // A whole-listing walk always covers more
+                                    // than one title, so the merge guard uses
+                                    // the page count as the lower bound.
+                                    const job = await buildJobOptions(Math.max(2, Object.keys(allDoujinshis).length));
+                                    if (job === null) {
+                                        return; // user cancelled the PDF-merge warning
+                                    }
                                     let finalName = pathElement.value;
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                                     const tabId = await getActiveTabId();
@@ -708,7 +851,11 @@ export default class Popup
                                         pages: pages,
                                         finalName: finalName,
                                         url: self.url,
-                                        tabId: tabId
+                                        tabId: tabId,
+                                        formatOverride: job.format,
+                                        separate: job.separate,
+                                        masterFolder: job.masterFolder,
+                                        nameTemplate: job.nameTemplate
                                     });
                                     self.updateProgress(0, finalName, false);
                                 }

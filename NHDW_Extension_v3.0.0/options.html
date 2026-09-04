@@ -47,7 +47,70 @@
         Download each file separately:
         <input id="downloadSeparately" type="checkbox"/>
         <br/><small>Off = all selected galleries go into one shared archive.
-        On = each gallery gets its own archive file named after its title.</small>
+        On = each gallery gets its own archive file named after its title.
+        This is the legacy global switch; list mode below has its own, more
+        explicit output-mode setting that overrides it.</small>
+        <br/><hr/>
+        <h3>List mode (homepage, search, artist, tag, genre)</h3>
+        <p><small>Used by the listing panel, the in-page card buttons and
+        <b>Download all</b>. These are stored separately from the single-title
+        settings above, so changing one never changes the other.</small></p>
+        Format:
+        <select id="listFormat">
+            <option value="zip">ZIP</option>
+            <option value="cbz">CBZ</option>
+            <option value="pdf">PDF</option>
+            <option value="raw">Raw images (testing)</option>
+        </select>
+        <br/><small>The same four formats a single title offers. Raw writes
+        loose images into one folder per title.</small>
+        <br/>
+        Output:
+        <select id="listOutputMode">
+            <option value="separate">Separate files (one per title)</option>
+            <option value="batch">Single merged file (all titles)</option>
+        </select>
+        <br/><small><b>Separate files</b> is the default: one archive (or one
+        folder, for raw) per title, named from the list-mode template below.
+        <b>Single merged file</b> is the old behaviour - every selected gallery
+        goes into one archive. Merging several different titles into one
+        <b>PDF</b> produces a tankoubon-style document that cannot be split
+        afterwards, so that combination always asks for confirmation first.</small>
+        <br/>
+        Put list downloads in the master folder:
+        <input id="listMasterFolder" type="checkbox"/>
+        <br/><small>Optional, not forced. When ticked, list downloads land in
+        the folder named above ("Folder for raw downloads") - archives as
+        <i>Downloads\NHDW\&lt;name&gt;.zip</i> and raw pages as
+        <i>Downloads\NHDW\&lt;title&gt;\001.jpg</i>. Untick it to save straight
+        into the download folder.</small>
+        <br/>
+        List-mode file name:
+        <input id="listDownloadName" type="text" size="30" placeholder="Same as single title"/>
+        <br/><small>Same tokens as the single-title template
+        (<code>{pretty}</code>, <code>{english}</code>, <code>{japanese}</code>,
+        <code>{id}</code>, <code>{artist}</code>, <code>{group}</code>,
+        <code>{character}</code>, <code>{language}</code>). Leave it empty to
+        follow the single-title template. Resolved per gallery from that
+        gallery's own metadata - never from the page URL.</small>
+        <div id="listDownloadNamePreview"><small></small></div>
+        <br/><hr/>
+        <h3>Interface</h3>
+        Toolbar click opens:
+        <select id="uiMode">
+            <option value="sidepanel">Side panel (dockable)</option>
+            <option value="popup">Popup (hovering)</option>
+        </select>
+        <br/><small>The side panel docks next to the page, can be resized and
+        stays open while you browse; the popup closes as soon as it loses
+        focus. Both show exactly the same view.</small>
+        <br/>
+        Download / Select buttons on listing cards:
+        <input id="inPageControls" type="checkbox"/>
+        <br/><small>Adds a Download button and a Select box to every gallery
+        card, plus a floating bar showing the selection count, format and output
+        mode - so listing pages can be downloaded without opening the extension
+        at all. Reload the nhentai page after changing this.</small>
         <br/><hr/>
         <h3>Advanced behaviour</h3>
         Use HTML to get API info:

@@ -636,7 +636,12 @@ function askOffscreen(message) {
         "separate-files batch followed by a queued gallery must emit three archives"
     );
     const separateFilenames = anchorDownloads.map((d) => d.download).sort();
-    const expectedSeparate = ["Test.zip", "Test Two.zip", "Downloads/Queued.zip"].sort();
+    // Separate-file names now go through utils.cleanName exactly like a
+    // single-title download (relayedOptions has replaceSpaces: true), so
+    // "Test Two" becomes "Test_Two" instead of keeping the raw title. Before
+    // 3.4.0 the batch used the raw title here while single titles were
+    // cleaned - the two paths disagreed.
+    const expectedSeparate = ["Test.zip", "Test_Two.zip", "Downloads/Queued.zip"].sort();
     if (JSON.stringify(separateFilenames) !== JSON.stringify(expectedSeparate)) {
         fail("separate-files filenames mismatch. Expected " + JSON.stringify(expectedSeparate) +
             " got " + JSON.stringify(separateFilenames));

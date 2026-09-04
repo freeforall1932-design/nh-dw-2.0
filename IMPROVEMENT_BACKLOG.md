@@ -755,3 +755,75 @@ replacing folder mode, CDN configuration hardening). PR #22 was merged with
    flow, tab-first fetch under Firefox.
 6. AMO distribution decision separately (store policy is outside this
    repo audit).
+
+---
+
+## Session log — 2026-09-04: list-mode parity, side panel, in-page card controls (3.4.0)
+
+### The report this session answers
+
+Verbatim from the user: single-title pages "can do 4 zip cbz pdf and raw", but
+"when I go to homepage or search or any artist or genre it's all about the list
+with a default of zip and the naming system is the website url itself"; the
+folder naming "work just like the other but I want that to be optional"; "I
+don't like the extension pop up is hovering with no flexibility to be hovered
+elsewhere because my other repo we have side panel instead of pop up"; and
+"can you make a feature to have download and or select button around the post
+when I'm in list mode". The stated must-haves were the format choice and the
+separate-file option; everything else was explicitly optional.
+
+### Root causes found
+
+1. **List mode was ZIP-only** because the listing panel never rendered a format
+   picker; the only format input was the stored `useZip`, and the popup's own
+   `formatOverride` was sent from the single-title branch only.
+2. **List files were named after the page URL** because list mode could only do
+   the *merged* output, whose archive name is `finalName` — and `finalName` was
+   derived in `Popup.updatePreviewAll` from `self.url`. The per-gallery template
+   path already existed but was reachable only through the
+   `downloadSeparately` option, which no list UI exposed.
+3. **`separate` was a one-way switch.** `background.ts` had
+   `if (relayedMessage.separate) options.downloadSeparately = true;` — an
+   explicit `false` was indistinguishable from "not specified", so a UI whose
+   default is separate could never ask for a merge.
+4. **Separate-mode names skipped `cleanName`.** `zipName = title` (raw title)
+   in both `background.ts` and `offscreen.ts`, while single-title downloads used
+   the cleaned path. `replaceSpaces` therefore silently did not apply to batch
+   output.
+5. **The folder wrap was raw-only and forced.** `rawMasterFolder` defaulted to
+   `NHDW` with no per-job switch, and archives had no equivalent at all.
+
+### Landed
+
+| Area | Change |
+|---|---|
+| Shared registry | New `src/utils/downloadFormats.ts`: formats, labels, `normalizeFormat` (incl. the retired `folder -> pdf` map), extensions, output mode, `effectiveOutputMode`, `outputModeToSeparate`, `shouldWarnPdfMerge`, list-template inheritance sentinel, list-mode storage defaults. Imported by the panel, the content script, the options page, the worker and the offscreen document. |
+| List settings | New `src/utils/listSettings.ts` (`buildListSettings` is a pure, unit-tested mapper). Keys: `listFormat`, `listOutputMode`, `listMasterFolder`, `listDownloadName`. |
+| Panel | `Popup.updatePreviewAll` now renders `message.listDownloadOptions()`: format picker, output picker, optional master-folder checkbox, merged-archive name row (only in batch mode) and a live resolved-filename preview. Both entry points (**Download selected** and **Download all (N pages)**) share one `buildJobOptions()` so neither can skip the merge guard. |
+| Pipeline | Per-job relay options extended with `nameTemplate` -> `options.downloadName`, `masterFolder` -> `options.rawMasterFolder` + `options.archiveMasterFolder`, and an explicit `separate` (true AND false). Same overrides applied on the non-offscreen fallback path via `jobOverridesFromRequest()`. |
+| Downloader | New `archiveMasterFolder` setting applied in `#downloadBlob` (the single funnel for server archives, zip/cbz and pdf) through `#archiveArtifactName()`; `normalizeArchiveMasterFolder` defaults to `""` so single-title behaviour is unchanged. |
+| PDF guard | `src/preview/pdfMergeWarning.ts` modal, safe path focused, dismissal scoped to `pdf + batch + >1 title` and only recorded when the user proceeds. Stacks after the existing page-count confirmation. |
+| Side panel | `sidePanel` permission + `side_panel.default_path`. `uiMode` setting, applied by the worker with `setPanelBehavior` + `action.setPopup`. Same document for both. `preview.ts` re-bootstraps on tab change and drops the fixed popup width in panel mode. |
+| In-page controls | `src/content/listControls.ts` + `css/content.css`. Per-card Download/Select, floating bar, idempotent MutationObserver injection, shared `allIds` selection, `sender.tab.id` fallback in the worker, `inPageControls` toggle, legacy checkbox hidden via `.nhdw-legacy-check`. |
+
+### Deliberate non-goals this session
+
+- **P3 queue UI with thumbnails** — specified in the worklist, not implemented.
+  The blocker is structural, not cosmetic: the queue currently lives entirely
+  inside the offscreen document (`queuedJobs`) and is only surfaced as a count.
+  A per-item UI needs the worker to mirror the queue into
+  `chrome.storage.session` (worker-restart safe) with per-item state, and the
+  offscreen document to report `queued -> fetching metadata -> downloading
+  (x/y) -> packaging -> done/failed` transitions instead of one global
+  progress number.
+- **Raw remains labelled "(testing)"** until a real browser confirms the folder
+  creation end to end.
+- **Firefox port** untouched; `chrome.sidePanel` has no Firefox equivalent
+  (`sidebar_action` is the analogue) and the new content script must be added
+  to that manifest.
+
+### Backlog items closed
+
+- **26. Master folder for single-file archives** — done (`archiveMasterFolder`,
+  driven by the list-mode checkbox; off by default for single titles).
+

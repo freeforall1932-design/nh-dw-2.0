@@ -7,7 +7,7 @@ import { recordDownloadRequest, bindDownloadId } from "./downloadNaming";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -22,6 +22,11 @@ export default class Downloader
         // Relayed/absent settings both end up normalized: undefined means the
         // default master folder, an explicit empty string disables it.
         this.#rawMasterFolder = normalizeRawMasterFolder(settings ? settings.rawMasterFolder : undefined);
+        // Optional master folder for finished ARCHIVES (zip/cbz/pdf). Unlike
+        // the raw folder this defaults to "" (off): a single file per gallery
+        // has never piled up in the download folder the way loose pages do,
+        // so it is only used when a caller (list mode) asks for it.
+        this.#archiveMasterFolder = normalizeArchiveMasterFolder(settings ? settings.archiveMasterFolder : undefined);
 
         // @ts-ignore
         if (typeof browser !== "undefined") { // Firefox
@@ -35,6 +40,8 @@ export default class Downloader
 
     // Top-level folder that collects raw (loose image) downloads; "" = off.
     #rawMasterFolder: string = DEFAULT_RAW_MASTER_FOLDER;
+    // Top-level folder that collects finished archives (zip/cbz/pdf); "" = off.
+    #archiveMasterFolder: string = "";
 
     isPaused: boolean = false;
     #resumePaused: (() => void) | null = null;
@@ -119,6 +126,8 @@ export default class Downloader
                             // The empty string is meaningful: it disables the
                             // master folder for raw downloads.
                             self.#rawMasterFolder = normalizeRawMasterFolder(elems.rawMasterFolder);
+                            // No stored counterpart: the archive master folder
+                            // is a per-job choice relayed by the caller.
                         })
                     );
                 });
@@ -438,8 +447,18 @@ export default class Downloader
         });
     }
 
+    // Finished archives (zip/cbz/pdf) optionally live inside a master folder,
+    // mirroring what raw downloads do with their titled folders. One switch in
+    // the UI drives both; "" keeps the historical "straight into Downloads".
+    #archiveArtifactName(filename: string): string {
+        return this.#archiveMasterFolder !== ""
+            ? this.#archiveMasterFolder + "/" + filename
+            : filename;
+    }
+
     async #downloadBlob(content: Blob, filename: string): Promise<void> {
         const { url, revoke } = await this.#urlForBlob(content);
+        filename = this.#archiveArtifactName(filename);
         try {
             await this.#saveArtifact(url, filename);
         } catch (error) {
@@ -705,7 +724,7 @@ export default class Downloader
     // a relay, because chrome.downloads is not exposed in offscreen documents
     // (only chrome.runtime is).
     saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean };
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string };
     // "flat" = this gallery owns the whole archive (pages at the root);
     // "nested" = shared batch archive (one folder per gallery inside).
     #archiveLayout: string = "nested";
@@ -754,6 +773,15 @@ export function sanitizeArtifactFilename(filename: string, fallbackStem: string)
 // undefined means "use the default". Relayed through the settings bag so the
 // offscreen document never needs chrome.storage.
 export const DEFAULT_RAW_MASTER_FOLDER = "NHDW";
+
+// Master folder for finished archives. Unlike the raw folder this is OFF by
+// default: it only applies when a caller explicitly asks for the wrap.
+export function normalizeArchiveMasterFolder(value: any): string {
+    if (value === undefined || value === null) {
+        return "";
+    }
+    return String(value).trim();
+}
 
 export function normalizeRawMasterFolder(value: any): string {
     if (value === undefined || value === null) {

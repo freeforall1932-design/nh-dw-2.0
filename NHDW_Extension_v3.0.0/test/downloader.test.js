@@ -489,6 +489,59 @@ describe('Downloader (archive layout)', () => {
     });
 });
 
+describe('Downloader (optional archive master folder)', () => {
+    // List mode can wrap finished archives in a master folder the same way raw
+    // downloads wrap their titled folders - but the wrap is a user choice, so
+    // it must be OFF unless a caller asks for it (single-title downloads keep
+    // landing straight in the download folder).
+    let chrome;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip');
+        globalThis.chrome = chrome;
+        globalThis.fetch = makeFetchStub();
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    async function runWith(settings) {
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Title', () => {}, () => {}, 'Title',
+            new JSZip(), 'Title', null, undefined,
+            Object.assign({ useZip: 'zip', maxConcurrentDownloads: 3, archiveLayout: 'flat' }, settings));
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+        return chrome.downloads.calls[0].filename;
+    }
+
+    it('saves straight into the download folder when no master folder is requested', async () => {
+        assert.strictEqual(await runWith({}), 'Title.zip');
+    });
+
+    it('wraps the archive when the caller asks for a master folder', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: 'NHDW' }), 'NHDW/Title.zip');
+    });
+
+    it('treats an explicitly empty master folder as "no wrap"', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: '' }), 'Title.zip');
+    });
+
+    it('supports a nested master folder path', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: 'NHDW/lists' }), 'NHDW/lists/Title.zip');
+    });
+
+    it('sanitizes a user-typed master folder per path segment', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: 'My:Folder* ' }), 'MyFolder/Title.zip');
+    });
+});
+
 describe('sanitizeArtifactFilename', () => {
     it('keeps clean names and subfolders untouched', () => {
         assert.strictEqual(sanitizeArtifactFilename('Downloads/Some Title/001.jpg', 'x'), 'Downloads/Some Title/001.jpg');

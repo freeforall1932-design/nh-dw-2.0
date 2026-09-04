@@ -11,6 +11,15 @@
 import { verifyAndSaveApiKey, removeApiKey } from "../options/apiKey";
 import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "../options/nameTemplate";
 import { utils } from "../utils/utils";
+import {
+    DOWNLOAD_FORMATS,
+    formatExtension,
+    formatLabel,
+    isInheritedListTemplate,
+    LIST_TEMPLATE_INHERIT,
+    normalizeFormat,
+    normalizeOutputMode
+} from "../utils/downloadFormats";
 
 const TEMPLATE_LABELS: Record<string, string> = {
     pretty: "Pretty title (short)",
@@ -207,5 +216,242 @@ export function renderSettings(container: HTMLElement): void {
             checksBox.appendChild(label);
         }
         renderNamePreview();
+    });
+
+    renderListModeSection(container);
+    renderInterfaceSection(container);
+}
+
+// ---- list mode (homepage / search / artist / tag / genre windows) -------
+// List mode has its OWN format, output mode, master-folder switch and file-name
+// template, stored under separate keys so changing them never touches the
+// single-title settings. The template defaults to following the single-title
+// one, which is what "Same as single title" expresses.
+function renderListModeSection(container: HTMLElement): void {
+    const section = el("div");
+    section.className = "psSection";
+
+    const heading = el("h4");
+    heading.textContent = "List mode (homepage, search, artist, tag)";
+    section.appendChild(heading);
+
+    const hint = el("small");
+    hint.textContent = "Defaults used when downloading from a listing page, from the in-page card buttons, or with Download all.";
+    section.appendChild(hint);
+
+    const formatRow = el("label");
+    formatRow.className = "psInline";
+    formatRow.appendChild(document.createTextNode("Format "));
+    const formatSelect = el("select");
+    formatSelect.id = "psListFormat";
+    for (const format of DOWNLOAD_FORMATS) {
+        const option = el("option");
+        option.value = format;
+        option.textContent = formatLabel(format);
+        formatSelect.appendChild(option);
+    }
+    formatRow.appendChild(formatSelect);
+    section.appendChild(formatRow);
+
+    const modeRow = el("label");
+    modeRow.className = "psInline";
+    modeRow.appendChild(document.createTextNode("Output "));
+    const modeSelect = el("select");
+    modeSelect.id = "psListOutputMode";
+    const modes = [
+        { value: "separate", label: "Separate files (one per title)" },
+        { value: "batch", label: "Single merged file (all titles)" }
+    ];
+    for (const mode of modes) {
+        const option = el("option");
+        option.value = mode.value;
+        option.textContent = mode.label;
+        modeSelect.appendChild(option);
+    }
+    modeRow.appendChild(modeSelect);
+    section.appendChild(modeRow);
+
+    const masterLabel = el("label");
+    masterLabel.className = "psInline";
+    const masterBox = el("input");
+    masterBox.type = "checkbox";
+    masterBox.id = "psListMasterFolder";
+    masterLabel.appendChild(masterBox);
+    masterLabel.appendChild(document.createTextNode(" Put list downloads in the master folder"));
+    section.appendChild(masterLabel);
+
+    const sameLabel = el("label");
+    sameLabel.className = "psInline";
+    const sameBox = el("input");
+    sameBox.type = "checkbox";
+    sameBox.id = "psListSameTemplate";
+    sameLabel.appendChild(sameBox);
+    sameLabel.appendChild(document.createTextNode(" File name: same as single title"));
+    section.appendChild(sameLabel);
+
+    const checksBox = el("div");
+    checksBox.id = "psListTemplateChecks";
+    checksBox.className = "psChecks";
+    section.appendChild(checksBox);
+
+    const preview = el("div");
+    preview.className = "psStatus";
+    preview.id = "psListTemplatePreview";
+    section.appendChild(preview);
+
+    container.appendChild(section);
+
+    chrome.storage.sync.get({
+        useZip: "zip",
+        downloadName: "{pretty}",
+        replaceSpaces: true,
+        rawMasterFolder: "NHDW",
+        listFormat: "zip",
+        listOutputMode: "separate",
+        listMasterFolder: true,
+        listDownloadName: LIST_TEMPLATE_INHERIT
+    }, (elems: any) => {
+        const singleTemplate = String(elems.downloadName || "{pretty}");
+        formatSelect.value = normalizeFormat(elems.listFormat, normalizeFormat(elems.useZip, "zip"));
+        modeSelect.value = normalizeOutputMode(elems.listOutputMode, "separate");
+        masterBox.checked = elems.listMasterFolder === undefined ? true : !!elems.listMasterFolder;
+        const inherited = isInheritedListTemplate(elems.listDownloadName);
+        sameBox.checked = inherited;
+
+        const currentTemplate = () => {
+            if (sameBox.checked) {
+                return singleTemplate;
+            }
+            const checked: Record<string, boolean> = {};
+            for (const token of TEMPLATE_TOKENS) {
+                const box = document.getElementById("psListTpl_" + token) as HTMLInputElement | null;
+                checked[token] = !!(box && box.checked);
+            }
+            return buildTemplate(checked);
+        };
+
+        const renderPreview = () => {
+            const template = currentTemplate();
+            const format = normalizeFormat(formatSelect.value, "zip");
+            const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
+            const clean = utils.cleanName(rendered, !!elems.replaceSpaces, "123456");
+            const folder = masterBox.checked && String(elems.rawMasterFolder || "") !== ""
+                ? String(elems.rawMasterFolder) + "/"
+                : "";
+            if (modeSelect.value === "batch" && format !== "raw") {
+                preview.textContent = "Example: Downloads/" + folder + "<listing name>" + formatExtension(format)
+                    + " (every title merged into one file)";
+                return;
+            }
+            preview.textContent = format === "raw"
+                ? "Example: Downloads/" + folder + clean + "/001.jpg"
+                : "Example: Downloads/" + folder + clean + formatExtension(format);
+        };
+
+        const setChecksVisible = () => {
+            checksBox.hidden = sameBox.checked;
+        };
+
+        // Token checkboxes for the list-mode template, pre-filled with the
+        // single-title template's tokens so the field starts where the user
+        // expects it to.
+        const inUse = templateTokensInUse(inherited ? singleTemplate : String(elems.listDownloadName));
+        for (const token of TEMPLATE_TOKENS) {
+            const label = el("label");
+            label.className = "psInline";
+            const box = el("input");
+            box.type = "checkbox";
+            box.id = "psListTpl_" + token;
+            box.checked = !!inUse[token];
+            box.addEventListener("change", () => {
+                chrome.storage.sync.set({ listDownloadName: currentTemplate() });
+                renderPreview();
+            });
+            label.appendChild(box);
+            label.appendChild(document.createTextNode(" " + TEMPLATE_LABELS[token]));
+            checksBox.appendChild(label);
+        }
+
+        formatSelect.addEventListener("change", () => {
+            chrome.storage.sync.set({ listFormat: normalizeFormat(formatSelect.value, "zip") });
+            renderPreview();
+        });
+        modeSelect.addEventListener("change", () => {
+            chrome.storage.sync.set({ listOutputMode: normalizeOutputMode(modeSelect.value, "separate") });
+            renderPreview();
+        });
+        masterBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ listMasterFolder: masterBox.checked });
+            renderPreview();
+        });
+        sameBox.addEventListener("change", () => {
+            chrome.storage.sync.set({
+                listDownloadName: sameBox.checked ? LIST_TEMPLATE_INHERIT : currentTemplate()
+            });
+            setChecksVisible();
+            renderPreview();
+        });
+
+        setChecksVisible();
+        renderPreview();
+    });
+}
+
+// ---- interface ---------------------------------------------------------
+// The toolbar click either opens the hovering popup or the side panel. Both
+// render THIS document, so the toggle only changes where it appears.
+function renderInterfaceSection(container: HTMLElement): void {
+    const section = el("div");
+    section.className = "psSection";
+
+    const heading = el("h4");
+    heading.textContent = "Interface";
+    section.appendChild(heading);
+
+    const panelLabel = el("label");
+    panelLabel.className = "psInline";
+    panelLabel.appendChild(document.createTextNode("Toolbar click opens "));
+    const panelSelect = el("select");
+    panelSelect.id = "psUiMode";
+    for (const mode of [
+        { value: "sidepanel", label: "Side panel (dockable)" },
+        { value: "popup", label: "Popup (hovering)" }
+    ]) {
+        const option = el("option");
+        option.value = mode.value;
+        option.textContent = mode.label;
+        panelSelect.appendChild(option);
+    }
+    panelLabel.appendChild(panelSelect);
+    section.appendChild(panelLabel);
+
+    const panelHint = el("small");
+    panelHint.textContent = "The side panel stays docked next to the page and can be resized; the popup closes as soon as it loses focus. Reopen the extension after changing this.";
+    section.appendChild(panelHint);
+
+    const controlsLabel = el("label");
+    controlsLabel.className = "psInline";
+    const controlsBox = el("input");
+    controlsBox.type = "checkbox";
+    controlsBox.id = "psInPageControls";
+    controlsLabel.appendChild(controlsBox);
+    controlsLabel.appendChild(document.createTextNode(" Download / Select buttons on listing cards"));
+    section.appendChild(controlsLabel);
+
+    const controlsHint = el("small");
+    controlsHint.textContent = "Adds a Download button and a Select box to every gallery card, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
+    section.appendChild(controlsHint);
+
+    container.appendChild(section);
+
+    chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true }, (elems: any) => {
+        panelSelect.value = elems.uiMode === "popup" ? "popup" : "sidepanel";
+        controlsBox.checked = elems.inPageControls === undefined ? true : !!elems.inPageControls;
+        panelSelect.addEventListener("change", () => {
+            chrome.storage.sync.set({ uiMode: panelSelect.value === "popup" ? "popup" : "sidepanel" });
+        });
+        controlsBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ inPageControls: controlsBox.checked });
+        });
     });
 }

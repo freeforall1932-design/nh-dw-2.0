@@ -1,3 +1,143 @@
 input[type="checkbox"] {
     zoom: 1.5;
 }
+
+/* ---- In-page card controls (NHentai Downloader) -------------------------
+   A Download button and a Select box on every listing card, plus a floating
+   action bar, so galleries can be queued without opening the extension.
+   Injected by js/listControls.js; everything is namespaced with nhdw- so it
+   cannot collide with nhentai's own styles. --------------------------------- */
+
+.nhdw-card {
+    position: relative;
+}
+
+.nhdw-card-controls {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    z-index: 5;
+    opacity: 0.55;
+    transition: opacity 0.12s ease-in-out;
+}
+
+.nhdw-card:hover .nhdw-card-controls,
+.nhdw-card-controls:focus-within {
+    opacity: 1;
+}
+
+.nhdw-card-controls .nhdw-select {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 4px;
+    padding: 2px 4px;
+    margin: 0;
+    cursor: pointer;
+}
+
+.nhdw-card-controls .nhdw-select-box {
+    zoom: 1;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    cursor: pointer;
+    accent-color: #e31b53;
+}
+
+.nhdw-card-controls .nhdw-download {
+    background: #e31b53;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.nhdw-card-controls .nhdw-download:hover {
+    background: #fff;
+    color: #e31b53;
+}
+
+.nhdw-card-controls .nhdw-download:disabled {
+    background: #777;
+    color: #ddd;
+    cursor: default;
+}
+
+/* The legacy caption checkbox is redundant while these controls are on. */
+.nhdw-controls-on .nhdw-legacy-check {
+    display: none;
+}
+
+.nhdw-action-bar {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #1f1f1f;
+    color: #fff;
+    border: 1px solid #e31b53;
+    border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    z-index: 2147483000;
+    font-size: 13px;
+}
+
+.nhdw-action-bar.nhdw-hidden {
+    display: none;
+}
+
+.nhdw-action-bar .nhdw-count {
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.nhdw-action-bar select {
+    background: #2c2c2c;
+    color: #fff;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 3px 4px;
+    font-size: 13px;
+}
+
+.nhdw-action-bar select:disabled {
+    color: #999;
+}
+
+.nhdw-action-bar button {
+    border: none;
+    border-radius: 4px;
+    padding: 5px 12px;
+    font-size: 13px;
+    cursor: pointer;
+    background: #444;
+    color: #fff;
+}
+
+.nhdw-action-bar button.nhdw-primary {
+    background: #e31b53;
+    font-weight: bold;
+}
+
+.nhdw-action-bar button:hover {
+    background: #fff;
+    color: #e31b53;
+}
+
+.nhdw-action-bar .nhdw-status {
+    white-space: nowrap;
+    color: #9ee29e;
+}

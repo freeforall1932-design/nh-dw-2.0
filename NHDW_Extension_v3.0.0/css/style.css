@@ -225,3 +225,151 @@ input[type="button"]:hover {
     margin: 2px 0;
     white-space: nowrap;
 }
+
+/* ---- Side panel: the same document is used for the toolbar popup and the
+   chrome.sidePanel view. A popup needs a fixed pixel width; a side panel is
+   resized by the user, so the width must be fluid there. ---- */
+html.nhdwPanel,
+html.nhdwPanel body {
+    width: auto;
+    max-width: 100%;
+}
+
+/* ---- List mode (homepage / search / artist / tag / genre windows) ---- */
+.listGalleries {
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 4px 6px;
+    margin: 6px 0;
+    text-align: left;
+}
+
+#htmlDark .listGalleries {
+    border-color: #555;
+}
+
+.listOptions {
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 6px 8px;
+    margin: 8px 0;
+    text-align: left;
+}
+
+#htmlDark .listOptions {
+    border-color: #555;
+}
+
+.listOptionRow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+}
+
+.listOptionRow > label:first-child {
+    min-width: 60px;
+    font-weight: bold;
+}
+
+.listOptionRow select,
+.listOptionRow input[type="text"] {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.listOptionRow label.listInline {
+    font-weight: normal;
+    min-width: 0;
+}
+
+.listNote {
+    display: block;
+    margin: 4px 0;
+    color: #b35900;
+}
+
+#htmlDark .listNote {
+    color: #e0a34e;
+}
+
+.listPreview {
+    font-size: 12px;
+    margin-top: 6px;
+    word-break: break-all;
+}
+
+/* ---- Modal confirmations (batch-PDF merge warning) ---- */
+.nhdwModalOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 12px;
+}
+
+.nhdwModal {
+    background: #fff;
+    color: #202a34;
+    border: 2px solid #e31b53;
+    border-radius: 8px;
+    padding: 12px 14px;
+    max-width: 420px;
+    text-align: left;
+}
+
+#htmlDark .nhdwModal {
+    background: #202a34;
+    color: #fff;
+}
+
+.nhdwModal h3 {
+    margin: 0 0 8px 0;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+}
+
+.nhdwModal p {
+    margin: 6px 0;
+    font-size: 13px;
+}
+
+.nhdwModalDismiss {
+    display: block;
+    margin: 10px 0 4px 0;
+    font-size: 12px;
+}
+
+.nhdwModalButtons {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+
+.nhdwModalButtons button {
+    flex: 1 1 auto;
+    padding: 8px 10px;
+    border: 1px solid #999;
+    border-radius: 5px;
+    background: #eee;
+    color: #202a34;
+    cursor: pointer;
+}
+
+.nhdwModalButtons button.nhdwModalPrimary {
+    background-color: #e31b53;
+    color: #fff;
+    border-color: #e31b53;
+    font-weight: bold;
+}
+
+.nhdwModalButtons button:focus {
+    outline: 2px solid #202a34;
+}
