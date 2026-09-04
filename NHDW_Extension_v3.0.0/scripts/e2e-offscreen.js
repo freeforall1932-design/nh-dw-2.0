@@ -186,6 +186,20 @@ function fetchStub(url) {
         }
         return Promise.resolve(new Response(pageBytes[(parseInt(imgMatch[2], 10) - 1) % pageBytes.length], { status: 200 }));
     }
+    // Listing-page HTML for the multi-page merged-history phase: page 1 shows
+    // gallery 123456, page 2 shows gallery 654321, in nhentai's card markup.
+    const pageMatch = /[?&]page=([0-9]+)/.exec(u);
+    if (pageMatch && u.includes("nhentai.net/search/")) {
+        const pageNo = parseInt(pageMatch[1], 10);
+        const id = pageNo === 1 ? GALLERY_ID : pageNo === 2 ? GALLERY_ID2 : 0;
+        const title = pageNo === 1 ? "One" : pageNo === 2 ? "Two" : "Unknown";
+        if (id !== 0) {
+            return Promise.resolve(new Response(
+                '<a href="/g/' + id + '/1/"><div class="caption">' + title + '<br>language 1</div></a>',
+                { status: 200 }
+            ));
+        }
+    }
     return Promise.resolve(new Response("not found", { status: 404 }));
 }
 
@@ -609,6 +623,57 @@ function askOffscreen(message) {
         fail("merged batch must not skip recorded titles, got " + JSON.stringify(mergedSummary));
     }
     console.log("PASS: merged batch keeps every title (one archive needs them all)");
+
+    // ---- Multi-page merged "Download all": clean pages record every id -----
+    // downloadAllPages runs the batch per listing page with downloadAtEnd true
+    // ONLY on the final page. Every earlier page must still count as clean (no
+    // failures) even though the merged save belongs to the last page, or a
+    // fully successful multi-page merge would never be recorded. One merged
+    // artifact is delivered ("path (lastPage)") and BOTH pages' ids are
+    // recorded under its name.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const pagesStart = await askOffscreen({
+        action: "downloadAllPages",
+        allDoujinshis: {},
+        pages: [1, 2],
+        finalName: "Downloads/PagesAll",
+        url: "https://nhentai.net/search/?q=test",
+        options: relayedOptions
+    });
+    if (!pagesStart || pagesStart.result !== "started") {
+        fail("downloadAllPages did not answer {result:'started'}, got " + JSON.stringify(pagesStart));
+    }
+    await waitFor(() => anchorDownloads.length === 1, "multi-page merged job must deliver one archive");
+    const pagesAnchor = anchorDownloads[0];
+    if (pagesAnchor.download !== "Downloads/PagesAll (2).zip") {
+        fail("multi-page merged artifact must be named 'path (lastPage)', got " + pagesAnchor.download);
+    }
+    const pageSummaries = sentMessages.filter((m) => m.action === "batchSummary");
+    if (pageSummaries.length !== 2) {
+        fail("downloadAllPages must emit one batchSummary per page, got " + pageSummaries.length);
+    }
+    for (const summary of pageSummaries) {
+        if (summary.succeeded !== 1 || summary.failed !== 0 || summary.skipped !== 0) {
+            fail("each clean page must report 1/0/0, got " + JSON.stringify(summary));
+        }
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "multi-page merged job must send exactly one jobFinished"
+    );
+    const pageRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!pageRecords || pageRecords.length !== 2) {
+        fail("both pages' ids must be recorded, got " + JSON.stringify(pageRecords));
+    }
+    for (const rec of pageRecords) {
+        if (rec.filename !== "Downloads/PagesAll (2).zip") {
+            fail("every merged multi-page record must point at the one artifact, got " + JSON.stringify(pageRecords));
+        }
+    }
+    console.log("PASS: clean multi-page merged job records both pages under the final artifact name");
 
     // ---- Batch metadata for unresolved ids reuses the user tab's session ---
     // Without galleryMetadata and WITH a sourceTabId, the document must fetch

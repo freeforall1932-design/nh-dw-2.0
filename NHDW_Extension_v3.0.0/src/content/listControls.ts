@@ -32,7 +32,7 @@ import {
     LIST_MODE_DEFAULTS,
     PDF_MERGE_WARNING_KEY
 } from "../utils/downloadFormats";
-import { readHistory, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
+import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 
 interface CardInfo {
     id: string;
@@ -432,13 +432,11 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
     let redownloadIds: string[] = [];
     let skippedCount = 0;
     if (effective === "separate") {
-        for (const id of Object.keys(galleries)) {
-            if (history[id] && !force.has(id)) {
-                skippedCount++;
-                continue;
-            }
+        const download = partitionKnown(history, Object.keys(galleries), redownload).download;
+        for (const id of download) {
             toDownload[id] = galleries[id];
         }
+        skippedCount = Object.keys(galleries).length - download.length;
     } else {
         toDownload = galleries;
     }

@@ -16,7 +16,7 @@ import {
     shouldWarnPdfMerge
 } from "../utils/downloadFormats"
 import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
-import { readHistory, DownloadHistory } from "../utils/downloadHistory"
+import { readHistory, partitionKnown, DownloadHistory } from "../utils/downloadHistory"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
@@ -630,9 +630,12 @@ export default class Popup
             });
             const alreadySelected = selectedIds.filter((id) => !!history[id]);
             const skipped = alreadySelected.filter((id) => !forceIds.has(id));
-            const willDownload = selectedIds.length - skipped.length;
             const summary = document.getElementById('downloadedSummary');
             const mode = effectiveOutputMode(settings.format, settings.outputMode);
+            // Merged mode never skips: the one archive needs every selected
+            // title, so the button count must be the full selection. Separate
+            // mode drops already-downloaded rows (minus overrides).
+            const willDownload = mode === "batch" ? selectedIds.length : selectedIds.length - skipped.length;
             if (summary) {
                 if (skipped.length > 0) {
                     summary.textContent = mode === "batch"
@@ -845,11 +848,12 @@ export default class Popup
                     // skipped ones cost ZERO metadata/API calls. Merged mode
                     // keeps every title (one file needs them all).
                     if (effectiveOutputMode(settings.format, settings.outputMode) === "separate") {
-                        for (const id of Object.keys(allDoujinshis)) {
-                            if (history[id] && !forceIds.has(id)) {
-                                delete allDoujinshis[id];
-                            }
+                        const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                        const filtered: Record<string, string> = {};
+                        for (const id of toDownload) {
+                            filtered[id] = allDoujinshis[id];
                         }
+                        allDoujinshis = filtered;
                     }
                     if (Object.keys(allDoujinshis).length > 0) { // There is at least one element selected, we launch download
                         const pathElement = document.getElementById('path') as HTMLInputElement;
@@ -924,11 +928,12 @@ export default class Popup
                         // the pipeline using the same recorded set). Merged mode
                         // keeps every title.
                         if (effectiveOutputMode(settings.format, settings.outputMode) === "separate") {
-                            for (const id of Object.keys(allDoujinshis)) {
-                                if (history[id] && !forceIds.has(id)) {
-                                    delete allDoujinshis[id];
-                                }
+                            const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                            const filtered: Record<string, string> = {};
+                            for (const id of toDownload) {
+                                filtered[id] = allDoujinshis[id];
                             }
+                            allDoujinshis = filtered;
                         }
                         let pages = self.#parseDownloadAll(maxPage);
                         if (typeof pages === "string") {

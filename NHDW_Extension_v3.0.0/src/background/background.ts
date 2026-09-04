@@ -679,9 +679,13 @@ module background
         // the merged artifact must have been saved (the last gallery carries
         // the save). A merged file only records its title set when the run is
         // fully clean, so a failure part-way leaves all of them re-downloadable.
+        // Multi-page "Download all" runs this per page with downloadAtEnd true
+        // ONLY on the final page: earlier pages must be failure-free but the
+        // save belongs to the last page, so finalSaveOk is required only when
+        // this invocation owns the merge.
         const clean = effectiveSeparate
             ? true
-            : (failed === 0 && finalSaveOk && batchKeys.length > 0);
+            : (failed === 0 && batchKeys.length > 0 && (!downloadAtEnd || finalSaveOk));
         return {
             records: records,
             clean: clean,

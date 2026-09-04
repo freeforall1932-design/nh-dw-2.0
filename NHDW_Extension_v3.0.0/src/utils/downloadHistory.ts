@@ -69,9 +69,11 @@ export function countHistory(history: DownloadHistory): number {
     return Object.keys(history).length;
 }
 
-// Pure split used by BOTH the UI pre-check and the pipeline guard: which
-// candidate ids are skipped (already recorded and not in redownloadIds) and
-// which are downloaded.
+// Pure split used by the UI pre-checks (popup + in-page bar): which candidate
+// ids are skipped (already recorded and not in redownloadIds) and which are
+// downloaded. The pipeline guards relay only the recorded id list (the
+// offscreen document has no chrome.storage), so they keep their equivalent
+// set-based check instead of calling this with a history object.
 export function partitionKnown(
     history: DownloadHistory,
     candidates: Array<string | number>,

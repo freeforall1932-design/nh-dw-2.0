@@ -136,10 +136,20 @@ into "Title (1).zip", "Title (2).zip" ...
   success, never on failure) and 5b–5e (unclean merged records nothing, clean
   merged records all, skip with zero API calls, redownload override).
   Offscreen e2e adds the guard phase (skip before fetch, `skipped:1`,
-  records in `jobFinished`, merged never skips). List-controls e2e adds
-  counts/labels/bulk override/per-card confirmation/merged-keeps-all.
-  `npm test` now 226 passing / 4 pending; smoke 7 PASS; `npm run test:e2e`
-  all green (worker 5e, offscreen guard, list-controls history included).
+  records in `jobFinished`, merged never skips) and a multi-page merged
+  phase (clean pages 1+2 → one artifact `path (2)` + both ids recorded —
+  the regression that caught the `finalSaveOk`-on-every-page bug). List-
+  controls e2e adds counts/labels/bulk override/per-card confirmation/
+  merged-keeps-all. `npm test` now 226 passing / 4 pending; smoke 7 PASS;
+  `npm run test:e2e` 70 PASS, 0 FAIL.
+- **Review fixes after the first pass:** merged `downloadAllPages` in both
+  pipelines required `finalSaveOk` on EVERY page, so a fully clean multi-page
+  merged job could never be recorded (only the final page owns the save) —
+  now `clean = failed===0 && batchKeys>0 && (!downloadAtEnd || finalSaveOk)`.
+  Popup merged-mode button count used `willDownload` (subtracting already-
+  downloaded) although merged never skips — now the full selection count.
+  `partitionKnown` is now actually used by both UI pre-checks (popup +
+  listControls) instead of existing only for tests.
 - **Version:** manifest 3.5.0 in source + release; README feature bullet,
   FAQ row and changelog entry added; backlog marked `[x]`.
 
