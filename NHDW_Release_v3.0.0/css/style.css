@@ -373,3 +373,39 @@ html.nhdwPanel body {
 .nhdwModalButtons button:focus {
     outline: 2px solid #202a34;
 }
+
+/* ---- Persistent download history (listing panel) -------------------------
+   Rows already downloaded get a small badge and a per-row "Download anyway"
+   override; the summary line shows real counts before the job is committed. */
+.nhdwAlready {
+    color: #4c8b4c;
+    font-size: 11px;
+}
+
+#htmlDark .nhdwAlready {
+    color: #9ee29e;
+}
+
+.nhdwAlready a.nhdwRedl,
+#htmlDark .nhdwAlready a.nhdwRedl {
+    color: #e31b53;
+    font-weight: bold;
+    text-decoration: underline;
+    cursor: pointer;
+    margin-left: 4px;
+}
+
+.nhdwSummary {
+    font-size: 12px;
+    margin: 2px 0 6px 0;
+    min-height: 14px;
+}
+
+.nhdwSummary.nhdwSummaryWarn {
+    color: #b3541e;
+    font-weight: bold;
+}
+
+#htmlDark .nhdwSummary.nhdwSummaryWarn {
+    color: #f2a154;
+}

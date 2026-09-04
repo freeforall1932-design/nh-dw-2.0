@@ -1,5 +1,13 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-04 — **3.5.0: persistent download history landed.** The
+extension now remembers every successfully downloaded gallery (keyed by gallery
+ID in `chrome.storage.local`) and skips it when the same listing is re-run, so
+re-downloads no longer produce `Title (1).zip`, `Title (2).zip` ... See
+"Download history (3.5.0 — newest)" below. Manifest version bumped to 3.5.0.
+Session branch: `arena/01a06b6f-nh-dw-2-0` (from `main` 7aa438e — the 3.4.1
+work, PR #33 merged).
+
 **Updated:** 2026-09-04 — **3.4.1: cross-extension naming leak closed.** The
 3.3.1 folder-naming guard registered Chrome's profile-wide
 `onDeterminingFilename` at worker startup and never released it, so this
@@ -75,6 +83,65 @@ bullet fixed in PR #30)
 - These are distinct folders. Source contains TypeScript/tests; release is the browser-loadable package. After every build: `cp js/*.js ../NHDW_Release_v3.0.0/js/`, verify `diff -rq js ../NHDW_Release_v3.0.0/js`, and also sync `index.html`, `options.html`, `css/*`, `manifest.json` when they change (the release README intentionally differs).
 
 ## Current implemented work
+
+### Download history (3.5.0 — newest)
+
+Skipping already-downloaded galleries when a listing is re-run (search / tag /
+artist / homepage), instead of downloading everything again and uniquifying
+into "Title (1).zip", "Title (2).zip" ...
+
+- **Storage:** `chrome.storage.local`, one key `downloadHistory`, shaped
+  `{ [galleryId]: { filename, when } }`. Sync is unusable (100 KB / 512 items).
+  Keyed on ID, never title: it survives template changes, title/language
+  edits, uniquify renames and browser-history clears. Only weakness: starts
+  empty, so pre-3.5.0 downloads are not remembered.
+- **Module:** `src/utils/downloadHistory.ts`. Pure helpers (normalize,
+  `historyIds`, `countHistory`, `partitionKnown`, `artifactRecordFilename`,
+  `historyRecords` + `BatchOutcome`) are imported by the offscreen document;
+  the storage functions (`readHistory`, `recordHistory`, `clearHistory`) are
+  **worker / popup / options only** — the offscreen document still touches
+  `chrome.runtime` alone, as `e2e-offscreen.js` enforces with its forbidden
+  storage/downloads/scripting counter.
+- **Recording:** on SUCCESSFUL completion only, never on enqueue. Separate
+  mode records each gallery that fully succeeded (raw counts as separate — no
+  container to merge). Merged mode records ALL of the job's ids together ONLY
+  if the whole job succeeded (every gallery + the artifact save); a failed or
+  cancelled merge records nothing, so the merge can be re-run. Partial
+  galleries (any page failed) are never recorded — nhentai publishes no
+  content hash, so byte identity cannot be verified, and a broken file would
+  otherwise be skipped forever (user's decision; not re-litigate).
+- **Hook points (both, per user):**
+  1. UI pre-check: popup rows get a ✓ badge + file name and a per-row
+     *Download anyway* link (`redl_<id>`); summary line "N selected · M
+     already downloaded · K will download" and the Download button shows the
+     real count; skipped ids are removed before metadata resolution so they
+     cost ZERO API calls. In-page bar (`listControls.ts`) shows the same
+     counts, per-card "Downloaded" labels (clicking an already-downloaded
+     card asks *Download again?*), and a bulk `Include already downloaded`
+     checkbox.
+  2. Authoritative pipeline guard (offscreen + worker fallback): the worker
+     reads history and relays `alreadyDownloadedIds` + `redownloadIds` with
+     each job; the pipeline skips recorded galleries (separate mode) before
+     fetching metadata and counts them in `batchSummary.skipped`.
+- **Escape hatches:** per-download override (per-row link / per-card
+  confirmation / bulk include) and *Clear history* in popup Settings and the
+  options page. No export/import (user declined). No new permissions.
+- **Recording transport:** offscreen accumulates `pendingHistoryRecords` and
+  sends them with the FINAL `jobFinished` (queued jobs ride along); the
+  worker's `jobFinished` branch writes them. `downloadAllPages` aggregates
+  per-page outcomes; merged mode requires every page fetched and clean.
+- **Tests:** `test/download-history.test.js` (12 cases: normalize/count/
+  partition/record-filename/clean-vs-dirty merged/record+clear via a
+  `chrome.storage.local` stub). Worker e2e adds phases 1b/1c (record on
+  success, never on failure) and 5b–5e (unclean merged records nothing, clean
+  merged records all, skip with zero API calls, redownload override).
+  Offscreen e2e adds the guard phase (skip before fetch, `skipped:1`,
+  records in `jobFinished`, merged never skips). List-controls e2e adds
+  counts/labels/bulk override/per-card confirmation/merged-keeps-all.
+  `npm test` now 226 passing / 4 pending; smoke 7 PASS; `npm run test:e2e`
+  all green (worker 5e, offscreen guard, list-controls history included).
+- **Version:** manifest 3.5.0 in source + release; README feature bullet,
+  FAQ row and changelog entry added; backlog marked `[x]`.
 
 ### Filename-guard listener lifetime (3.4.1 — newest)
 

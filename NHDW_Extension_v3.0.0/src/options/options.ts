@@ -4,6 +4,7 @@ import Select from "./Select";
 import { verifyAndSaveApiKey, removeApiKey } from "./apiKey";
 import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "./nameTemplate";
 import { utils } from "../utils/utils";
+import { clearHistory, countHistory, readHistory } from "../utils/downloadHistory";
 import {
     formatExtension,
     isInheritedListTemplate,
@@ -283,4 +284,35 @@ if (archiveToggle) {
     archiveToggle.addEventListener("change", function() {
         chrome.storage.local.set({ useServerArchive: archiveToggle.checked });
     });
+}
+
+// ---- download history ------------------------------------------------------
+// The persistent "already downloaded" list lives in chrome.storage.local (see
+// utils/downloadHistory.ts). Listing pages skip recorded galleries; this is
+// the escape hatch that forgets everything.
+const historyStatus = document.getElementById("historyStatus") as HTMLElement | null;
+const clearHistoryButton = document.getElementById("clearHistory") as HTMLButtonElement | null;
+if (clearHistoryButton) {
+    const refreshHistoryStatus = () => {
+        readHistory().then((history) => {
+            if (historyStatus) {
+                const n = countHistory(history);
+                historyStatus.textContent = n === 0
+                    ? "No downloads recorded yet."
+                    : n + " gallery" + (n === 1 ? "" : "s") + " recorded in this browser.";
+            }
+        });
+    };
+    clearHistoryButton.addEventListener("click", async () => {
+        if (!confirm("Clear the download history?\n\nEvery gallery will be downloaded again from the next listing, including ones you still have.")) {
+            return;
+        }
+        clearHistoryButton.disabled = true;
+        await clearHistory();
+        if (historyStatus) {
+            historyStatus.textContent = "Download history cleared.";
+        }
+        clearHistoryButton.disabled = false;
+    });
+    refreshHistoryStatus();
 }

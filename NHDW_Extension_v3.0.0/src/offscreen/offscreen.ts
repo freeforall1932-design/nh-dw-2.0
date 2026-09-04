@@ -8,6 +8,15 @@ import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../pars
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
 import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
+import { normalizeFormat } from "../utils/downloadFormats";
+// Pure helpers only: the offscreen document must never call the storage
+// functions of this module (it has no chrome.storage). The service worker
+// relays the recorded IDs with the job and owns every history write.
+import {
+    BatchOutcome,
+    artifactRecordFilename,
+    historyRecords
+} from "../utils/downloadHistory";
 var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
@@ -55,6 +64,14 @@ let jobPaused = false;
 // already contains its per-job options and source tab id supplied by the worker.
 const queuedJobs: any[] = [];
 
+// Records of successfully completed galleries since the last jobFinished.
+// Queued jobs run without sending jobFinished between them (the worker's
+// active-job marker must stay set), so records accumulate here and are
+// delivered together with the FINAL jobFinished. The worker writes them to
+// chrome.storage.local: only successful completions are recorded, never
+// enqueues, so a cancelled or failed job cannot poison the history.
+let pendingHistoryRecords: Array<{ id: string; filename: string }> = [];
+
 function beginJob(): AbortSignal {
     jobAbortController = new AbortController();
     return jobAbortController.signal;
@@ -79,12 +96,24 @@ function notifyJobFinished() {
     const next = queuedJobs.shift();
     if (next) {
         // Continue directly into the next job. Do not send jobFinished between
-        // queued jobs: the worker's active-job marker must stay set.
+        // queued jobs: the worker's active-job marker must stay set. Finished
+        // galleries from the previous job stay in pendingHistoryRecords and
+        // ride along with the final jobFinished.
         broadcastQueueState();
         runQueuedJob(next);
         return;
     }
-    chrome.runtime.sendMessage({ from: "offscreen", action: "jobFinished" });
+    const records = pendingHistoryRecords;
+    pendingHistoryRecords = [];
+    chrome.runtime.sendMessage({ from: "offscreen", action: "jobFinished", records: records });
+}
+
+// Accumulate history records produced by one finished job (they are written
+// by the worker when jobFinished is finally sent).
+function collectHistoryRecords(records: Array<{ id: string; filename: string }>) {
+    if (records && records.length > 0) {
+        pendingHistoryRecords = pendingHistoryRecords.concat(records);
+    }
 }
 
 // The active-job marker lives in the service worker's chrome.storage.session
@@ -276,8 +305,22 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
     }
+    // Record history ONLY on a fully successful single-title download (never
+    // on enqueue, never on failure/cancel). "filename" mirrors what the
+    // Downloader saves: <path>.<format> for archives, <master>/<path>/001.jpg
+    // for raw.
+    const format = normalizeFormat(options && options.useZip, "zip");
+    const masterFolder = format === "raw"
+        ? (options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : "NHDW")
+        : (options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "");
     currentDownloader.startAsync()
-        .then(() => { notifyJobFinished(); scheduleIdleClose(); })
+        .then(() => {
+            collectHistoryRecords([{
+                id: String(jsonTmp.id),
+                filename: artifactRecordFilename({ format: format, name: path, masterFolder: masterFolder })
+            }]);
+            notifyJobFinished(); scheduleIdleClose();
+        })
         .catch(() => { notifyJobFinished(); scheduleIdleClose(); });
 }
 
@@ -328,6 +371,10 @@ async function downloadAllDoujinshisAsync(
     let duplicateBehaviour: string = options.duplicateBehaviour || "rename";
     let replaceSpaces: boolean = options.replaceSpaces !== undefined ? options.replaceSpaces : true;
     let downloadSeparately: boolean = !!options.downloadSeparately;
+    // Raw can never merge (no container), so it always behaves as one folder
+    // per title and is recorded per gallery regardless of the requested mode.
+    const format: string = normalizeFormat(options.useZip, "zip");
+    const effectiveSeparate: boolean = downloadSeparately || format === "raw";
     // Each gallery in a separate archive owns that archive (flat entries,
     // named after the gallery); a shared batch archive keeps one folder per
     // gallery inside.
@@ -348,7 +395,26 @@ async function downloadAllDoujinshisAsync(
     // Per-gallery tally for the end-of-batch summary.
     let succeeded = 0;
     let failed = 0;
+    let skipped = 0;
     const failedKinds: Record<string, number> = {};
+
+    // History guard (the authoritative safety net): the UI pre-check already
+    // removes recorded galleries before enqueueing, but anything that falls
+    // through (a race, a stale panel, Download all across pages parsed here)
+    // is skipped WITHOUT fetching metadata — zero API calls for skipped items.
+    // The worker relayed the recorded ID list with the job (offscreen has no
+    // chrome.storage); redownloadIds are the user's "download anyway" picks.
+    const alreadySet = new Set<string>(
+        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map(String) : []
+    );
+    const redownloadSet = new Set<string>(
+        Array.isArray(options.redownloadIds) ? options.redownloadIds.map(String) : []
+    );
+
+    // History records produced by this invocation.
+    const records: Array<{ id: string; filename: string }> = [];
+    const batchKeys: string[] = [];
+    let finalSaveOk = false;
 
     function countFailure(error: any) {
         failed++;
@@ -358,6 +424,13 @@ async function downloadAllDoujinshisAsync(
 
     for (let i = 0; i < length; i++) {
         let key = allKeys[i];
+        // Only per-title (separate) output can skip a gallery: a merged
+        // archive must contain every selected title, so batch jobs never skip
+        // (they re-record everything only when the whole job succeeds).
+        if (effectiveSeparate && alreadySet.has(key) && !redownloadSet.has(key)) {
+            skipped++;
+            continue;
+        }
         // Tell the popup which gallery the batch is working on. Broadcast with
         // from:"offscreen" so the service worker does not relay it back.
         chrome.runtime.sendMessage({
@@ -484,7 +557,7 @@ async function downloadAllDoujinshisAsync(
             }
             names.push(title);
             let zipName = null;
-            if (downloadSeparately) {
+            if (effectiveSeparate) {
                 // Separate files are named from the (list-mode) template and
                 // the gallery's OWN metadata, cleaned exactly like a
                 // single-title download - never from the page URL.
@@ -492,6 +565,9 @@ async function downloadAllDoujinshisAsync(
             } else if (downloadAtEnd && i == length - 1) {
                 zipName = finalName;
             }
+            // Batch mode: the merged archive is saved by the LAST gallery's
+            // Downloader. Its success is what makes the job "clean".
+            const isFinalSave = !effectiveSeparate && downloadAtEnd && i === length - 1;
             currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
             downloadSeparately ? new JSZip() : zip,
             zipName, jobAbortController ? jobAbortController.signal : null, undefined,
@@ -504,6 +580,25 @@ async function downloadAllDoujinshisAsync(
             try {
                 await currentDownloader.startAsync();
                 succeeded++;
+                if (isFinalSave) {
+                    finalSaveOk = true;
+                }
+                if (effectiveSeparate) {
+                    // Only a fully successful gallery is recorded; a partial
+                    // gallery (any page failed) re-downloads cleanly next run.
+                    records.push({
+                        id: key,
+                        filename: artifactRecordFilename({
+                            format: format,
+                            name: zipName || utils.cleanName(title, replaceSpaces, key),
+                            masterFolder: format === "raw"
+                                ? (typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : "NHDW")
+                                : (typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "")
+                        })
+                    });
+                } else {
+                    batchKeys.push(key);
+                }
             } catch (error) {
                 countFailure(error);
             }
@@ -528,10 +623,24 @@ async function downloadAllDoujinshisAsync(
             action: "batchSummary",
             succeeded: succeeded,
             failed: failed,
+            skipped: skipped,
             total: length,
             failedKinds: failedKinds
         });
     }
+    // Batch mode is all-or-nothing: every gallery must have succeeded AND the
+    // merged artifact must have been saved (the last gallery carries the save).
+    // A merged file only records its title set when the run is fully clean, so
+    // a failure part-way leaves all of them re-downloadable.
+    const clean = effectiveSeparate
+        ? true
+        : (failed === 0 && finalSaveOk && batchKeys.length > 0);
+    return {
+        records: records,
+        clean: clean,
+        batchKeys: batchKeys,
+        skipped: skipped
+    } as BatchOutcome;
 }
 
 function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: any) {
@@ -542,7 +651,20 @@ function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName:
     jobRunning = true;
     let zip = new JSZip();
     downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, true, galleryMetadata, sourceTabId, options || {})
-        .then(() => { notifyJobFinished(); scheduleIdleClose(); })
+        .then((outcome: BatchOutcome) => {
+            // Record on SUCCESS only: separate mode per successful gallery;
+            // merged mode records every title only when the whole job is clean.
+            const jobOptions = options || {};
+            const format = normalizeFormat(jobOptions.useZip, "zip");
+            const effectiveSeparate = !!(jobOptions.downloadSeparately || format === "raw");
+            collectHistoryRecords(historyRecords(outcome, {
+                effectiveSeparate: effectiveSeparate,
+                format: format,
+                finalName: finalName,
+                archiveMasterFolder: typeof jobOptions.archiveMasterFolder === "string" ? jobOptions.archiveMasterFolder : ""
+            }));
+            notifyJobFinished(); scheduleIdleClose();
+        })
         .catch(function(error) {
             if (!jobWasAborted()) {
                 errorCallback(String(error));
@@ -559,8 +681,19 @@ async function downloadAllPagesAsync(
     url: string,
     sourceTabId?: number | null,
     options: any = {}
-) {
+): Promise<BatchOutcome> {
     let downloadName: string = options.downloadName || "{pretty}";
+    const format: string = normalizeFormat(options.useZip, "zip");
+    const effectiveSeparate: boolean = !!(options.downloadSeparately || format === "raw");
+
+    // Aggregate every page's outcome: separate mode keeps per-gallery records
+    // (they are real, independent files); merged mode records every title only
+    // when EVERY page succeeded and the artifact was saved.
+    const allRecords: Array<{ id: string; filename: string }> = [];
+    const allBatchKeys: string[] = [];
+    let allClean = true;
+    let skippedTotal = 0;
+    let pagesFetched = 0;
 
     let zip = new JSZip();
     for (let i = 0; i < pagesArr.length; i++) {
@@ -599,9 +732,44 @@ async function downloadAllPagesAsync(
                 }
                 allDoujinshis[card.id] = tmpName;
             }
-            await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1, {}, sourceTabId, options);
+            const outcome = await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", i == pagesArr.length - 1, {}, sourceTabId, options);
+            allRecords.push.apply(allRecords, outcome.records);
+            allBatchKeys.push.apply(allBatchKeys, outcome.batchKeys);
+            skippedTotal += outcome.skipped;
+            if (!outcome.clean) {
+                allClean = false;
+            }
+            pagesFetched++;
+        } else {
+            // A page that could not be fetched contributes nothing: a merged
+            // job is never clean without it, so no batch titles are recorded.
+            allClean = false;
         }
     }
+
+    const clean = effectiveSeparate
+        ? true
+        : (allClean && pagesFetched === pagesArr.length && pagesArr.length > 0);
+    if (!effectiveSeparate && clean) {
+        const finalName = path + " (" + String(pagesArr[pagesArr.length - 1]) + ")";
+        const filename = artifactRecordFilename({
+            format: format,
+            name: finalName,
+            masterFolder: typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : ""
+        });
+        return {
+            records: allBatchKeys.map((id) => ({ id: id, filename: filename })),
+            clean: true,
+            batchKeys: [],
+            skipped: skippedTotal
+        } as BatchOutcome;
+    }
+    return {
+        records: effectiveSeparate ? allRecords : [],
+        clean: clean,
+        batchKeys: [],
+        skipped: skippedTotal
+    } as BatchOutcome;
 }
 
 function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, url: string, sourceTabId?: number | null, options?: any) {
@@ -611,7 +779,11 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
     beginJob();
     jobRunning = true;
     downloadAllPagesAsync(allDoujinshis, pagesArr, path, url, sourceTabId, options || {})
-        .then(() => { notifyJobFinished(); scheduleIdleClose(); })
+        .then((outcome: BatchOutcome) => {
+            // Records are already resolved (merged mode is all-or-nothing).
+            collectHistoryRecords(outcome.records);
+            notifyJobFinished(); scheduleIdleClose();
+        })
         .catch(function(error) {
             if (!jobWasAborted()) {
                 errorCallback(String(error));

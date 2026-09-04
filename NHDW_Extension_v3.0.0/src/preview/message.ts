@@ -91,8 +91,14 @@ export module message
             '<input type="button" id="buttonGrantCdn" value="Grant image host access"/>';
     }
     
-    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string): string {
+    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string, alreadyNote?: string): string {
         const selected = (value: string) => value === selectedFormat ? ' selected' : '';
+        const historyNote = alreadyNote
+            ? '<small id="singleHistoryInfo" class="nhdwAlready">&#10003; Already downloaded: ' + alreadyNote + '</small><br/>'
+            : '<small id="singleHistoryInfo" class="nhdwAlready"></small>';
+        // A single-title click is always explicit, so already-downloaded titles
+        // are NOT auto-skipped here; the button label makes the override clear.
+        const buttonLabel = alreadyNote ? 'Download again' : 'Download';
         return '<div class="popupColumns">' +
             '<div class="popupColumn">' +
             '<h3>' + title + '</h3>' +
@@ -102,9 +108,10 @@ export module message
             '<option value="cbz"' + selected('cbz') + '>CBZ</option>' +
             '<option value="pdf"' + selected('pdf') + '>PDF</option>' +
             '<option value="raw"' + selected('raw') + '>Raw images</option>' +
-            '</select><br/><br/>' +
+            '</select><br/>' +
+            historyNote +
             'Downloads/<input type="text" id="path"/>' + extension + '<br/><br/>' +
-            '<input type="button" id="button" value="Download" autofocus/>' +
+            '<input type="button" id="button" value="' + buttonLabel + '" autofocus/>' +
             '</div>' +
             '<div class="popupColumn">' +
             '<b>Similar galleries</b>' +
@@ -193,9 +200,12 @@ export module message
     }
 
     // Batch download summary shown after the batch finishes
-    export function batchSummary(succeeded: number, failed: number, total: number, failedKinds?: Record<string, number>): string {
+    export function batchSummary(succeeded: number, failed: number, total: number, failedKinds?: Record<string, number>, skipped: number = 0): string {
         let html = '<h3>Download complete</h3>';
         html += '<p>' + succeeded + ' of ' + total + ' galleries downloaded successfully.</p>';
+        if (skipped > 0) {
+            html += '<p>' + skipped + ' already downloaded gallery' + (skipped === 1 ? '' : 's') + ' skipped.</p>';
+        }
         if (failed > 0) {
             html += '<p style="color:red">' + failed + ' gallery' + (failed > 1 ? 's' : '') + ' failed';
             if (failedKinds) {

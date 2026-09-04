@@ -478,8 +478,8 @@ function askOffscreen(message) {
         fail("no ZIP must be delivered when the batch gallery fails, got " + anchorDownloads.length);
     }
     const failSummary = sentMessages.find((m) => m.action === "batchSummary");
-    if (!failSummary || failSummary.succeeded !== 0 || failSummary.failed !== 1 || failSummary.total !== 1) {
-        fail("batchSummary must report 0/1/1 for a single failing gallery, got " + JSON.stringify(failSummary));
+    if (!failSummary || failSummary.succeeded !== 0 || failSummary.failed !== 1 || failSummary.total !== 1 || failSummary.skipped !== 0) {
+        fail("batchSummary must report 0/1/1 skipped:0 for a single failing gallery, got " + JSON.stringify(failSummary));
     }
     if (!failSummary.failedKinds || failSummary.failedKinds.image !== 1) {
         fail("the failing gallery is an image failure; failedKinds must be {image:1}, got " + JSON.stringify(failSummary.failedKinds));
@@ -511,8 +511,8 @@ function askOffscreen(message) {
         "no batchSummary was sent for the mixed batch"
     );
     const mixedSummary = sentMessages.find((m) => m.action === "batchSummary");
-    if (!mixedSummary || mixedSummary.succeeded !== 1 || mixedSummary.failed !== 1 || mixedSummary.total !== 2) {
-        fail("mixed batch summary must report 1/1/2, got " + JSON.stringify(mixedSummary));
+    if (!mixedSummary || mixedSummary.succeeded !== 1 || mixedSummary.failed !== 1 || mixedSummary.total !== 2 || mixedSummary.skipped !== 0) {
+        fail("mixed batch summary must report 1/1/2 skipped:0, got " + JSON.stringify(mixedSummary));
     }
     if (!mixedSummary.failedKinds || mixedSummary.failedKinds.metadata !== 1) {
         fail("the missing gallery is a metadata failure; failedKinds must be {metadata:1}, got " + JSON.stringify(mixedSummary.failedKinds));
@@ -524,6 +524,91 @@ function askOffscreen(message) {
         fail("batchProgress must be sent before each gallery");
     }
     console.log("PASS: batch continues after a gallery failure and reports 1/1/2");
+
+    // ---- Persistent history: already-downloaded ids are skipped, zero API ---
+    // The worker relays the recorded ID list with the job (the offscreen
+    // document has no chrome.storage). A recorded gallery in SEPARATE mode is
+    // not fetched at all (no API call, no progress broadcast) unless it is in
+    // the user's redownloadIds. A merged batch keeps every title.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const skipStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/Skip",
+        options: Object.assign({}, relayedOptions, { downloadSeparately: true, alreadyDownloadedIds: [GALLERY_ID2], redownloadIds: [] })
+    });
+    if (!skipStart || skipStart.result !== "started") {
+        fail("history-skip batch did not answer {result:'started'}, got " + JSON.stringify(skipStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "history-skip batch must finish");
+    const skipSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!skipSummary || skipSummary.succeeded !== 1 || skipSummary.failed !== 0 || skipSummary.total !== 2 || skipSummary.skipped !== 1) {
+        fail("history-skip batchSummary must report 1/0/2 skipped:1, got " + JSON.stringify(skipSummary));
+    }
+    if (anchorDownloads.length !== 1 || anchorDownloads[0].download !== "Test.zip") {
+        fail("only the un-recorded gallery must download, got " + JSON.stringify(anchorDownloads));
+    }
+    if (fetchedUrls.some(
+        (u) => u.includes("/api/v2/galleries/" + GALLERY_ID2) || u.includes("/galleries/" + MEDIA_ID2 + "/")
+    )) {
+        fail("a recorded gallery must not be fetched at all (zero API calls): " + JSON.stringify(fetchedUrls));
+    }
+    const skipProgress = sentMessages.filter((m) => m.action === "batchProgress");
+    if (skipProgress.length !== 1 || skipProgress[0].galleryName !== "One") {
+        fail("no batchProgress may be sent for a skipped gallery, got " + JSON.stringify(skipProgress));
+    }
+    const skipRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!skipRecords || skipRecords.length !== 1 || String(skipRecords[0].id) !== String(GALLERY_ID)) {
+        fail("jobFinished must carry exactly the newly-downloaded record, got " + JSON.stringify(skipRecords));
+    }
+    console.log("PASS: recorded gallery skipped without API calls; redownload override still works");
+
+    // ---- Download anyway: redownloadIds re-fetch recorded galleries ---------
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const overrideStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/Override",
+        options: Object.assign({}, relayedOptions, { downloadSeparately: true, alreadyDownloadedIds: [GALLERY_ID2], redownloadIds: [GALLERY_ID2] })
+    });
+    if (!overrideStart || overrideStart.result !== "started") {
+        fail("override batch did not answer {result:'started'}, got " + JSON.stringify(overrideStart));
+    }
+    await waitFor(() => anchorDownloads.length === 1, "override must re-download the recorded gallery");
+    const overrideFetches = fetchedUrls.filter(
+        (u) => u.includes("/api/v2/galleries/" + GALLERY_ID2) || u.includes("/galleries/" + MEDIA_ID2 + "/")
+    );
+    if (overrideFetches.length === 0) {
+        fail("redownloadIds must make the recorded gallery fetch metadata+images, got " + JSON.stringify(fetchedUrls));
+    }
+    console.log("PASS: redownloadIds overrides the history guard");
+
+    // ---- Merged batch never skips: every title is needed in one archive -----
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const mergedStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/MergedHistory",
+        options: Object.assign({}, relayedOptions, { alreadyDownloadedIds: [GALLERY_ID2], redownloadIds: [] })
+    });
+    if (!mergedStart || mergedStart.result !== "started") {
+        fail("merged history batch did not answer {result:'started'}, got " + JSON.stringify(mergedStart));
+    }
+    await waitFor(() => anchorDownloads.length === 1, "merged batch must still deliver the one archive");
+    const mergedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!mergedSummary || mergedSummary.skipped !== 0 || mergedSummary.succeeded !== 2) {
+        fail("merged batch must not skip recorded titles, got " + JSON.stringify(mergedSummary));
+    }
+    console.log("PASS: merged batch keeps every title (one archive needs them all)");
 
     // ---- Batch metadata for unresolved ids reuses the user tab's session ---
     // Without galleryMetadata and WITH a sourceTabId, the document must fetch

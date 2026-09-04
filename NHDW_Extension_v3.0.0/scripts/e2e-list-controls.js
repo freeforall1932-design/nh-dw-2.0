@@ -203,7 +203,8 @@ function makeDocument(ids) {
 
 function run(options) {
     const settings = options.settings || {};
-    const localStore = { allIds: [] };
+    // Persistent download-history fixture (chrome.storage.local "downloadHistory").
+    const localStore = Object.assign({ allIds: [] }, options.history || {});
     const syncWrites = [];
     const localWrites = [];
     const sentMessages = [];
@@ -343,6 +344,108 @@ function wait(ms) {
             fail("a card download must contain exactly that gallery");
         }
         console.log("PASS: the card Download button reuses the shared list-mode job options");
+    }
+
+    // --- 4b. download history: counts, labels, skip and override -----------
+    {
+        const ctx = run({
+            history: { downloadHistory: { "222222": { filename: "Old/Two.zip", when: 1 } } }
+        });
+        await wait(0);
+        // Card label reflects the recorded state.
+        const controls = cardControls(ctx.dom);
+        if (controls[1].querySelector(".nhdw-download").textContent !== "Downloaded") {
+            fail("a recorded card must show 'Downloaded'");
+        }
+        if (controls[0].querySelector(".nhdw-download").textContent !== "Download") {
+            fail("an un-recorded card must show 'Download'");
+        }
+        // Select the recorded + one fresh card: counts show real numbers.
+        const boxA = controls[0].querySelector(".nhdw-select-box");
+        boxA.checked = true;
+        boxA.dispatch("change");
+        const boxB = controls[1].querySelector(".nhdw-select-box");
+        boxB.checked = true;
+        boxB.dispatch("change");
+        const count = ctx.dom.document.getElementById("nhdw-count");
+        if (!count || count.textContent !== "2 selected \u00b7 1 already downloaded \u00b7 1 will download") {
+            fail("the bar must show the history-aware counts, got " + JSON.stringify(count && count.textContent));
+        }
+        // The bulk toggle appears only where there is something recorded.
+        const row = ctx.dom.document.getElementById("nhdw-redownload-row");
+        if (!row || row.hidden) fail("the 'include already downloaded' row must be visible");
+        // Start download: recorded gallery is skipped, zero API calls (it is
+        // not even sent to the worker).
+        ctx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+        const job1 = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!job1 || job1.action !== "downloadAllDoujinshis") {
+            fail("expected a downloadAllDoujinshis job, got " + JSON.stringify(job1));
+        }
+        if (!job1.allDoujinshis["111111"] || job1.allDoujinshis["222222"] !== undefined) {
+            fail("the recorded gallery must be skipped, got " + JSON.stringify(job1.allDoujinshis));
+        }
+        if (!Array.isArray(job1.redownloadIds) || job1.redownloadIds.length !== 0) {
+            fail("no download-anyway ids without an explicit override, got " + JSON.stringify(job1.redownloadIds));
+        }
+        // Bulk "Include already downloaded" re-sends the recorded gallery.
+        const includeBox = ctx.dom.document.getElementById("nhdw-redownload");
+        includeBox.checked = true;
+        includeBox.dispatch("change");
+        ctx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+        const job2 = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!job2.allDoujinshis["111111"] || !job2.allDoujinshis["222222"]) {
+            fail("the include-already toggle must re-send recorded galleries, got " + JSON.stringify(job2.allDoujinshis));
+        }
+        if (job2.redownloadIds.join(",") !== "222222") {
+            fail("included recorded ids must travel as redownloadIds, got " + JSON.stringify(job2.redownloadIds));
+        }
+        console.log("PASS: recorded cards are skipped with history-aware counts and a bulk override");
+
+        // Per-card download-anyway: declining does nothing, confirming re-sends.
+        const singleCtx = run({
+            history: { downloadHistory: { "222222": { filename: "Old/Two.zip", when: 1 } } },
+            confirmAnswers: [false]
+        });
+        await wait(0);
+        cardControls(singleCtx.dom)[1].querySelector(".nhdw-download").dispatch("click");
+        if (singleCtx.sentMessages.length !== 0) {
+            fail("declining the download-again confirmation must send nothing, got " +
+                JSON.stringify(singleCtx.sentMessages));
+        }
+        const singleCtx2 = run({
+            history: { downloadHistory: { "222222": { filename: "Old/Two.zip", when: 1 } } },
+            confirmAnswers: [true]
+        });
+        await wait(0);
+        cardControls(singleCtx2.dom)[1].querySelector(".nhdw-download").dispatch("click");
+        const singleJob = singleCtx2.sentMessages[singleCtx2.sentMessages.length - 1];
+        if (!singleJob || !singleJob.allDoujinshis["222222"]) {
+            fail("confirming the download-again confirmation must send the gallery, got " +
+                JSON.stringify(singleJob));
+        }
+        if (singleJob.redownloadIds.join(",") !== "222222") {
+            fail("a confirmed card must carry its id in redownloadIds, got " +
+                JSON.stringify(singleJob.redownloadIds));
+        }
+        console.log("PASS: per-card Download anyway asks for confirmation and re-sends on OK");
+
+        // Merged mode never skips: the one archive needs every selected title.
+        const mergedCtx = run({
+            settings: { listFormat: "zip", listOutputMode: "batch" },
+            history: { downloadHistory: { "222222": { filename: "Old/Two.zip", when: 1 } } }
+        });
+        await wait(0);
+        for (const control of cardControls(mergedCtx.dom)) {
+            const box = control.querySelector(".nhdw-select-box");
+            box.checked = true;
+            box.dispatch("change");
+        }
+        mergedCtx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+        const mergedJob = mergedCtx.sentMessages[mergedCtx.sentMessages.length - 1];
+        if (!mergedJob.allDoujinshis["111111"] || !mergedJob.allDoujinshis["222222"]) {
+            fail("merged mode must keep recorded titles, got " + JSON.stringify(mergedJob.allDoujinshis));
+        }
+        console.log("PASS: merged mode keeps every selected title (one archive needs them all)");
     }
 
     // --- 5. raw disables merging ------------------------------------------

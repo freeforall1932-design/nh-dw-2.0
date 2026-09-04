@@ -156,6 +156,16 @@
         <br/>
         Replace spaces by underscores:
         <input id="replaceSpaces" type="checkbox"/>
+        <br/><hr/>
+        <h3>Download history</h3>
+        <p><small>Galleries downloaded successfully are remembered in this
+        browser (never synced) and skipped on listing pages, so re-running a
+        search, tag, artist or homepage does not download everything a second
+        time. Each already-downloaded row in the panel has its own
+        <i>Download anyway</i> link; this button forgets the whole list (the
+        per-row override stops working, and everything downloads again).</small></p>
+        <div id="historyStatus" role="status" aria-live="polite"></div>
+        <button id="clearHistory" type="button">Clear history</button>
     </body>
     <script src="js/options.js"></script>
 </html>

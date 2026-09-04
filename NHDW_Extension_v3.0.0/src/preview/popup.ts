@@ -16,6 +16,7 @@ import {
     shouldWarnPdfMerge
 } from "../utils/downloadFormats"
 import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
+import { readHistory, DownloadHistory } from "../utils/downloadHistory"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
@@ -146,9 +147,10 @@ chrome.runtime.onMessage.addListener(function(request) {
             request.current, request.total, request.galleryName, request.stage || "Downloading", request.queued || 0);
         setTimeout(wireActiveJobControls, 0);
     } else if (request.action === "batchSummary") {
-        // End-of-batch success/failure summary
+        // End-of-batch success/failure summary (skipped = already-downloaded
+        // galleries the persistent history guard dropped).
         document.getElementById('action')!.innerHTML = message.batchSummary(
-            request.succeeded, request.failed, request.total, request.failedKinds);
+            request.succeeded, request.failed, request.total, request.failedKinds, request.skipped);
         setTimeout(() => {
             const buttonBack = document.getElementById('buttonBack');
             if (buttonBack) {
@@ -361,7 +363,7 @@ export default class Popup
                 useZip: "zip",
                 downloadName: "{pretty}",
                 replaceSpaces: true
-            }, function(elems) {
+            }, async function(elems) {
                 let extension = "";
                 if (elems.useZip == "zip")
                     extension = ".zip";
@@ -374,7 +376,19 @@ export default class Popup
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
-                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip);
+                // Persistent history (chrome.storage.local): tell the user this
+                // gallery was already downloaded. A single-title click is an
+                // explicit request, so it is NOT auto-blocked — the button
+                // becomes "Download again" instead.
+                let alreadyNote: string = "";
+                try {
+                    const history: DownloadHistory = await readHistory();
+                    const rec = history[id];
+                    if (rec) {
+                        alreadyNote = escapeHtml(rec.filename) + (rec.when ? " (" + new Date(rec.when).toLocaleDateString() + ")" : "");
+                    }
+                } catch (_) { /* history is cosmetic; never block the preview */ }
+                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip, alreadyNote);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listeners after updating the HTML content.
@@ -509,13 +523,23 @@ export default class Popup
     // mode (separate is the default), an optional master folder, and its own
     // filename template. Every download from here goes through exactly the
     // same pipeline as a single-title download, so the two cannot drift.
-    updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, listSettings: ListModeSettings) {
+    async updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, listSettings: ListModeSettings) {
         let self = Popup.getInstance();
 
         if (galleries.length === 0) {
             document.getElementById('action')!.innerHTML = message.invalidPage();
             return;
         }
+
+        // Persistent download history (chrome.storage.local): rows already
+        // downloaded get a badge and their own "Download anyway" override, and
+        // the summary line shows the real counts BEFORE any job is committed.
+        let history: DownloadHistory = {};
+        try {
+            history = await readHistory();
+        } catch (_) { /* history is cosmetic; listing still renders without it */ }
+        // Gallery ids the user explicitly asked to re-download.
+        const forceIds = new Set<string>();
 
         // Working copy of the list-mode settings: every picker writes here and
         // persists to storage, so the choice survives closing the panel.
@@ -544,6 +568,12 @@ export default class Popup
             }
             titleById[card.id] = tmpName;
             finalHtml += '<input id="' + card.id + '" type="checkbox"/>' + escapeHtml(tmpName) + '<br/>';
+            const rec = history[card.id];
+            if (rec) {
+                finalHtml += '<small class="nhdwAlready" id="done_' + card.id + '">&#10003; Already downloaded: '
+                    + escapeHtml(rec.filename)
+                    + ' <a href="#" class="nhdwRedl" id="redl_' + card.id + '">Download anyway</a></small><br/>';
+            }
             allIds.push(card.id);
         }
 
@@ -562,6 +592,7 @@ export default class Popup
         let currPage = currentPage;
         let html = '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>'
             + '<div class="listGalleries">' + finalHtml + '</div>'
+            + '<div id="downloadedSummary" class="nhdwSummary"></div>'
             + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/>'
             + message.listDownloadOptions(settings)
             + '<input type="button" id="button" value="Download selected"/>';
@@ -586,6 +617,42 @@ export default class Popup
         // filename preview must always show what the next download produces.
         const sampleTitle = galleries.length > 0 ? (titleById[galleries[0].id] || galleries[0].title) : "Sample Title";
         const sampleId = galleries.length > 0 ? galleries[0].id : "123456";
+
+        // ---- already-downloaded counts -------------------------------------
+        // Live summary: "N selected · M already downloaded · K will download",
+        // shown BEFORE the job is committed; the download button carries the
+        // real count. Batch/merged mode does NOT skip anything (the merged
+        // file must contain every selected title), so the wording explains it.
+        const refreshDownloadSummary = () => {
+            const selectedIds = allIds.filter((id) => {
+                const box = document.getElementById(id) as HTMLInputElement | null;
+                return !!(box && box.checked);
+            });
+            const alreadySelected = selectedIds.filter((id) => !!history[id]);
+            const skipped = alreadySelected.filter((id) => !forceIds.has(id));
+            const willDownload = selectedIds.length - skipped.length;
+            const summary = document.getElementById('downloadedSummary');
+            const mode = effectiveOutputMode(settings.format, settings.outputMode);
+            if (summary) {
+                if (skipped.length > 0) {
+                    summary.textContent = mode === "batch"
+                        ? selectedIds.length + " selected · " + skipped.length + " already downloaded (merged-file mode re-downloads them into one file)"
+                        : selectedIds.length + " selected · " + skipped.length + " already downloaded · " + willDownload + " will download";
+                    summary.className = "nhdwSummary nhdwSummaryWarn";
+                } else if (selectedIds.length > 0) {
+                    summary.textContent = selectedIds.length + " selected";
+                    summary.className = "nhdwSummary";
+                } else {
+                    summary.textContent = "";
+                    summary.className = "nhdwSummary";
+                }
+            }
+            const downloadButton = document.getElementById('button') as HTMLInputElement | null;
+            if (downloadButton) {
+                downloadButton.value = "Download selected (" + willDownload + ")";
+                downloadButton.disabled = mode === "batch" ? selectedIds.length === 0 : willDownload === 0;
+            }
+        };
 
         const refreshListOptionUi = () => {
             const effective = effectiveOutputMode(settings.format, settings.outputMode);
@@ -616,6 +683,7 @@ export default class Popup
                         ? "One folder per title: Downloads/" + folder + clean + "/001.jpg"
                         : "One file per title: Downloads/" + folder + clean + formatExtension(settings.format));
             }
+            refreshDownloadSummary();
         };
 
         setTimeout(() => {
@@ -648,6 +716,32 @@ export default class Popup
                 pathInput.addEventListener('input', refreshListOptionUi);
             }
             refreshListOptionUi();
+        }, 0);
+
+        // Per-download "download anyway" override: clicking the link on a row
+        // that was already downloaded marks it for re-download, keeps its
+        // checkbox ticked and updates the counts immediately.
+        setTimeout(() => {
+            allIds.forEach((id) => {
+                const link = document.getElementById('redl_' + id) as HTMLAnchorElement | null;
+                if (!link) {
+                    return;
+                }
+                link.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    forceIds.add(id);
+                    link.textContent = "will re-download";
+                    const box = document.getElementById(id) as HTMLInputElement | null;
+                    if (box) {
+                        box.checked = true;
+                    }
+                    chrome.storage.local.get({ allIds: [] }, (elemsLocal) => {
+                        chrome.storage.local.set({ allIds: self.#saveIdInLocalStorage(id, elemsLocal.allIds, true) });
+                    });
+                    executeActiveTabScript("js/updateContent.js");
+                    refreshDownloadSummary();
+                });
+            });
         }, 0);
 
         // Build the job payload shared by "Download selected" and "Download
@@ -710,6 +804,7 @@ export default class Popup
                             allIds: storageAllIds
                         });
                         executeActiveTabScript("js/updateContent.js");
+                        refreshDownloadSummary();
                     });
                 });
             }
@@ -728,6 +823,7 @@ export default class Popup
                         allIds: []
                     });
                     executeActiveTabScript("js/updateContent.js");
+                    refreshDownloadSummary();
                 });
             }
         }, 0);
@@ -744,6 +840,17 @@ export default class Popup
                             allDoujinshis[id] = titleById[id];
                         }
                     });
+                    // Hop off the already-downloaded galleries (separate mode),
+                    // keeping the per-row "Download anyway" picks — so the
+                    // skipped ones cost ZERO metadata/API calls. Merged mode
+                    // keeps every title (one file needs them all).
+                    if (effectiveOutputMode(settings.format, settings.outputMode) === "separate") {
+                        for (const id of Object.keys(allDoujinshis)) {
+                            if (history[id] && !forceIds.has(id)) {
+                                delete allDoujinshis[id];
+                            }
+                        }
+                    }
                     if (Object.keys(allDoujinshis).length > 0) { // There is at least one element selected, we launch download
                         const pathElement = document.getElementById('path') as HTMLInputElement;
                         if (pathElement) {
@@ -771,12 +878,13 @@ export default class Popup
                                 formatOverride: job.format,
                                 separate: job.separate,
                                 masterFolder: job.masterFolder,
-                                nameTemplate: job.nameTemplate
+                                nameTemplate: job.nameTemplate,
+                                redownloadIds: Array.from(forceIds)
                             });
                             self.updateProgress(0, finalName, false);
                         }
                     } else {
-                        document.getElementById('action')!.innerHTML = "You must select at least one element to download.";
+                        document.getElementById('action')!.innerHTML = "Every selected gallery is already downloaded. Click <i>Download anyway</i> on a row to re-download it (or Clear history in Settings).";
                     }
                 });
             }
@@ -811,6 +919,17 @@ export default class Popup
                                 allDoujinshis[id] = titleById[id];
                             }
                         });
+                        // Separate mode: don't resolve already-downloaded ids on
+                        // THIS page (zero API calls; later pages are guarded by
+                        // the pipeline using the same recorded set). Merged mode
+                        // keeps every title.
+                        if (effectiveOutputMode(settings.format, settings.outputMode) === "separate") {
+                            for (const id of Object.keys(allDoujinshis)) {
+                                if (history[id] && !forceIds.has(id)) {
+                                    delete allDoujinshis[id];
+                                }
+                            }
+                        }
                         let pages = self.#parseDownloadAll(maxPage);
                         if (typeof pages === "string") {
                             alert(pages);
@@ -837,11 +956,19 @@ export default class Popup
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                                     const tabId = await getActiveTabId();
                                     const selectedIds = Object.keys(allDoujinshis);
-                                    const galleryMetadata = await resolveSelectedGalleries(selectedIds, tabId);
-                                    if (Object.keys(galleryMetadata).length === 0) {
-                                        document.getElementById('action')!.innerHTML =
-                                            "Could not read gallery metadata from this tab. Keep the NHentai page open after completing any browser verification, then try again.";
-                                        return;
+                                    // Every card on THIS page may already be
+                                    // downloaded and skipped, yet other pages
+                                    // still have work: the page walk re-parses
+                                    // each page itself, so empty metadata here
+                                    // is fine (nothing to resolve).
+                                    let galleryMetadata: Record<string, any> = {};
+                                    if (selectedIds.length > 0) {
+                                        galleryMetadata = await resolveSelectedGalleries(selectedIds, tabId);
+                                        if (Object.keys(galleryMetadata).length === 0) {
+                                            document.getElementById('action')!.innerHTML =
+                                                "Could not read gallery metadata from this tab. Keep the NHentai page open after completing any browser verification, then try again.";
+                                            return;
+                                        }
                                     }
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
                                     chrome.runtime.sendMessage({
@@ -855,7 +982,8 @@ export default class Popup
                                         formatOverride: job.format,
                                         separate: job.separate,
                                         masterFolder: job.masterFolder,
-                                        nameTemplate: job.nameTemplate
+                                        nameTemplate: job.nameTemplate,
+                                        redownloadIds: Array.from(forceIds)
                                     });
                                     self.updateProgress(0, finalName, false);
                                 }
@@ -881,6 +1009,7 @@ export default class Popup
                             });
                         });
                         executeActiveTabScript("js/updateContent.js");
+                        refreshDownloadSummary();
                     });
 
                     chrome.storage.local.get({

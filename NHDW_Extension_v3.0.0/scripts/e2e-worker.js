@@ -61,7 +61,11 @@ const chromeStub = {
     },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults, syncSettings)); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults, localSettings)); } },
+        local: {
+            get(defaults, cb) { cb(Object.assign({}, defaults, localSettings)); },
+            set(items, cb) { Object.assign(localSettings, items); if (cb) cb(); },
+            remove(key, cb) { delete localSettings[key]; if (cb) cb(); }
+        },
         session: {
             get(key, cb) {
                 cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore));
@@ -305,6 +309,39 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     console.log("PASS phase 1: ZIP (" + buf.length + " bytes) delivered as " + download.filename +
         " with entries " + names.join(", ") + " (" + zipProgress + " progress messages)");
 
+    // ---- Phase 1b: successful download is recorded into the persistent history
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)],
+        "a successful download must be recorded in the downloaded-history list"
+    );
+    const historyRecord = localSettings.downloadHistory[String(GALLERY_ID)];
+    if (historyRecord.filename !== "Downloads/Test.zip") {
+        fail("history record filename must be the artifact name, got " + JSON.stringify(historyRecord));
+    }
+    if (typeof historyRecord.when !== "number" || historyRecord.when > Date.now()) {
+        fail("history record must carry a sane timestamp, got " + JSON.stringify(historyRecord));
+    }
+    console.log("PASS phase 1b: successful ZIP recorded as " + historyRecord.filename +
+        " in chrome.storage.local");
+
+    // ---- Phase 1c: a gallery that fails to download is NEVER recorded -------
+    // (a partial download cannot be proven byte-identical, so re-runs re-fetch it)
+    downloadFails = true;
+    expectedWorkerRejection = true;
+    const historyBefore = Object.keys(localSettings.downloadHistory || {}).length;
+    fireDownload("Downloads/FailRecord", "FailRecord");
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "downloadError"),
+        "the failing gallery must send a downloadError"
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    if (localSettings.downloadHistory && Object.keys(localSettings.downloadHistory).length !== historyBefore) {
+        fail("a failed download must never be recorded in the history");
+    }
+    downloadFails = false;
+    expectedWorkerRejection = false;
+    console.log("PASS phase 1c: failed download adds nothing to the history");
+
     // ---- Phase 2: raw mode (per-page downloads) ---------------------------
     downloads.length = 0;
     syncSettings = { useZip: "raw", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW" };
@@ -477,6 +514,115 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("batchProgress must be sent before each gallery, got " + progressMsgs.length);
     }
     console.log("PASS phase 5: batch continues after a gallery failure and reports 1/1/2");
+
+    // ---- Phase 5b: a failed MERGED batch records nothing (all-or-nothing) --
+    // Settled decision: a merged archive records ALL of its gallery ids
+    // together ONLY if the whole job succeeded. Phase 5 ended 1/1, so even
+    // though gallery 123456's page data was fetched inside the shared
+    // archive, it must NOT be recorded as done.
+    await waitFor(() => sessionStore.downloadJob === undefined,
+        "worker marker must clear after the mixed batch");
+    await new Promise((r) => setTimeout(r, 150));
+    if (!localSettings.downloadHistory || localSettings.downloadHistory["1"] !== undefined) {
+        fail("the failed merged batch must not record the missing gallery (id '1')");
+    }
+    if (localSettings.downloadHistory[String(GALLERY_ID)] === undefined) {
+        fail("gallery 123456 must still carry its phase-1 record");
+    }
+    console.log("PASS phase 5b: an unclean merged batch records NO ids (the merge can be re-run)");
+
+    // ---- Phase 5c: a fully clean merged batch records every id ONCE --------
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    failImages = false;
+    onMessageHandler(
+        { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" }, finalName: "Downloads/MergedClean" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("clean merged batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary" && m.failed === 0),
+        "no clean batchSummary was sent"
+    );
+    await waitFor(() => sessionStore.downloadJob === undefined,
+        "worker marker must clear after the clean merged batch");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] && localSettings.downloadHistory[String(GALLERY_ID2)],
+        "a clean merged batch must record BOTH galleries"
+    );
+    const mergedRecord = localSettings.downloadHistory[String(GALLERY_ID)];
+    if (mergedRecord.filename !== "Downloads/MergedClean.zip") {
+        fail("merged records must carry the merged artifact name, got " + JSON.stringify(mergedRecord));
+    }
+    if (localSettings.downloadHistory[String(GALLERY_ID2)].filename !== "Downloads/MergedClean.zip") {
+        fail("both merged ids must point at the same artifact, got " + JSON.stringify(localSettings.downloadHistory));
+    }
+    console.log("PASS phase 5c: clean merged batch recorded both ids under " + mergedRecord.filename);
+
+    // ---- Phase 5d: recorded galleries are skipped unless re-downloaded -----
+    localSettings.downloadHistory = { [String(GALLERY_ID)]: { filename: "One.zip", when: 1 } };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/Skip",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("skip batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary" && m.skipped === 1),
+        "the skip batch must report skipped:1"
+    );
+    await waitFor(() => sessionStore.downloadJob === undefined, "skip batch marker must clear");
+    if (downloads.length !== 1 || !/Two\.zip/.test(downloads[0].filename)) {
+        fail("only the un-recorded gallery must download, got " + JSON.stringify(downloads.map((d) => d.filename)));
+    }
+    if (apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID + "/"))) {
+        fail("a recorded gallery must not hit the API: " + JSON.stringify(apiRequestLog));
+    }
+    console.log("PASS phase 5d: recorded gallery skipped with zero API calls (separate mode)");
+
+    // ---- Phase 5e: redownloadIds re-fetch a recorded gallery ----------------
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One" },
+            finalName: "Downloads/Override",
+            separate: true,
+            redownloadIds: [String(GALLERY_ID)]
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("override batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => downloads.length === 1, "redownloadIds must deliver the gallery again");
+    await waitFor(
+        () => sessionStore.downloadJob === undefined && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            // The gallery fixture's title is "Test", so the new artifact is Test.zip.
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === "Test.zip",
+        "the re-downloaded gallery must be recorded again"
+    );
+    console.log("PASS phase 5e: redownloadIds overrides the history guard and re-records");
 
     // ---- Phase 6: interrupted-job detection --------------------------------
     // A job marker without an active downloader means a previous download died
