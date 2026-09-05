@@ -1334,3 +1334,8 @@ current caller) the resolved format is identical to before.
   options preview/save split. No list mode there, so no inheritance fix. No
   panel harness in that tree — the backport is build-verified and
   suite-verified (166 passing / 4 pending), not behaviour-verified.
+- **`test/download-verify.test.js` (new, 10 tests, added to the mocha list):**
+  pins the tail-anchored `chrome.downloads` filename regex and the
+  "cannot verify -> never block" rule. Note that `package.json`'s `test`
+  script lists mocha files explicitly, so a new fixture file runs nothing
+  until it is added there.

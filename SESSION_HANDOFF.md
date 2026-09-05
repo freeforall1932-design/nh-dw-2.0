@@ -488,6 +488,22 @@ suite (166 passing / 4 pending, smoke 5 PASS, e2e exit 0) and by the code
 being identical to the Chrome fix that phase 6 pins — recorded here as an
 open gap rather than claimed as tested.
 
+**`downloadVerify.ts` pinned.** It was the other zero-reference module. Its
+pure logic is now covered by `test/download-verify.test.js` (10 tests): the
+tail-anchored regex matches on POSIX and Windows separators, refuses
+`MyNHDW/Title.zip` and `NHDW-old/Title.zip`, is anchored at the end, escapes
+metacharacters; `fileExistsOnDisk` resolves `false` (never throws, never
+blocks a download) when `chrome.downloads` is missing or throws;
+`verifyHistoryOnDisk` returns exactly the ids still on disk and skips empty
+records; `presentBatchFilenames` reports the taken `_part2/_part3` candidates.
+Removing the `(?:^|[\\/])` anchor from the compiled helper fails the
+lookalike-parent test, so the suite is not vacuous.
+
+**Gotcha worth remembering:** the `test` script in `package.json` lists mocha
+files **explicitly** — adding `test/foo.test.js` without adding it there
+silently runs nothing (the count stays put and the suite still passes). New
+fixture files must be appended to that list.
+
 ### Shared batch pipeline (3.6.3)
 
 Item 32: one storage-free `downloadAllDoujinshis` core used by the worker
