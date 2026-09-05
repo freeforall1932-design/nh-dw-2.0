@@ -268,10 +268,15 @@ export module message
             html += '<br/><b>' + escapeHtml(galleryName) + '</b> was not downloaded: ';
         }
         html += escapeHtml(String(error));
+        // Always leave an action: batch-level errors (no galleryId, so not
+        // retryable) used to render with zero buttons and leave the popup
+        // stuck until it was reopened (item 29). Retry stays only when the
+        // pipeline named a gallery that can be re-added.
+        html += '<br/><br/>';
         if (canRetry) {
-            html += '<br/><br/><input type="button" id="buttonRetryFailed" value="Retry"/> ';
-            html += '<input type="button" id="buttonBack" value="Go Back"/>';
+            html += '<input type="button" id="buttonRetryFailed" value="Retry"/> ';
         }
+        html += '<input type="button" id="buttonBack" value="Go Back"/>';
         return html;
     }
 

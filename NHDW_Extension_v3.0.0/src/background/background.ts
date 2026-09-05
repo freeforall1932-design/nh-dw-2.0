@@ -1,16 +1,13 @@
 import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
-import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
-import { utils, classifyError, errorMessage } from "../utils/utils";
+import { errorMessage } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
-import { clearnetSource } from "../sources/GallerySource";
-import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
-import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
+import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions } from "../utils/batchPipeline";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
 import { installDownloadCompletionTracker, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
@@ -20,7 +17,6 @@ import { normalizeFormat, formatExtension, DownloadFormat } from "../utils/downl
 // clears it on user request. The offscreen document never touches storage.
 import {
     BatchOutcome,
-    FailedGallery,
     DownloadHistory,
     applyBatchDate,
     artifactRecordFilename,
@@ -201,59 +197,10 @@ chrome.tabs.query({
         setIcon(tabs[0].url);
 });
 
-function tryParseGalleryText(text: string): any | null {
-    if (!text) return null;
-    const trimmed = String(text).trim();
-    if (trimmed.startsWith("{")) {
-        try {
-            const j = coerceGallery(JSON.parse(trimmed));
-            if (j) return j;
-        } catch (_) {}
-    }
-    const fromHtml = extractGalleryFromHtml(text);
-    if (looksLikeGallery(fromHtml)) return fromHtml;
-    return null;
-}
-
-async function getGalleryViaTab(tabId: number, galleryId: string, parsing: AParsing): Promise<any | null> {
-    const urlsToTry: string[] = [];
-    // API URL (parsing dependent)
-    try {
-        urlsToTry.push(parsing.GetUrl(galleryId));
-    } catch (_) {}
-    // Clearnet direct API
-    urlsToTry.push(clearnetSource.getApiUrl(galleryId));
-    // Gallery pages (main + /1/)
-    urlsToTry.push(clearnetSource.getGalleryUrl(galleryId));
-    urlsToTry.push("https://nhentai.net/g/" + encodeURIComponent(galleryId) + "/1/");
-
-    // Deduplicate
-    const seen = new Set<string>();
-    for (const url of urlsToTry) {
-        if (seen.has(url)) continue;
-        seen.add(url);
-        try {
-            const via = await fetchUrlFromTab(tabId, url);
-            if (via && via.ok && via.text) {
-                const parsed = tryParseGalleryText(via.text);
-                if (parsed) return parsed;
-                // Also try JSON directly if content-type is json
-                try {
-                    const j = coerceGallery(JSON.parse(via.text));
-                    if (j) return j;
-                } catch (_) {}
-            }
-        } catch (_) {
-            // continue to next URL
-        }
-    }
-    return null;
-}
-
 module background
 {
     let currentDownloader: Downloader | null = null;
-    let parsing: AParsing;
+    let parsing: AParsing = new ApiParsing();
     // One AbortController per download job, shared by metadata and image
     // fetches so `goBack` aborts in-flight requests instead of only flagging
     // the job as "awaiting abort".
@@ -425,500 +372,105 @@ module background
         });
     }
 
+    function makeFallbackBatchHost(errorCallback: Function, progressCallback: Function): BatchHost {
+        return {
+            get parsing() { return parsing; },
+            getAbortSignal: () => jobAbortController ? jobAbortController.signal : null,
+            wasAborted: () => jobWasAborted(),
+            messageExtras: () => ({}),
+            sendMessage: (payload: any) => { chrome.runtime.sendMessage(payload); },
+            errorCallback: errorCallback,
+            progressCallback: progressCallback,
+            fetchUrlFromTab: fetchUrlFromTab,
+            fetchImpl: (url: string, init?: any) => fetch(url, init),
+            newZip: () => new JSZip(),
+            downloadGallery: async (job) => {
+                currentDownloader = new Downloader(
+                    job.json,
+                    job.path,
+                    errorCallback,
+                    progressCallback,
+                    job.displayName,
+                    job.zip,
+                    job.zipName,
+                    jobAbortController ? jobAbortController.signal : null,
+                    undefined,
+                    job.gallerySettings
+                );
+                if (typeof job.sourceTabId === "number") {
+                    currentDownloader.sourceTabId = job.sourceTabId;
+                }
+                await currentDownloader.startAsync();
+            }
+        };
+    }
+
     export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }) {
         beginJob();
-        let zip = new JSZip();
-        downloadAllDoujinshisAsync(zip, allDoujinshis, finalName, errorCallback, progressCallback, true, galleryMetadata, sourceTabId, options)
-            .then((outcome: BatchOutcome) => {
+        const zip = new JSZip();
+        resolveWorkerBatchOptions(options).then((resolved) => {
+            runBatchDownload({
+                zip: zip,
+                allDoujinshis: allDoujinshis,
+                finalName: finalName,
+                downloadAtEnd: true,
+                galleryMetadata: galleryMetadata,
+                sourceTabId: sourceTabId,
+                options: resolved,
+                host: makeFallbackBatchHost(errorCallback, progressCallback)
+            }).then((outcome: BatchOutcome) => {
                 clearJobMarker();
-                // Record on SUCCESS only: separate mode per successful gallery;
-                // merged mode records every title only when the whole job is clean.
-                const jobOptions = options || {};
-                const format = normalizeFormat(jobOptions.useZip || "zip", "zip");
-                const effectiveSeparate = !!(jobOptions.downloadSeparately || format === "raw");
-                const resolved = historyRecords(outcome, {
+                if (!jobWasAborted() && outcome.failedGalleries && outcome.failedGalleries.length > 0) {
+                    rememberFailedGalleries(outcome.failedGalleries, buildRetryJob(sourceTabId, resolved));
+                }
+                const format = normalizeFormat(resolved.useZip, "zip");
+                const effectiveSeparate = !!(resolved.downloadSeparately || format === "raw");
+                const records = historyRecords(outcome, {
                     effectiveSeparate: effectiveSeparate,
                     format: format,
                     finalName: finalName,
-                    archiveMasterFolder: typeof jobOptions.archiveMasterFolder === "string" ? jobOptions.archiveMasterFolder : ""
+                    archiveMasterFolder: typeof resolved.archiveMasterFolder === "string" ? resolved.archiveMasterFolder : ""
                 });
-                if (resolved.length > 0) {
-                    recordHistory(resolved);
-                    forgetRecordedFailures(resolved);
+                if (records.length > 0) {
+                    recordHistory(records);
+                    forgetRecordedFailures(records);
                 }
-            })
-            .catch(function(error) {
+            }).catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
                     errorCallback(String(error));
                 }
             });
-    }
-
-    async function downloadAllDoujinshisAsync(
-        zip: typeof JSZip,
-        allDoujinshis: Record<string, string>,
-        finalName: string,
-        errorCallback: Function,
-        progressCallback: Function,
-        downloadAtEnd: boolean,
-        galleryMetadata: Record<string, any> = {},
-        sourceTabId?: number | null,
-        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }
-    ): Promise<BatchOutcome> {
-        let downloadName: string = "";
-        let duplicateBehaviour: string = "";
-        let replaceSpaces: boolean = false;
-        let downloadSeparately: boolean = false;
-        let maxConcurrentDownloads: string | undefined;
-        let rawMaxConcurrent: string | undefined;
-        let rawMasterFolder: string = "NHDW";
-        await new Promise((resolve, _reject) => {
-            resolve(
-                chrome.storage.sync.get({
-                    downloadName: "{pretty}",
-                    duplicateBehaviour: "rename",
-                    replaceSpaces: true,
-                    downloadSeparately: false,
-                    maxConcurrentDownloads: "3",
-                    rawMaxConcurrent: "3",
-                    rawMasterFolder: "NHDW"
-                }, function(elems) {
-                    downloadName = elems.downloadName;
-                    duplicateBehaviour = elems.duplicateBehaviour;
-                    replaceSpaces = elems.replaceSpaces;
-                    downloadSeparately = elems.downloadSeparately;
-                    maxConcurrentDownloads = elems.maxConcurrentDownloads;
-                    rawMaxConcurrent = elems.rawMaxConcurrent;
-                    rawMasterFolder = elems.rawMasterFolder;
-                })
-            );
         });
-        // A per-job override (the popup's similar-gallery panel always asks
-        // for one archive per selected gallery) beats the stored "download
-        // each file separately" option.
-        if (options && options.downloadSeparately !== undefined) {
-            downloadSeparately = !!options.downloadSeparately;
-        }
-        // List mode carries its own filename template and its own (optional)
-        // master folder. Without the template override the batch fell back to
-        // the listing page's URL for the produced file name.
-        if (options && typeof options.downloadName === "string") {
-            downloadName = options.downloadName;
-        }
-        if (options && typeof options.rawMasterFolder === "string") {
-            rawMasterFolder = options.rawMasterFolder;
-        }
-        // Each gallery in a separate archive owns that archive: flat entries,
-        // file named after the gallery. One shared archive keeps a folder per
-        // gallery inside so titles never collide.
-        const gallerySettings: any = { archiveLayout: downloadSeparately ? "flat" : "nested" };
-        gallerySettings.rawMasterFolder = rawMasterFolder;
-        if (options && typeof options.archiveMasterFolder === "string") {
-            gallerySettings.archiveMasterFolder = options.archiveMasterFolder;
-        }
-        if (options && options.useZip) {
-            gallerySettings.useZip = options.useZip;
-            gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
-        }
-        // Raw mode's own (smaller) cap on simultaneous browser downloads.
-        gallerySettings.rawMaxConcurrent = rawMaxConcurrent;
-        // API key mode lives in chrome.storage.local (secrets never sync).
-        // Empty string = keyless mode, which keeps its previous route order.
-        const localApi = await readLocalApiSettings();
-        const apiKey = localApi.apiKey;
-        // Relay the API key fields with the per-gallery settings: the
-        // offscreen document cannot read chrome.storage, and the Downloader
-        // must not touch it either (only chrome.runtime is exposed there).
-        gallerySettings.apiKey = apiKey || null;
-        gallerySettings.useServerArchive = localApi.useServerArchive;
-        let names: Array<string> = [];
-        let length = Object.keys(allDoujinshis).length;
-        let allKeys = Object.keys(allDoujinshis);
-        // Per-gallery tally for the end-of-batch summary.
-        let succeeded = 0;
-        let failed = 0;
-        let skipped = 0;
-        const failedKinds: Record<string, number> = {};
-
-        // Persistent history guard (authoritative safety net behind the UI
-        // pre-check): skip already-recorded galleries BEFORE any metadata
-        // fetch, minus the user's "download anyway" picks. The worker read
-        // chrome.storage.local at enqueue time; the recorded set is relayed in
-        // options to the offscreen document when this runs there.
-        const format: string = normalizeFormat(options ? options.useZip : "zip", "zip");
-        const effectiveSeparate: boolean = !!(options && (options.downloadSeparately || format === "raw"));
-        const alreadySet = new Set<string>(
-            options && Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map(String) : []
-        );
-        const redownloadSet = new Set<string>(
-            options && Array.isArray(options.redownloadIds) ? options.redownloadIds.map(String) : []
-        );
-        // History records produced by this invocation.
-        const records: Array<{ id: string; filename: string }> = [];
-        const batchKeys: string[] = [];
-        let finalSaveOk = false;
-        // Every gallery that did not complete, by name, so the summary can
-        // list them and the popup can re-add exactly those.
-        const failedGalleries: FailedGallery[] = [];
-
-        function countFailure(key: string, error: any) {
-            failed++;
-            const { kind } = classifyError(error);
-            failedKinds[kind] = (failedKinds[kind] || 0) + 1;
-            failedGalleries.push({ id: String(key), name: String(allDoujinshis[key] || key), error: errorMessage(error) });
-        }
-        // Job settings a retry of the failures must run with (see
-        // utils/failedGalleries.ts): same format / template / master folder,
-        // separate files, metadata resolved again.
-        const batchRetryJob: any = { formatOverride: format };
-        if (typeof sourceTabId === "number") batchRetryJob.tabId = sourceTabId;
-        if (options && typeof options.downloadName === "string") batchRetryJob.nameTemplate = options.downloadName;
-        if (format === "raw") {
-            batchRetryJob.masterFolder = String(rawMasterFolder || "");
-        } else if (options && typeof options.archiveMasterFolder === "string") {
-            batchRetryJob.masterFolder = options.archiveMasterFolder;
-        }
-
-        for (let i = 0; i < length; i++) {
-            let key = allKeys[i];
-            // Only per-title (separate) output can skip a gallery: a merged
-            // archive must contain every selected title, so batch jobs never
-            // skip (they re-record everything only when the whole job succeeds).
-            if (effectiveSeparate && alreadySet.has(key) && !redownloadSet.has(key)) {
-                skipped++;
-                continue;
-            }
-            // Tell the popup which gallery the batch is working on.
-            chrome.runtime.sendMessage({
-                action: "batchProgress",
-                current: i + 1,
-                total: length,
-                galleryName: allDoujinshis[key],
-                stage: "Downloading"
-            });
-
-            // Metadata route order.
-            // API key mode:
-            //   0. Official keyed API (Authorization: Key ..., 429 backoff)
-            // Keyless mode is unchanged:
-            //   1. Already-resolved via selectedGalleryResolver
-            //   2. Via the user's open tab (reuses Cloudflare clearance)
-            //   3. Extension-origin fetch (likely 403)
-            // A failing keyed request simply falls through to the keyless
-            // routes, so an invalid key can never break a download.
-            let json: any | null = galleryMetadata[key] || null;
-            if (json === null && apiKey) {
-                try {
-                    const keyedParsing = new ApiParsing();
-                    const keyedResp = await fetchNhentaiApi(
-                        keyedParsing.GetUrl(key),
-                        { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined },
-                        apiKey
-                    );
-                    if (keyedResp.ok) {
-                        json = await keyedParsing.GetJsonAsync(keyedResp);
-                    }
-                } catch (_) {
-                    // Fall through to the tab-based routes.
-                }
-            }
-            let jsonFromTab: any | null = null;
-            if (json === null && typeof sourceTabId === "number") {
-                jsonFromTab = await getGalleryViaTab(sourceTabId, key, parsing);
-            }
-            if (json === null) {
-                json = jsonFromTab;
-            }
-            let resp: any = null;
-            if (json) {
-                resp = { ok: true, status: 200, statusText: "resolved via tab" };
-            } else {
-                try {
-                    resp = await fetch(parsing.GetUrl(key), { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
-                } catch (e) {
-                    resp = { ok: false, status: 0, statusText: String(e), headers: { get: () => null } };
-                }
-            }
-
-            if (resp.ok)
-            {
-                try {
-                    if (!json) {
-                        json = await parsing.GetJsonAsync(resp);
-                    }
-                } catch (error) {
-                    // Metadata parse failure (e.g. a Cloudflare HTML page).
-                    countFailure(key, error);
-                    errorCallback("Can't download " + key + " (" + String(error) + ").");
-                    continue; // Keep going with the remaining galleries.
-                }
-
-                let title = utils.getDownloadName(downloadName, json.title.pretty === "" ?
-                    json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
-                    json.title.english, json.title.japanese, key, json.tags);
-                if (names.includes(title)) {
-                    if (duplicateBehaviour === "ignore") {
-                        continue;
-                    }
-                    let tmp = title;
-                    while (names.includes(tmp)) {
-                        // Use the gallery ID (key) as the disambiguator so the
-                        // resulting name is deterministic and traceable back to
-                        // the source gallery instead of depending on iteration order.
-                        tmp = title + " (" + key + ")";
-                    }
-                    title = tmp;
-                }
-                names.push(title);
-                let zipName = null;
-                if (effectiveSeparate) {
-                    // Separate files are named from the (list-mode) template
-                    // and the gallery's OWN metadata, cleaned exactly like a
-                    // single-title download - never from the page URL.
-                    zipName = utils.cleanName(title, replaceSpaces, key);
-                } else if (downloadAtEnd && i == length - 1) {
-                    zipName = finalName;
-                }
-                // Batch mode: the merged archive is saved by the LAST gallery's
-                // Downloader. Its success is what makes the job "clean".
-                const isFinalSave = !effectiveSeparate && downloadAtEnd && i === length - 1;
-                currentDownloader = new Downloader(json, utils.cleanName(title, replaceSpaces, key), errorCallback, progressCallback, allDoujinshis[key],
-                effectiveSeparate ? new JSZip() : zip, // If we download separately, we make sure to not reuse the previous ZIP
-                zipName, jobAbortController ? jobAbortController.signal : null, undefined, gallerySettings);
-                if (typeof sourceTabId === "number") {
-                    currentDownloader.sourceTabId = sourceTabId;
-                }
-                // We download the ZIP file in the following cases:
-                // downloadSeparately is true / raw (effective separate)
-                // OR downloadAtEnd is true (can be false if downloading many pages) AND we are at the doujin of the current list
-
-                try {
-                    await currentDownloader.startAsync();
-                    succeeded++;
-                    if (isFinalSave) {
-                        finalSaveOk = true;
-                    }
-                    if (effectiveSeparate) {
-                        // Only a fully successful gallery is recorded; a
-                        // partial gallery (any page failed) stays un-recorded
-                        // so the next run re-fetches it cleanly.
-                        records.push({
-                            id: key,
-                            filename: artifactRecordFilename({
-                                format: format,
-                                name: zipName || utils.cleanName(title, replaceSpaces, key),
-                                masterFolder: format === "raw"
-                                    ? String(rawMasterFolder || "NHDW")
-                                    : (options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "")
-                            })
-                        });
-                    } else {
-                        batchKeys.push(key);
-                    }
-                } catch (error) {
-                    // The Downloader already surfaced its own failure through
-                    // errorCallback (and intentionally stays silent on abort).
-                    // Keep going with the remaining galleries; the summary at
-                    // the end reports the total count of successes/failures.
-                    countFailure(key, error);
-                }
-            }
-            else
-            {
-                // Distinguish Cloudflare blocks from other HTTP errors so the
-                // user knows to open the gallery and complete any challenge.
-                const isCf = resp.status === 503 || resp.status === 403;
-                const ct = (resp.headers.get("content-type") || "").toLowerCase();
-                const isHtml = ct.includes("html");
-                if (isCf || isHtml) {
-                    errorCallback("Can't download " + key + " - Cloudflare blocked the request (HTTP " + resp.status + "). Open the gallery in a tab, complete any challenge, then try again.");
-                } else {
-                    errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
-                }
-                countFailure(key, "Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
-            }
-        }
-
-        // End-of-batch summary (not sent when the job was cancelled).
-        if (!jobWasAborted()) {
-            if (failedGalleries.length > 0) {
-                rememberFailedGalleries(failedGalleries, batchRetryJob);
-            }
-            chrome.runtime.sendMessage({
-                action: "batchSummary",
-                succeeded: succeeded,
-                failed: failed,
-                skipped: skipped,
-                total: length,
-                failedKinds: failedKinds,
-                // Names + ids of the failures and the job settings, so the
-                // popup can show WHICH galleries failed and re-add them.
-                failedGalleries: failedGalleries,
-                retryJob: batchRetryJob
-            });
-        }
-        // Batch mode is all-or-nothing: every gallery must have succeeded AND
-        // the merged artifact must have been saved (the last gallery carries
-        // the save). A merged file only records its title set when the run is
-        // fully clean, so a failure part-way leaves all of them re-downloadable.
-        // Multi-page "Download all" runs this per page with downloadAtEnd true
-        // ONLY on the final page: earlier pages must be failure-free but the
-        // save belongs to the last page, so finalSaveOk is required only when
-        // this invocation owns the merge.
-        const clean = effectiveSeparate
-            ? true
-            : (failed === 0 && batchKeys.length > 0 && (!downloadAtEnd || finalSaveOk));
-        return {
-            records: records,
-            clean: clean,
-            batchKeys: batchKeys,
-            skipped: skipped,
-            failedGalleries: failedGalleries
-        } as BatchOutcome;
     }
 
     export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }) {
         beginJob();
-        downloadAllPagesAsync(allDoujinshis, pagesArr, path, errorCallback, progressCallback, url, sourceTabId, options)
-            .then((outcome: BatchOutcome) => {
+        resolveWorkerBatchOptions(options).then((resolved) => {
+            runPagedBatchDownload({
+                allDoujinshis: allDoujinshis,
+                pagesArr: pagesArr,
+                path: path,
+                url: url,
+                sourceTabId: sourceTabId,
+                options: resolved,
+                host: makeFallbackBatchHost(errorCallback, progressCallback)
+            }).then((outcome: BatchOutcome) => {
                 clearJobMarker();
-                // Records are already resolved (merged mode is all-or-nothing).
+                if (!jobWasAborted() && outcome.failedGalleries && outcome.failedGalleries.length > 0) {
+                    rememberFailedGalleries(outcome.failedGalleries, buildRetryJob(sourceTabId, resolved));
+                }
                 if (outcome.records.length > 0) {
                     recordHistory(outcome.records);
                     forgetRecordedFailures(outcome.records);
                 }
-            })
-            .catch(function(error) {
+            }).catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
                     errorCallback(String(error));
                 }
             });
-    }
-
-    async function downloadAllPagesAsync(
-        allDoujinshis: Record<string, string>,
-        pagesArr: Array<number>,
-        path: string,
-        errorCallback: Function,
-        progressCallback: Function,
-        url: string,
-        sourceTabId?: number | null,
-        options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }
-    ): Promise<BatchOutcome> {
-        let downloadName: string = "";
-        await new Promise((resolve, _reject) => {
-            resolve(
-                chrome.storage.sync.get({
-                    downloadName: "{pretty}",
-                    maxConcurrentDownloads: "3"
-                }, function(elems) {
-                    downloadName = elems.downloadName;
-                })
-            );
         });
-        const format: string = normalizeFormat(options ? options.useZip : "zip", "zip");
-        const effectiveSeparate: boolean = !!(options && (options.downloadSeparately || format === "raw"));
-
-        // Aggregate every page's outcome: separate mode keeps per-gallery
-        // records (they are real, independent files); merged mode records every
-        // title only when EVERY page succeeded and the artifact was saved.
-        const allRecords: Array<{ id: string; filename: string }> = [];
-        const allBatchKeys: string[] = [];
-        let allClean = true;
-        let skippedTotal = 0;
-        let pagesFetched = 0;
-
-        let zip = new JSZip();
-        for (let i = 0; i < pagesArr.length; i++) {
-            // Take the page at the current index. Do not mutate pagesArr here:
-            // splicing while iterating made the "last page" check below wrong and
-            // the final ZIP was never downloaded.
-            let curr = pagesArr[i];
-            let m = /page=([0-9]+)/.exec(url)
-            if (m !== null) {
-                url = url.replace(m[0], "page=" + curr);
-            } else if (url.includes("?")) {
-                url += "&page=" + curr
-            } else {
-                url += "?page=" + curr
-            }
-
-            // Try to reuse the user's tab session for listing pages as well.
-            let pageText: string | null = null;
-            if (typeof sourceTabId === "number") {
-                try {
-                    const viaTab = await fetchUrlFromTab(sourceTabId, url);
-                    if (viaTab && viaTab.ok && viaTab.text) {
-                        pageText = viaTab.text;
-                    }
-                } catch (_) {}
-            }
-            if (pageText === null) {
-                try {
-                    const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: jobAbortController ? jobAbortController.signal : undefined });
-                    if (resp.ok) {
-                        pageText = await resp.text();
-                    }
-                } catch (_) {}
-            }
-
-            if (pageText !== null)
-            {
-                // Anchor-scoped card parsing (see CardParsing.ts): each gallery ID
-                // is matched against its own caption so titles with quotes,
-                // entities, or extra markup cannot be mispaired with ids.
-                const cards = parseGalleryCardsFromHtml(pageText);
-                allDoujinshis = {};
-                for (const card of cards) {
-                    let tmpName;
-                    if (downloadName === "{pretty}") {
-                        tmpName = card.title.replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
-                    } else {
-                        tmpName = card.title.trim();
-                    }
-                    allDoujinshis[card.id] = tmpName;
-                }
-                const outcome = await downloadAllDoujinshisAsync(zip, allDoujinshis, path + " (" + curr + ")", errorCallback, progressCallback, i == pagesArr.length - 1, {}, sourceTabId, options);
-                allRecords.push.apply(allRecords, outcome.records);
-                allBatchKeys.push.apply(allBatchKeys, outcome.batchKeys);
-                skippedTotal += outcome.skipped;
-                if (!outcome.clean) {
-                    allClean = false;
-                }
-                pagesFetched++;
-            } else {
-                // A page that could not be fetched contributes nothing: a
-                // merged job is never clean without it, so no batch titles
-                // are recorded.
-                allClean = false;
-            }
-        }
-
-        const clean = effectiveSeparate
-            ? true
-            : (allClean && pagesFetched === pagesArr.length && pagesArr.length > 0);
-        if (!effectiveSeparate && clean) {
-            const finalName = path + " (" + String(pagesArr[pagesArr.length - 1]) + ")";
-            const filename = artifactRecordFilename({
-                format: format,
-                name: finalName,
-                masterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : ""
-            });
-            return {
-                records: allBatchKeys.map((id) => ({ id: id, filename: filename })),
-                clean: true,
-                batchKeys: [],
-                skipped: skippedTotal
-            } as BatchOutcome;
-        }
-        return {
-            records: effectiveSeparate ? allRecords : [],
-            clean: clean,
-            batchKeys: [],
-            skipped: skippedTotal
-        } as BatchOutcome;
     }
 
     export function goBack() {
@@ -1285,6 +837,55 @@ function readLocalApiSettings(): Promise<{ apiKey: string; useServerArchive: boo
         } catch (_) {
             resolve({ apiKey: "", useServerArchive: false });
         }
+    });
+}
+
+function resolveWorkerBatchOptions(options?: BatchJobOptions): Promise<BatchJobOptions> {
+    return new Promise<BatchJobOptions>((resolve) => {
+        const finish = (stored: any, localApi: { apiKey: string; useServerArchive: boolean }) => {
+            const merged: BatchJobOptions = {
+                useZip: stored && stored.useZip ? stored.useZip : "zip",
+                downloadName: stored && stored.downloadName ? stored.downloadName : "{pretty}",
+                duplicateBehaviour: stored && stored.duplicateBehaviour ? stored.duplicateBehaviour : "rename",
+                replaceSpaces: stored && stored.replaceSpaces !== undefined ? stored.replaceSpaces : true,
+                downloadSeparately: !!(stored && stored.downloadSeparately),
+                maxConcurrentDownloads: stored && stored.maxConcurrentDownloads !== undefined ? stored.maxConcurrentDownloads : "3",
+                rawMaxConcurrent: stored && stored.rawMaxConcurrent !== undefined ? stored.rawMaxConcurrent : "3",
+                rawMasterFolder: stored && stored.rawMasterFolder !== undefined ? String(stored.rawMasterFolder) : "NHDW",
+                apiKey: localApi.apiKey,
+                useServerArchive: localApi.useServerArchive
+            };
+            if (options) {
+                if (options.downloadSeparately !== undefined) merged.downloadSeparately = !!options.downloadSeparately;
+                if (typeof options.downloadName === "string") merged.downloadName = options.downloadName;
+                if (typeof options.rawMasterFolder === "string") merged.rawMasterFolder = options.rawMasterFolder;
+                if (typeof options.archiveMasterFolder === "string") merged.archiveMasterFolder = options.archiveMasterFolder;
+                if (options.useZip) merged.useZip = options.useZip;
+                if (typeof options.duplicateBehaviour === "string") merged.duplicateBehaviour = options.duplicateBehaviour;
+                if (options.replaceSpaces !== undefined) merged.replaceSpaces = options.replaceSpaces;
+                if (options.maxConcurrentDownloads !== undefined) merged.maxConcurrentDownloads = options.maxConcurrentDownloads;
+                if (options.rawMaxConcurrent !== undefined) merged.rawMaxConcurrent = options.rawMaxConcurrent;
+                if (Array.isArray(options.alreadyDownloadedIds)) merged.alreadyDownloadedIds = options.alreadyDownloadedIds;
+                if (Array.isArray(options.redownloadIds)) merged.redownloadIds = options.redownloadIds;
+            }
+            resolve(merged);
+        };
+        readLocalApiSettings().then((localApi) => {
+            try {
+                chrome.storage.sync.get({
+                    useZip: "zip",
+                    downloadName: "{pretty}",
+                    duplicateBehaviour: "rename",
+                    replaceSpaces: true,
+                    downloadSeparately: false,
+                    maxConcurrentDownloads: "3",
+                    rawMaxConcurrent: "3",
+                    rawMasterFolder: "NHDW"
+                }, (elems: any) => finish(elems, localApi));
+            } catch (_) {
+                finish({}, localApi);
+            }
+        });
     });
 }
 
