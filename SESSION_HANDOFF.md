@@ -1,5 +1,35 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`, final) — **read
+this block first.** After item 33 this session ran **four review passes** over
+the pipeline, the older versions' code and the settings UI, and merged as
+**PR #39** (tip `c55e4ac`). Eight defects were found by review, reproduced by a
+test that fails on the pre-fix build, and fixed — the list is in the PR body
+and in "Review pass 1-4" sections below. What changed structurally, so a fresh
+session does not re-derive it:
+
+- **`scripts/e2e-popup.js` (new, in `npm run test:e2e`)** gives the popup /
+  side panel offline coverage for the first time: 8 phases over the message →
+  UI and storage contracts. Read its header before touching it — the three
+  stub traps in there each cost a debugging round.
+- **`resolveListFormat()`** in `src/utils/downloadFormats.ts` is now the only
+  place the list-mode format is resolved, and `LIST_MODE_DEFAULTS` must not
+  carry a `listFormat` key (a fixture asserts its absence). Before this the
+  documented single-title inheritance was dead in every path.
+- **Settings panes never write on render.** `renderNamePreview(false)` /
+  `renderTemplatePreview(...)`; only a `change` handler writes.
+- Suite totals: Chrome **310 passing / 4 pending**, smoke 7 PASS, e2e 101 PASS
+  lines; Firefox 166 passing / 4 pending, smoke 5 PASS, e2e 46 PASS.
+
+**Open, in the order I would take them:** worklist **37** (Firefox panel
+harness — the only thing standing between the Firefox folder and being
+verifiable), **38** (options-page harness), **39** (empty-token separators —
+needs a decision, not code), **40**, **41**; then the carried-over items: P3
+queue UI, raw retry follow-ups, raw list-mode verification, real-browser pass,
+Firefox port (item 27). Full specs: "Next backlog (worklist)" below and
+IMPROVEMENT_BACKLOG.md items 35-41. Judgement calls a reviewer should look at:
+"Open questions" 14-19.
+
 **Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`) — **3.6.4: item
 33, one format decision per job.** `resolveJobFormat(override, stored)` in
 `src/utils/downloadFormats.ts` is now the only place a job's output format is
@@ -1423,6 +1453,16 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
     someone who set `useZip` to CBZ/PDF/raw and never touched list mode now
     gets that format from listing pages too, where they previously got ZIP.
     That is the documented intent, but it is a visible change.
+
+19. **CI logs cannot be read from this environment.** `gh run view --log` and
+    the `actions/runs/<id>/logs` API both fail with
+    `failed to get run log: … results-receiver.actions.githubusercontent.com …
+    EOF`, on every run, including successful ones. So CI is verified by run
+    status plus the workflow's step list (`extension-tests.yml` runs
+    `npm test`, `test:smoke`, `test:e2e` in that order), **not** by reading the
+    per-phase PASS lines. A local run is the only way to see them. If a future
+    session needs log output, that is a runner/credential question, not
+    something to re-debug with `gh`.
 
 ### Structural
 
