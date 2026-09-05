@@ -105,6 +105,8 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
 | **Toolbar click opens nothing / I want the old popup back** | Settings -> *Interface* -> **Toolbar click opens**. `Side panel` needs Chrome 114+; on older builds the popup is used automatically. |
 | **Two checkboxes on each gallery card** | The legacy caption checkbox is hidden while the in-page card controls are on. If both show, reload the nhentai page; to keep only the old one, turn off Settings -> *Download / Select buttons on listing cards*. |
 | **A list download is named after the page URL** | That was the pre-3.4.0 behaviour of the merged single-file mode. Switch **Output** to *Separate files* (the new default) — each file is then named from the list-mode template and that gallery's own metadata. |
+| **A download failed but the notice did not say which gallery, and there was no way to retry** | Fixed in v3.6.0. Every failure now names the gallery (title + id + reason) and the panel offers **Retry failed**, which re-downloads exactly those titles with the same format / master folder / name template as one file per title. Failed galleries stay listed at the top of the panel (with *Retry* / *Dismiss*) until you deal with them or close the browser, so closing the panel mid-batch no longer loses them. Failed galleries are never marked as downloaded. |
+| **Raw mode: a gallery was "complete" but a page was missing (or Chrome showed 200 downloads at once)** | Fixed in v3.6.0. Raw pages go through Chrome's download manager, and the extension used to count a page as saved the moment the download *started*, so a page interrupted afterwards (network drop, disk full, cancelled in the download shelf) went unnoticed and the gallery was recorded as downloaded with a page missing. Each file is now followed until it is actually written: an interrupted page is retried (up to 5 times), and if it still fails the gallery is reported as failed and **not** recorded, so the next run of the same listing fetches it again. Raw mode also has its own cap on simultaneous downloads (Settings → *Raw images: files saved at the same time*, default 3) instead of flooding the download shelf. |
 | **Re-running a search re-downloads everything I already got (or makes "Title (1).zip")** | Fixed in v3.5.0: the extension remembers every gallery that downloaded successfully in this browser and skips it on listing pages. Each already-downloaded row has a ✓ badge with its file name and a *Download anyway* link if you want it again; Settings → *Download history* → *Clear history* forgets everything. Galleries downloaded before v3.5.0 are not remembered automatically — the first run after updating still downloads them. Skipping is *verify-then-redownload* by default: the file is only treated as already-downloaded while it still exists on disk, so a deleted file is fetched again on the next run (Settings → *Verify downloaded files exist* to turn that off). A *Single merged file* job never skips; when the dated merged file already exists it asks first and then saves `_part2`, `_part3` …. |
 
 ## Known limitations and things still under review
@@ -112,7 +114,11 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
 * **`raw` format is labelled "(testing)".** It writes one folder of loose
   images per title and always behaves as *Separate files*, but folder creation
   has not yet been confirmed across every platform. Prefer ZIP/CBZ/PDF if you
-  need certainty.
+  need certainty. Since v3.6.0 a raw gallery with a page that could not be
+  written is reported as failed (by name, with *Retry*) rather than recorded as
+  complete; the pages that did arrive stay in the folder and a retry saves the
+  gallery again next to them (`uniquify`: `001 (1).jpg`), it does not delete
+  the defective folder.
 * **Service-worker restarts during a very large gallery.** Chrome may shut the
   extension's worker down mid-download and the browser keeps downloading
   without it. Names are restored from a session mirror when the worker wakes,
@@ -137,7 +143,31 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.5.0 (current): Persistent download history — "already downloaded" is skipped.**
+* **v3.6.0 (current): Named failures with Retry; raw mode waits for every page.**
+  Every failed gallery is now reported **by name** (title, id and the reason)
+  — in the single-title error, in the end-of-batch summary and in a notice at
+  the top of the panel that persists for the browser session (the worker keeps
+  the list in `chrome.storage.session`), so closing the panel mid-batch no
+  longer loses track of what did not download. **Retry failed** re-sends exactly
+  those titles with the settings they ran under (format, master folder, name
+  template) as separate files, bypassing the history guard; *Dismiss* forgets
+  them; a title that later succeeds drops off the list automatically. Failed
+  galleries are still never recorded in the download history. Raw mode (one
+  browser download per page) used to treat "download started" as "page saved",
+  so a page interrupted afterwards (network drop, disk full, cancelled in the
+  shelf) went unnoticed and the gallery was recorded complete with a page
+  missing — and nothing throttled it, so a large gallery became hundreds of
+  simultaneous downloads. Each browser download is now followed to its terminal
+  state (`chrome.downloads.onChanged` + a slow `search()` poll as a safety net;
+  the offscreen document asks the worker in bounded 45-second slices so no MV3
+  message is held open long enough to get the worker killed; a download that
+  never finishes is stopped after 4 minutes and counted as failed). An
+  interrupted page goes through the existing retry loop; when the retries are
+  exhausted the gallery fails and is listed by name. A new *Raw images: files
+  saved at the same time* setting (1–10, default 3) caps in-flight raw
+  downloads independently of the archive fetch concurrency. Browsers whose
+  downloads API lacks `onChanged` keep the previous behaviour.
+* **v3.5.0: Persistent download history — "already downloaded" is skipped.**
   The extension now remembers every gallery that downloaded successfully
   (keyed by gallery ID, in `chrome.storage.local`) and skips it when the same
   listing is re-run (search / tag / artist / homepage). The panel shows a ✓

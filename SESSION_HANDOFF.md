@@ -1,5 +1,21 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-04 — **3.6.0: named failures + Retry; raw mode waits for
+every page.** Triggered by a live report: two galleries failed in a batch, the
+notice said only "2 galleries failed" (no names), there was no retry button,
+and — the deeper bug — raw mode counted a page as saved the moment
+`chrome.downloads.download()` *started* it, so a page interrupted afterwards
+went unnoticed and the gallery was recorded in the download history with a page
+missing; nothing throttled raw either (200 pages = 200 simultaneous browser
+downloads). See "Failed-gallery reporting + raw completion tracking (3.6.0 —
+newest)" below. Manifest bumped to 3.6.0 in both folders. Verification on this
+branch: webpack clean, `npm test` **256 passing / 4 pending**, smoke **7 PASS**,
+`npm run test:e2e` all PASS (new phases: offscreen raw interrupted→retry /
+defective→named failure / raw batch summary; worker phase 3 names the gallery,
+phase 5 names the failed title, phase 5a retry clears it; relay §11 awaitDownload
++ §12 failed-gallery memory). Session branch: `arena/01a06bf0-nh-dw-2-0` (from
+`main` 05a1a31, the 3.5.0 follow-up, PR #34).
+
 **Updated:** 2026-09-04 — **3.5.0 follow-up complete and reviewed: verify-before-skip
 + merged date/part naming.** The user's settled decisions (verify-then-redownload
 toggle for separate mode default ON; merged mode warns only and never skips;
@@ -98,7 +114,120 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
-### Download history (3.5.0 — newest)
+### Failed-gallery reporting + raw completion tracking (3.6.0 — newest)
+
+**Symptoms fixed.** (a) A failure notice with no gallery names and no way to
+re-add the failed titles. (b) Raw mode ("separate file/folder") treating a
+gallery with an interrupted page as complete — and recording it in the
+download history, so the next listing run skipped it. (c) Raw mode ignoring
+every concurrency cap.
+
+**Root cause of (b)/(c).** `Downloader.#saveArtifact` resolved as soon as
+`chrome.downloads.download()`'s callback returned a `downloadId`. That callback
+fires when the download *item is created*, not when the file is written. An
+interruption after that point (network drop, disk full, the user cancelling in
+the shelf, the naming guard losing to another extension and Chrome erroring)
+was invisible to the retry loop. Because every save "finished" instantly, the
+page-batch loop released the whole gallery in milliseconds.
+
+**Design (all four formats).**
+
+- `src/background/downloadControl.ts` (new, worker + Downloader; touches only
+  `chrome.downloads` / `chrome.runtime.lastError`, never storage):
+  `awaitDownloadCompletion(id, {pollMs, maxWaitMs, onTimeout, signal,
+  cancelOnAbort})` resolves (never rejects) with `{ok, state, error}` when the
+  download reaches `complete` / `interrupted`. Sources: `downloads.onChanged`
+  (listener installed once at worker load; terminal events that arrive before
+  anyone waits are parked in a 200-entry map) plus a slow `downloads.search`
+  poll (missed-event safety net + MV3 keep-alive; the first empty `search`
+  answer is tolerated because a fresh item may not be searchable yet, a later
+  one means "erased" → lost). `onTimeout:"cancel"` (default, 4 min) cancels the
+  download and reports `timeout` ("… was stopped" — the word "cancel" would
+  make `classifyError` label it a user cancellation); `onTimeout:"report"`
+  answers `state:"pending"` and leaves it running. Abort: stop waiting; cancel
+  the browser download only when `cancelOnAbort` (raw pages — worthless
+  half-done; never a finished archive). **Contexts without `onChanged`** (unit
+  stubs, the e2e harnesses, browsers lacking the event) answer
+  `{ok:true, state:"unknown"}` — the pre-3.6.0 "started = saved" semantics —
+  so nothing that used to work can hang. `startTrackedDownload(url, filename,
+  opts)` = record name for the filename guard → `download()` → bind id →
+  await completion; rejects with the reason. `normalizeRawConcurrency` (1..10,
+  default 3).
+- `Downloader.#saveArtifact` (direct path, fallback worker) uses
+  `startTrackedDownload` with `cancelOnAbort: useZip === "raw"`. Raw mode's
+  batch size is now `rawMaxConcurrent` (new sync key, options page select,
+  default 3) instead of `maxConcurrentDownloads` (up to 15, meant for
+  archive-mode fetches). The error string keeps its shape
+  (`Failed to download original image (<reason>).`) so `classifyError` still
+  reports `image`; `lastError` objects are unwrapped (no more `[object Object]`).
+- Offscreen path: `saveViaServiceWorker` → `saveDownload` answers the numeric
+  `downloadId` at creation → `awaitDownloadViaServiceWorker` loops
+  `awaitDownload` (worker answers within `AWAIT_DOWNLOAD_SLICE_MS` = 45 s,
+  `onTimeout:"report"`, so no single message channel is held open near the
+  5-minute MV3 limit; the document re-asks while `pending`, gives up after
+  4 min with `cancelDownload`). A missing / non-`result:true` answer (older
+  worker, harness stubs) = success. Blob artifacts (zip/cbz/pdf) still go
+  through the anchor mechanism and are not awaited (unchanged).
+- Failure identity: every pipeline reports `failedGalleries: [{id, name,
+  error}]` + a compact `retryJob {formatOverride, tabId?, nameTemplate?,
+  masterFolder?}` in `batchSummary` (offscreen + fallback; also in
+  `BatchOutcome`), and `galleryId / galleryName / retryJob` on single-title
+  `downloadError`. The fallback single-title job builds its retryJob at
+  failure time (the Downloader has resolved the effective format by then).
+- `src/utils/failedGalleries.ts` (new): pure `mergeFailures` (replace same id,
+  cap 200 oldest-first), `dropFailures`, `groupRetryMessages(entries, tabId)`
+  → one `downloadAllDoujinshis {allDoujinshis, galleryMetadata:{},
+  finalName:"Retry", separate:true, redownloadIds, formatOverride?,
+  nameTemplate?, masterFolder?, tabId?}` per distinct settings (a retry never
+  merges failed titles into a second partial archive; failed ids bypass the
+  history guard; the *active* tab wins over the original one). Storage:
+  `chrome.storage.session` key `nhdwFailedGalleries`, worker is the only
+  writer (serialized read-modify-write; `set` handles callback and promise
+  flavours). Worker: remembers from offscreen `batchSummary` / `downloadError`
+  broadcasts (bookkeeping only — they still reach the popup directly, return
+  `false`) and from the fallback callbacks; forgets ids on `recordHistory`
+  (`jobFinished` records, fallback `.then(outcome)`); popup messages
+  `getFailedGalleries` → `{result:"success", failed}` and
+  `forgetFailedGalleries {ids?}` (no ids = clear).
+- UI: `message.batchSummary(..., failedGalleries, canRetry)` lists names +
+  reasons + `Retry failed (N)`; `message.downloadError(error, galleryName,
+  canRetry)` names the title with `Retry`; `#failedNotice` (index.html, above
+  `#action`) is filled by `refreshFailedNotice()` at every bootstrap with
+  `Retry failed (N)` / `Dismiss`; `retryFailedGalleries()` in popup.ts sends
+  the grouped commands sequentially (handles `queued`). `escapeHtml` and
+  `errorMessage` moved to `utils/utils.ts` (shared by message.ts / popup.ts /
+  offscreen / worker).
+
+**Decisions.** Partial galleries are still never recorded (unchanged rule). A
+defective raw folder is not deleted: the pages that arrived stay, a retry saves
+the gallery again (`uniquify` → `001 (1).jpg`) — deleting user files from an
+extension was judged worse than a duplicate. Raw batch size and archive fetch
+concurrency are separate settings on purpose. The offscreen document still
+uses `chrome.runtime` only (`scripts/e2e-offscreen.js` enforces it).
+
+**Tests.** `test/download-control.test.js` (new; in the mocha list):
+complete / interrupted / unrelated events / early event / missed event via
+search / erased / timeout-cancel / report-pending / abort (+ archive not
+cancelled) / no-onChanged fallback / `startTrackedDownload` / lastError
+unwrapping / concurrency normalization; failedGalleries pure helpers.
+`test/downloader.test.js`: raw with a scripted `onChanged` stub — interrupted
+page retried and gallery succeeds, page that keeps failing fails the gallery
+with the reason, `rawMaxConcurrent` cap (max in flight = 2 with archive
+setting 15), relayed `rawMaxConcurrent`, abort cancels loose pages; the
+legacy raw tests (no `onChanged`, 3×6 attempts) are untouched. Harnesses:
+`e2e-offscreen.js` scripts `awaitDownload` per filename/attempt
+(`rawDownloadScript`, ids ≥ 100; legacy `{result:7}` otherwise);
+`e2e-worker.js` phase 3 / 5 / 5a; `e2e-relay.js` §11 / §12 (its
+`storage.session.set` stub now calls the callback).
+
+**Still to verify in a real browser (not possible offline).** A raw gallery
+with a page cancelled in the download shelf → retry → gallery fails by name and
+is NOT recorded; `Retry failed` from the summary and from the persistent notice
+(popup + side panel); the notice survives closing/reopening the panel; a 200+
+page raw gallery keeps ≤ `rawMaxConcurrent` items active in the shelf; a slow
+page (> 45 s) completes without the worker being killed (the relay re-asks).
+
+### Download history (3.5.0)
 
 Skipping already-downloaded galleries when a listing is re-run (search / tag /
 artist / homepage), instead of downloading everything again and uniquifying
@@ -684,6 +813,13 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
   `chrome.storage.session` so the panel can render them after a worker restart.
   Thumbnails are available without extra requests: `t.nhentai.net` covers are
   derivable from `media_id`, and the listing cards already have them in the DOM.
+- [ ] **Raw retry policy follow-ups (3.6.0 left these open on purpose).**
+  A retried raw gallery is saved next to the defective folder's pages
+  (`uniquify`); an option to *remove the partial folder before retrying*
+  (`chrome.downloads.removeFile` on the pages this job created) and per-page
+  resume (re-download only the missing page numbers) are possible but need a
+  real-browser check of `removeFile` semantics first. Also consider surfacing
+  the failed list in the in-page floating bar (it only `flashStatus`es today).
 - [ ] **Raw list-mode verification (blocks flipping the "(testing)" label).**
   `formatLabel("raw")` currently returns "Raw images (testing)". Once a real
   browser confirms one real folder per title with loose images, drop
@@ -753,6 +889,14 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 ## Do not
 
 - Do not switch branches or push to a branch other than the current session branch.
+- Do not treat `chrome.downloads.download()`'s callback as "file saved" again.
+  It only means the item was created; use `startTrackedDownload` /
+  `awaitDownloadCompletion` (`src/background/downloadControl.ts`) or the
+  offscreen `saveViaServiceWorker` relay, which awaits completion. Do not hold
+  one `awaitDownload` message open longer than `AWAIT_DOWNLOAD_SLICE_MS` (MV3
+  kills the worker at 5 minutes per in-flight event).
+- Do not delete user files from a defective raw folder automatically, and do
+  not record a gallery in the download history unless every page completed.
 - Do not register `chrome.downloads.onDeterminingFilename` at worker startup or
   leave it registered while idle. It is a profile-wide event: participation
   alone makes Chrome able to blame this extension for other extensions'

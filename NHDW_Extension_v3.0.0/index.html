@@ -12,6 +12,9 @@
             <button id="tabDownload" class="popupTab active" type="button">Download</button>
             <button id="tabSettings" class="popupTab" type="button">Settings</button>
         </div>
+        <!-- Failed-gallery notice (hidden unless the worker remembers galleries
+             that failed in this session; see popup.ts refreshFailedNotice). -->
+        <div id="failedNotice" class="failedNotice" hidden></div>
         <div id="action">Loading...</div>
         <div id="settingsPane" hidden></div>
         <!-- CDN host-grant notice (hidden unless nhentai reports image hosts the

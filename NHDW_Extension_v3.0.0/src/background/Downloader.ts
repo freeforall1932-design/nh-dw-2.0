@@ -3,11 +3,11 @@ import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
-import { recordDownloadRequest, bindDownloadId, discardDownloadRequest } from "./downloadNaming";
+import { startTrackedDownload, normalizeRawConcurrency } from "./downloadControl";
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -74,7 +74,7 @@ export default class Downloader
 
     async startAsync() {
         let self = this;
-        const applySettings = (useZipRaw: string, maxConcurrentDownloads: number | string) => {
+        const applySettings = (useZipRaw: string, maxConcurrentDownloads: number | string, rawMaxConcurrent?: number | string) => {
             // Whitelist: a corrupt or legacy value (or undefined from a broken
             // storage read) must fall back to "zip" — an unknown value would
             // otherwise be fetched into the ZIP but never saved (the final
@@ -90,6 +90,14 @@ export default class Downloader
             self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
                 ? configuredConcurrency
                 : 3;
+            if (self.useZip === "raw") {
+                // Raw mode hands every page to the browser's download manager
+                // and (since 3.6.0) waits for each file to finish, so this
+                // batch size is the number of browser downloads running at
+                // once. It has its own, smaller cap: the archive-mode fetch
+                // concurrency (up to 15) would flood the download shelf.
+                self.maxConcurrentDownloads = normalizeRawConcurrency(rawMaxConcurrent);
+            }
             // "flat": this Downloader owns the whole archive, so pages sit at
             // the archive ROOT and the archive is named after the gallery —
             // no Title/Title/… double folder. "nested" (the default) is for
@@ -112,7 +120,7 @@ export default class Downloader
         // expose chrome.runtime) pass the options relayed by the service
         // worker; otherwise fall back to reading chrome.storage.sync.
         if (this.#settings && (this.#settings.useZip !== undefined || this.#settings.maxConcurrentDownloads !== undefined)) {
-            applySettings(this.#settings.useZip || "zip", this.#settings.maxConcurrentDownloads || "3");
+            applySettings(this.#settings.useZip || "zip", this.#settings.maxConcurrentDownloads || "3", this.#settings.rawMaxConcurrent);
         } else {
             try {
                 await new Promise((resolve, _reject) => {
@@ -120,9 +128,10 @@ export default class Downloader
                         chrome.storage.sync.get({
                             useZip: "zip",
                             maxConcurrentDownloads: "3",
+                            rawMaxConcurrent: "3",
                             rawMasterFolder: DEFAULT_RAW_MASTER_FOLDER
                         }, function (elems) {
-                            applySettings(elems.useZip, elems.maxConcurrentDownloads);
+                            applySettings(elems.useZip, elems.maxConcurrentDownloads, elems.rawMaxConcurrent);
                             // The empty string is meaningful: it disables the
                             // master folder for raw downloads.
                             self.#rawMasterFolder = normalizeRawMasterFolder(elems.rawMasterFolder);
@@ -429,25 +438,21 @@ export default class Downloader
             await this.saveUrl(url, safeName);
             return;
         }
-        await new Promise<void>((resolve, reject) => {
-            // Record the requested name for the onDeterminingFilename guard
-            // before starting (see downloadNaming.ts — another extension's
-            // listener makes Chrome ignore `filename` entirely), then bind
-            // the downloadId once known. uniquify keeps re-downloads of the
-            // same gallery from silently overwriting the first one.
-            recordDownloadRequest(url, safeName);
-            chrome.downloads.download({ url: url, filename: safeName, conflictAction: "uniquify" }, function(downloadId) {
-                if (downloadId === undefined) {
-                    // Nothing will ever complete for this URL, so release the
-                    // recorded name immediately: a stuck entry would keep the
-                    // global onDeterminingFilename listener attached.
-                    discardDownloadRequest(url);
-                    reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
-                } else {
-                    bindDownloadId(url, downloadId);
-                    resolve();
-                }
-            });
+        // startTrackedDownload records the requested name for the
+        // onDeterminingFilename guard before starting (see downloadNaming.ts —
+        // another extension's listener makes Chrome ignore `filename`
+        // entirely), binds the downloadId once known, and then WAITS for the
+        // download to reach a terminal state (downloadControl.ts). A page
+        // interrupted after it started therefore rejects here and feeds the
+        // retry loop instead of counting as saved. uniquify keeps
+        // re-downloads of the same gallery from silently overwriting the
+        // first one. Because this now waits for completion, the page batch
+        // loop above caps how many browser downloads are in flight at once
+        // (raw mode: the "raw concurrency" setting). A user cancel stops the
+        // wait — and cancels loose raw pages, which are worthless half-done.
+        await startTrackedDownload(url, safeName, {
+            signal: this.#abortSignal,
+            cancelOnAbort: this.useZip === "raw"
         });
     }
 
@@ -531,8 +536,13 @@ export default class Downloader
                 // segment independently at save time.
                 const masterPrefix = this.#rawMasterFolder !== "" ? this.#rawMasterFolder + "/" : "";
                 await this.#saveArtifact(imageUrl, masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
-            } catch (error) {
-                throw "Failed to download original image (" + error + ").";
+            } catch (error: any) {
+                // Startup failures AND downloads interrupted after they
+                // started (network drop, disk full, cancelled in the shelf)
+                // land here and go through the retry loop; only after the
+                // retries are exhausted does the gallery fail.
+                const reason = error && error.message !== undefined ? error.message : error;
+                throw "Failed to download original image (" + reason + ").";
             }
             return;
         }
@@ -728,7 +738,7 @@ export default class Downloader
     // a relay, because chrome.downloads is not exposed in offscreen documents
     // (only chrome.runtime is).
     saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string };
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string };
     // "flat" = this gallery owns the whole archive (pages at the root);
     // "nested" = shared batch archive (one folder per gallery inside).
     #archiveLayout: string = "nested";

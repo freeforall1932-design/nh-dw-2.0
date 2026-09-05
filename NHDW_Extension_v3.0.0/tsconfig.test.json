@@ -10,6 +10,7 @@
         "src/utils/**/*.ts",
         "src/options/nameTemplate.ts",
         "src/background/Downloader.ts",
+        "src/background/downloadControl.ts",
         "src/background/ArchiveDownload.ts",
         "src/background/tabImageFetch.ts",
         "src/preview/selectedGalleryResolver.ts",

@@ -30,6 +30,14 @@ let onMessageHandler = null;
 const sentMessages = [];
 const downloads = [];                 // what the (simulated) worker downloaded
 const tabFetches = [];                 // fetchInTab / fetchUrlInTab relays
+// Raw-mode completion tracking (3.6.0): when a script is installed, every
+// saveDownload gets its own downloadId and awaitDownload answers per the
+// script; without one the legacy {result:7} / "unknown" answers apply.
+let rawDownloadScript = null;
+let nextRawDownloadId = 100;
+const rawDownloadIds = {};
+const awaitDownloadCalls = [];
+const cancelledDownloads = [];
 
 // Options exactly as the service worker relays them (it reads
 // chrome.storage.sync on the document's behalf).
@@ -52,9 +60,35 @@ const chromeCore = {
             sentMessages.push(msg);
             if (!msg || msg.from !== "offscreen") return;
             if (msg.action === "saveDownload") {
-                // The service worker calls chrome.downloads.download here.
+                // The service worker calls chrome.downloads.download here and
+                // answers with the downloadId as soon as the item exists.
                 downloads.push({ url: msg.url, filename: msg.filename });
-                if (cb) setTimeout(() => cb({ result: 7 }), 0);
+                const id = rawDownloadScript === null ? 7 : nextRawDownloadId++;
+                if (rawDownloadScript !== null) {
+                    rawDownloadIds[id] = { filename: msg.filename, attempt: downloads.filter((d) => d.filename === msg.filename).length - 1 };
+                }
+                if (cb) setTimeout(() => cb({ result: id }), 0);
+            } else if (msg.action === "awaitDownload") {
+                // The worker follows the download to its terminal state
+                // (downloadControl.ts). This harness scripts the outcome per
+                // filename/attempt: "complete", an interrupt reason, or
+                // "pending" (still running; the document must ask again).
+                awaitDownloadCalls.push(msg.downloadId);
+                const entry = rawDownloadIds[msg.downloadId];
+                let answer;
+                if (rawDownloadScript === null || !entry) {
+                    answer = { result: true, ok: true, state: "unknown", error: null };
+                } else {
+                    const outcome = rawDownloadScript(entry.filename, entry.attempt, entry.asked || 0);
+                    entry.asked = (entry.asked || 0) + 1;
+                    if (outcome === "complete") answer = { result: true, ok: true, state: "complete", error: null };
+                    else if (outcome === "pending") answer = { result: true, ok: false, state: "pending", error: null };
+                    else answer = { result: true, ok: false, state: "interrupted", error: "Download interrupted (" + outcome + ")" };
+                }
+                if (cb) setTimeout(() => cb(answer), 0);
+            } else if (msg.action === "cancelDownload") {
+                cancelledDownloads.push(msg.downloadId);
+                if (cb) setTimeout(() => cb({ result: true }), 0);
             } else if (msg.action === "fetchInTab") {
                 // The service worker injects fetchImageInPage into the tab.
                 tabFetches.push({ kind: "image", url: msg.url, world: msg.world });
@@ -885,6 +919,140 @@ function askOffscreen(message) {
         fail("PDF page 1 must use the image dimensions");
     }
     console.log("PASS: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.download);
+
+    // ---- Raw mode: a page counts as saved only when its download completes --
+    // The worker answers saveDownload with the downloadId at creation time and
+    // awaitDownload with the terminal state. Page 2 is interrupted once after
+    // it started and must be retried; the gallery then succeeds and is
+    // recorded. A "pending" answer (download still running) must make the
+    // document ask again rather than give up.
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    sentMessages.length = 0;
+    awaitDownloadCalls.length = 0;
+    cancelledDownloads.length = 0;
+    rawDownloadScript = (filename, attempt, asked) => {
+        if (/002\.png$/.test(filename) && attempt === 0) return "NETWORK_FAILED";
+        if (/001\.jpg$/.test(filename) && asked === 0) return "pending";
+        return "complete";
+    };
+    const rawOptions = Object.assign({}, relayedOptions, { useZip: "raw", rawMasterFolder: "NHDW", rawMaxConcurrent: "2" });
+    const rawStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/RawTracked",
+        name: "RawTracked",
+        options: rawOptions
+    });
+    if (!rawStart || rawStart.result !== "started") {
+        fail("raw downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(rawStart));
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "tracked raw job must finish"
+    );
+    if (downloads.length !== 4) {
+        fail("tracked raw job must issue 3 page downloads + 1 retry of the interrupted page, got " + JSON.stringify(downloads));
+    }
+    if (downloads.filter((d) => d.filename === "NHDW/Downloads/RawTracked/002.png").length !== 2) {
+        fail("the interrupted page must be downloaded again, got " + JSON.stringify(downloads));
+    }
+    if (awaitDownloadCalls.length < 5) {
+        fail("every raw page must be awaited (and a pending answer re-asked), got " + awaitDownloadCalls.length + " awaitDownload calls");
+    }
+    const rawRetry = sentMessages.find((m) => m.action === "updateProgress" && m.retry);
+    if (!rawRetry || !/retry 1\/5/.test(rawRetry.retry)) {
+        fail("the raw retry must surface in the progress UI, got " + JSON.stringify(rawRetry));
+    }
+    if (sentMessages.some((m) => m.action === "downloadError")) {
+        fail("a page that succeeds on retry must not fail the gallery: " + JSON.stringify(sentMessages.filter((m) => m.action === "downloadError")));
+    }
+    const rawRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!rawRecords || rawRecords.length !== 1 || rawRecords[0].filename !== "NHDW/Downloads/RawTracked/001.jpg") {
+        fail("a fully completed raw gallery is recorded under its first page, got " + JSON.stringify(rawRecords));
+    }
+    console.log("PASS: raw page interrupted after start is retried; the gallery completes and is recorded");
+
+    // ---- Raw mode: a page that keeps failing makes the gallery FAIL ----------
+    // Not "complete with a page missing": no history record, one named
+    // downloadError (gallery id + name + the interruption reason) so the
+    // popup can list it and offer a retry.
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    sentMessages.length = 0;
+    rawDownloadScript = (filename) => (/003\.jpg$/.test(filename) ? "FILE_NO_SPACE" : "complete");
+    const rawFailStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/RawDefective",
+        name: "RawDefective",
+        options: rawOptions
+    });
+    if (!rawFailStart || rawFailStart.result !== "started") {
+        fail("defective raw job did not answer {result:'started'}, got " + JSON.stringify(rawFailStart));
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "defective raw job must finish"
+    );
+    const defectiveErrors = sentMessages.filter((m) => m.action === "downloadError");
+    if (defectiveErrors.length !== 1) {
+        fail("a defective raw gallery must produce exactly one downloadError, got " + JSON.stringify(defectiveErrors));
+    }
+    if (!/Failed to download original image/.test(defectiveErrors[0].error) || !/FILE_NO_SPACE/.test(defectiveErrors[0].error)) {
+        fail("the error must name the interruption reason, got " + defectiveErrors[0].error);
+    }
+    if (String(defectiveErrors[0].galleryId) !== String(GALLERY_ID) || defectiveErrors[0].galleryName !== "RawDefective") {
+        fail("the error must NAME the failed gallery (id + name), got " + JSON.stringify(defectiveErrors[0]));
+    }
+    if (!defectiveErrors[0].retryJob || defectiveErrors[0].retryJob.formatOverride !== "raw" || defectiveErrors[0].retryJob.masterFolder !== "NHDW") {
+        fail("the error must carry the job settings a retry needs, got " + JSON.stringify(defectiveErrors[0].retryJob));
+    }
+    if (downloads.filter((d) => d.filename === "NHDW/Downloads/RawDefective/003.jpg").length !== 6) {
+        fail("the failing page must be tried 1 + 5 times, got " + JSON.stringify(downloads));
+    }
+    const defectiveRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!defectiveRecords || defectiveRecords.length !== 0) {
+        fail("a raw gallery with a missing page must NOT be recorded as downloaded, got " + JSON.stringify(defectiveRecords));
+    }
+    console.log("PASS: raw gallery with a page that keeps failing is reported by name and never recorded");
+
+    // ---- Raw batch: failures are listed by name with the retry settings -----
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    sentMessages.length = 0;
+    const rawBatchStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "1": "Missing", [GALLERY_ID]: "Test" },
+        finalName: "Downloads/RawBatch",
+        options: Object.assign({}, rawOptions, { downloadName: "{pretty}", rawMasterFolder: "Stash" })
+    });
+    if (!rawBatchStart || rawBatchStart.result !== "started") {
+        fail("raw batch did not answer {result:'started'}, got " + JSON.stringify(rawBatchStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "raw batch must emit a batchSummary");
+    const rawSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (rawSummary.succeeded !== 0 || rawSummary.failed !== 2 || rawSummary.total !== 2) {
+        fail("raw batch summary must report 0/2/2 (metadata failure + defective gallery), got " + JSON.stringify(rawSummary));
+    }
+    const namedFailures = (rawSummary.failedGalleries || []).map((f) => f.id + ":" + f.name).sort();
+    if (JSON.stringify(namedFailures) !== JSON.stringify(["1:Missing", GALLERY_ID + ":Test"].sort())) {
+        fail("batchSummary must list every failed gallery by id and name, got " + JSON.stringify(rawSummary.failedGalleries));
+    }
+    const defectiveEntry = rawSummary.failedGalleries.find((f) => String(f.id) === String(GALLERY_ID));
+    if (!/FILE_NO_SPACE/.test(defectiveEntry.error)) {
+        fail("each failed gallery must carry its reason, got " + JSON.stringify(defectiveEntry));
+    }
+    if (!rawSummary.retryJob || rawSummary.retryJob.formatOverride !== "raw" || rawSummary.retryJob.masterFolder !== "Stash" || rawSummary.retryJob.nameTemplate !== "{pretty}") {
+        fail("batchSummary must carry the job settings a retry needs, got " + JSON.stringify(rawSummary.retryJob));
+    }
+    await waitFor(() => sentMessages.filter((m) => m.action === "jobFinished").length === 1, "raw batch must finish");
+    const rawBatchRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!rawBatchRecords || rawBatchRecords.length !== 0) {
+        fail("no failed raw gallery may be recorded, got " + JSON.stringify(rawBatchRecords));
+    }
+    console.log("PASS: raw batch summary names every failed gallery with its reason and the retry settings");
+    rawDownloadScript = null;
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {

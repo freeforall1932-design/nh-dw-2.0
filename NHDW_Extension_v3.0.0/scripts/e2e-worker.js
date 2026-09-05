@@ -458,8 +458,24 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (!/retry 1\/5/.test(retryMsgs[0].retry)) {
         fail("first retry message should read 'retry 1/5', got " + retryMsgs[0].retry);
     }
+    // The failure must NAME the gallery and carry the settings a retry needs
+    // (the user saw "2 galleries failed" with no names and no retry button).
+    if (String(error.galleryId) !== String(GALLERY_ID) || error.galleryName !== "FailTest") {
+        fail("downloadError must name the failed gallery (id + name), got " + JSON.stringify(error));
+    }
+    if (!error.retryJob || error.retryJob.formatOverride !== "raw") {
+        fail("downloadError must carry the retry settings, got " + JSON.stringify(error.retryJob));
+    }
+    await waitFor(
+        () => Array.isArray(sessionStore.nhdwFailedGalleries) && sessionStore.nhdwFailedGalleries.some((f) => String(f.id) === String(GALLERY_ID)),
+        "the failed gallery must be remembered in chrome.storage.session"
+    );
+    if (localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+        /FailTest/.test(localSettings.downloadHistory[String(GALLERY_ID)].filename)) {
+        fail("a raw gallery whose pages failed must never be recorded as downloaded");
+    }
     console.log("PASS phase 3: failing raw downloads were retried (" + downloads.length +
-        " attempts), retries surfaced in progress (" + retryMsgs.length + " retry messages) and the error reached the popup: " + error.error);
+        " attempts), retries surfaced in progress (" + retryMsgs.length + " retry messages) and the error reached the popup by name: " + error.error);
 
     // ---- Phase 4: batch with a failing gallery reports exactly once -------
     // Regression guard: the Downloader surfaces a gallery failure through
@@ -545,7 +561,59 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (progressMsgs.length < 2) {
         fail("batchProgress must be sent before each gallery, got " + progressMsgs.length);
     }
-    console.log("PASS phase 5: batch continues after a gallery failure and reports 1/1/2");
+    if (!Array.isArray(mixedSummary.failedGalleries) || mixedSummary.failedGalleries.length !== 1 ||
+        mixedSummary.failedGalleries[0].id !== "1" || mixedSummary.failedGalleries[0].name !== "Missing" ||
+        !/404/.test(mixedSummary.failedGalleries[0].error)) {
+        fail("batchSummary must list the failed gallery by id, name and reason, got " + JSON.stringify(mixedSummary.failedGalleries));
+    }
+    if (!mixedSummary.retryJob || typeof mixedSummary.retryJob !== "object") {
+        fail("batchSummary must carry the retry settings, got " + JSON.stringify(mixedSummary.retryJob));
+    }
+    await waitFor(
+        () => Array.isArray(sessionStore.nhdwFailedGalleries) && sessionStore.nhdwFailedGalleries.some((f) => f.id === "1" && f.name === "Missing"),
+        "the failed batch gallery must be remembered for the session"
+    );
+    // The popup can list and retry them later.
+    const failedList = await new Promise((resolve) => onMessageHandler({ action: "getFailedGalleries" }, {}, resolve));
+    if (!failedList || failedList.result !== "success" || !failedList.failed.some((f) => f.id === "1" && f.name === "Missing")) {
+        fail("getFailedGalleries must list the remembered failure, got " + JSON.stringify(failedList));
+    }
+    console.log("PASS phase 5: batch continues after a gallery failure, reports 1/1/2 and names the failed title");
+
+    // ---- Phase 5a: retrying the failed title re-downloads it and clears it --
+    // The popup's "Retry failed" re-sends downloadAllDoujinshis with the
+    // remembered ids (separate files, redownload override). The metadata
+    // 404 was permanent for id 1, so here the retry targets a title that
+    // failed for a transient reason: seed it as failed, retry, expect it to
+    // succeed, be recorded and leave the failed list.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    sessionStore.nhdwFailedGalleries = [{ id: String(GALLERY_ID), name: "Test", error: "transient", retryJob: { formatOverride: "zip" }, at: Date.now() }];
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "Test" }, galleryMetadata: {},
+            finalName: "Retry", separate: true, redownloadIds: [String(GALLERY_ID)], formatOverride: "zip"
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("retry batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "no batchSummary for the retry batch");
+    const retrySummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (retrySummary.succeeded !== 1 || retrySummary.failed !== 0) {
+        fail("retry batch must succeed 1/0/1, got " + JSON.stringify(retrySummary));
+    }
+    if (downloads.length !== 1 || !/\.zip$/.test(String(downloads[0].filename))) {
+        fail("the retried title must be delivered again, got " + JSON.stringify(downloads));
+    }
+    await waitFor(
+        () => !(sessionStore.nhdwFailedGalleries || []).some((f) => String(f.id) === String(GALLERY_ID)),
+        "a retried gallery that succeeded must leave the failed list"
+    );
+    console.log("PASS phase 5a: retrying a remembered failure re-downloads it and clears it from the failed list");
 
     // ---- Phase 5b: a failed MERGED batch records nothing (all-or-nothing) --
     // Settled decision: a merged archive records ALL of its gallery ids

@@ -24,6 +24,7 @@ let options = [
     new CheckBox("replaceSpaces"),
     new CheckBox("htmlParsing"),
     new Select("maxConcurrentDownloads"),
+    new Select("rawMaxConcurrent"),
     // List mode keeps its own keys so it can never overwrite the
     // single-title defaults above.
     new Select("listFormat"),
@@ -43,6 +44,7 @@ chrome.storage.sync.get({
     htmlParsing: false,
     downloadSeparately: false,
     maxConcurrentDownloads: "3",
+    rawMaxConcurrent: "3",
     rawMasterFolder: "NHDW",
     listFormat: "zip",
     listOutputMode: "separate",

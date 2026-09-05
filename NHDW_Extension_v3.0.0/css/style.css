@@ -64,6 +64,41 @@ input[type="button"]:hover {
     margin-bottom: 6px;
 }
 
+/* Failed-gallery notice (galleries of this session that did not download,
+   listed by name with Retry / Dismiss) and the failed list inside summaries. */
+#failedNotice {
+    margin: 8px 0;
+    padding: 6px;
+    border: 1px solid #b3541e;
+    border-radius: 5px;
+    font-size: 12px;
+    text-align: left;
+}
+
+#htmlDark #failedNotice {
+    border-color: #f2a154;
+}
+
+.nhdwFailedList {
+    margin: 4px 0 6px 0;
+    padding-left: 18px;
+    text-align: left;
+    max-height: 140px;
+    overflow-y: auto;
+}
+
+.nhdwFailedList li {
+    margin-bottom: 4px;
+}
+
+.nhdwFailedReason {
+    color: #b3541e;
+}
+
+#htmlDark .nhdwFailedReason {
+    color: #f2a154;
+}
+
 /* Two-column popup: current gallery on the left, similar galleries on the right */
 .popupColumns {
     display: flex;

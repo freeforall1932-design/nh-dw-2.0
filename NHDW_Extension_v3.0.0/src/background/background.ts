@@ -3,7 +3,7 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
-import { utils, classifyError } from "../utils/utils";
+import { utils, classifyError, errorMessage } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
 import { clearnetSource } from "../sources/GallerySource";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
@@ -12,13 +12,15 @@ import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFet
 import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
 import * as cdnConfigService from "./cdnConfigService";
-import { installDownloadFilenameGuard, recordDownloadRequest, bindDownloadId, discardDownloadRequest } from "./downloadNaming";
+import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
+import { installDownloadCompletionTracker, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
 import { normalizeFormat, formatExtension, DownloadFormat } from "../utils/downloadFormats";
 // The worker OWNS the persistent download history (chrome.storage.local): it
 // reads it for the pipeline guard, writes it when jobs report success and
 // clears it on user request. The offscreen document never touches storage.
 import {
     BatchOutcome,
+    FailedGallery,
     DownloadHistory,
     applyBatchDate,
     artifactRecordFilename,
@@ -32,6 +34,9 @@ import {
 // The offscreen document must never see this module: chrome.downloads is a
 // worker-only capability and it is what makes "verify before skip" possible.
 import { presentBatchFilenames, verifyHistoryOnDisk } from "../utils/downloadVerify";
+// Failed galleries of the session (chrome.storage.session): remembered so the
+// popup can name them and re-add them even after it was closed mid-job.
+import { rememberFailedGalleries, forgetFailedGalleries, readPendingFailuresSettled, clearPendingFailures } from "../utils/failedGalleries";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
@@ -46,6 +51,17 @@ var JSZip = require("jszip");
 // browser-wide filename chain, or Chrome can blame this extension for
 // unrelated downloads started by other extensions.
 installDownloadFilenameGuard();
+// Completion tracking for browser downloads (raw pages, fallback archives):
+// registered at load so terminal events are never missed after a worker
+// restart mid-gallery. Harmless where onChanged does not exist.
+installDownloadCompletionTracker();
+
+// One awaitDownload relay answer is held open for at most this long; the
+// offscreen document simply asks again while the download is still running.
+// Kept well under the 5-minute budget MV3 grants a single in-flight event so
+// a slow page can never get the worker terminated mid-gallery.
+const AWAIT_DOWNLOAD_SLICE_MS = 45000;
+const AWAIT_DOWNLOAD_POLL_MS = 10000;
 
 // ---- toolbar UI mode: side panel or popup -------------------------------
 // The user's other extension uses a side panel and the hovering popup cannot
@@ -328,7 +344,28 @@ module background
             settings.useServerArchive = localApi.useServerArchive;
             const startWithSettings = () => {
                 let zip = new JSZip();
-                currentDownloader = new Downloader(jsonTmp, path, errorCallback, progressCallback, name, zip, path, signal, undefined, settings);
+                // A failure names the gallery and carries the job settings so
+                // the popup can re-add it (same format / master folder). The
+                // job is built when the failure happens: by then the
+                // Downloader has resolved the effective format (a job without
+                // an explicit override reads it from the stored settings).
+                const buildRetryJob = (): any => {
+                    const retryJob: any = {};
+                    const format = normalizeFormat((currentDownloader && currentDownloader.useZip) || settings.useZip || "zip", "zip");
+                    retryJob.formatOverride = format;
+                    if (typeof sourceTabId === "number") retryJob.tabId = sourceTabId;
+                    const retryFolder = format === "raw" ? settings.rawMasterFolder : settings.archiveMasterFolder;
+                    if (typeof retryFolder === "string") retryJob.masterFolder = retryFolder;
+                    return retryJob;
+                };
+                const namedErrorCallback = (error: any) => {
+                    errorCallback(errorMessage(error), {
+                        galleryId: jsonTmp && jsonTmp.id !== undefined ? String(jsonTmp.id) : "",
+                        galleryName: name,
+                        retryJob: buildRetryJob()
+                    });
+                };
+                currentDownloader = new Downloader(jsonTmp, path, namedErrorCallback, progressCallback, name, zip, path, signal, undefined, settings);
                 if (typeof sourceTabId === "number") {
                     currentDownloader.sourceTabId = sourceTabId;
                 }
@@ -346,32 +383,43 @@ module background
                         const masterFolder = format === "raw"
                             ? String(settings.rawMasterFolder || "NHDW")
                             : String(settings.archiveMasterFolder || "");
-                        recordHistory([{
+                        const records = [{
                             id: String(jsonTmp.id),
                             filename: artifactRecordFilename({
                                 format: format,
                                 name: String(downloader.downloadName || path),
                                 masterFolder: masterFolder
                             })
-                        }]);
+                        }];
+                        recordHistory(records);
+                        forgetRecordedFailures(records);
                     })
                     .catch(function(error) { clearJobMarker(); throw error; });
             };
             try {
-                // The raw master folder is a sync (non-secret) setting; read it
-                // here so the Downloader never touches chrome.storage itself
-                // (same class runs inside the offscreen document).
-                if (options && typeof options.rawMasterFolder === "string") {
-                    // The caller already resolved the folder for this job.
-                    settings.rawMasterFolder = options.rawMasterFolder;
-                    startWithSettings();
-                    return;
-                }
-                chrome.storage.sync.get({ rawMasterFolder: "NHDW" }, (elems: any) => {
-                    settings.rawMasterFolder = elems && elems.rawMasterFolder !== undefined ? String(elems.rawMasterFolder) : "NHDW";
+                // The raw master folder and the concurrency caps are sync
+                // (non-secret) settings; read them here so the Downloader
+                // never touches chrome.storage itself (same class runs inside
+                // the offscreen document).
+                chrome.storage.sync.get({ rawMasterFolder: "NHDW", maxConcurrentDownloads: "3", rawMaxConcurrent: "3" }, (elems: any) => {
+                    if (options && typeof options.rawMasterFolder === "string") {
+                        // The caller already resolved the folder for this job.
+                        settings.rawMasterFolder = options.rawMasterFolder;
+                    } else {
+                        settings.rawMasterFolder = elems && elems.rawMasterFolder !== undefined ? String(elems.rawMasterFolder) : "NHDW";
+                    }
+                    if (settings.useZip !== undefined) {
+                        // A per-job format override bypasses the Downloader's
+                        // own storage read, so relay the caps with it.
+                        settings.maxConcurrentDownloads = elems && elems.maxConcurrentDownloads !== undefined ? elems.maxConcurrentDownloads : "3";
+                    }
+                    settings.rawMaxConcurrent = elems && elems.rawMaxConcurrent !== undefined ? elems.rawMaxConcurrent : "3";
                     startWithSettings();
                 });
             } catch (_) {
+                if (options && typeof options.rawMasterFolder === "string") {
+                    settings.rawMasterFolder = options.rawMasterFolder;
+                }
                 startWithSettings(); // keep the default master folder
             }
         });
@@ -396,6 +444,7 @@ module background
                 });
                 if (resolved.length > 0) {
                     recordHistory(resolved);
+                    forgetRecordedFailures(resolved);
                 }
             })
             .catch(function(error) {
@@ -422,6 +471,7 @@ module background
         let replaceSpaces: boolean = false;
         let downloadSeparately: boolean = false;
         let maxConcurrentDownloads: string | undefined;
+        let rawMaxConcurrent: string | undefined;
         let rawMasterFolder: string = "NHDW";
         await new Promise((resolve, _reject) => {
             resolve(
@@ -431,6 +481,7 @@ module background
                     replaceSpaces: true,
                     downloadSeparately: false,
                     maxConcurrentDownloads: "3",
+                    rawMaxConcurrent: "3",
                     rawMasterFolder: "NHDW"
                 }, function(elems) {
                     downloadName = elems.downloadName;
@@ -438,6 +489,7 @@ module background
                     replaceSpaces = elems.replaceSpaces;
                     downloadSeparately = elems.downloadSeparately;
                     maxConcurrentDownloads = elems.maxConcurrentDownloads;
+                    rawMaxConcurrent = elems.rawMaxConcurrent;
                     rawMasterFolder = elems.rawMasterFolder;
                 })
             );
@@ -469,6 +521,8 @@ module background
             gallerySettings.useZip = options.useZip;
             gallerySettings.maxConcurrentDownloads = maxConcurrentDownloads;
         }
+        // Raw mode's own (smaller) cap on simultaneous browser downloads.
+        gallerySettings.rawMaxConcurrent = rawMaxConcurrent;
         // API key mode lives in chrome.storage.local (secrets never sync).
         // Empty string = keyless mode, which keeps its previous route order.
         const localApi = await readLocalApiSettings();
@@ -504,11 +558,26 @@ module background
         const records: Array<{ id: string; filename: string }> = [];
         const batchKeys: string[] = [];
         let finalSaveOk = false;
+        // Every gallery that did not complete, by name, so the summary can
+        // list them and the popup can re-add exactly those.
+        const failedGalleries: FailedGallery[] = [];
 
-        function countFailure(error: any) {
+        function countFailure(key: string, error: any) {
             failed++;
             const { kind } = classifyError(error);
             failedKinds[kind] = (failedKinds[kind] || 0) + 1;
+            failedGalleries.push({ id: String(key), name: String(allDoujinshis[key] || key), error: errorMessage(error) });
+        }
+        // Job settings a retry of the failures must run with (see
+        // utils/failedGalleries.ts): same format / template / master folder,
+        // separate files, metadata resolved again.
+        const batchRetryJob: any = { formatOverride: format };
+        if (typeof sourceTabId === "number") batchRetryJob.tabId = sourceTabId;
+        if (options && typeof options.downloadName === "string") batchRetryJob.nameTemplate = options.downloadName;
+        if (format === "raw") {
+            batchRetryJob.masterFolder = String(rawMasterFolder || "");
+        } else if (options && typeof options.archiveMasterFolder === "string") {
+            batchRetryJob.masterFolder = options.archiveMasterFolder;
         }
 
         for (let i = 0; i < length; i++) {
@@ -580,7 +649,7 @@ module background
                     }
                 } catch (error) {
                     // Metadata parse failure (e.g. a Cloudflare HTML page).
-                    countFailure(error);
+                    countFailure(key, error);
                     errorCallback("Can't download " + key + " (" + String(error) + ").");
                     continue; // Keep going with the remaining galleries.
                 }
@@ -652,7 +721,7 @@ module background
                     // errorCallback (and intentionally stays silent on abort).
                     // Keep going with the remaining galleries; the summary at
                     // the end reports the total count of successes/failures.
-                    countFailure(error);
+                    countFailure(key, error);
                 }
             }
             else
@@ -667,19 +736,26 @@ module background
                 } else {
                     errorCallback("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
                 }
-                countFailure("Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
+                countFailure(key, "Can't download " + key + " (Code " + resp.status + ": " + resp.statusText + ").");
             }
         }
 
         // End-of-batch summary (not sent when the job was cancelled).
         if (!jobWasAborted()) {
+            if (failedGalleries.length > 0) {
+                rememberFailedGalleries(failedGalleries, batchRetryJob);
+            }
             chrome.runtime.sendMessage({
                 action: "batchSummary",
                 succeeded: succeeded,
                 failed: failed,
                 skipped: skipped,
                 total: length,
-                failedKinds: failedKinds
+                failedKinds: failedKinds,
+                // Names + ids of the failures and the job settings, so the
+                // popup can show WHICH galleries failed and re-add them.
+                failedGalleries: failedGalleries,
+                retryJob: batchRetryJob
             });
         }
         // Batch mode is all-or-nothing: every gallery must have succeeded AND
@@ -697,7 +773,8 @@ module background
             records: records,
             clean: clean,
             batchKeys: batchKeys,
-            skipped: skipped
+            skipped: skipped,
+            failedGalleries: failedGalleries
         } as BatchOutcome;
     }
 
@@ -709,6 +786,7 @@ module background
                 // Records are already resolved (merged mode is all-or-nothing).
                 if (outcome.records.length > 0) {
                     recordHistory(outcome.records);
+                    forgetRecordedFailures(outcome.records);
                 }
             })
             .catch(function(error) {
@@ -1152,6 +1230,32 @@ function relayDownloadError(error: string) {
     chrome.runtime.sendMessage({ action: "downloadError", error: error });
 }
 
+// Error reporter for the in-worker fallback pipeline. The optional context
+// names the failed gallery and carries the job the popup can re-send.
+function fallbackErrorCallback(error: any, context?: { galleryId?: string; galleryName?: string; retryJob?: any }) {
+    const payload: any = { action: "downloadError", error: errorMessage(error) };
+    if (context) {
+        if (context.galleryId !== undefined) payload.galleryId = String(context.galleryId);
+        if (context.galleryName !== undefined) payload.galleryName = String(context.galleryName);
+        if (context.retryJob !== undefined) payload.retryJob = context.retryJob;
+        if (context.galleryId) {
+            rememberFailedGalleries(
+                [{ id: String(context.galleryId), name: String(context.galleryName || context.galleryId), error: payload.error }],
+                context.retryJob || null
+            );
+        }
+    }
+    chrome.runtime.sendMessage(payload);
+}
+
+// A gallery that downloaded successfully is no longer "failed": drop it from
+// the session list (and record it in the history, which the callers do).
+function forgetRecordedFailures(records: Array<{ id: string | number; filename: string }>) {
+    try {
+        forgetFailedGalleries(records.map((entry) => String(entry.id)));
+    } catch (_) { /* bookkeeping only */ }
+}
+
 // Settings the offscreen document needs but cannot read itself (no
 // chrome.storage there). The worker reads chrome.storage.sync and relays them
 // in every download command.
@@ -1162,6 +1266,7 @@ const DOWNLOAD_OPTION_DEFAULTS = {
     replaceSpaces: true,
     downloadSeparately: false,
     maxConcurrentDownloads: "3",
+    rawMaxConcurrent: "3",
     htmlParsing: false,
     rawMasterFolder: "NHDW"
 };
@@ -1217,25 +1322,40 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         // onDeterminingFilename guard (installDownloadFilenameGuard) reads
         // the map to re-assert the name/folder when another extension's
         // listener would otherwise suppress it (Chromium bug 579563).
-        try {
-            if (typeof request.filename === "string" && request.filename !== "") {
-                recordDownloadRequest(String(request.url), request.filename);
-            }
-            chrome.downloads.download({ url: request.url, filename: request.filename, conflictAction: "uniquify" }, (downloadId: number) => {
-                if (downloadId === undefined) {
-                    // Release the recorded name: nothing will complete for it
-                    // and a stuck entry would pin the global listener.
-                    discardDownloadRequest(String(request.url));
-                    sendResponse({ result: false, error: String(chrome.runtime.lastError || "Unable to start download") });
-                } else {
-                    bindDownloadId(String(request.url), downloadId);
-                    sendResponse({ result: downloadId });
-                }
+        //
+        // The answer carries the downloadId as soon as the browser accepted
+        // the download; the offscreen document then follows it to completion
+        // with awaitDownload (below), so a page interrupted after it started
+        // reaches the Downloader's retry loop instead of counting as saved.
+        startBrowserDownload(String(request.url), String(request.filename || ""))
+            .then((downloadId) => { sendResponse({ result: downloadId }); })
+            .catch((error: any) => {
+                sendResponse({ result: false, error: error && error.message !== undefined ? String(error.message) : String(error) });
             });
-        } catch (error) {
-            sendResponse({ result: false, error: String(error) });
-        }
         return true;
+    }
+    if (request.action === "awaitDownload") {
+        // Bounded wait for a terminal state of one browser download
+        // (downloadControl.ts): answers complete / interrupted, or "pending"
+        // when the slice elapsed, in which case the offscreen document asks
+        // again. Contexts without downloads.onChanged answer "unknown" and
+        // the caller keeps the historical "started = saved" behaviour.
+        awaitDownloadCompletion(Number(request.downloadId), {
+            onTimeout: "report",
+            maxWaitMs: AWAIT_DOWNLOAD_SLICE_MS,
+            pollMs: AWAIT_DOWNLOAD_POLL_MS
+        }).then((outcome) => {
+            sendResponse({ result: true, ok: outcome.ok, state: outcome.state, error: outcome.error || null });
+        });
+        return true;
+    }
+    if (request.action === "cancelDownload") {
+        // The offscreen document gave up on a page (user cancel, or a
+        // download that never finishes): stop the browser download so a
+        // retry cannot land next to a zombie copy of the same file.
+        cancelTrackedDownload(Number(request.downloadId));
+        sendResponse({ result: true });
+        return false; // answered synchronously
     }
     if (request.action === "recordDownloadName") {
         // Fire-and-forget bookkeeping from the offscreen document: blob saves
@@ -1277,7 +1397,24 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         // and must never reject (storage failure cannot fail the download).
         if (Array.isArray(request.records) && request.records.length > 0) {
             recordHistory(request.records);
+            forgetRecordedFailures(request.records);
         }
+        return false;
+    }
+    if (request.action === "batchSummary" || request.action === "downloadError") {
+        // Broadcasts also reach the popup directly (never relayed back); the
+        // worker only REMEMBERS the named failures they carry, so a popup
+        // opened later can still list and retry them.
+        try {
+            if (request.action === "batchSummary" && Array.isArray(request.failedGalleries) && request.failedGalleries.length > 0) {
+                rememberFailedGalleries(request.failedGalleries, request.retryJob || null);
+            } else if (request.action === "downloadError" && request.galleryId) {
+                rememberFailedGalleries(
+                    [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: String(request.error) }],
+                    request.retryJob || null
+                );
+            }
+        } catch (_) { /* bookkeeping only */ }
         return false;
     }
     if (request.action === "offscreenIdle") {
@@ -1306,6 +1443,20 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         background.clearJobMarker();
         sendResponse({ result: "success" });
         return false;
+    }
+    if (request.action === "getFailedGalleries") {
+        // Popup / side panel: which galleries of this browser session failed
+        // (names, reasons, and the job settings a retry needs).
+        readPendingFailuresSettled().then((failed) => {
+            sendResponse({ result: "success", failed: failed });
+        });
+        return true;
+    }
+    if (request.action === "forgetFailedGalleries") {
+        // User dismissed some (or all) failed galleries.
+        const done = Array.isArray(request.ids) ? forgetFailedGalleries(request.ids) : clearPendingFailures();
+        done.then(() => sendResponse({ result: "success" }));
+        return true;
     }
     if (request.action === "getCdnStatus") {
         // Popup asks which image CDN servers are active and whether nhentai
@@ -1524,9 +1675,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             background.downloadDoujinshi(
                 request.json,
                 request.path,
-                (error: string) => {
-                    chrome.runtime.sendMessage({ action: "downloadError", error: error });
-                },
+                fallbackErrorCallback,
                 (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                     chrome.runtime.sendMessage({
                         action: "updateProgress",
@@ -1564,9 +1713,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                         background.downloadAllDoujinshis(
                             requestWithName.allDoujinshis,
                             requestWithName.finalName,
-                            (error: string) => {
-                                chrome.runtime.sendMessage({ action: "downloadError", error: error });
-                            },
+                            fallbackErrorCallback,
                             (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                                 chrome.runtime.sendMessage({
                                     action: "updateProgress",
@@ -1587,9 +1734,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                         background.downloadAllDoujinshis(
                             request.allDoujinshis,
                             request.finalName,
-                            (error: string) => {
-                                chrome.runtime.sendMessage({ action: "downloadError", error: error });
-                            },
+                            fallbackErrorCallback,
                             (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                                 chrome.runtime.sendMessage({
                                     action: "updateProgress",
@@ -1618,9 +1763,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                         withName.allDoujinshis,
                         withName.pages,
                         withName.finalName,
-                        (error: string) => {
-                            chrome.runtime.sendMessage({ action: "downloadError", error: error });
-                        },
+                        fallbackErrorCallback,
                         (progress: number, doujinshiName: string, isZipping: boolean, retry: string | null) => {
                             chrome.runtime.sendMessage({
                                 action: "updateProgress",

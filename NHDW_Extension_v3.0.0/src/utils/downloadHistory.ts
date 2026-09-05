@@ -128,6 +128,19 @@ export interface BatchOutcome {
     batchKeys: string[];
     /** Galleries skipped because they were already downloaded (separate mode only). */
     skipped: number;
+    /**
+     * Galleries that did not complete, with the name the user selected them
+     * under and the last error, so the UI can list them and offer a retry.
+     * Optional: older callers/tests build outcomes without it.
+     */
+    failedGalleries?: FailedGallery[];
+}
+
+// One failed gallery of a batch: what the UI needs to name it and re-add it.
+export interface FailedGallery {
+    id: string;
+    name: string;
+    error: string;
 }
 
 // Turn a BatchOutcome into the history entries to write.
