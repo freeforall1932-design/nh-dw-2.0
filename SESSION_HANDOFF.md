@@ -376,16 +376,48 @@ still queues the rest — matches the batch continue-after-failure rule);
 `wireRetryButton` leaves its button disabled if `groupRetryMessages` produces
 nothing, which needs an entry with no id to happen.
 
-**Verification gap, stated plainly:** there is no window-less popup harness
-(only the real-browser `e2e-browser.js`, which cannot run here), so the two
-`popup.ts` fixes are covered by `tsc` + the webpack build only. The identical
-defect in `listControls.ts` **is** regression-tested, and the popup change is
-the same edit.
+**Verification gap closed the same session — `scripts/e2e-popup.js` (new).**
+The panel's message -> UI layer had no offline coverage at all (only the
+real-browser `e2e-browser.js`), which is exactly where item 29 and the
+failed-notice defect lived. The new harness loads the built `js/preview.js` in
+a VM with a DOM stub and drives it with the messages the worker/offscreen
+document send, then clicks the buttons those messages render. Five phases:
 
-**Still not reviewed:** the whole `NHDW_Firefox_v1.0.0` snapshot, which still
-contains the pre-3.6.4 `String(error)` batch paths
-(`background.ts:281,423,506,725,737`, `offscreen.ts:470,547`) and none of the
-3.4.0+ work; tracked under item 27.
+1. an object-shaped `downloadError` renders its message (never
+   `[object Object]`) with Retry + Go Back;
+2. a batch-level error still leaves a clickable Go Back (item 29, at bundle
+   level rather than only in `test/message.test.js`);
+3. a `batchSummary` names the failed galleries and offers `Retry failed (N)`;
+4. clicking Retry re-sends exactly those ids with the failed job's settings as
+   separate files, and when the worker answers `error` the failed notice comes
+   **back** — this is the regression test for the notice defect, and it fails
+   on the pre-fix bundle with `a refused retry must restore the failed notice,
+   got hidden=true`;
+5. Dismiss asks the worker to forget the list and hides the notice.
+
+Added to `npm run test:e2e`. Two harness notes so nobody mistakes its limits:
+the panel registers **two** `onMessage` listeners (`popup.ts` and
+`preview.ts`), so the harness delivers to all of them — keeping only the last
+silently tests the wrong half; and the stub keeps one node per id, so
+"click the current button" means the last listener wired for it (a real
+`innerHTML` re-render destroys the old element). It does **not** bootstrap a
+listing page, so the popup's list-job / PDF-merge / similar-galleries paths
+are still only covered by the equivalent content-script phases.
+
+**Found by that harness, and fixed:** `popup.ts` did
+`message.downloadError(String(request.error), …)` — the last hop before the
+user, stringifying an error that `message.downloadError` already knows how to
+unwrap. Latent (every sender upstream sends `errorMessage(error)`), but it is
+the same class the 3.6.1/3.6.4 sweeps targeted, and phase 1 now pins it.
+
+**`NHDW_Firefox_v1.0.0` error parity backported.** Its seven user-facing
+`String(error)` sites (`background.ts:281,423,506,725,737`,
+`offscreen.ts:470,547,616`) plus `options/apiKey.ts` and the two popup
+`statusText` sites now use `errorMessage()`, added to its `utils/utils.ts`
+verbatim from the Chrome tree. Its own suite passes: **166 passing / 4
+pending**, smoke 5 PASS, e2e exit 0, including a backported worker phase 11
+that fails on the pre-backport bundle with `got "[object Object]"`. Its
+manifest still says 3.3.1 and it still lacks all 3.4.0+ work — item 27.
 
 ### Shared batch pipeline (3.6.3)
 

@@ -1290,3 +1290,21 @@ P3 queue UI, the raw retry-policy follow-ups, the raw list-mode
 real-browser verification step. No behaviour change was made that a real
 browser could contradict offline: with a `formatOverride` present (every
 current caller) the resolved format is identical to before.
+
+### Addendum — popup harness + Firefox error parity (same session)
+
+- **`scripts/e2e-popup.js` (new, in `npm run test:e2e`):** window-less coverage
+  of the panel's message -> UI layer, which previously had none offline. Five
+  phases: object-shaped `downloadError` renders its message; batch-level error
+  keeps Go Back (item 29); summary names failures with `Retry failed (N)`;
+  Retry re-sends the failed ids and a refused retry restores the failed notice
+  (fails pre-fix with `got hidden=true`); Dismiss forgets. Does not bootstrap
+  a listing page.
+- **Found and fixed by it:** `popup.ts` stringified `request.error` before
+  `message.downloadError` — the last hop, defeating the message-first rule even
+  though `message.ts` handles objects. Latent, now pinned by phase 1.
+- **`NHDW_Firefox_v1.0.0`:** all ten user-facing `String(error)` sites now use
+  `errorMessage()` (added to its `utils/utils.ts` verbatim). Suite: 166
+  passing / 4 pending, smoke 5 PASS, e2e exit 0, plus a backported worker
+  phase 11 that fails pre-backport with `got "[object Object]"`. Still 3.3.1
+  and still missing 3.4.0+ work (item 27).

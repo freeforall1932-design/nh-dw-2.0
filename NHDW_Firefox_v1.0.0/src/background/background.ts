@@ -3,7 +3,7 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "./Downloader";
-import { utils, classifyError } from "../utils/utils";
+import { utils, classifyError, errorMessage } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
 import { clearnetSource } from "../sources/GallerySource";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
@@ -278,7 +278,7 @@ module background
             .catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
-                    errorCallback(String(error));
+                    errorCallback(errorMessage(error));
                 }
             });
     }
@@ -420,7 +420,7 @@ module background
                 } catch (error) {
                     // Metadata parse failure (e.g. a Cloudflare HTML page).
                     countFailure(error);
-                    errorCallback("Can't download " + key + " (" + String(error) + ").");
+                    errorCallback("Can't download " + key + " (" + errorMessage(error) + ").");
                     continue; // Keep going with the remaining galleries.
                 }
 
@@ -503,7 +503,7 @@ module background
             .catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
-                    errorCallback(String(error));
+                    errorCallback(errorMessage(error));
                 }
             });
     }
@@ -722,7 +722,7 @@ function askOffscreen(message: any, callback?: (response: any) => void) {
                                 if (callback) callback(response2);
                             }))
                             .catch((error) => {
-                                if (callback) callback({ result: false, error: String(error) });
+                                if (callback) callback({ result: false, error: errorMessage(error) });
                             });
                     }, 250);
                     return;
@@ -734,7 +734,7 @@ function askOffscreen(message: any, callback?: (response: any) => void) {
         })
         .catch((error) => {
             if (callback) {
-                callback({ result: false, error: String(error) });
+                callback({ result: false, error: errorMessage(error) });
             }
         });
 }

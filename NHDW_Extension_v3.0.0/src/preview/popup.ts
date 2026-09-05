@@ -256,10 +256,14 @@ chrome.runtime.onMessage.addListener(function(request) {
         // cancellation), NAME the gallery when the pipeline told us which one
         // failed, and offer a retry when it can be re-added.
         const failed: FailedGallery[] = request.galleryId !== undefined && request.galleryId !== null && request.galleryId !== ""
-            ? [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: String(request.error) }]
+            ? [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }]
             : [];
         const retryable = failed.length > 0;
-        document.getElementById('action')!.innerHTML = message.downloadError(String(request.error), request.galleryName, retryable);
+        // errorMessage(), never String(): this is the LAST hop before the user
+        // sees the text, so an object-shaped error (or a structured-cloned
+        // Error) must not become "[object Object]" here even though every
+        // sender upstream already unwraps it.
+        document.getElementById('action')!.innerHTML = message.downloadError(errorMessage(request.error), request.galleryName, retryable);
         setTimeout(() => {
             if (retryable) {
                 wireRetryButton(pendingFromMessage(failed, request.retryJob));

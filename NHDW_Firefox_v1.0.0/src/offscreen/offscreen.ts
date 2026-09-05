@@ -3,7 +3,7 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "../background/Downloader";
-import { utils, classifyError } from "../utils/utils";
+import { utils, classifyError, errorMessage } from "../utils/utils";
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
 import { fetchNhentaiApi } from "../utils/apiAuth";
@@ -467,7 +467,7 @@ async function downloadAllDoujinshisAsync(
                 }
             } catch (error) {
                 countFailure(error);
-                errorCallback("Can't download " + key + " (" + String(error) + ").");
+                errorCallback("Can't download " + key + " (" + errorMessage(error) + ").");
                 continue;
             }
 
@@ -544,7 +544,7 @@ function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName:
         .then(() => { notifyJobFinished(); scheduleIdleClose(); })
         .catch(function(error) {
             if (!jobWasAborted()) {
-                errorCallback(String(error));
+                errorCallback(errorMessage(error));
             }
             notifyJobFinished();
             scheduleIdleClose();
@@ -613,7 +613,7 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
         .then(() => { notifyJobFinished(); scheduleIdleClose(); })
         .catch(function(error) {
             if (!jobWasAborted()) {
-                errorCallback(String(error));
+                errorCallback(errorMessage(error));
             }
             notifyJobFinished();
             scheduleIdleClose();

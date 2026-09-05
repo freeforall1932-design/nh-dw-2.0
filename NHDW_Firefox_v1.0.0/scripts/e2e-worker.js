@@ -40,6 +40,12 @@ const apiRequestLog = [];
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
+// When set, the NEXT batchProgress broadcast throws this value (an object or
+// an Error) so the batch pipeline rejects at top level - the only way to
+// reach the batch-level .catch, whose text is what the popup renders.
+// Backported with the 3.6.4 error-parity fix from the Chrome tree.
+let sendMessageThrows = null;
+
 // GET /api/v2/cdn fixture: reports a mirror OUTSIDE the hardcoded set so the
 // phase asserts prove the worker actually resolved runtime CDN config.
 const CDN_CONFIG_FIXTURE = JSON.stringify({
@@ -72,7 +78,14 @@ const chromeStub = {
     },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
-        sendMessage(msg) { sentMessages.push(msg); },
+        sendMessage(msg) {
+            if (sendMessageThrows && msg && msg.action === "batchProgress") {
+                const thrown = sendMessageThrows;
+                sendMessageThrows = null;
+                throw thrown;
+            }
+            sentMessages.push(msg);
+        },
         lastError: null
     },
     downloads: {
@@ -657,6 +670,33 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("keyless mode must never send an Authorization header, got " + JSON.stringify(keylessApiCalls));
     }
     console.log("PASS phase 10: keyless batch sends no Authorization header");
+
+    // ---- Phase 11: a batch-level failure shows its real reason -------------
+    // The batch .catch is the last user-facing error path. Before the 3.6.4
+    // backport it did String(error), so an object-shaped failure rendered
+    // "[object Object]" and an Error rendered "Error: <msg>" in the popup.
+    for (const thrown of [{ message: "channel closed (fixture)" }, new Error("worker restarted (fixture)")]) {
+        sentMessages.length = 0;
+        sendMessageThrows = thrown;
+        onMessageHandler(
+            { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "Test" }, finalName: "Downloads/BatchThrow" },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => sentMessages.some((m) => m.action === "downloadError"),
+            "a batch-level throw must reach the popup as downloadError"
+        );
+        const batchError = sentMessages.find((m) => m.action === "downloadError");
+        const text = String(batchError.error);
+        if (text !== thrown.message) {
+            fail("the batch error must be the thrown message alone, got " + JSON.stringify(text));
+        }
+        if (/\[object Object\]/.test(text) || /^Error:/.test(text)) {
+            fail("a batch-level failure must render its reason, got " + JSON.stringify(text));
+        }
+    }
+    console.log("PASS phase 11: batch-level failures render their real reason (object + Error shapes)");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);
