@@ -17,12 +17,17 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Fix `content.ts` / `updateContent.ts` caption-loop crash on pages without `.caption` cards; scope gallery IDs to each card's own gallery link (`closest('a[href*="/g/"]')` — the caption sits inside the cover link on nhentai) instead of a document-wide regex matched by index; verified by `scripts/e2e-content.js`
 - [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
 - [x] Raw-mode failures never render `Error: [object Object]` (3.6.1): the browser's object `lastError` was stringified at the worker, wrapped in an `Error`, then stringified again by the raw catch. Every boundary (worker reply, downloadControl interrupted/start errors, offscreen `saveViaServiceWorker`/`awaitDownloadViaServiceWorker`, and the stale Firefox snapshot) is now message-first — `.message` is unwrapped and shapeless objects fall back to readable text. Regression unit tests + an e2e phase with an Error-instance answer.
-- [~] 2026-09-05 codebase-review backlog, **items 28–34**: 28–32 and 34 done
-  in 3.6.2/3.6.3 (batch metadata validation, popup Go Back always, sanitized
-  history names, merged ignore no longer drops titles, console
-  `errorMessage()` sweep, shared storage-free batch core). Still open:
-  **33** fallback-path format default. Full specs in the session log at
-  the end of this file.
+- [x] 2026-09-05 codebase-review backlog, **items 28–34**: all closed.
+  28–32 and 34 in 3.6.2/3.6.3 (batch metadata validation, popup Go Back
+  always, sanitized history names, merged ignore no longer drops titles,
+  console `errorMessage()` sweep, shared storage-free batch core); **33** in
+  3.6.4 — `resolveJobFormat(override, stored)` in `src/utils/downloadFormats.ts`
+  is now the only place a job's format is decided. The live gap it closed:
+  `resolveMergedBatchName` computed its disk candidates from the raw request
+  (`formatOverride || "zip"`), so a merged job with no explicit override
+  looked for `.zip` while the artifact is `.cbz`/`.pdf` — the "you already
+  have this file" warning could never match and re-runs grew `_partN`
+  forever. Full specs in the session log at the end of this file.
 - [x] Fix `downloadAllPages`: stop mutating `pagesArr` while iterating so the final ZIP is actually downloaded
 - [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
 - [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
@@ -1083,7 +1088,8 @@ config/optional-host flow; manifest permissions; build reproducibility.
   Worker `downloadAllPages` now remembers `failedGalleries` like
   `downloadAllDoujinshis`. Tests: `test/batch-pipeline.test.js`.
 
-- **[ ] 33. Fallback-path format must not silently default to zip (L3, low).**
+- **[x] 33. Fallback-path format must not silently default to zip (L3, low).**
+  DONE in 3.6.4 — see the session log at the end of this file.
   In the no-offscreen fallback the batch record/retry format is
   `normalizeFormat(options.useZip ?? "zip", "zip")` while each Downloader
   reads the *stored* format when no per-job override is present — so a caller
@@ -1149,3 +1155,82 @@ Item **33** (fallback-path format default) is deliberately not in this drop.
 Version 3.6.3 in source + release manifests. Verification: webpack clean,
 `npm test` **277 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
 PASS; source `js/` byte-identical to release `js/`.
+
+---
+
+## Session log — 2026-09-05: 3.6.4 one format decision per job (item 33)
+
+Session `arena/01a0701c-nh-dw-2-0`, from `main` `08148a6` (PR #38, the
+3.6.2/3.6.3 merge). Last open item from the 2026-09-05 review.
+
+### What was actually still broken
+
+The item described the record/retry format diverging from the Downloader's in
+the no-offscreen fallback. Auditing every resolution site showed 3.6.3 had
+already closed that half: `resolveWorkerBatchOptions` fills `useZip` from
+`chrome.storage.sync` before the shared core runs, and both the record
+(`normalizeFormat(resolved.useZip)`) and the Downloader settings
+(`gallerySettings.useZip`) come from that same value; the offscreen side does
+the same with the relayed `jobOptions`. The single-title fallback record was
+also already safe — it reads `downloader.useZip` *after* `startAsync()`.
+
+The live gap was a third consumer nobody had listed:
+`resolveMergedBatchName` resolved the format from the **raw request**
+(`normalizeFormat(relayedMessage.formatOverride || "zip")`) while the artifact
+is named from the job's resolved format. A merged job with no explicit
+`formatOverride` and a stored default of cbz/pdf therefore computed `.zip`
+candidates, so:
+
+- `presentBatchFilenames` never saw the real `.cbz` on disk → the *you already
+  have this file* warning could not fire;
+- `pickFreeBatchFilename` never saw the history record either (records use the
+  real format) → every re-run grew another `_partN`.
+
+Latent rather than live-in-production only because every current UI caller
+(popup, list panel, in-page card controls, retry jobs) sends `formatOverride`.
+Proven by test: reverting just that one expression makes the new worker e2e
+phase 5j fail with `warn-first must match the real cbz artifact, got
+{"result":"started"}`.
+
+### The fix
+
+| Area | Change |
+| --- | --- |
+| Registry | `src/utils/downloadFormats.ts`: `resolveJobFormat(override, stored)` (override → stored → zip) and `normalizeFormatOverride` moved here from `background.ts` (the second copy of the same rule is gone). |
+| Worker single-title | `downloadDoujinshi` resolves the format in its existing `chrome.storage.sync.get` (`useZip` added to the defaults) and **always** sets `settings.useZip` plus both concurrency caps, so the Downloader never takes its own storage-read branch and record/retry/file agree by construction. |
+| Relay | `startRelayedJob` sets `options.useZip = resolveJobFormat(formatOverride, stored)` unconditionally — the offscreen document has no `chrome.storage`, so it must always be handed a concrete format. |
+| Merged naming | `resolveMergedBatchName(relayedMessage, confirmExisting, jobFormat?)` uses the job's resolved format, or resolves override → stored `useZip` → zip itself; the storage read moved above the early `raw`/separate bail-out. Fixes both fallback call sites, which pass no `jobFormat`. |
+| Batch core | `batchPipeline.ts` resolves once and passes the **normalized** format down (`gallerySettings.useZip = format`), so normalization happens once instead of again inside every Downloader; `buildRetryJob` and the paged path use the same helper. |
+| Offscreen single-title | one `jobFormat` used for the Downloader settings, the history record and the retry job. |
+
+### Tests
+
+- `test/list-mode.test.js` — 5 cases: override wins, stored fallback (incl.
+  unrecognized override must not become zip), legacy `"folder"` on both sides,
+  zip last resort, `normalizeFormatOverride` keeps unusable values out.
+- `test/batch-pipeline.test.js` — new `job format contract (item 33)` block:
+  for zip / cbz / pdf / raw / legacy `folder` / no-format-sent, the history
+  record suffix, `gallerySettings.useZip` and `batchSummary.retryJob.formatOverride`
+  must all be the same resolved value (7 cases).
+- `scripts/e2e-worker.js` — phase 5i (stored `cbz` and stored legacy `folder`
+  with **no** `formatOverride`: artifact and record both `.cbz` / both `.pdf`)
+  and phase 5j (merged job, no override: artifact, record and the warn-first
+  `existing` answer all use `Downloads/MergedStored.cbz`). 5j is the real
+  regression test; 5i is a pinning test (it passes on the pre-fix code, which
+  was already correct for single-title records).
+
+### Verification
+
+webpack clean; `tsc -p tsconfig.json` and `tsconfig.test.json` clean;
+`npm test` **289 passing / 4 pending** (was 277/4 — +12 new cases); smoke
+**7 PASS**; `npm run test:e2e` all PASS incl. the two new worker phases;
+source `js/` byte-identical to `NHDW_Release_v3.0.0/js/`; manifests 3.6.4 in
+source + release.
+
+### Not in this drop
+
+P3 queue UI, the raw retry-policy follow-ups, the raw list-mode
+`(testing)` label (needs a real browser), the Firefox port, and every
+real-browser verification step. No behaviour change was made that a real
+browser could contradict offline: with a `formatOverride` present (every
+current caller) the resolved format is identical to before.

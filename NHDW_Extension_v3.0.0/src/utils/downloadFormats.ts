@@ -58,6 +58,38 @@ export function normalizeFormat(value: any, fallback: DownloadFormat = "zip"): D
         : fallback;
 }
 
+// A per-job format override (popup picker, list-mode bar, in-page card
+// controls, retry job). An unrecognized value must stay undefined so the
+// stored default wins, rather than silently becoming zip.
+export function normalizeFormatOverride(value: any): DownloadFormat | undefined {
+    if (value === undefined || value === null || value === "") {
+        return undefined;
+    }
+    const normalized = normalizeFormat(value, "zip");
+    return (value === "folder" || normalized === value) ? normalized : undefined;
+}
+
+// THE ONE PLACE a job's output format is decided: a per-job override wins,
+// then the stored default, then zip.
+//
+// Why this exists (backlog item 33): the batch record/retry format and the
+// format the Downloader actually used were derived at different points from
+// different inputs, so a caller that omits `formatOverride` could get a
+// history record saying `.zip` while the file on disk is `.cbz`/`.pdf`/a raw
+// folder - which then makes "verify before skip" search for a file that does
+// not exist and re-download the gallery on every listing run.
+//
+// Rule: resolve ONCE at job start, then hand the SAME normalized value to
+// every consumer (history records, retry jobs, merged artifact names,
+// Downloader settings). Never re-derive it downstream.
+export function resolveJobFormat(override: any, stored?: any): DownloadFormat {
+    const resolvedOverride = normalizeFormatOverride(override);
+    if (resolvedOverride !== undefined) {
+        return resolvedOverride;
+    }
+    return normalizeFormat(stored, "zip");
+}
+
 export function normalizeOutputMode(value: any, fallback: OutputMode = "separate"): OutputMode {
     const text = String(value === undefined || value === null ? "" : value);
     return (OUTPUT_MODES as ReadonlyArray<string>).indexOf(text) !== -1

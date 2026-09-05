@@ -19,8 +19,10 @@ const {
     formatLabel,
     isInheritedListTemplate,
     normalizeFormat,
+    normalizeFormatOverride,
     normalizeOutputMode,
     outputModeToSeparate,
+    resolveJobFormat,
     resolveListTemplate,
     shouldWarnPdfMerge,
     supportsBatchMerge
@@ -61,6 +63,45 @@ describe('shared download format registry', () => {
         assert.strictEqual(formatLabel('zip'), 'ZIP');
         assert.ok(/testing/i.test(formatLabel('raw')),
             'raw must be visibly labelled as under test rather than silently missing');
+    });
+});
+
+// Backlog item 33: one job, one format decision. Every consumer of a job -
+// the Downloader settings, the history record, the retry job and the merged
+// artifact name - must read the SAME resolved value, or "verify before skip"
+// searches for a file that was never written and the gallery re-downloads on
+// every listing run.
+describe('job format resolution (item 33)', () => {
+    it('lets a per-job override win over the stored default', () => {
+        assert.strictEqual(resolveJobFormat('cbz', 'zip'), 'cbz');
+        assert.strictEqual(resolveJobFormat('raw', 'cbz'), 'raw');
+        assert.strictEqual(resolveJobFormat('pdf', 'raw'), 'pdf');
+    });
+
+    it('falls back to the stored default when no override is sent', () => {
+        assert.strictEqual(resolveJobFormat(undefined, 'cbz'), 'cbz');
+        assert.strictEqual(resolveJobFormat(null, 'pdf'), 'pdf');
+        assert.strictEqual(resolveJobFormat('', 'raw'), 'raw');
+        assert.strictEqual(resolveJobFormat('rar', 'cbz'), 'cbz',
+            'an unrecognized override must not silently become zip');
+    });
+
+    it('maps the retired "folder" value on both sides', () => {
+        assert.strictEqual(resolveJobFormat('folder', 'zip'), 'pdf');
+        assert.strictEqual(resolveJobFormat(undefined, 'folder'), 'pdf');
+    });
+
+    it('ends at zip when neither side names a format', () => {
+        assert.strictEqual(resolveJobFormat(undefined, undefined), 'zip');
+        assert.strictEqual(resolveJobFormat(undefined), 'zip');
+    });
+
+    it('keeps an unusable override out of the resolution', () => {
+        assert.strictEqual(normalizeFormatOverride(''), undefined);
+        assert.strictEqual(normalizeFormatOverride(null), undefined);
+        assert.strictEqual(normalizeFormatOverride('rar'), undefined);
+        assert.strictEqual(normalizeFormatOverride('folder'), 'pdf');
+        assert.strictEqual(normalizeFormatOverride('cbz'), 'cbz');
     });
 });
 

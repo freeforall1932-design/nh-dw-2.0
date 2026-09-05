@@ -1,5 +1,17 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`) — **3.6.4: item
+33, one format decision per job.** `resolveJobFormat(override, stored)` in
+`src/utils/downloadFormats.ts` is now the only place a job's output format is
+decided; the worker fallback, the offscreen document, the history records,
+the retry jobs and the merged artifact naming all read that one value. The
+concrete defect this closes: `resolveMergedBatchName` computed its disk
+candidates from the raw request (`formatOverride || "zip"`), so a merged job
+with no explicit format looked for `.zip` while the artifact is `.cbz`/`.pdf`
+— warn-first could never fire and re-runs grew `_partN` forever. All
+numbered items from the 2026-09-05 review (28–34) are now closed. Remaining:
+P3 queue UI, raw retry follow-ups, real-browser verification, Firefox port.
+
 **Updated:** 2026-09-05 (session `arena/01a06fb0-nh-dw-2-0`) — **3.6.3: item
 32, one shared batch pipeline.** Worker fallback and offscreen now wrap
 `src/utils/batchPipeline.ts` (storage-free core, injected IO). Suggested
@@ -164,7 +176,60 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
-### Shared batch pipeline (3.6.3 — newest)
+### Job format resolution (3.6.4 — newest)
+
+Item 33: one job, one format decision. `resolveJobFormat(override, stored)`
+(+ the moved `normalizeFormatOverride`) lives in `src/utils/downloadFormats.ts`
+and is the only place the per-job override, the stored default and the zip
+fallback are combined.
+
+- **The bug that was real.** `resolveMergedBatchName` resolved the format from
+  the raw request: `normalizeFormat(relayedMessage.formatOverride || "zip")`.
+  A merged job with no explicit override whose stored default is cbz/pdf
+  computed `.zip` candidates, so `presentBatchFilenames` /
+  `pickFreeBatchFilename` never saw the real artifact: the *you already have
+  this file* warning could not fire and every re-run grew another `_partN`.
+  The function now reads the job's resolved format (relay path) or resolves
+  override → stored `useZip` → zip itself, and the storage read moved above
+  the early `raw`/separate bail-out.
+- **Worker fallback single-title** (`downloadDoujinshi`) resolves the format
+  in its existing `chrome.storage.sync.get` (`useZip` added to the defaults)
+  and **always** sets `settings.useZip` + the concurrency caps, so the
+  Downloader never falls back to its own storage read and the record, retry
+  job and file are the same format by construction.
+- **Relay path** (`startRelayedJob`) sets `options.useZip =
+  resolveJobFormat(relayedMessage.formatOverride, options.useZip)`
+  unconditionally — the offscreen document has no `chrome.storage`, so it must
+  always receive a concrete format.
+- **Batch core** (`batchPipeline.ts`) resolves once and hands the *normalized*
+  format to the Downloader (`gallerySettings.useZip = format`), so
+  normalization happens once instead of again inside every Downloader;
+  `buildRetryJob` and the paged path use the same helper.
+- **Offscreen single-title** builds `jobFormat` once and uses it for the
+  Downloader settings, the history record and the retry job.
+- `background.ts` no longer carries its own copy of `normalizeFormatOverride`
+  (it was the second definition of the same rule).
+
+**Tests.** `test/list-mode.test.js` (5 cases: override wins, stored fallback,
+legacy `folder` on both sides, zip last resort, unusable override stays out);
+`test/batch-pipeline.test.js` "job format contract" (record + Downloader
+settings + `retryJob.formatOverride` agree for zip/cbz/pdf/raw/`folder`/none);
+`scripts/e2e-worker.js` phase 5i (stored cbz and legacy `folder` name both the
+artifact and the record with no override sent) and phase 5j (merged job with
+no override: artifact, record and warn-first all use `.cbz` — **fails on the
+pre-fix code**, verified by reverting the resolver line). Manifests 3.6.4.
+Verification this session: webpack clean, `tsc` both configs clean,
+`npm test` **289 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
+PASS; source `js/` byte-identical to `NHDW_Release_v3.0.0/js/`.
+
+**Scope note (honest):** the record/artifact mismatch the item described was
+already closed for single-title and batch jobs by 3.6.3's
+`resolveWorkerBatchOptions` (both derive from the same resolved value); the
+merged-naming pass was the live gap, and it was latent because every current
+UI caller sends `formatOverride`. The rest of this drop is the structural
+half: one resolution point, so the mismatch cannot come back.
+
+### Shared batch pipeline (3.6.3)
 
 Item 32: one storage-free `downloadAllDoujinshis` core used by the worker
 fallback and the offscreen document, so the two copies cannot drift again.
@@ -833,7 +898,11 @@ workflow edit has already been committed, drop it with
 
 **PR #37 is merged** (2026-09-05, merge commit `8e32768`): it deleted
 `new 19.txt` from `main` and recorded the 2026-09-05 review findings as
-backlog items 28–34. Nothing else is pending on the CI/workflow side: the
+backlog items 28–34. **PR #38 is merged too** (merge commit `08148a6`): it
+landed 3.6.2 + 3.6.3 (items 28–32 and 34) on `main`. Both are noted here
+because earlier revisions of this document stopped at PR #37 and a reader
+could otherwise assume the 3.6.2/3.6.3 work was still unmerged.
+Nothing else is pending on the CI/workflow side: the
 queued trigger-paths change was applied by the user through the GitHub web
 editor on 2026-09-04 as commit `840d79e` ("Add additional files to extension
 tests workflow"); the live workflow and
@@ -1022,8 +1091,8 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 ## Next backlog (worklist — statuses as of 2026-09-05)
 
 Newest additions first (from the 2026-09-05 codebase review; full specs in
-IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–32 and 34 are done in
-3.6.2/3.6.3. Remaining: 33.
+IMPROVEMENT_BACKLOG.md session log 2026-09-05). **28–34 are all done**
+(3.6.2 / 3.6.3 / 3.6.4). Nothing from that review is open any more.
 
 - [x] **28. Batch metadata: non-gallery JSON must fail ONE gallery, not the
   whole batch (review finding M1, high).** DONE in 3.6.2 (`requireGallery`
@@ -1042,13 +1111,15 @@ IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–32 and 34 are done in
   `test/batch-pipeline.test.js`). The core never imports `chrome.storage` /
   `chrome.downloads`. Paged jobs remember failed galleries the same way a
   selected-gallery batch does.
-- [ ] **33. Fallback-path format must not silently default to zip (L3, low).**
-  In the no-offscreen fallback the record/retry format comes from
-  `options.useZip ?? "zip"` while each Downloader reads the stored format when
-  no override is present → record/extension mismatch for any caller that omits
-  `formatOverride` (all current callers send it). Harden the contract and add
-  a unit test that the record format always equals the Downloader's resolved
-  format.
+- [x] **33. Fallback-path format must not silently default to zip (L3, low).**
+  DONE in 3.6.4. `resolveJobFormat(override, stored)` in
+  `src/utils/downloadFormats.ts` is the single resolution point; the worker
+  fallback always sets `settings.useZip` + caps, the relay always sends a
+  concrete format, the batch core hands the normalized format to the
+  Downloader, and `resolveMergedBatchName` names candidates from the job's
+  resolved format (the live gap: merged warn-first searched `.zip` for a
+  `.cbz` artifact). Tests: resolver units, the batch "job format contract"
+  block, worker e2e 5i/5j (5j fails on the pre-fix code).
 - [x] **34. Message-first sweep for remaining console paths (L4, cosmetic).**
   DONE in 3.6.2. Downloader retry / server-archive `console.warn` use
   `errorMessage()`.

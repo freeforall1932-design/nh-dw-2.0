@@ -5,7 +5,7 @@ import Downloader from "../background/Downloader";
 import { errorMessage } from "../utils/utils";
 import { fetchUrlFromTab } from "../background/tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
-import { normalizeFormat } from "../utils/downloadFormats";
+import { resolveJobFormat } from "../utils/downloadFormats";
 import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions } from "../utils/batchPipeline";
 // Pure helpers only: the offscreen document must never call the storage
 // functions of this module (it has no chrome.storage). The service worker
@@ -355,11 +355,17 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // A failure names the gallery and carries the job settings so the popup
     // can re-add it (same format / master folder; metadata is re-resolved).
     const galleryId = jsonTmp && jsonTmp.id !== undefined ? String(jsonTmp.id) : "";
+    // Resolved ONCE for this job and used for the Downloader settings, the
+    // history record and the retry job. The offscreen document has no
+    // chrome.storage, so it must never let the Downloader fall back to its own
+    // storage read: that is how the record could disagree with the file
+    // (backlog item 33).
+    const jobFormat = resolveJobFormat(options ? options.useZip : undefined);
     const retryJob = buildRetryJob(sourceTabId, options);
     // Single-gallery jobs own their archive: pages at the root, file named
     // after the gallery (no Title/Title double folder).
     currentDownloader = new Downloader(jsonTmp, path, galleryErrorCallback(galleryId, name, retryJob), progressCallback, name, zip, path, signal,
-        undefined, { useZip: options ? options.useZip : undefined, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, rawMaxConcurrent: options ? options.rawMaxConcurrent : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined, archiveMasterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined });
+        undefined, { useZip: jobFormat, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, rawMaxConcurrent: options ? options.rawMaxConcurrent : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined, archiveMasterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined });
     currentDownloader.saveUrl = saveArtifactSmart;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -368,7 +374,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // on enqueue, never on failure/cancel). "filename" mirrors what the
     // Downloader saves: <path>.<format> for archives, <master>/<path>/001.jpg
     // for raw.
-    const format = normalizeFormat(options && options.useZip, "zip");
+    const format = jobFormat;
     const masterFolder = format === "raw"
         ? (options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : "NHDW")
         : (options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "");
@@ -436,7 +442,7 @@ function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName:
         host: makeOffscreenBatchHost()
     })
         .then((outcome: BatchOutcome) => {
-            const format = normalizeFormat(jobOptions.useZip, "zip");
+            const format = resolveJobFormat(jobOptions.useZip);
             const effectiveSeparate = !!(jobOptions.downloadSeparately || format === "raw");
             collectHistoryRecords(historyRecords(outcome, {
                 effectiveSeparate: effectiveSeparate,

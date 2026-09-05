@@ -11,7 +11,7 @@ import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, Batc
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
 import { installDownloadCompletionTracker, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
-import { normalizeFormat, formatExtension, DownloadFormat } from "../utils/downloadFormats";
+import { normalizeFormat, normalizeFormatOverride, resolveJobFormat, formatExtension, DownloadFormat } from "../utils/downloadFormats";
 // The worker OWNS the persistent download history (chrome.storage.local): it
 // reads it for the pipeline guard, writes it when jobs report success and
 // clears it on user request. The offscreen document never touches storage.
@@ -276,9 +276,14 @@ module background
         // Single-gallery jobs always own their archive: pages go to the root
         // and the file is named after the gallery (no Title/Title double name).
         const settings: any = { archiveLayout: "flat" };
-        if (options && options.useZip) {
-            settings.useZip = options.useZip;
-        }
+        // The effective output format is resolved ONCE for this job (per-job
+        // override -> stored default -> zip) inside the storage read below,
+        // and every consumer reads that single value: the Downloader settings,
+        // the history record and the retry job. Deriving it twice, from
+        // different inputs, is how a record could claim ".zip" while the file
+        // on disk is ".cbz"/".pdf"/a raw folder (backlog item 33) - which then
+        // breaks "verify before skip" into an endless re-download.
+        const requestedFormat = options ? options.useZip : undefined;
         // Optional master folder (the wrap is a user choice, never forced).
         if (options && typeof options.archiveMasterFolder === "string") {
             settings.archiveMasterFolder = options.archiveMasterFolder;
@@ -293,9 +298,10 @@ module background
                 let zip = new JSZip();
                 // A failure names the gallery and carries the job settings so
                 // the popup can re-add it (same format / master folder). The
-                // job is built when the failure happens: by then the
-                // Downloader has resolved the effective format (a job without
-                // an explicit override reads it from the stored settings).
+                // job is built when the failure happens; `settings.useZip` is
+                // always set by now (resolved once at job start), so the
+                // Downloader's own field and this fallback are the same value
+                // and a retry can never change the format of the job.
                 const buildRetryJob = (): any => {
                     const retryJob: any = {};
                     const format = normalizeFormat((currentDownloader && currentDownloader.useZip) || settings.useZip || "zip", "zip");
@@ -348,22 +354,31 @@ module background
                 // (non-secret) settings; read them here so the Downloader
                 // never touches chrome.storage itself (same class runs inside
                 // the offscreen document).
-                chrome.storage.sync.get({ rawMasterFolder: "NHDW", maxConcurrentDownloads: "3", rawMaxConcurrent: "3" }, (elems: any) => {
+                chrome.storage.sync.get({ useZip: "zip", rawMasterFolder: "NHDW", maxConcurrentDownloads: "3", rawMaxConcurrent: "3" }, (elems: any) => {
+                    // ONE resolution for the whole job. The Downloader is
+                    // always handed the result, so it never falls back to its
+                    // own storage read and can never resolve to something the
+                    // record/retry job did not expect.
+                    settings.useZip = resolveJobFormat(requestedFormat, elems && elems.useZip);
                     if (options && typeof options.rawMasterFolder === "string") {
                         // The caller already resolved the folder for this job.
                         settings.rawMasterFolder = options.rawMasterFolder;
                     } else {
                         settings.rawMasterFolder = elems && elems.rawMasterFolder !== undefined ? String(elems.rawMasterFolder) : "NHDW";
                     }
-                    if (settings.useZip !== undefined) {
-                        // A per-job format override bypasses the Downloader's
-                        // own storage read, so relay the caps with it.
-                        settings.maxConcurrentDownloads = elems && elems.maxConcurrentDownloads !== undefined ? elems.maxConcurrentDownloads : "3";
-                    }
+                    // The caps travel with the resolved format (the Downloader
+                    // only reads them from its settings bag).
+                    settings.maxConcurrentDownloads = elems && elems.maxConcurrentDownloads !== undefined ? elems.maxConcurrentDownloads : "3";
                     settings.rawMaxConcurrent = elems && elems.rawMaxConcurrent !== undefined ? elems.rawMaxConcurrent : "3";
                     startWithSettings();
                 });
             } catch (_) {
+                // No storage in this context: the per-job override is all we
+                // have, and the shared resolver still yields one value that
+                // both the Downloader and the record will use.
+                settings.useZip = resolveJobFormat(requestedFormat, undefined);
+                settings.maxConcurrentDownloads = "3";
+                settings.rawMaxConcurrent = "3";
                 if (options && typeof options.rawMasterFolder === "string") {
                     settings.rawMasterFolder = options.rawMasterFolder;
                 }
@@ -579,19 +594,32 @@ function attachHistoryOverrides(overrides: any): Promise<any> {
 // per-gallery template, and single-title downloads never pass through here.
 async function resolveMergedBatchName(
     relayedMessage: any,
-    confirmExisting: boolean
+    confirmExisting: boolean,
+    jobFormat?: string
 ): Promise<{ finalName: string } | { existing: string }> {
-    const format = normalizeFormat(relayedMessage.formatOverride || "zip", "zip");
-    if (relayedMessage.separate === true || format === "raw" || relayedMessage.action === "downloadDoujinshi") {
-        return { finalName: String(relayedMessage.finalName || "") };
-    }
     const settings = await new Promise<any>((resolve) => {
         try {
-            chrome.storage.sync.get({ batchNameDate: true, verifyDownloadedFiles: true }, (elems) => resolve(elems || {}));
+            chrome.storage.sync.get({ batchNameDate: true, verifyDownloadedFiles: true, useZip: "zip" }, (elems) => resolve(elems || {}));
         } catch (_) {
             resolve({});
         }
     });
+    // ONE format decision for the naming pass: the format the job resolved to
+    // when the caller already knows it (relay path), otherwise per-job
+    // override -> stored default -> zip. Reading the request alone meant a
+    // merged job with no explicit override computed ".zip" candidates for a
+    // job whose stored default is cbz/pdf, so the "you already have this
+    // file" warning could never match the real artifact and every re-run grew
+    // another _partN (backlog item 33).
+    const format = normalizeFormat(
+        jobFormat !== undefined
+            ? jobFormat
+            : resolveJobFormat(relayedMessage.formatOverride, settings.useZip),
+        "zip"
+    );
+    if (relayedMessage.separate === true || format === "raw" || relayedMessage.action === "downloadDoujinshi") {
+        return { finalName: String(relayedMessage.finalName || "") };
+    }
     const dateOn = settings.batchNameDate !== false;
     const verify = settings.verifyDownloadedFiles !== false;
     // formatExtension returns ".zip" (with the dot); the naming helpers expect
@@ -638,19 +666,6 @@ function resolveTabId(request: any, sender: any): number | undefined {
         return sender.tab.id;
     }
     return undefined;
-}
-
-function normalizeFormatOverride(value: any): DownloadFormat | undefined {
-    // Shared registry (utils/downloadFormats): one definition of the four
-    // formats and of the retired "folder" -> "pdf" mapping, so list mode and
-    // single-title mode can never disagree about what a format means.
-    if (value === undefined || value === null || value === "") {
-        return undefined;
-    }
-    const normalized = normalizeFormat(value, "zip");
-    // An unrecognized value must stay undefined (fall back to the stored
-    // default) rather than silently becoming zip.
-    return (value === "folder" || normalized === value) ? normalized : undefined;
 }
 
 // NOTE: MV3 service workers run in a worker global scope without `window`.
@@ -1126,12 +1141,16 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 // One shared format registry: list mode, single-title mode and
                 // the in-page card controls all send the same values, and the
                 // retired "folder" format still maps to PDF.
-                const formatOverride = relayedMessage.formatOverride;
-                if (formatOverride !== undefined && formatOverride !== null && formatOverride !== "") {
-                    // Popup format choices affect this job only; do not mutate
-                    // the user's persisted default in chrome.storage.sync.
-                    options.useZip = normalizeFormat(formatOverride, options.useZip);
-                }
+                // ONE resolution for the whole job: per-job override, then the
+                // stored default, then zip. Popup format choices affect this
+                // job only - the user's persisted default in
+                // chrome.storage.sync is never mutated. The offscreen document
+                // has no chrome.storage, so it must always receive a concrete
+                // format; the merged-name resolution below uses this same
+                // value rather than re-reading the raw request, otherwise the
+                // disk candidates and part numbering are computed for the
+                // wrong extension (backlog item 33).
+                options.useZip = resolveJobFormat(relayedMessage.formatOverride, options.useZip);
                 if (relayedMessage.separate !== undefined) {
                     // Explicit output mode from the caller (list mode defaults
                     // to separate files; the similar-gallery panel always asks
@@ -1190,7 +1209,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                     // already have this file" warning (the user chose warn-only
                     // for merged jobs). Resolution must never block a download.
                     if (relayedMessage.action === "downloadAllDoujinshis" || relayedMessage.action === "downloadAllPages") {
-                        resolveMergedBatchName(relayedMessage, !!relayedMessage.existingConfirmed)
+                        resolveMergedBatchName(relayedMessage, !!relayedMessage.existingConfirmed, options.useZip)
                             .then((resolved: any) => {
                                 if (resolved && resolved.existing) {
                                     sendResponse({ result: "existing", filename: resolved.existing });

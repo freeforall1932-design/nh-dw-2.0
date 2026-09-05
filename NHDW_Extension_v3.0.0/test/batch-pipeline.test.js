@@ -450,3 +450,70 @@ describe('runPagedBatchDownload', () => {
         assert.ok(/not gallery metadata/.test(outcome.failedGalleries[0].error));
     });
 });
+
+// Backlog item 33: the format a job RESOLVES to must be the same value the
+// Downloader is told, the value the history record is written with and the
+// value a retry re-sends. Before this was one decision made in three places
+// from three inputs, so a caller that omits the per-job override could get a
+// record saying ".zip" for a ".cbz"/".pdf"/raw artifact - which breaks
+// verify-before-skip into a permanent re-download loop.
+describe('job format contract (item 33)', () => {
+    const CASES = [
+        { sent: 'zip', resolved: 'zip', recordSuffix: '.zip' },
+        { sent: 'cbz', resolved: 'cbz', recordSuffix: '.cbz' },
+        { sent: 'pdf', resolved: 'pdf', recordSuffix: '.pdf' },
+        { sent: 'raw', resolved: 'raw', recordSuffix: '/001.jpg' },
+        // A stored setting left over from before PDF replaced the folder mode.
+        { sent: 'folder', resolved: 'pdf', recordSuffix: '.pdf' },
+        // A caller that sends no format at all: still ONE decision, and the
+        // Downloader is told it instead of being left to guess.
+        { sent: undefined, resolved: 'zip', recordSuffix: '.zip' }
+    ];
+
+    for (const testCase of CASES) {
+        const label = testCase.sent === undefined ? 'no format sent' : 'format "' + testCase.sent + '"';
+        it('record, Downloader settings and retry job all agree for ' + label, async () => {
+            const host = makeHost();
+            const outcome = await runBatchDownload({
+                zip: {},
+                allDoujinshis: { '1': 'One' },
+                finalName: 'Contract',
+                downloadAtEnd: true,
+                galleryMetadata: { '1': gallery(1, 'One') },
+                options: { useZip: testCase.sent, downloadSeparately: true, downloadName: '{pretty}', archiveMasterFolder: '' },
+                host: host
+            });
+
+            assert.strictEqual(host.downloads.length, 1);
+            // The Downloader receives the already-resolved format, so it never
+            // normalizes a second time and can never disagree with the record.
+            assert.strictEqual(host.downloads[0].gallerySettings.useZip, testCase.resolved,
+                'the Downloader must be told the resolved format');
+
+            assert.strictEqual(outcome.records.length, 1);
+            assert.ok(outcome.records[0].filename.endsWith(testCase.recordSuffix),
+                'record must use the resolved format, got ' + outcome.records[0].filename);
+
+            const summary = host.messages.find((m) => m.action === 'batchSummary');
+            assert.ok(summary, 'a batch summary must be sent');
+            assert.strictEqual(summary.retryJob.formatOverride, testCase.resolved,
+                'a retry must re-send the same format the job actually used');
+        });
+    }
+
+    it('never hands a raw value the Downloader would re-normalize differently', async () => {
+        const host = makeHost();
+        await runBatchDownload({
+            zip: {},
+            allDoujinshis: { '1': 'One' },
+            finalName: 'Legacy',
+            downloadAtEnd: true,
+            galleryMetadata: { '1': gallery(1, 'One') },
+            options: { useZip: 'folder', downloadSeparately: true, archiveMasterFolder: '' },
+            host: host
+        });
+        assert.strictEqual(host.downloads[0].gallerySettings.useZip, 'pdf');
+        assert.strictEqual(host.downloads[0].gallerySettings.useZip.indexOf('folder'), -1,
+            'the retired folder value must not survive into the Downloader settings');
+    });
+});

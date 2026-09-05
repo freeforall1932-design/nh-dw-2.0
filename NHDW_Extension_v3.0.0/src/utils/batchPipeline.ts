@@ -15,7 +15,7 @@ import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import { coerceGallery, extractGalleryFromHtml, looksLikeGallery, requireGallery } from "../parsing/GalleryEmbed";
 import { fetchNhentaiApi } from "./apiAuth";
 import { artifactRecordFilename, BatchOutcome, FailedGallery } from "./downloadHistory";
-import { normalizeFormat } from "./downloadFormats";
+import { resolveJobFormat } from "./downloadFormats";
 import { clearnetSource } from "../sources/GallerySource";
 import { utils, classifyError, errorMessage } from "./utils";
 
@@ -111,7 +111,10 @@ export async function getGalleryViaTab(
 }
 
 export function buildRetryJob(sourceTabId: number | null | undefined, options: BatchJobOptions): any {
-    const format = normalizeFormat(options ? options.useZip : "zip", "zip");
+    // The retry must carry the format the job ACTUALLY used: hosts resolve the
+    // per-job override against the stored default before calling in, so this
+    // is the same value that named the artifact and the history record.
+    const format = resolveJobFormat(options ? options.useZip : undefined);
     const job: any = { formatOverride: format };
     if (typeof sourceTabId === "number") job.tabId = sourceTabId;
     if (options && typeof options.downloadName === "string") job.nameTemplate = options.downloadName;
@@ -280,14 +283,21 @@ export async function runBatchDownload(args: {
     const duplicateBehaviour: string = options.duplicateBehaviour || "rename";
     const replaceSpaces: boolean = options.replaceSpaces !== undefined ? options.replaceSpaces : true;
     const downloadSeparately: boolean = !!options.downloadSeparately;
-    const format: string = normalizeFormat(options.useZip, "zip");
+    // Resolved ONCE here and handed to the Downloader below (see
+    // gallerySettings.useZip): the history record, the retry job and the
+    // produced file are all derived from this single value, so a caller that
+    // omits the per-job override can never get a record saying ".zip" for a
+    // ".cbz"/".pdf"/raw artifact (backlog item 33).
+    const format: string = resolveJobFormat(options.useZip);
     const effectiveSeparate: boolean = downloadSeparately || format === "raw";
     const rawMasterFolder: string = typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : "NHDW";
     const archiveMasterFolder: string = typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "";
     const apiKey: string = options.apiKey ? String(options.apiKey) : "";
 
     const gallerySettings: any = {
-        useZip: options.useZip,
+        // The already-resolved format, not the raw request: normalization
+        // happens once, above, instead of again inside every Downloader.
+        useZip: format,
         maxConcurrentDownloads: options.maxConcurrentDownloads,
         rawMaxConcurrent: options.rawMaxConcurrent,
         archiveLayout: downloadSeparately ? "flat" : "nested",
@@ -487,7 +497,7 @@ export async function runPagedBatchDownload(args: {
     const options: BatchJobOptions = args.options || {};
     const host = args.host;
     const downloadName: string = options.downloadName || "{pretty}";
-    const format: string = normalizeFormat(options.useZip, "zip");
+    const format: string = resolveJobFormat(options.useZip);
     const effectiveSeparate: boolean = !!(options.downloadSeparately || format === "raw");
     const pagesArr = args.pagesArr;
     let url = args.url;
