@@ -224,6 +224,24 @@ describe('download completion tracking', () => {
         assert.strictEqual(interruptedMessage(undefined), 'Download interrupted');
     });
 
+    it('keeps object-shaped download errors readable (never "[object Object]")', async () => {
+        // The raw-mode report "Error: [object Object]" came from String()-ing
+        // the browser's lastError object and then stringifying the resulting
+        // Error. The creation path must unwrap .message (or fall back), and
+        // the interrupted-reason formatter must too.
+        assert.strictEqual(interruptedMessage({ message: 'NETWORK_FAILED' }), 'Download interrupted (NETWORK_FAILED)');
+        assert.strictEqual(interruptedMessage({ message: 'FILE_NO_SPACE' }), 'Download interrupted (FILE_NO_SPACE)');
+        assert.strictEqual(interruptedMessage({}), 'Download interrupted');
+        assert.ok(!/\[object Object\]/.test(interruptedMessage({})));
+        // Synchronous throw with a bare object: its .message survives...
+        chrome.downloads.download = () => { throw { message: 'Invalid filename' }; };
+        await assert.rejects(startBrowserDownload('https://x/1.jpg', 'a/b.jpg'), /Invalid filename/);
+        // ...and a shapeless object falls back instead of becoming
+        // Error("[object Object]").
+        chrome.downloads.download = () => { throw { nonsense: true }; };
+        await assert.rejects(startBrowserDownload('https://x/1.jpg', 'a/b.jpg'), /Unable to start download/);
+    });
+
     it('normalizes the raw concurrency setting into 1..10 with a default of 3', () => {
         assert.strictEqual(RAW_CONCURRENCY_DEFAULT, 3);
         assert.strictEqual(RAW_CONCURRENCY_MAX, 10);

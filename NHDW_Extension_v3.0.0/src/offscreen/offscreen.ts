@@ -205,7 +205,11 @@ async function awaitDownloadViaServiceWorker(downloadId: number, signal: AbortSi
             }
             continue;
         }
-        throw new Error(String(answer.error || "Download interrupted"));
+        // errorMessage() (never String()): a worker that answers with a
+        // structured-cloned Error object would otherwise stringify to
+        // "Error: [object Object]" and swallow the real reason. Message-first
+        // keeps every reason readable regardless of what crossed the channel.
+        throw new Error(errorMessage(answer.error) || "Download interrupted");
     }
 }
 
@@ -220,7 +224,9 @@ async function saveViaServiceWorker(url: string, filename: string): Promise<void
         throw new Error("Unable to save the file (worker unreachable)");
     }
     if (response.result === false) {
-        throw new Error(String(response.error || "Unable to save the file"));
+        // Message-first, never String(): an Error object in response.error
+        // would render as "Error: [object Object]" (the old raw-mode report).
+        throw new Error(errorMessage(response.error) || "Unable to save the file");
     }
     if (typeof response.result === "number") {
         await awaitDownloadViaServiceWorker(response.result, jobAbortController ? jobAbortController.signal : null);

@@ -806,13 +806,24 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         try {
             chrome.downloads.download({ url: request.url, filename: request.filename }, (downloadId: number) => {
                 if (downloadId === undefined) {
-                    sendResponse({ result: false, error: String(chrome.runtime.lastError || "Unable to start download") });
+                    // Message-first: the browser's lastError is an object
+                    // ({message}); String() renders it "[object Object]" which
+                    // the offscreen document then re-wraps into
+                    // "Error: [object Object]".
+                    const lastError: any = chrome.runtime.lastError;
+                    const reason = (lastError && typeof lastError.message === "string" && lastError.message !== "")
+                        ? lastError.message
+                        : (typeof lastError === "string" && lastError !== "" ? lastError : "Unable to start download");
+                    sendResponse({ result: false, error: reason });
                 } else {
                     sendResponse({ result: downloadId });
                 }
             });
-        } catch (error) {
-            sendResponse({ result: false, error: String(error) });
+        } catch (error: any) {
+            const reason = (error && typeof error.message === "string" && error.message !== "")
+                ? error.message
+                : (typeof error === "string" && error !== "" ? error : "Unable to start download");
+            sendResponse({ result: false, error: reason });
         }
         return true;
     }

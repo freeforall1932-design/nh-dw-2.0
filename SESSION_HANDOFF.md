@@ -1,5 +1,28 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-05 — **3.6.1 follow-up (review of 3.6.0 against a live
+report): raw-mode failures no longer render "Error: [object Object]".** The
+user's report was `Failed to download original image (Error:
+[object Object]).` for raw pages 2/3. Root cause: the OLD (pre-3.6.0) path
+stringified the browser's `lastError` object (`String({message})` →
+`Error("[object Object]")`) and the raw catch then stringified that Error
+(`"(" + error + ")"` → the exact report). 3.6.0 fixed those two spots in the
+Chrome tree, but the review found the same pattern still reachable through
+object-shaped errors at two other boundaries + the stale
+`NHDW_Firefox_v1.0.0` snapshot (3.3.1, still carries the old code and its
+built js; documented as lagging). Hardened message-first everywhere:
+`downloadControl.interruptedMessage` + `startBrowserDownload` catch,
+`background.ts` saveDownload reply, offscreen `saveViaServiceWorker` /
+`awaitDownloadViaServiceWorker` (uses `errorMessage`, never `String`), and the
+Firefox snapshot equivalents. New tests: unit (object lastError → readable,
+sync object throw → readable, `interruptedMessage` object shapes) + e2e
+offscreen phase where `saveDownload` answers an Error instance (asserts
+`Invalid filename (fixture)` survives and `[object Object]` never appears).
+**258 passing / 4 pending**, smoke 7 PASS, e2e all PASS (new phase included);
+Firefox snapshot 166 passing / 4 pending. Manifests bumped to **3.6.1** in
+Extension + Release; README / backlog updated. Session branch:
+`arena/01a06f6b-nh-dw-2-0` (from `main` c1fca03, the 3.6.0 merge, PR #35).
+
 **Updated:** 2026-09-04 — **3.6.0: named failures + Retry; raw mode waits for
 every page.** Triggered by a live report: two galleries failed in a batch, the
 notice said only "2 galleries failed" (no names), there was no retry button,
@@ -113,6 +136,57 @@ bullet fixed in PR #30)
 - These are distinct folders. Source contains TypeScript/tests; release is the browser-loadable package. After every build: `cp js/*.js ../NHDW_Release_v3.0.0/js/`, verify `diff -rq js ../NHDW_Release_v3.0.0/js`, and also sync `index.html`, `options.html`, `css/*`, `manifest.json` when they change (the release README intentionally differs).
 
 ## Current implemented work
+
+### Raw-mode error readability (3.6.1 — newest)
+
+**Report.** Live raw download (separate file/folder): pages 2 and 3 failed with
+`Error while downloading <title>/2: Failed to download original image (Error:
+[object Object])., tries remaining: 1` from `js/offscreen.js`. The [object
+Object] hid the real browser reason.
+
+**Exact old chain (matches the report byte for byte).** `chrome.downloads.download`
+callback → `downloadId === undefined` → old worker replied
+`String(chrome.runtime.lastError || …)`; `lastError` is an object `{message}`,
+so it became the string `[object Object]`; the old offscreen wrapped it in
+`new Error("[object Object]")`; the old raw catch did
+`throw "Failed to download original image (" + error + ")."` — stringifying
+the Error added `Error: `. The 3.6.0 session fixed exactly this in the Chrome
+tree (`lastErrorMessage`, `.message` extraction) but the defect was still
+possible wherever a non-string error object crossed a boundary, and the
+`NHDW_Firefox_v1.0.0` snapshot (3.3.1, byte-identical old code, loadable as a
+Chrome unpacked extension via its Chrome-style `manifest.json`) still contains
+the old chain — the most plausible source of this log.
+
+**Fix (message-first at every boundary, never `String(plainObject)`).**
+- `downloadControl.ts`: `interruptedMessage()` unwraps `reason.message`
+  (object-shaped download errors) and falls back to `Download interrupted`;
+  `startBrowserDownload` sync `catch` unwraps a thrown object's `.message`, or
+  `Unable to start download` — no `Error("[object Object]")`.
+- `background.ts` `saveDownload` reply: same unwrap before `sendResponse`
+  (the offscreen document only ever sees this string).
+- `offscreen.ts`: `saveViaServiceWorker` / `awaitDownloadViaServiceWorker`
+  now use `errorMessage()` (already imported) instead of `String()` so even an
+  Error INSTANCE crossing the channel shows its message, never
+  `Error: [object Object]` after the Downloader wraps it.
+- `NHDW_Firefox_v1.0.0` (snapshot, for parity while it lags): same unwrapping
+  in its `Downloader.#saveArtifact` callback, raw-mode catch (`.message`),
+  `background.ts` saveDownload reply and its offscreen `saveViaServiceWorker`
+  (`errorText` helper); its built `js/` rebuilt.
+
+**Tests.** `test/download-control.test.js`: `interruptedMessage({message:
+'NETWORK_FAILED'})`, shapeless object → `Download interrupted`, sync object
+throw → `.message` / fallback (never `[object Object]`).
+`test/downloader.test.js`: raw with `chrome.downloads.download` throwing a
+bare object — final callback error contains the object's message and no
+`[object Object]` / `Error:` wrap. `scripts/e2e-offscreen.js`: new phase with
+`saveDownload` answering `{result:false, error: new Error('Invalid filename
+(fixture)')}` — asserts the exact old report shape cannot come out and the
+message survives. **258 passing / 4 pending**, smoke 7 PASS, e2e all PASS
+(new phase included). Manifests 3.6.1 in Extension + Release (both files
+synced). Known-review note: the 3.6.0 "no more [object Object]" claim was only
+true for the creation-failure path it fixed (and only while worker and
+offscreen are the same lockstep build); these boundary hardenings remove the
+mixed-version footgun.
 
 ### Failed-gallery reporting + raw completion tracking (3.6.0 — newest)
 

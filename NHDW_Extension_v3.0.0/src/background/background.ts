@@ -1330,7 +1330,14 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         startBrowserDownload(String(request.url), String(request.filename || ""))
             .then((downloadId) => { sendResponse({ result: downloadId }); })
             .catch((error: any) => {
-                sendResponse({ result: false, error: error && error.message !== undefined ? String(error.message) : String(error) });
+                // Message-first, never String(plainObject): an object error
+                // must not survive the channel as "[object Object]" (the old
+                // raw-mode report) — the offscreen document only sees this
+                // string and wraps it once more.
+                const reason = error && error.message !== undefined
+                    ? String(error.message)
+                    : (typeof error === "string" ? error : "Unable to start download");
+                sendResponse({ result: false, error: reason });
             });
         return true;
     }

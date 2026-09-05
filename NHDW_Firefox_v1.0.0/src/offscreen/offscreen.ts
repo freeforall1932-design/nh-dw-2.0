@@ -115,6 +115,18 @@ function applyCdnServers(options: any) {
 // either a blob: object URL created here (zip/pdf mode) or the original
 // CDN URL (raw mode). Blob URLs are extension-origin, so the worker can
 // download them even though it cannot create object URLs itself.
+// Message-first stringification for error values crossing the worker
+// boundary. String(plainObject) would render "[object Object]" — the exact
+// reason the old raw-mode report showed ("Error: [object Object]" after the
+// Downloader wrapped it) — so objects contribute their .message and anything
+// else without one falls back to readable text instead of an object's
+// default toString.
+function errorText(value: any, fallback: string): string {
+    if (typeof value === "string" && value !== "") return value;
+    if (value !== undefined && value !== null && typeof value.message === "string" && value.message !== "") return value.message;
+    return fallback;
+}
+
 function saveViaServiceWorker(url: string, filename: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
         let settled = false;
@@ -134,11 +146,11 @@ function saveViaServiceWorker(url: string, filename: string): Promise<void> {
                 { from: "offscreen", action: "saveDownload", url: url, filename: filename },
                 (response: any) => {
                     if (chrome.runtime.lastError || !response) {
-                        finish(String(chrome.runtime.lastError || "Unable to save the file (worker unreachable)"));
+                        finish(errorText(chrome.runtime.lastError, "Unable to save the file (worker unreachable)"));
                         return;
                     }
                     if (response.result === false) {
-                        finish(String(response.error || "Unable to save the file"));
+                        finish(errorText(response.error, "Unable to save the file"));
                         return;
                     }
                     finish(null);
@@ -149,14 +161,14 @@ function saveViaServiceWorker(url: string, filename: string): Promise<void> {
                     if (!response) {
                         finish("Unable to save the file (worker unreachable)");
                     } else if (response.result === false) {
-                        finish(String(response.error || "Unable to save the file"));
+                        finish(errorText(response.error, "Unable to save the file"));
                     } else {
                         finish(null);
                     }
-                }).catch((error: any) => finish(String(error)));
+                }).catch((error: any) => finish(errorText(error, "Unable to save the file")));
             }
         } catch (error) {
-            finish(String(error));
+            finish(errorText(error, "Unable to save the file"));
         }
     });
 }

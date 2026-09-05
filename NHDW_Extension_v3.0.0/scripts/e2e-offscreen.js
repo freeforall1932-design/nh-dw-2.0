@@ -38,6 +38,11 @@ let nextRawDownloadId = 100;
 const rawDownloadIds = {};
 const awaitDownloadCalls = [];
 const cancelledDownloads = [];
+// Regression (raw-mode "[object Object]" report): when set, saveDownload
+// answers {result:false, error: <Error instance>} exactly like a worker that
+// did not stringify its rejection. The offscreen document must unwrap the
+// Error's message instead of String()-ing it into "Error: [object Object]".
+let saveDownloadErrorScript = null;
 
 // Options exactly as the service worker relays them (it reads
 // chrome.storage.sync on the document's behalf).
@@ -63,6 +68,10 @@ const chromeCore = {
                 // The service worker calls chrome.downloads.download here and
                 // answers with the downloadId as soon as the item exists.
                 downloads.push({ url: msg.url, filename: msg.filename });
+                if (saveDownloadErrorScript !== null) {
+                    if (cb) setTimeout(() => cb({ result: false, error: new Error(saveDownloadErrorScript) }), 0);
+                    return;
+                }
                 const id = rawDownloadScript === null ? 7 : nextRawDownloadId++;
                 if (rawDownloadScript !== null) {
                     rawDownloadIds[id] = { filename: msg.filename, attempt: downloads.filter((d) => d.filename === msg.filename).length - 1 };
@@ -1053,6 +1062,38 @@ function askOffscreen(message) {
     }
     console.log("PASS: raw batch summary names every failed gallery with its reason and the retry settings");
     rawDownloadScript = null;
+
+    // ---- Raw mode: an Error object crossing saveDownload must stay readable --
+    // The 3.5.0-era report was "Failed to download original image (Error:
+    // [object Object]).": the worker String()-ed the browser's object
+    // lastError and the Downloader wrapped the resulting Error, so the real
+    // reason vanished. The offscreen boundary must unwrap .message before it
+    // wraps the value in a new Error, even when a worker answers with an
+    // Error instance instead of a string.
+    downloads.length = 0;
+    sentMessages.length = 0;
+    saveDownloadErrorScript = "Invalid filename (fixture)";
+    const errorObjectStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/RawErrorObject",
+        name: "RawErrorObject",
+        options: Object.assign({}, relayedOptions, { useZip: "raw", rawMasterFolder: "NHDW" })
+    });
+    if (!errorObjectStart || errorObjectStart.result !== "started") {
+        fail("raw error-object downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(errorObjectStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "downloadError"), "raw error-object job must report a failure");
+    const errorObjectReport = sentMessages.find((m) => m.action === "downloadError");
+    if (!/Failed to download original image \(Invalid filename \(fixture\)\)\./.test(errorObjectReport.error)) {
+        fail("an Error object from the worker must surface its message, got: " + errorObjectReport.error);
+    }
+    if (/\[object Object\]/.test(errorObjectReport.error)) {
+        fail("the raw-mode error must never render [object Object], got: " + errorObjectReport.error);
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "jobFinished"), "raw error-object job must finish");
+    saveDownloadErrorScript = null;
+    console.log("PASS: raw page failure reason survives the offscreen/worker boundary as readable text");
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {
