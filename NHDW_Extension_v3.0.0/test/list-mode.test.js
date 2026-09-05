@@ -28,7 +28,7 @@ const {
     shouldWarnPdfMerge,
     supportsBatchMerge
 } = require('../build/test/utils/downloadFormats.js');
-const { buildListSettings, resolveMasterFolder } = require('../build/test/utils/listSettings.js');
+const { buildListSettings, readListSettings, resolveMasterFolder } = require('../build/test/utils/listSettings.js');
 
 describe('shared download format registry', () => {
     it('exposes exactly the four formats offered on a title page', () => {
@@ -196,6 +196,46 @@ describe('list format inheritance', () => {
         assert.strictEqual(buildListSettings({ useZip: 'cbz', listFormat: 'zip' }).format,
             resolveListFormat('zip', 'cbz'));
     });
+});
+
+// readListSettings goes through chrome.storage.sync.get(defaults, cb), so this
+// stub reproduces what Chrome actually does: merge the stored values OVER the
+// caller's defaults. That merge is the whole point - a "zip" default for
+// listFormat used to make an unset key indistinguishable from a chosen one,
+// which is what killed the documented single-title inheritance.
+function withSyncStore(store, fn) {
+    global.chrome = {
+        storage: {
+            sync: { get(defaults, cb) { cb(Object.assign({}, defaults, store)); } },
+            local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
+        }
+    };
+    return Promise.resolve()
+        .then(fn)
+        .finally(() => { delete global.chrome; });
+}
+
+describe('list format inheritance through the real reader', () => {
+    it('LIST_MODE_DEFAULTS must not define listFormat', () => {
+        assert.strictEqual(LIST_MODE_DEFAULTS.listFormat, undefined,
+            'a listFormat default here is spread into storage.get and hides "never set"');
+        assert.ok(!Object.prototype.hasOwnProperty.call(LIST_MODE_DEFAULTS, 'listFormat'));
+    });
+
+    it('readListSettings inherits the single-title format when list mode has none', () =>
+        withSyncStore({ useZip: 'cbz' }, async () => {
+            assert.strictEqual((await readListSettings()).format, 'cbz');
+        }));
+
+    it('readListSettings keeps an explicit list format over the single-title one', () =>
+        withSyncStore({ useZip: 'cbz', listFormat: 'zip' }, async () => {
+            assert.strictEqual((await readListSettings()).format, 'zip');
+        }));
+
+    it('readListSettings falls back to zip when neither key is stored', () =>
+        withSyncStore({}, async () => {
+            assert.strictEqual((await readListSettings()).format, 'zip');
+        }));
 });
 
 describe('list-mode settings resolution', () => {

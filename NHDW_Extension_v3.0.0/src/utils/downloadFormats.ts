@@ -162,8 +162,13 @@ export function resolveListTemplate(listTemplate: any, singleTemplate: string): 
 // ---- storage defaults --------------------------------------------------
 // List-mode settings live under their own keys so changing them can never
 // alter the single-title defaults (and vice versa).
+// NOTE: listFormat is deliberately ABSENT. These defaults are spread into
+// chrome.storage.get() calls (listSettings.SYNC_DEFAULTS, listControls), and a
+// "zip" default there makes an unset key indistinguishable from a chosen one,
+// so resolveListFormat() could never fall through to the single-title format -
+// the inheritance documented on buildListSettings was dead in every runtime
+// path. An absent key is what makes it live.
 export const LIST_MODE_DEFAULTS = {
-    listFormat: "zip",
     listOutputMode: "separate",
     listMasterFolder: true,
     listDownloadName: LIST_TEMPLATE_INHERIT

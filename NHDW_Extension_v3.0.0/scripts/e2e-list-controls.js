@@ -583,5 +583,25 @@ function wait(ms) {
         console.log("PASS: in-page controls stay out of the page when disabled");
     }
 
+    // --- N. list mode inherits the single-title format ----------------------
+    // listFormat is NOT stored here, so the in-page controls must fall through
+    // to the single-title format (cbz) exactly like the popup does. Before the
+    // listFormat key was dropped from LIST_MODE_DEFAULTS, the storage default
+    // made this zip while the panel advertised cbz.
+    {
+        const ctx = run({ settings: { useZip: "cbz" } });
+        await wait(0);
+        const controls = cardControls(ctx.dom);
+        if (controls.length === 0) {
+            fail("expected injected card controls for the inheritance check");
+        }
+        controls[0].querySelector(".nhdw-download").dispatch("click");
+        const job = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!job || job.formatOverride !== "cbz") {
+            fail("with no listFormat stored a card download must inherit cbz, got " + JSON.stringify(job));
+        }
+        console.log("PASS: in-page card downloads inherit the single-title format");
+    }
+
     console.log("PASS: in-page listing card controls behave correctly.");
 })();

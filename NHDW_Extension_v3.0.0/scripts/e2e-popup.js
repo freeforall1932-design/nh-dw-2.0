@@ -15,7 +15,27 @@
 //   3. a batch summary names the failed galleries and offers Retry failed (N);
 //   4. clicking Retry re-sends exactly those titles with the job's settings,
 //      and when the worker refuses to start, the failed notice comes BACK
-//      instead of leaving the panel with no way to retry again.
+//      instead of leaving the panel with no way to retry again;
+//   5. Dismiss asks the worker to forget the list and hides the notice;
+//   6. opening the Settings tab does NOT rewrite the stored name template
+//      (it used to canonicalise "{id} - {pretty}" into "{pretty} - {id}");
+//   7. an explicit token tick still saves - the fix must not make the section
+//      read-only;
+//   8. with no listFormat key set, the list-mode format shown is the inherited
+//      single-title one, i.e. the format that will actually be used.
+//
+// THREE STUB TRAPS, each of which silently tests the wrong thing (all cost a
+// debugging round; keep them if you port this harness to the Firefox folder):
+//   * the panel registers TWO onMessage listeners (popup.ts and preview.ts), so
+//     delivery must fan out - keeping only the last one tests the wrong half;
+//   * storage.local must answer apiKeyGate "skipped", otherwise the first-run
+//     key gate renders into #action and overwrites every phase;
+//   * assigning .id on a createElement node must register it with
+//     getElementById (last write wins), because popupSettings builds its
+//     checkboxes that way and then looks them up by id - without it the panel
+//     reads back fresh unchecked boxes instead of the ones it just built.
+// chrome.storage.sync is stateful here and logs every write to syncWrites, so
+// "must not write" is assertable.
 //
 // Usage:  node scripts/e2e-popup.js [path/to/js/preview.js]
 // Exit code 0 = all phases passed.

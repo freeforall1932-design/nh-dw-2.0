@@ -419,6 +419,8 @@ pending**, smoke 5 PASS, e2e exit 0, including a backported worker phase 11
 that fails on the pre-backport bundle with `got "[object Object]"`. Its
 manifest still says 3.3.1 and it still lacks all 3.4.0+ work — item 27.
 
+### Fourth pass — the settings pane and downloadVerify (3.6.4)
+
 **Review pass 4 — the two modules with zero test references
 (`src/preview/popupSettings.ts`, 551 lines, and `src/utils/downloadVerify.ts`).**
 `grep -rl popupSettings test/ scripts/` returned nothing before this pass;
@@ -438,21 +440,36 @@ it (new phases 6-8):
    rewrite downloadName, it wrote [{"downloadName":"{pretty} - {id}"}]`;
    phase 7 pins that an explicit tick still saves (the fix must not make the
    section read-only).
-2. **Both settings panels advertised a list format that was not the one in
-   use.** `listFormat` has no stored value until the user sets one, and list
-   mode then inherits the single-title format — that chain lived inline in
-   three places (`listSettings.buildListSettings`, `listControls.ts:107`,
-   `popupSettings.ts`) and both panels defeated it by passing
-   `listFormat: "zip"` as a `chrome.storage.get` **default**, which erases the
-   difference between "never set" and "deliberately zip". With `useZip: "cbz"`
-   the panels showed ZIP while `listControls`/`buildListSettings` used CBZ for
-   the same storage. Fixed by extracting `resolveListFormat(storedListFormat,
-   storedUseZip)` into `downloadFormats.ts` (the same shape as the existing
-   `resolveListTemplate`), using it in all four places, and dropping the
-   `listFormat` default from both panels' `get()` calls. Covered by five new
-   fixtures in `test/list-mode.test.js` ("list format inheritance") and by
-   phase 8, which fails on a bundle with only that fix reverted with
-   `must show the inherited format cbz, got zip`.
+2. **The documented list-format inheritance never worked anywhere.**
+   `listFormat` has no stored value until the user sets one, and list mode is
+   documented to inherit the single-title format until then
+   (`buildListSettings`: "The list format defaults to the single-title format
+   the first time"). That chain was written inline in three places, and every
+   runtime reader defeated it: `LIST_MODE_DEFAULTS` carried `listFormat: "zip"`
+   and is spread into the `chrome.storage.get` defaults of both
+   `listSettings.SYNC_DEFAULTS` and `listControls.readSettings`, so an unset key
+   arrived as `"zip"` and could never fall through to `useZip`. Both panels did
+   the same with their own `listFormat: "zip"` default. Net effect before the
+   fix: everything resolved ZIP, consistently, and the inheritance comment was
+   dead code.
+   Fixed in two steps. First `resolveListFormat(storedListFormat, storedUseZip)`
+   was extracted into `downloadFormats.ts` (the same shape as the existing
+   `resolveListTemplate`), used at all four call sites, and the `listFormat`
+   default dropped from both panels. **That alone was not enough and briefly
+   made things worse** — the panels then inherited (showing CBZ) while both
+   readers still resolved ZIP, i.e. a display/runtime mismatch where before
+   there had been a consistent wrong answer. The pre-merge review caught it;
+   the completing fix is removing `listFormat` from `LIST_MODE_DEFAULTS`
+   itself, so no reader can supply the default.
+   Covered at both layers now: `test/list-mode.test.js` has "list format
+   inheritance" (5 fixtures on the helper) and "list format inheritance through
+   the real reader" (4 fixtures driving `readListSettings` through a
+   `chrome.storage` stub that merges stored values over the caller's defaults,
+   which is what Chrome does); `e2e-popup.js` phase 8 asserts the panel shows
+   the inherited format, and `e2e-list-controls.js` asserts a card download
+   actually sends it. Reintroducing `listFormat: "zip"` into
+   `LIST_MODE_DEFAULTS` fails two fixtures and makes the list-controls phase
+   fail with `must inherit cbz, got …"formatOverride":"zip"`.
 3. `src/options/options.ts` ended `initNameTemplate` with
    `saveTemplate(storedTemplate)` — writing the stored value straight back on
    every page open, firing `storage.onChanged` for a value nobody changed.
@@ -487,6 +504,17 @@ harness, so the backport is verified only by a clean build plus its existing
 suite (166 passing / 4 pending, smoke 5 PASS, e2e exit 0) and by the code
 being identical to the Chrome fix that phase 6 pins — recorded here as an
 open gap rather than claimed as tested.
+
+**Pre-merge self-review (same session) found one of my own fixes incomplete.**
+The first pass-4 change made the two panels inherit the list format while
+`readListSettings` and `listControls.readSettings` still resolved ZIP, because
+`LIST_MODE_DEFAULTS.listFormat = "zip"` was spread into their storage defaults.
+Before the change everything agreed on ZIP; after it the panels would have
+shown CBZ for a job that downloads ZIP. Completed by removing the key from
+`LIST_MODE_DEFAULTS` (defect 2 above) and pinned at both layers. The lesson for
+the next reviewer: when a fix changes what a *display* resolves, grep for every
+other consumer of the same storage defaults before calling it done —
+`grep -rn LIST_MODE_DEFAULTS src/` is the whole check.
 
 **`downloadVerify.ts` pinned.** It was the other zero-reference module. Its
 pure logic is now covered by `test/download-verify.test.js` (10 tests): the
@@ -1353,6 +1381,49 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
    longer participates when idle, but the two fixes have never been observed
    together on a real profile.
 
+### From the 2026-09-05 review passes (3.6.4, passes 1-4)
+
+14. **A non-canonical separator is still lost on the first explicit tick.**
+    The pass-4 fix stops the Settings tab from rewriting the template on
+    *open*, but the checkbox UI itself can only build `" - "` separators.
+    `isTokenOnlyTemplate("{pretty}_{id}")` is `true`, so the checkboxes are
+    offered, and the first tick writes `buildTemplate(checked)` =
+    `"{pretty} - {id}"` — the user's `_` is gone. Same for any custom
+    ordering, which is now at least explicit. Suggested fix if anyone cares:
+    add an `isCanonicalTemplate()` check (tokens in `TEMPLATE_TOKENS` order,
+    joined by exactly `" - "`) and route anything else to the manual input the
+    way a truly custom template already is. Not done: it changes which users
+    see checkboxes, which is a UX decision.
+15. **Panel settings are write-only; nothing verifies the reader re-reads.**
+    `verifyDownloadedFiles`, `batchNameDate`, `uiMode`, `inPageControls` and
+    the list-mode keys are written by `popupSettings.ts` and read elsewhere
+    (`background.ts` reads `uiMode` on `storage.onChanged`; `listControls.ts`
+    reads `inPageControls` and the list keys at inject time). The panel's own
+    hints tell the user to reload the page / reopen the extension, and that is
+    never asserted anywhere. A listener-based refresh would remove the
+    instruction but has not been built or tested.
+16. **The popup harness drives a hand-rolled DOM, not a real one.**
+    `scripts/e2e-popup.js` proves the message -> UI contract and the storage
+    contract; it cannot prove layout, focus, `hidden` CSS, or that Chrome
+    really delivers to both `onMessage` listeners in this order. Anything
+    visual is still on the real-browser list.
+17. **`downloadVerify.ts` is unit-pinned but never observed against a real
+    `chrome.downloads`.** In particular the assumption that
+    `downloads.search({ filenameRegex })` matches a Windows path with
+    backslashes, and that `item.exists` is `false` (not missing) for a file the
+    user deleted. If `exists` were absent rather than false, a recorded gallery
+    would be re-downloaded forever - safe, but silently slower.
+18. **`resolveListFormat` centralised the chain but not the *write*.** Both
+    panels display the inherited format and both readers now resolve the same
+    value, but neither writes it back unless the user changes it. That is
+    deliberate (a stored `listFormat` would freeze list mode against later
+    single-title changes), but it means the panel can show CBZ while the stored
+    key is still empty — do not "fix" that by persisting on render, which is
+    exactly defect 1's shape. **Behaviour change to confirm with the user:**
+    someone who set `useZip` to CBZ/PDF/raw and never touched list mode now
+    gets that format from listing pages too, where they previously got ZIP.
+    That is the documented intent, but it is a visible change.
+
 ### Structural
 
 9. **`NHDW_Firefox_v1.0.0` is not cleared.** It still ships the 3.3.1 guard in
@@ -1374,8 +1445,58 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 ## Next backlog (worklist — statuses as of 2026-09-05)
 
 Newest additions first (from the 2026-09-05 codebase review; full specs in
-IMPROVEMENT_BACKLOG.md session log 2026-09-05). **28–34 are all done**
-(3.6.2 / 3.6.3 / 3.6.4). Nothing from that review is open any more.
+IMPROVEMENT_BACKLOG.md session log 2026-09-05). **28–36 are all done**
+(3.6.2 / 3.6.3 / 3.6.4). **37–41 are new and open** — they came out of the
+four review passes on 2026-09-05 and are the honest remainder of this
+session.
+
+- [x] **35. Settings-pane audit (review pass 4, three real defects).** DONE
+  2026-09-05. Opening the Settings tab rewrote the file-name template
+  (`"{id} - {pretty}"` -> `"{pretty} - {id}"`); the documented list-format
+  inheritance was dead in every path (a `listFormat: "zip"` storage default,
+  supplied by `LIST_MODE_DEFAULTS` for both readers and by each panel for
+  itself, hid "never set"); `options.ts` wrote the template back on every page
+  open. Fixed with a `persist` flag, a shared `resolveListFormat()` in
+  `downloadFormats.ts`, removal of the key from `LIST_MODE_DEFAULTS`, and a
+  preview/save split. Pinned by `scripts/e2e-popup.js` phases 6-8, the
+  `e2e-list-controls.js` inheritance phase and 19 fixtures in
+  `test/list-mode.test.js`. The panels-only half of the format fix was caught
+  incomplete by the pre-merge review — see the pass-4 section.
+- [x] **36. `downloadVerify.ts` pinned (review pass 4).** DONE 2026-09-05 —
+  `test/download-verify.test.js`, 10 tests (tail-anchored regex, lookalike
+  parents refused, escapes metacharacters, "cannot verify -> never block",
+  history partitioning, `_part2` candidates). It was the last module in `src/`
+  with zero test references.
+- [ ] **37. Firefox panel harness (new, blocks clearing `NHDW_Firefox_v1.0.0`).**
+  That tree has no offline coverage of its popup/Settings pane at all, so the
+  pass-4 `persist` fix and the options preview/save split are backported but
+  only build- and suite-verified there. Port `scripts/e2e-popup.js` (its DOM
+  stub is reusable verbatim) and wire it into its `npm run test:e2e`.
+- [ ] **38. Options-page harness (new).** `js/options.js` has no VM harness, so
+  `options.ts`'s DOM wiring — the generic `Select`/`CheckBox`/`InputField`
+  init, the `listFormat` inheritance line added in pass 4, the API-key panel —
+  is only typechecked. Needs a stub that models `<select>.options` and
+  `selectedIndex` (which `Select.init`/`update` read) plus the real
+  `options.html` option lists.
+- [ ] **39. Decide the empty-token separator (needs a human call).** With
+  `{language}`/`{group}`/`{artist}` in the template and no matching tag, the
+  separator survives: `getDownloadName("{id} - {pretty} - {language}", …, [])`
+  -> `"123456 - 123456 - "` -> `cleanName` -> `"123456_-"`. The empty-token
+  behaviour is pinned on purpose by `test/parsing.test.js` (`"Pretty||"`), so
+  this is a contract, not a bug — but the resulting file name is ugly. Options:
+  collapse dangling separators in `cleanName` (touches every name), or drop
+  empty tokens with their separator in `getDownloadName` (breaks that test on
+  purpose). Deliberately not changed in this session.
+- [ ] **40. Popup harness does not bootstrap a listing page (new, known
+  limit).** So the panel's list-job / PDF-merge / similar-galleries paths are
+  still covered only by the equivalent content-script phases
+  (`e2e-list-controls.js`). Extending it means stubbing `getGalleries` +
+  `activeTabGallery`, which is a real piece of work.
+- [ ] **41. Non-canonical separators are still canonicalised on tick (new,
+  UX decision).** See open question 14: `isTokenOnlyTemplate("{pretty}_{id}")`
+  is `true`, so the checkboxes are offered and the first tick rewrites it to
+  `"{pretty} - {id}"`. Suggested: an `isCanonicalTemplate()` gate that routes
+  odd separators to the manual input.
 
 - [x] **28. Batch metadata: non-gallery JSON must fail ONE gallery, not the
   whole batch (review finding M1, high).** DONE in 3.6.2 (`requireGallery`
@@ -1530,6 +1651,16 @@ IMPROVEMENT_BACKLOG.md session log 2026-09-05). **28–34 are all done**
 - Do not put `chrome.storage`, `chrome.downloads`, `chrome.scripting`, or `chrome.permissions` in the offscreen document.
 - Do not use `/api/v2/auth/*` or `/api/v2/user/keys`.
 - Do not remove tab-first fetching or claim Cloudflare bypass.
+- Do not add a `test/*.test.js` file without appending it to the mocha list in
+  `package.json`'s `test` script. The list is explicit; a new file silently
+  runs nothing and the suite still reports success.
+- Do not let a settings pane write on render. `popupSettings.ts` and
+  `options.ts` must write only from an explicit `change` handler (review pass
+  4, defect 1); first paint takes `renderNamePreview(false)` /
+  `renderTemplatePreview(...)`.
+- Do not give `listFormat` a `chrome.storage.get` default again. An unset key
+  means "follow the single-title format"; a `"zip"` default erases that and
+  makes both panels lie about the format in use. Use `resolveListFormat()`.
 - Do not run `npm audit fix --force`.
 - Do not expand web-accessible resources.
 - Do not add `<all_urls>` (or any non-nhentai host) to host/optional-host permissions; all image hosts must validate as HTTPS `*.nhentai.net` origins.
