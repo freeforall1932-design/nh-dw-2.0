@@ -29,6 +29,26 @@ export function classifyError(error: any): { kind: string; label: string } {
     return { kind: "unknown", label: "Error" };
 }
 
+// Readable text for a thrown value: Error objects contribute their message
+// (String(new Error("x")) gives "Error: x" and a structured clone of one is an
+// empty object), strings pass through, anything else is stringified.
+export function errorMessage(error: any): string {
+    if (error === undefined || error === null) return "";
+    if (typeof error === "string") return error;
+    if (error.message !== undefined) return String(error.message);
+    return String(error);
+}
+
+// Escape text before embedding it in innerHTML so a gallery title containing
+// quotes or HTML cannot break the markup (or inject content).
+export function escapeHtml(text: string): string {
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
+
 export module utils
 {
     // Clean a word, if replaceSpaces is true, all spaces are replaced by an underscore.

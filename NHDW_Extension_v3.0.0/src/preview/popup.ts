@@ -1,6 +1,6 @@
 import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
-import { utils, classifyError } from "../utils/utils";
+import { utils, escapeHtml } from "../utils/utils";
 import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl } from "../sources"
@@ -16,7 +16,8 @@ import {
     shouldWarnPdfMerge
 } from "../utils/downloadFormats"
 import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
-import { readHistory, partitionKnown, applyBatchDate, DownloadHistory } from "../utils/downloadHistory"
+import { readHistory, partitionKnown, applyBatchDate, DownloadHistory, FailedGallery } from "../utils/downloadHistory"
+import { PendingFailure, groupRetryMessages } from "../utils/failedGalleries"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
@@ -32,15 +33,6 @@ function executeActiveTabScript(file: string): void {
     });
 }
 
-// Escape text before embedding it in the popup's innerHTML so a gallery title
-// containing quotes or HTML cannot break the markup (or inject content).
-function escapeHtml(text: string): string {
-    return String(text)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-}
 
 // Extract metadata from the already-open gallery page. Prefer the rendered
 // DOM (window._gallery / embedded JSON) so we never need /api/gallery, which
@@ -127,6 +119,122 @@ function wireActiveJobControls() {
     }
 }
 
+// ---- retry of failed galleries --------------------------------------------
+// The pipelines report WHICH galleries failed (id + name + reason) together
+// with the job settings they ran under (retryJob), and the worker remembers
+// them for the session. The popup re-sends exactly those galleries: same
+// format / template / master folder, one file per title, failed ids forced
+// past the history guard (see utils/failedGalleries.ts).
+
+function pendingFromMessage(failed: FailedGallery[], retryJob: any): PendingFailure[] {
+    return failed.map((entry) => ({
+        id: String(entry.id),
+        name: String(entry.name || entry.id),
+        error: String(entry.error || ""),
+        retryJob: retryJob && typeof retryJob === "object" ? retryJob : null,
+        at: Date.now()
+    }));
+}
+
+// Send the retry command(s) for these failures. Several commands (different
+// job settings) are queued by the worker one after the other.
+export async function retryFailedGalleries(entries: PendingFailure[]): Promise<void> {
+    const tabId = await getActiveTabId();
+    const messages = groupRetryMessages(entries, tabId);
+    if (messages.length === 0) {
+        return;
+    }
+    const names = entries.map((entry) => entry.name);
+    document.getElementById('action')!.innerHTML = "Retrying " + entries.length + " gallery" + (entries.length === 1 ? "" : "ies") + ": " + escapeHtml(names.join(", "));
+    let index = 0;
+    const sendNext = () => {
+        if (index >= messages.length) {
+            return;
+        }
+        const notice = document.getElementById('failedNotice');
+        if (notice) {
+            // The retry is in progress; the list comes back (minus whatever
+            // succeeded) with the summary.
+            notice.hidden = true;
+        }
+        const payload = messages[index++];
+        chrome.runtime.sendMessage(payload, (response: any) => {
+            try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+            if (response && response.result === "queued") {
+                document.getElementById('action')!.innerHTML = "Retry queued at position " + response.position + ".";
+            } else if (!response || response.result !== "error") {
+                Popup.getInstance().updateProgress(0, names.join(", "), false);
+            }
+            sendNext();
+        });
+    };
+    sendNext();
+}
+
+function wireRetryButton(entries: PendingFailure[]) {
+    const button = document.getElementById('buttonRetryFailed') as HTMLInputElement | null;
+    if (!button) return;
+    button.addEventListener('click', function() {
+        button.disabled = true;
+        retryFailedGalleries(entries);
+    });
+}
+
+function wireBackButton() {
+    const buttonBack = document.getElementById('buttonBack');
+    if (buttonBack) {
+        buttonBack.addEventListener('click', function() {
+            let popup = Popup.getInstance();
+            chrome.runtime.sendMessage({ action: "goBack" }, function() {
+                popup.updatePreviewAsync(popup.url);
+                // Leaving the summary: keep the failed titles visible above
+                // the preview until the user retries or dismisses them.
+                refreshFailedNotice();
+            });
+        });
+    }
+}
+
+// Failed galleries remembered by the worker for this session. Shown above the
+// normal preview until the user retries or dismisses them, so closing the
+// popup during a batch no longer loses track of what did not download.
+export function refreshFailedNotice(): void {
+    const notice = document.getElementById('failedNotice');
+    if (!notice) {
+        return;
+    }
+    try {
+        chrome.runtime.sendMessage({ action: "getFailedGalleries" }, (response: any) => {
+            try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+            const failed: PendingFailure[] = response && response.result === "success" && Array.isArray(response.failed) ? response.failed : [];
+            if (failed.length === 0) {
+                notice.hidden = true;
+                notice.innerHTML = "";
+                return;
+            }
+            notice.innerHTML = message.failedNotice(failed);
+            notice.hidden = false;
+            const retryButton = document.getElementById('buttonRetryPending') as HTMLInputElement | null;
+            if (retryButton) {
+                retryButton.addEventListener('click', function() {
+                    retryButton.disabled = true;
+                    notice.hidden = true;
+                    retryFailedGalleries(failed);
+                });
+            }
+            const dismissButton = document.getElementById('buttonDismissFailed');
+            if (dismissButton) {
+                dismissButton.addEventListener('click', function() {
+                    notice.hidden = true;
+                    chrome.runtime.sendMessage({ action: "forgetFailedGalleries" }, () => {
+                        try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                    });
+                });
+            }
+        });
+    } catch (_) { /* worker unreachable: no notice */ }
+}
+
 // Add message listener for progress updates and error messages
 // NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
 // must return false. Returning true kept the message channel open and made
@@ -138,9 +246,22 @@ chrome.runtime.onMessage.addListener(function(request) {
         Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry, request.queued, request.paused);
     } else if (request.action === "downloadError") {
         // Label the failure kind (metadata / Cloudflare / image / archive /
-        // cancellation) so the user understands what went wrong at a glance.
-        const { label } = classifyError(request.error);
-        document.getElementById('action')!.innerHTML = 'An error occured: <b>' + label + '.</b> ' + escapeHtml(String(request.error));
+        // cancellation), NAME the gallery when the pipeline told us which one
+        // failed, and offer a retry when it can be re-added.
+        const failed: FailedGallery[] = request.galleryId !== undefined && request.galleryId !== null && request.galleryId !== ""
+            ? [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: String(request.error) }]
+            : [];
+        const retryable = failed.length > 0;
+        document.getElementById('action')!.innerHTML = message.downloadError(String(request.error), request.galleryName, retryable);
+        if (retryable) {
+            setTimeout(() => {
+                wireRetryButton(pendingFromMessage(failed, request.retryJob));
+                wireBackButton();
+            }, 0);
+            // The worker is remembering this failure at the same time; refresh
+            // the session list once it has had a moment to land.
+            setTimeout(refreshFailedNotice, 500);
+        }
     } else if (request.action === "batchProgress") {
         // Per-gallery progress while a batch download is running
         document.getElementById('action')!.innerHTML = message.batchProgress(
@@ -148,20 +269,22 @@ chrome.runtime.onMessage.addListener(function(request) {
         setTimeout(wireActiveJobControls, 0);
     } else if (request.action === "batchSummary") {
         // End-of-batch success/failure summary (skipped = already-downloaded
-        // galleries the persistent history guard dropped).
+        // galleries the persistent history guard dropped). Failed galleries
+        // are listed by name with a "Retry failed" button.
+        const failed: FailedGallery[] = Array.isArray(request.failedGalleries) ? request.failedGalleries : [];
+        const retryable = failed.length > 0;
         document.getElementById('action')!.innerHTML = message.batchSummary(
-            request.succeeded, request.failed, request.total, request.failedKinds, request.skipped);
+            request.succeeded, request.failed, request.total, request.failedKinds, request.skipped, failed, retryable);
         setTimeout(() => {
-            const buttonBack = document.getElementById('buttonBack');
-            if (buttonBack) {
-                buttonBack.addEventListener('click', function() {
-                    let popup = Popup.getInstance();
-                    chrome.runtime.sendMessage({ action: "goBack" }, function() {
-                        popup.updatePreviewAsync(popup.url);
-                    });
-                });
+            wireBackButton();
+            if (retryable) {
+                wireRetryButton(pendingFromMessage(failed, request.retryJob));
             }
         }, 0);
+        // A retry that succeeded drops titles from the session list; a new
+        // failure adds to it. Either way the notice above the preview must
+        // follow (after the worker's bookkeeping had a moment to land).
+        setTimeout(refreshFailedNotice, 500);
     }
     return false;
 });

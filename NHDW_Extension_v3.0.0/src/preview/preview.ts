@@ -1,4 +1,4 @@
-import Popup from "./popup"
+import Popup, { refreshFailedNotice } from "./popup"
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { message } from "./message";
@@ -127,6 +127,8 @@ function bootstrapForActiveTab() {
         // Independent of the download state: surface the optional host grant
         // when nhentai's CDN config reports hosts we have no permission for.
         refreshCdnNotice();
+        // Galleries that failed earlier in this session (named, retryable).
+        refreshFailedNotice();
         chrome.storage.local.get({
             lastUrl: ""
         }, function(elemsLocal) {

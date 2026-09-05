@@ -8,7 +8,7 @@
   "scripts": {
     "build": "webpack",
     "build:test": "tsc -p tsconfig.test.json",
-    "test": "npm run build:test && mocha test/test.js test/parsing.test.js test/downloader.test.js test/manifest.test.js test/resolver.test.js test/api-key.test.js test/cdn-config.test.js test/pdf-builder.test.js test/apiauth.test.js test/archive.test.js test/name-template.test.js test/artifact-name.test.js test/download-naming.test.js test/list-mode.test.js test/download-history.test.js --timeout 15000",
+    "test": "npm run build:test && mocha test/test.js test/parsing.test.js test/downloader.test.js test/manifest.test.js test/resolver.test.js test/api-key.test.js test/cdn-config.test.js test/pdf-builder.test.js test/apiauth.test.js test/archive.test.js test/name-template.test.js test/artifact-name.test.js test/download-naming.test.js test/list-mode.test.js test/download-history.test.js test/download-control.test.js --timeout 15000",
     "test:smoke": "node scripts/smoke-mv3.js && node scripts/smoke-mv3.js js/offscreen.js --offscreen",
     "test:e2e": "node scripts/e2e-worker.js && node scripts/e2e-offscreen.js && node scripts/e2e-relay.js && node scripts/e2e-content.js && node scripts/e2e-list-controls.js",
     "test:live": "RUN_LIVE_TESTS=1 mocha test/test.js --timeout 30000",

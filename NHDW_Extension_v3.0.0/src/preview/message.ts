@@ -1,6 +1,8 @@
 import { API_KEY_SETTINGS_URL } from "../utils/apiAuth";
 import { DOWNLOAD_FORMATS, formatExtension, formatLabel, effectiveOutputMode } from "../utils/downloadFormats";
 import { ListModeSettings } from "../utils/listSettings";
+import { FailedGallery } from "../utils/downloadHistory";
+import { classifyError, escapeHtml } from "../utils/utils";
 
 export module message
 {
@@ -199,8 +201,11 @@ export module message
         return "Upper limit must be strictly bigger than lower limit";
     }
 
-    // Batch download summary shown after the batch finishes
-    export function batchSummary(succeeded: number, failed: number, total: number, failedKinds?: Record<string, number>, skipped: number = 0): string {
+    // Batch download summary shown after the batch finishes. Failed galleries
+    // are listed BY NAME (with the reason) and, when the caller can re-add
+    // them, a "Retry failed" button is offered — a bare failure count left
+    // the user with no way to know which titles were missing.
+    export function batchSummary(succeeded: number, failed: number, total: number, failedKinds?: Record<string, number>, skipped: number = 0, failedGalleries?: FailedGallery[], canRetry: boolean = false): string {
         let html = '<h3>Download complete</h3>';
         html += '<p>' + succeeded + ' of ' + total + ' galleries downloaded successfully.</p>';
         if (skipped > 0) {
@@ -217,8 +222,56 @@ export module message
                 }
             }
             html += '.</p>';
+            html += failedGalleryList(failedGalleries);
+            if (canRetry && failedGalleries && failedGalleries.length > 0) {
+                html += '<input type="button" id="buttonRetryFailed" value="Retry failed (' + failedGalleries.length + ')"/> ';
+            }
         }
         html += '<br/><input type="button" id="buttonBack" value="Go Back"/>';
+        return html;
+    }
+
+    // Named list of the galleries that did not complete. Not recorded in the
+    // download history, so they show as not downloaded on the next visit.
+    export function failedGalleryList(failedGalleries?: FailedGallery[]): string {
+        if (!failedGalleries || failedGalleries.length === 0) {
+            return '';
+        }
+        let html = '<ul class="nhdwFailedList">';
+        for (const entry of failedGalleries) {
+            const reason = classifyError(entry.error).label;
+            html += '<li><b>' + escapeHtml(entry.name) + '</b> <small>(#' + escapeHtml(entry.id) + ')</small>' +
+                '<br/><small class="nhdwFailedReason">' + escapeHtml(reason) + ': ' + escapeHtml(entry.error) + '</small></li>';
+        }
+        html += '</ul>';
+        html += '<small>Failed galleries are not marked as downloaded; nothing partial is recorded.</small><br/>';
+        return html;
+    }
+
+    // Notice shown above the preview while the worker remembers failed
+    // galleries from this session (the popup may have been closed when the
+    // job ended). Retry re-adds them; Dismiss forgets them.
+    export function failedNotice(failed: FailedGallery[]): string {
+        const count = failed.length;
+        return '<b>' + count + ' gallery' + (count === 1 ? '' : 'ies') + ' failed to download</b>' +
+            failedGalleryList(failed) +
+            '<input type="button" id="buttonRetryPending" value="Retry failed (' + count + ')"/> ' +
+            '<input type="button" id="buttonDismissFailed" value="Dismiss"/>';
+    }
+
+    // Single-gallery failure. Names the gallery when known and offers a
+    // retry of the same job when the caller can re-send it.
+    export function downloadError(error: string, galleryName?: string, canRetry: boolean = false): string {
+        const { label } = classifyError(error);
+        let html = 'An error occured: <b>' + escapeHtml(label) + '.</b> ';
+        if (galleryName) {
+            html += '<br/><b>' + escapeHtml(galleryName) + '</b> was not downloaded: ';
+        }
+        html += escapeHtml(String(error));
+        if (canRetry) {
+            html += '<br/><br/><input type="button" id="buttonRetryFailed" value="Retry"/> ';
+            html += '<input type="button" id="buttonBack" value="Go Back"/>';
+        }
         return html;
     }
 

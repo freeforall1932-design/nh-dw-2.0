@@ -36,6 +36,7 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Two-column popup: current gallery (format picker + path + Download) on the left, similar-galleries selection panel (checkbox list + All/None + Download selected) on the right; the selected related galleries each download as their own titled archive (`separate: true` per-job override).
 - [x] Persistent download history (3.5.0): re-running a listing (search / tag / artist / homepage) skips galleries that already downloaded successfully instead of re-downloading them and uniquifying into `Title (1).zip`. `chrome.storage.local` keyed by gallery ID; recorded on successful completion only (separate mode per gallery; a merged job records all of its ids only when the whole job succeeded; partial galleries never recorded). UI pre-check in the popup (✓ badge + filename, per-row *Download anyway*, live "N selected · M already downloaded · K will download" counts) and the in-page bar (per-card *Downloaded* labels with *Download again?* confirmation, bulk *Include already downloaded*); an authoritative offscreen/worker guard relays the recorded IDs with each job so nothing slips through and skipped ids cost zero API calls. *Clear history* in popup Settings and the options page. No export/import, no new permissions; offscreen still uses `chrome.runtime` only.
 - [x] Verify-before-skip + merged naming (3.5.0 follow-up, user decisions): separate-mode skipping is *verify-then-redownload* behind a Settings toggle (default ON) — a recorded gallery is skipped only when `chrome.downloads.search` confirms the file still exists, deleted files re-download automatically, OFF = record-only skip. Merged mode never skips, but an existing merged file warns first and proceeds on confirmation (`{result:"existing"}` ↔ `existingConfirmed`, both pipelines, UI confirms and re-sends). Merged/batch names get `_DDMMYYYY` (`batchNameDate`, default ON, no double stamp), history records the dated name, and the same title+date again becomes `_part2`, `_part3`… with verify deciding reuse (deleted file's name reused) vs growth; multi-page merges keep the part number on the base before the ` (lastPage)` marker. `chrome.downloads.search` is worker-only (`src/utils/downloadVerify.ts`, never imported by offscreen); unit + e2e coverage (phases 5f–5h).
+- [x] Named failures + Retry, raw completion tracking (3.6.0): every failed gallery is reported by id + name + reason (single-title `downloadError`, `batchSummary.failedGalleries`, and a session-persistent `#failedNotice` backed by `chrome.storage.session` via the worker); **Retry failed** re-sends exactly those titles with the job's own settings as separate files past the history guard (`src/utils/failedGalleries.ts`); *Dismiss* forgets, a later success drops the id. Raw mode no longer treats "download started" as "page saved": `src/background/downloadControl.ts` follows each `chrome.downloads` item to `complete`/`interrupted` (`onChanged` + `search` poll, 4-minute cap, offscreen relay in 45 s slices), so an interrupted page is retried and a gallery with a missing page fails by name instead of being recorded; raw has its own in-flight cap (`rawMaxConcurrent`, default 3). Contexts without `onChanged` keep the old semantics. Covered by `test/download-control.test.js`, new raw cases in `test/downloader.test.js`, and new e2e phases in all three harnesses.
 - ✅ **Work-list status — 3.5.0 done (2026-09-04).** Both items above are implemented, reviewed and shipped together from `arena/01a06b6f-nh-dw-2-0` (commits `57c5a87`, `8fde409`, `7d429c5`) and merged into `main` by a merge-commit PR. Verification at merge time: webpack build + `tsc` test config clean, `npm test` 233 passing / 4 pending, smoke 7 PASS, `npm run test:e2e` 73 PASS / 0 FAIL, and the push-triggered `extension-tests` GitHub Action green on the same offline suites (build → unit → smoke → e2e). No new permissions, offscreen document still uses `chrome.runtime` only; known limits (local-only history starting empty; `chrome.downloads.search` sees profile-downloaded files only) are documented in README and SESSION_HANDOFF.
 
 ### 1. Add a real integration test strategy
@@ -359,6 +360,18 @@ UI**: each page retry emits a progress update with `retry "n/5"`, and the popup 
 `scripts/e2e-offscreen.js` and `scripts/e2e-worker.js` (exactly-once error, retry
 messages, summary counts 1/1/2 with correct failedKinds) and 6 new `classifyError`
 unit tests in `test/parsing.test.js`.
+
+**3.6.0 addendum — failures are named and retryable.** The 3.5.0-era summary
+still said only "2 galleries failed" and offered no way back. Both pipelines
+now attach `failedGalleries: [{id, name, error}]` and a `retryJob` to
+`batchSummary`, and `galleryId/galleryName/retryJob` to single-title
+`downloadError`; the popup lists the names with per-title reasons and a
+*Retry failed (N)* button, and a persistent notice above the preview keeps the
+list for the browser session (worker-owned `chrome.storage.session`, see
+`src/utils/failedGalleries.ts`). Raw mode's "complete with a page missing"
+false positive (the download callback fires at item creation, not at file
+write) is closed by `src/background/downloadControl.ts` — see the 3.6.0 entry
+under "Current status" and `SESSION_HANDOFF.md`.
 
 ### 14. Make filenames safe and predictable
 

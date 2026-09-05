@@ -15,6 +15,10 @@ const code = fs.readFileSync(bundlePath, "utf8");
 let onMessageHandler = null;
 const relays = [];            // messages sent to the offscreen document
 const broadcasts = [];        // messages sent to the popup
+const downloadChangedListeners = [];
+const downloadItems = {};     // downloadId -> {id, state} for downloads.search
+const cancelledDownloads = [];
+function fireDownloadChanged(delta) { for (const fn of downloadChangedListeners) fn(delta); }
 const downloadCalls = [];     // chrome.downloads.download calls by the worker
 const executeScriptCalls = [];
 let createDocumentCalls = 0;
@@ -44,8 +48,8 @@ const chromeStub = {
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
         session: {
             get(key, cb) { cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore)); },
-            set(items) { Object.assign(sessionStore, items); },
-            remove(key) { delete sessionStore[key]; }
+            set(items, cb) { Object.assign(sessionStore, items); if (cb) cb(); },
+            remove(key, cb) { delete sessionStore[key]; if (cb) cb(); }
         },
         onChanged: { addListener() {} }
     },
@@ -93,7 +97,12 @@ const chromeStub = {
         download(opts, cb) {
             downloadCalls.push(opts);
             if (cb) cb(7);
-        }
+        },
+        // Completion tracking (downloadControl.ts): the worker follows a
+        // download to its terminal state through onChanged + search.
+        onChanged: { addListener(fn) { downloadChangedListeners.push(fn); } },
+        search(query, cb) { cb(downloadItems[query.id] ? [downloadItems[query.id]] : []); },
+        cancel(id, cb) { cancelledDownloads.push(id); if (cb) cb(); }
     },
     offscreen: {
         hasDocument(cb) { cb(hasDocumentResult); },
@@ -417,6 +426,101 @@ function sendToBackground(message, sender) {
         fail("fetchUrlInTab must inject in the MAIN world: " + JSON.stringify(executeScriptCalls));
     }
     console.log("PASS: fetchUrlInTab relays page-text fetches to the tab");
+
+    // 11. awaitDownload: the offscreen document follows a raw page to its
+    //     terminal state through the worker. complete -> ok, interrupted ->
+    //     the reason, still running after the slice -> "pending" (the
+    //     document asks again), cancelDownload -> chrome.downloads.cancel.
+    downloadItems[7] = { id: 7, state: "in_progress" };
+    const awaitComplete = new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "awaitDownload", downloadId: 7 }, {}, resolve);
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    fireDownloadChanged({ id: 7, state: { current: "complete" } });
+    const completeAnswer = await awaitComplete;
+    if (!completeAnswer || completeAnswer.result !== true || completeAnswer.ok !== true || completeAnswer.state !== "complete") {
+        fail("awaitDownload must answer ok on state complete, got " + JSON.stringify(completeAnswer));
+    }
+    downloadItems[8] = { id: 8, state: "in_progress" };
+    const awaitInterrupted = new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "awaitDownload", downloadId: 8 }, {}, resolve);
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    fireDownloadChanged({ id: 8, state: { current: "interrupted" }, error: { current: "NETWORK_FAILED" } });
+    const interruptedDl = await awaitInterrupted;
+    if (!interruptedDl || interruptedDl.ok !== false || interruptedDl.state !== "interrupted" || !/NETWORK_FAILED/.test(interruptedDl.error)) {
+        fail("awaitDownload must report an interruption with its reason, got " + JSON.stringify(interruptedDl));
+    }
+    // A terminal event that fires BEFORE the document asks must not be lost.
+    downloadItems[9] = { id: 9, state: "complete" };
+    fireDownloadChanged({ id: 9, state: { current: "complete" } });
+    const earlyAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "awaitDownload", downloadId: 9 }, {}, resolve);
+    });
+    if (!earlyAnswer || earlyAnswer.ok !== true) {
+        fail("awaitDownload must see a completion that happened before the ask, got " + JSON.stringify(earlyAnswer));
+    }
+    const cancelAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "cancelDownload", downloadId: 8 }, {}, resolve);
+    });
+    if (!cancelAnswer || cancelAnswer.result !== true || cancelledDownloads.indexOf(8) === -1) {
+        fail("cancelDownload must cancel the browser download, got " + JSON.stringify(cancelAnswer) + " cancelled=" + JSON.stringify(cancelledDownloads));
+    }
+    console.log("PASS: awaitDownload follows a browser download to complete/interrupted and cancelDownload cancels it");
+
+    // 12. Failed galleries are remembered for the session (named + retryable)
+    //     from the offscreen broadcasts, dropped when the gallery later
+    //     succeeds, listed for the popup and forgettable on request.
+    const summaryKeptOpen = onMessageHandler({
+        from: "offscreen", action: "batchSummary", succeeded: 1, failed: 2, skipped: 0, total: 3,
+        failedKinds: { image: 1, metadata: 1 },
+        failedGalleries: [
+            { id: "111", name: "Broken One", error: "Failed to download original image (Download interrupted (NETWORK_FAILED))." },
+            { id: "222", name: "Broken Two", error: "Can't download 222 (Code 404: Not Found)." }
+        ],
+        retryJob: { formatOverride: "raw", masterFolder: "NHDW", nameTemplate: "{pretty}" }
+    }, {}, () => {});
+    if (summaryKeptOpen === true) {
+        fail("batchSummary broadcasts must not keep the message channel open");
+    }
+    onMessageHandler({
+        from: "offscreen", action: "downloadError", error: "Failed to download original image (x).",
+        galleryId: "333", galleryName: "Broken Three", retryJob: { formatOverride: "zip" }
+    }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    const failedList = await sendToBackground({ action: "getFailedGalleries" });
+    const listedIds = failedList && Array.isArray(failedList.failed) ? failedList.failed.map((f) => f.id).sort() : null;
+    if (!listedIds || JSON.stringify(listedIds) !== JSON.stringify(["111", "222", "333"])) {
+        fail("getFailedGalleries must list every remembered failure by id, got " + JSON.stringify(failedList));
+    }
+    const failedOne = failedList.failed.find((f) => f.id === "111");
+    if (failedOne.name !== "Broken One" || !/NETWORK_FAILED/.test(failedOne.error) || !failedOne.retryJob || failedOne.retryJob.formatOverride !== "raw") {
+        fail("remembered failures must keep name, reason and retry settings, got " + JSON.stringify(failedOne));
+    }
+    if (!sessionStore.nhdwFailedGalleries || sessionStore.nhdwFailedGalleries.length !== 3) {
+        fail("failures must live in chrome.storage.session (survive worker restarts), got " + JSON.stringify(sessionStore.nhdwFailedGalleries));
+    }
+    // A later success drops the gallery from the failed list.
+    onMessageHandler({ from: "offscreen", action: "jobFinished", records: [{ id: "111", filename: "NHDW/Broken One/001.jpg" }] }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    const failedAfterSuccess = await sendToBackground({ action: "getFailedGalleries" });
+    if (failedAfterSuccess.failed.map((f) => f.id).sort().join(",") !== "222,333") {
+        fail("a gallery that later succeeded must leave the failed list, got " + JSON.stringify(failedAfterSuccess.failed));
+    }
+    const forgetAnswer = await sendToBackground({ action: "forgetFailedGalleries", ids: ["222"] });
+    if (!forgetAnswer || forgetAnswer.result !== "success") {
+        fail("forgetFailedGalleries answered " + JSON.stringify(forgetAnswer));
+    }
+    const failedAfterForget = await sendToBackground({ action: "getFailedGalleries" });
+    if (failedAfterForget.failed.length !== 1 || failedAfterForget.failed[0].id !== "333") {
+        fail("forgetFailedGalleries(ids) must drop only those ids, got " + JSON.stringify(failedAfterForget.failed));
+    }
+    await sendToBackground({ action: "forgetFailedGalleries" });
+    const failedAfterClear = await sendToBackground({ action: "getFailedGalleries" });
+    if (failedAfterClear.failed.length !== 0) {
+        fail("forgetFailedGalleries without ids must clear the list, got " + JSON.stringify(failedAfterClear.failed));
+    }
+    console.log("PASS: failed galleries are remembered by name for the session, dropped on success, listed and forgettable");
 
     console.log("PASS: service worker relay behaves correctly.");
     process.exit(0);

@@ -126,6 +126,18 @@
             <option value="15">15 (Fastest, may cause errors)</option>
         </select>
         <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
+        <br/>
+        Raw images: files saved at the same time (per gallery):
+        <select id="rawMaxConcurrent">
+            <option value="1">1 (One file at a time)</option>
+            <option value="2">2</option>
+            <option value="3">3 (Default)</option>
+            <option value="5">5</option>
+            <option value="10">10 (May flood the download manager)</option>
+        </select>
+        <br/><small>Raw images go through the browser's download manager one file per page. Each file is now
+        followed until it is written, so a page that is interrupted is retried and a gallery with a missing page
+        is reported as failed instead of being marked downloaded.</small>
         <br/><hr/>
         <h3>Optional nhentai API key</h3>
         <p><small>Optional. Downloads work without a key. Paste a key you generated in your nhentai account settings; this extension never asks for your password or creates keys. The key is kept in this browser profile only and is not synced. It stays saved across browser restarts and disabling/re-enabling the extension; only Remove key (or uninstalling the extension) removes it.</small></p>
