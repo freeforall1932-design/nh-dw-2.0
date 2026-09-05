@@ -267,6 +267,70 @@ into the pipeline), and three consumers re-derived the format with
 (`background.ts` retry job, single-title record, fallback batch record). All
 five now go through the single resolver.
 
+### Deeper review of 3.6.0 / 3.6.1 / 3.5.0 / 3.4.x code (3.6.4)
+
+The first review pass only covered the 3.6.4 change surface plus the
+`String(error)` class. A second pass read the earlier sessions' modules end to
+end. **Found clean, with the specific reason:**
+
+- `downloadControl.ts` (3.6.0): `signal.aborted` is checked *before* the
+  listener is registered (no missed-abort hang); `waiters` supports several
+  waiters per id and `settle` removes only itself, so the worker's 45 s
+  `awaitDownload` slices can hand over to the next slice without losing a
+  terminal event that lands in between (it is parked in `recentTerminal`);
+  first empty `search` tolerated, later empty = erased; timeout cancels then
+  reports; `onTimeout:"report"` answers `pending` and leaves it running;
+  `recentTerminal` is FIFO-capped at 200.
+- `failedGalleries.ts` (3.6.0): `queue()` serializes read-modify-write and
+  swallows storage errors; `mergeFailures` replaces same-id entries and
+  `slice(merged.length - cap)` keeps the NEWEST; `readPendingFailuresSettled`
+  waits for in-flight writes so a popup asking right after a job sees them.
+- `downloadVerify.ts` / `downloadHistory.ts` (3.5.0): `recordedFilenameRegex`
+  escapes and anchors with a separator boundary (so `MyNHDW/Title.zip` cannot
+  match `NHDW/Title.zip`); `normalizeHistory` cannot throw on malformed
+  stored data; `historyRecords` returns `[]` for an unclean merged job;
+  `applyBatchDate` never double-stamps; `pickFreeBatchFilename` falls through
+  to Chrome's `uniquify` past 10 parts.
+- `downloadNaming.ts` (3.4.1): all five documented drain paths exist and each
+  ends in `persistSession()` + `syncListener()` — suggestion consumed (`:237`),
+  TTL prune (`:134`), FIFO cap (`:142`), `discardDownloadRequest` (`:321`),
+  `forgetDownload` (`:332`, called from the `onChanged` hygiene listener at
+  `:412`).
+- Offscreen `awaitDownloadViaServiceWorker` (3.6.0/3.6.1): re-asks while
+  `pending`, gives up at 4 min with `cancelDownload`, treats a missing /
+  non-`result:true` answer as "older worker, assume saved".
+- `selectedGalleryResolver.ts` (item 7): sequential same-tab resolution, no
+  tab creation anywhere in `src/`.
+
+**Two defects found and fixed here:**
+
+1. **Item 7's backlog text described code that does not exist.** It claimed
+   the popup opens "one bounded temporary tab at a time" and closes each one,
+   and that `test/resolver.test.js` verifies "sequential tab usage, cleanup".
+   There is no `chrome.tabs.create` / `tabs.remove` in `src/` at all, and the
+   test asserts the opposite (*"without creating or navigating tabs"*). A
+   future session could have "fixed" tab cleanup that was never missing.
+   Item 8's "temporary-tab resolver" reference was stale for the same reason.
+   Both corrected; the original plan is kept but marked superseded.
+2. **`attachHistoryOverrides` had no failure path at two of its three call
+   sites.** The relay path already fell back to an empty history list, but the
+   two worker-fallback handlers chain straight off the promise with no
+   `.catch`, so a rejection would leave `sendResponse` uncalled — Chrome logs
+   "message channel closed" and the job never starts. The fallback now lives
+   inside `attachHistoryOverrides` itself, so the invariant holds for every
+   caller. **Honest severity: unreachable today** — `readHistory`,
+   `readVerificationSetting` and `verifyHistoryOnDisk` all resolve rather than
+   reject, so this is insurance against a future change, and it is therefore
+   not covered by a test. The relay path's now-redundant `.catch` was left in
+   place rather than removed.
+
+**Not reviewed in either pass** (unchanged risk, listed so nobody assumes
+coverage): `cdnConfigService`, `listControls.ts`, `pdfMergeWarning.ts`,
+`listSettings.ts`, the popup's `retryFailedGalleries` round trip, and the
+whole `NHDW_Firefox_v1.0.0` snapshot — which still contains the pre-3.6.4
+`String(error)` batch paths (`background.ts:281,423,506,725,737`,
+`offscreen.ts:470,547`) and is tracked under item 27.
+
 ### Shared batch pipeline (3.6.3)
 
 Item 32: one storage-free `downloadAllDoujinshis` core used by the worker

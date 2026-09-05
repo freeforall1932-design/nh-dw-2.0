@@ -562,12 +562,12 @@ function readVerificationSetting(): Promise<boolean> {
 // chrome.storage.local; the offscreen document receives the list relayed
 // inside its job options (it has no storage of its own).
 function attachHistoryOverrides(overrides: any): Promise<any> {
+    if (!Array.isArray(overrides.redownloadIds)) {
+        overrides.redownloadIds = [];
+    }
     return readHistory().then((history) => readVerificationSetting().then((verify) => {
         const apply = (ids: string[]) => {
             overrides.alreadyDownloadedIds = ids;
-            if (!Array.isArray(overrides.redownloadIds)) {
-                overrides.redownloadIds = [];
-            }
             return overrides;
         };
         if (!verify || Object.keys(history).length === 0) {
@@ -578,7 +578,17 @@ function attachHistoryOverrides(overrides: any): Promise<any> {
         return verifyHistoryOnDisk(history).then((present) => {
             return apply(historyIds(history).filter((id) => present.has(id)));
         });
-    }));
+    })).catch(() => {
+        // A history/verification failure must never block a download. This
+        // resolves here rather than at each call site on purpose: the relay
+        // path already had this fallback, but the two worker-fallback
+        // handlers chain straight off this promise with no .catch of their
+        // own, so a rejection would leave sendResponse uncalled - Chrome then
+        // logs "message channel closed" and the job never starts. Empty list
+        // means "skip nothing", which is the safe direction.
+        overrides.alreadyDownloadedIds = [];
+        return overrides;
+    });
 }
 
 // Merged-job naming for listing re-runs (settled with the user):

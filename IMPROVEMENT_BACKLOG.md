@@ -219,9 +219,25 @@ one error per failing gallery, and sends `batchProgress` for all three.
 
 ### 7. Resolve selected galleries through the active browser context
 
-**Progress:** complete for the resolver and offline coverage. The popup resolves selected IDs through one bounded temporary tab at a time, extracts `window._gallery` in the main world, closes each tab, and passes successful metadata through the worker/offscreen pipeline. API fallback remains available when a gallery cannot be resolved. `test/resolver.test.js` verifies sequential tab usage, cleanup, and already-complete tabs; real Chrome/Brave confirmation remains covered by item 10.
+**Progress:** complete — but **not** the way the plan below describes, and the
+text here was stale until the 2026-09-05 review corrected it.
 
-For selected result-page IDs, use a controlled resolver instead of depending only on the API:
+`src/preview/selectedGalleryResolver.ts` resolves every selected ID through
+**the tab the user is already on** (`fetchGalleryViaTab(sourceTabId, id)`,
+sequential, one at a time) and returns only the IDs that pass
+`looksLikeGallery`. It **never opens, navigates or closes a tab**: there is no
+`chrome.tabs.create` or `chrome.tabs.remove` anywhere in `src/` (verified by
+grep on 2026-09-05). A missing ID is simply left out of the map; the batch
+pipeline makes its own tab-scoped attempt for that gallery and reports a
+metadata failure if the session cannot supply it. With no source tab the
+resolver returns an empty map rather than falling back to opening one.
+
+`test/resolver.test.js` asserts exactly that, including
+*'resolves selected galleries through the supplied tab without creating or
+navigating tabs'* and *'does not try to create a fallback tab when no source
+tab was supplied'*. Real Chrome/Brave confirmation remains covered by item 10.
+
+The original proposal (kept for history — **superseded**, do not implement it):
 
 1. Open one temporary gallery tab at a time, or use a small bounded queue.
 2. Wait for the gallery page to load.
@@ -237,7 +253,7 @@ Do not open dozens of tabs, and do not claim that this bypasses Cloudflare.
 
 ### 8. Add configurable source adapters
 
-**Progress:** complete for the supported clearnet source. The `GallerySource` interface and source registry centralize host matching, gallery/API URLs, and image CDN fallback URLs. `ApiParsing`, `HtmlParsing`, `Downloader`, the popup, the temporary-tab resolver, and the service-worker icon path use the adapter; parsers and the downloader accept an injectable source. Onion support is intentionally dropped under item 9.
+**Progress:** complete for the supported clearnet source. The `GallerySource` interface and source registry centralize host matching, gallery/API URLs, and image CDN fallback URLs. `ApiParsing`, `HtmlParsing`, `Downloader`, the popup, the selected-gallery resolver (same-tab; see item 7), and the service-worker icon path use the adapter; parsers and the downloader accept an injectable source. Onion support is intentionally dropped under item 9.
 
 Create a source abstraction so clearnet and onion URLs are not scattered throughout the code:
 
