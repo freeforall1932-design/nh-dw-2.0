@@ -164,6 +164,13 @@ export async function retryFailedGalleries(entries: PendingFailure[]): Promise<v
                 document.getElementById('action')!.innerHTML = "Retry queued at position " + response.position + ".";
             } else if (!response || response.result !== "error") {
                 Popup.getInstance().updateProgress(0, names.join(", "), false);
+            } else {
+                // The command never started (e.g. the offscreen document could
+                // not be created). The notice was hidden when the retry began,
+                // so bring the still-failed list back: without it the panel has
+                // no way to retry again until it is closed and reopened, and
+                // the worker still holds the failures.
+                refreshFailedNotice();
             }
             sendNext();
         });
@@ -1006,7 +1013,8 @@ export default class Popup
                     // keeping the per-row "Download anyway" picks — so the
                     // skipped ones cost ZERO metadata/API calls. Merged mode
                     // keeps every title (one file needs them all).
-                    if (effectiveOutputMode(settings.format, settings.outputMode) === "separate") {
+                    const batchBeforeWarning = effectiveOutputMode(settings.format, settings.outputMode) === "batch";
+                    if (!batchBeforeWarning) {
                         const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
                         const filtered: Record<string, string> = {};
                         for (const id of toDownload) {
@@ -1020,6 +1028,24 @@ export default class Popup
                             const job = await buildJobOptions(Object.keys(allDoujinshis).length);
                             if (job === null) {
                                 return; // user cancelled the PDF-merge warning
+                            }
+                            if (batchBeforeWarning && job.separate) {
+                                // "Switch to separate files" in the merge warning
+                                // turns this into a separate-mode job, so the
+                                // history skip applies now: drop the recorded
+                                // galleries BEFORE their metadata is resolved
+                                // (skipped ids must cost zero API calls) and
+                                // before any count is reported to the user.
+                                const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                                const refiltered: Record<string, string> = {};
+                                for (const id of keep) {
+                                    refiltered[id] = allDoujinshis[id];
+                                }
+                                allDoujinshis = refiltered;
+                                if (Object.keys(allDoujinshis).length === 0) {
+                                    document.getElementById('action')!.innerHTML = "Every selected gallery is already downloaded. Click <i>Download anyway</i> on a row to re-download it (or Clear history in Settings).";
+                                    return;
+                                }
                             }
                             let finalName = pathElement.value;
                             document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
@@ -1085,7 +1111,8 @@ export default class Popup
                         // THIS page (zero API calls; later pages are guarded by
                         // the pipeline using the same recorded set). Merged mode
                         // keeps every title.
-                        if (effectiveOutputMode(settings.format, settings.outputMode) === "separate") {
+                        const batchBeforeWarning = effectiveOutputMode(settings.format, settings.outputMode) === "batch";
+                        if (!batchBeforeWarning) {
                             const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
                             const filtered: Record<string, string> = {};
                             for (const id of toDownload) {
@@ -1114,6 +1141,20 @@ export default class Popup
                                     const job = await buildJobOptions(Math.max(2, Object.keys(allDoujinshis).length));
                                     if (job === null) {
                                         return; // user cancelled the PDF-merge warning
+                                    }
+                                    if (batchBeforeWarning && job.separate) {
+                                        // Downgraded to separate files by the merge
+                                        // warning: apply the history skip now, before
+                                        // this page's metadata is resolved. An empty
+                                        // set is fine here - other pages may still
+                                        // have work, and the pipeline re-parses each
+                                        // page itself.
+                                        const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                                        const refiltered: Record<string, string> = {};
+                                        for (const id of keep) {
+                                            refiltered[id] = allDoujinshis[id];
+                                        }
+                                        allDoujinshis = refiltered;
                                     }
                                     let finalName = pathElement.value;
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";

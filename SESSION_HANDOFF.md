@@ -324,12 +324,68 @@ end. **Found clean, with the specific reason:**
    not covered by a test. The relay path's now-redundant `.catch` was left in
    place rather than removed.
 
-**Not reviewed in either pass** (unchanged risk, listed so nobody assumes
-coverage): `cdnConfigService`, `listControls.ts`, `pdfMergeWarning.ts`,
-`listSettings.ts`, the popup's `retryFailedGalleries` round trip, and the
-whole `NHDW_Firefox_v1.0.0` snapshot — which still contains the pre-3.6.4
-`String(error)` batch paths (`background.ts:281,423,506,725,737`,
-`offscreen.ts:470,547`) and is tracked under item 27.
+### Third pass — list mode, PDF-merge guard, retry UI, CDN service (3.6.4)
+
+The modules the second pass listed as unreviewed have now been read.
+
+**Defect found and fixed — the PDF-merge downgrade skipped the history guard.**
+Merged mode deliberately keeps every selected title, so the 3.5.0
+already-downloaded filter is applied *only* when the job is separate. But the
+PDF-merge warning can turn a merged job into a separate one **after** that
+filter has run (`mode = "separate"` in `listControls.startDownload`,
+`outputMode = "separate"` in the popup's `buildJobOptions`). The job then went
+out in separate mode still carrying recorded galleries, so:
+
+- `resolveSelectedGalleries` resolved metadata for galleries the worker was
+  about to skip — the exact API calls the skip exists to avoid ("skipped ids
+  are removed before metadata resolution so they cost ZERO API calls", 3.5.0);
+- the panel/page counts (`N selected · M already downloaded · K will
+  download`, the button label, the in-page flash) described a different job
+  than the one sent.
+
+Three call sites, all fixed by applying the partition after the warning:
+`listControls.ts` `startDownload`, `popup.ts` "Download selected", `popup.ts`
+"Download all (N pages)" (where an empty result is still allowed — other pages
+may have work). Reachable by: list mode = PDF + *Single merged file*, select
+titles including already-downloaded ones, then choose **Switch to separate
+files**. Proven by test — the new `e2e-list-controls` phase fails on the
+pre-fix bundle with `a separate-mode job must not carry the already-downloaded
+title, got {"111111":"Title 1","222222":"Title 2","333333":"Title 3"}`. A
+second new phase pins the other direction: confirming the merge still keeps the
+recorded title, because the skip belongs to separate mode only.
+
+**Defect found and fixed — the failed-gallery notice vanished on a failed
+retry.** `retryFailedGalleries` hides `#failedNotice` when the first retry
+command is sent, before knowing whether it started. If the worker answered
+`error` (e.g. "Unable to start the offscreen download document"), the panel was
+left with no failed list and no Retry button until it was closed and reopened —
+even though the worker still holds the failures. The `error` branch now calls
+`refreshFailedNotice()`.
+
+**Read and found clean:** `pdfMergeWarning.ts` (safe button focused so Enter
+picks one-PDF-per-title; "don't warn me again" honoured only when the user
+proceeds; Escape/overlay cancel; `settled` guard; keydown listener removed and
+overlay detached on close); `listSettings.ts`; `cdnConfigService.ts` (memory
+then session cache, in-flight dedupe, 6 s timeout, permission filtering, stale
+cache kept on failure); `groupRetryMessages` (per-settings batching, forced
+`redownloadIds`, active tab preferred over the original).
+
+**Noted, deliberately not changed:** `retryFailedGalleries` keeps sending the
+remaining grouped commands after one answers `error` (a partially-failed retry
+still queues the rest — matches the batch continue-after-failure rule);
+`wireRetryButton` leaves its button disabled if `groupRetryMessages` produces
+nothing, which needs an entry with no id to happen.
+
+**Verification gap, stated plainly:** there is no window-less popup harness
+(only the real-browser `e2e-browser.js`, which cannot run here), so the two
+`popup.ts` fixes are covered by `tsc` + the webpack build only. The identical
+defect in `listControls.ts` **is** regression-tested, and the popup change is
+the same edit.
+
+**Still not reviewed:** the whole `NHDW_Firefox_v1.0.0` snapshot, which still
+contains the pre-3.6.4 `String(error)` batch paths
+(`background.ts:281,423,506,725,737`, `offscreen.ts:470,547`) and none of the
+3.4.0+ work; tracked under item 27.
 
 ### Shared batch pipeline (3.6.3)
 

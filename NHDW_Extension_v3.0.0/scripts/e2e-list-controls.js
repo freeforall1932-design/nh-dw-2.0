@@ -492,6 +492,65 @@ function wait(ms) {
     }
 
     {
+        // The downgrade to separate files must ALSO apply the history skip.
+        // Merged mode keeps every title (one archive needs them all), so the
+        // recorded gallery is still in the selection when the warning is
+        // answered; once the user picks one PDF per title the job is separate
+        // and the recorded gallery must be dropped here - not sent to the
+        // worker to be resolved and skipped (that costs the metadata/API calls
+        // the skip exists to avoid, and the counts shown would be wrong).
+        const ctx = run({
+            settings: { listFormat: "pdf", listOutputMode: "batch" },
+            history: { downloadHistory: { "222222": { filename: "Old/Two.pdf", when: 1 } } },
+            confirmAnswers: [false]
+        });
+        await wait(0);
+        for (const control of cardControls(ctx.dom)) {
+            const box = control.querySelector(".nhdw-select-box");
+            box.checked = true;
+            box.dispatch("change");
+        }
+        ctx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+        const job = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!job || job.separate !== true) {
+            fail("declining the merge must produce separate files, got " + JSON.stringify(job));
+        }
+        if (job.allDoujinshis["222222"] !== undefined) {
+            fail("a separate-mode job must not carry the already-downloaded title, got "
+                + JSON.stringify(job.allDoujinshis));
+        }
+        if (!job.allDoujinshis["111111"]) {
+            fail("the unrecorded title must still download, got " + JSON.stringify(job.allDoujinshis));
+        }
+        console.log("PASS: switching to separate files in the merge warning applies the history skip");
+    }
+
+    {
+        // ...and confirming the merge must keep every title, recorded or not:
+        // the skip belongs to separate mode only.
+        const ctx = run({
+            settings: { listFormat: "pdf", listOutputMode: "batch" },
+            history: { downloadHistory: { "222222": { filename: "Old/Two.pdf", when: 1 } } },
+            confirmAnswers: [true]
+        });
+        await wait(0);
+        for (const control of cardControls(ctx.dom)) {
+            const box = control.querySelector(".nhdw-select-box");
+            box.checked = true;
+            box.dispatch("change");
+        }
+        ctx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+        const job = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!job || job.separate !== false) {
+            fail("confirming the merge must keep one merged file, got " + JSON.stringify(job));
+        }
+        if (!job.allDoujinshis["222222"] || !job.allDoujinshis["111111"]) {
+            fail("a merged job must keep every selected title, got " + JSON.stringify(job.allDoujinshis));
+        }
+        console.log("PASS: confirming the merge still keeps the recorded title in the archive");
+    }
+
+    {
         // Confirming keeps the merge, so the escape hatch still exists.
         const ctx = run({
             settings: { listFormat: "pdf", listOutputMode: "batch" },

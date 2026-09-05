@@ -171,6 +171,12 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   preview status line, the API-key verification failure and the error panel
   itself are message-first now; a worker e2e phase reproduces the old
   `[object Object]` output on the pre-fix build.
+  Two more defects from the same review: choosing *Switch to separate files*
+  in the batch-PDF warning used to send the already-downloaded titles anyway
+  (they were resolved, then skipped downstream, and the on-screen counts
+  described a different job than the one sent) — the history skip is now
+  applied after the warning in all three entry points; and a failed **Retry
+  failed** attempt no longer leaves the panel without the failed list.
 * **v3.6.3: one shared batch pipeline.**
   The worker fallback and the offscreen document used to each keep a copy of
   `downloadAllDoujinshisAsync`; they had already drifted (HTML second-chance
