@@ -178,14 +178,21 @@ export function renderSettings(container: HTMLElement): void {
         }
 
         const inUse = templateTokensInUse(storedTemplate);
-        const renderNamePreview = () => {
+        // persist=false is for the first paint only. buildTemplate always emits
+        // the canonical order with " - " separators, so saving on render would
+        // silently rewrite a template the user ordered themselves
+        // ("{id} - {pretty}" -> "{pretty} - {id}") merely because they opened
+        // this tab. Only an explicit checkbox change may write.
+        const renderNamePreview = (persist: boolean = true) => {
             const checked: Record<string, boolean> = {};
             for (const t of TEMPLATE_TOKENS) {
                 const box = document.getElementById("psTpl_" + t) as HTMLInputElement | null;
                 checked[t] = !!(box && box.checked);
             }
             const template = buildTemplate(checked);
-            chrome.storage.sync.set({ downloadName: template });
+            if (persist) {
+                chrome.storage.sync.set({ downloadName: template });
+            }
             // Show a concrete example of the resulting file name.
             const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
             const clean = utils.cleanName(rendered, spacesBox.checked, "123456");
@@ -201,11 +208,12 @@ export function renderSettings(container: HTMLElement): void {
             box.type = "checkbox";
             box.id = "psTpl_" + token;
             box.checked = !!inUse[token];
-            box.addEventListener("change", renderNamePreview);
+            // Explicit user action - this is the only write in this section.
+            box.addEventListener("change", () => renderNamePreview(true));
             label.appendChild(box);
             label.appendChild(document.createTextNode(" " + TEMPLATE_LABELS[token]));
             checksBox.appendChild(label);
         }
-        renderNamePreview();
+        renderNamePreview(false);
     });
 }

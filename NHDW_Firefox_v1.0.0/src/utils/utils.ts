@@ -3,6 +3,17 @@ import Tag from "./tag"
 // Classify a thrown error / error string into a stable failure kind so the UI
 // can label failures consistently (metadata vs Cloudflare vs image vs ZIP vs
 // user cancellation) instead of showing a raw string.
+// Readable text for a thrown value: Error objects contribute their message
+// (String(new Error("x")) gives "Error: x" and a structured clone of one is an
+// empty object), strings pass through, anything else is stringified.
+// Backported from the Chrome tree (3.6.4) - same implementation on purpose.
+export function errorMessage(error: any): string {
+    if (error === undefined || error === null) return "";
+    if (typeof error === "string") return error;
+    if (error.message !== undefined) return String(error.message);
+    return String(error);
+}
+
 export function classifyError(error: any): { kind: string; label: string } {
     const message = String(error && error.message !== undefined ? error.message : error);
     const msg = message.toLowerCase();

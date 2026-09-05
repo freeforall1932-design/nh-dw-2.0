@@ -58,6 +58,38 @@ export function normalizeFormat(value: any, fallback: DownloadFormat = "zip"): D
         : fallback;
 }
 
+// A per-job format override (popup picker, list-mode bar, in-page card
+// controls, retry job). An unrecognized value must stay undefined so the
+// stored default wins, rather than silently becoming zip.
+export function normalizeFormatOverride(value: any): DownloadFormat | undefined {
+    if (value === undefined || value === null || value === "") {
+        return undefined;
+    }
+    const normalized = normalizeFormat(value, "zip");
+    return (value === "folder" || normalized === value) ? normalized : undefined;
+}
+
+// THE ONE PLACE a job's output format is decided: a per-job override wins,
+// then the stored default, then zip.
+//
+// Why this exists (backlog item 33): the batch record/retry format and the
+// format the Downloader actually used were derived at different points from
+// different inputs, so a caller that omits `formatOverride` could get a
+// history record saying `.zip` while the file on disk is `.cbz`/`.pdf`/a raw
+// folder - which then makes "verify before skip" search for a file that does
+// not exist and re-download the gallery on every listing run.
+//
+// Rule: resolve ONCE at job start, then hand the SAME normalized value to
+// every consumer (history records, retry jobs, merged artifact names,
+// Downloader settings). Never re-derive it downstream.
+export function resolveJobFormat(override: any, stored?: any): DownloadFormat {
+    const resolvedOverride = normalizeFormatOverride(override);
+    if (resolvedOverride !== undefined) {
+        return resolvedOverride;
+    }
+    return normalizeFormat(stored, "zip");
+}
+
 export function normalizeOutputMode(value: any, fallback: OutputMode = "separate"): OutputMode {
     const text = String(value === undefined || value === null ? "" : value);
     return (OUTPUT_MODES as ReadonlyArray<string>).indexOf(text) !== -1
@@ -114,6 +146,15 @@ export function isInheritedListTemplate(value: any): boolean {
     return value === undefined || value === null || value === LIST_TEMPLATE_INHERIT;
 }
 
+// The list-mode format follows the single-title one until the user gives list
+// mode its own key. Callers must pass the RAW stored values: a
+// chrome.storage.get default of "zip" for listFormat erases the difference
+// between "never set" and "deliberately zip", which is what made both settings
+// panels show ZIP while list downloads actually used the single-title format.
+export function resolveListFormat(storedListFormat: any, storedUseZip: any): DownloadFormat {
+    return normalizeFormat(storedListFormat, normalizeFormat(storedUseZip, "zip"));
+}
+
 export function resolveListTemplate(listTemplate: any, singleTemplate: string): string {
     return isInheritedListTemplate(listTemplate) ? String(singleTemplate) : String(listTemplate);
 }
@@ -121,8 +162,13 @@ export function resolveListTemplate(listTemplate: any, singleTemplate: string): 
 // ---- storage defaults --------------------------------------------------
 // List-mode settings live under their own keys so changing them can never
 // alter the single-title defaults (and vice versa).
+// NOTE: listFormat is deliberately ABSENT. These defaults are spread into
+// chrome.storage.get() calls (listSettings.SYNC_DEFAULTS, listControls), and a
+// "zip" default there makes an unset key indistinguishable from a chosen one,
+// so resolveListFormat() could never fall through to the single-title format -
+// the inheritance documented on buildListSettings was dead in every runtime
+// path. An absent key is what makes it live.
 export const LIST_MODE_DEFAULTS = {
-    listFormat: "zip",
     listOutputMode: "separate",
     listMasterFolder: true,
     listDownloadName: LIST_TEMPLATE_INHERIT

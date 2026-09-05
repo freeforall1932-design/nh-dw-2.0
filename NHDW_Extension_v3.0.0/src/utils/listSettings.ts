@@ -13,8 +13,8 @@ import {
     DownloadFormat,
     OutputMode,
     LIST_MODE_DEFAULTS,
-    normalizeFormat,
     normalizeOutputMode,
+    resolveListFormat,
     resolveListTemplate,
     PDF_MERGE_WARNING_KEY
 } from "./downloadFormats";
@@ -63,7 +63,7 @@ export function buildListSettings(stored: any, pdfMergeWarnDismissed: boolean = 
     return {
         // The list format defaults to the single-title format the first time,
         // then remembers its own value under its own key.
-        format: normalizeFormat(source.listFormat, normalizeFormat(source.useZip, "zip")),
+        format: resolveListFormat(source.listFormat, source.useZip),
         // Separate files is the DEFAULT in list mode; batch is the opt-in.
         outputMode: normalizeOutputMode(source.listOutputMode, "separate"),
         masterFolder: source.listMasterFolder === undefined ? true : !!source.listMasterFolder,

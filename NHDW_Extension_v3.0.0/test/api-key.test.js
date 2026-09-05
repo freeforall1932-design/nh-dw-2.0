@@ -48,6 +48,20 @@ describe('optional API key', () => {
         assert.strictEqual(storage.values.apiKey, undefined);
     });
 
+    it('reports a thrown failure by its message, never [object Object]', async () => {
+        const storage = storageFixture();
+        const thrown = await verifyAndSaveApiKey('k', storage, async () => {
+            throw { message: 'network unreachable (fixture)' };
+        });
+        assert.strictEqual(thrown.ok, false);
+        assert.strictEqual(thrown.error, 'network unreachable (fixture)');
+        const errored = await verifyAndSaveApiKey('k', storage, async () => {
+            throw new Error('boom (fixture)');
+        });
+        assert.strictEqual(errored.error, 'boom (fixture)', 'no "Error: " prefix');
+        assert.strictEqual(storage.values.apiKey, undefined, 'a failed verification stores nothing');
+    });
+
     it('removes a locally stored key', async () => {
         const storage = storageFixture({ apiKey: 'secret-key' });
         await removeApiKey(storage);

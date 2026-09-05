@@ -2,7 +2,7 @@ import { API_KEY_SETTINGS_URL } from "../utils/apiAuth";
 import { DOWNLOAD_FORMATS, formatExtension, formatLabel, effectiveOutputMode } from "../utils/downloadFormats";
 import { ListModeSettings } from "../utils/listSettings";
 import { FailedGallery } from "../utils/downloadHistory";
-import { classifyError, escapeHtml } from "../utils/utils";
+import { classifyError, escapeHtml, errorMessage } from "../utils/utils";
 
 export module message
 {
@@ -267,7 +267,10 @@ export module message
         if (galleryName) {
             html += '<br/><b>' + escapeHtml(galleryName) + '</b> was not downloaded: ';
         }
-        html += escapeHtml(String(error));
+        // Message-first at the last boundary too: an Error instance crossing
+        // a message channel must not render as "Error: ..." (or "[object
+        // Object]" for a structured-cloned one).
+        html += escapeHtml(errorMessage(error));
         // Always leave an action: batch-level errors (no galleryId, so not
         // retryable) used to render with zero buttons and leave the popup
         // stuck until it was reopened (item 29). Retry stays only when the

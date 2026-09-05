@@ -20,4 +20,24 @@ describe('message.downloadError', () => {
         assert.ok(/id="buttonRetryFailed"/.test(retryable), 'retryable error must offer Retry');
         assert.ok(/id="buttonBack"/.test(retryable), 'retryable error must still offer Go Back');
     });
+
+    // An Error instance (or a structured-cloned object) crossing a message
+    // channel must render as its message alone: String(new Error('x')) is
+    // "Error: x" and String({}) is "[object Object]" - the report shape 3.6.1
+    // removed from every other user-facing path.
+    it('renders object-shaped errors as their message, never [object Object]', () => {
+        const fromError = message.downloadError(new Error('worker restarted'));
+        assert.ok(/worker restarted/.test(fromError), 'the message must survive, got ' + fromError);
+        assert.ok(!/Error:/.test(fromError), 'no "Error: " prefix, got ' + fromError);
+
+        const fromObject = message.downloadError({ message: 'channel closed' });
+        assert.ok(/channel closed/.test(fromObject), 'an object message must survive, got ' + fromObject);
+
+        // A shapeless object has no message to extract, so it still
+        // stringifies - documented behaviour, asserted so a future change to
+        // errorMessage() shows up here instead of in a user's popup.
+        const shapeless = message.downloadError({});
+        assert.ok(/\[object Object\]/.test(shapeless),
+            'a shapeless object stringifies by design, got ' + shapeless);
+    });
 });

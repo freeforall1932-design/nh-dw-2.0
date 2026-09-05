@@ -28,6 +28,7 @@ import {
     normalizeOutputMode,
     outputModeToSeparate,
     shouldWarnPdfMerge,
+    resolveListFormat,
     resolveListTemplate,
     LIST_MODE_DEFAULTS,
     PDF_MERGE_WARNING_KEY
@@ -104,7 +105,7 @@ function readSettings(): Promise<boolean> {
         try {
             chrome.storage.sync.get(defaults, (elems: any) => {
                 const stored = elems || defaults;
-                settings.format = normalizeFormat(stored.listFormat, normalizeFormat(stored.useZip, "zip"));
+                settings.format = resolveListFormat(stored.listFormat, stored.useZip);
                 settings.outputMode = normalizeOutputMode(stored.listOutputMode, "separate");
                 settings.masterFolder = stored.listMasterFolder === undefined ? true : !!stored.listMasterFolder;
                 settings.masterFolderName = String(stored.rawMasterFolder === undefined ? "NHDW" : stored.rawMasterFolder);
@@ -441,7 +442,7 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
         toDownload = galleries;
     }
     redownloadIds = Object.keys(galleries).filter((id) => force.has(id));
-    const titleCount = Object.keys(toDownload).length;
+    let titleCount = Object.keys(toDownload).length;
     if (titleCount === 0) {
         flashStatus("All selected are already downloaded - use Download anyway to re-fetch");
         return;
@@ -459,6 +460,25 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
             "OK = merge anyway.\nCancel = download one PDF per title (recommended).");
         if (!merge) {
             mode = "separate";
+        }
+    }
+    if (effective === "batch" && mode === "separate") {
+        // The merge warning just downgraded this job to separate files, so the
+        // history skip applies NOW: drop the recorded galleries here instead of
+        // sending them to be resolved and skipped downstream. Otherwise the
+        // counts shown to the user do not match what is sent, and the skipped
+        // titles cost metadata/API calls they were supposed to cost zero
+        // (3.5.0 invariant).
+        const keep = partitionKnown(history, Object.keys(galleries), redownload).download;
+        toDownload = {};
+        for (const id of keep) {
+            toDownload[id] = galleries[id];
+        }
+        skippedCount = Object.keys(galleries).length - keep.length;
+        titleCount = Object.keys(toDownload).length;
+        if (titleCount === 0) {
+            flashStatus("All selected are already downloaded - use Download anyway to re-fetch");
+            return;
         }
     }
     const message: any = {

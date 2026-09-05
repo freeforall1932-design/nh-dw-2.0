@@ -1,5 +1,47 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`, final) — **read
+this block first.** After item 33 this session ran **four review passes** over
+the pipeline, the older versions' code and the settings UI, and merged as
+**PR #39** (tip `c55e4ac`). Eight defects were found by review, reproduced by a
+test that fails on the pre-fix build, and fixed — the list is in the PR body
+and in "Review pass 1-4" sections below. What changed structurally, so a fresh
+session does not re-derive it:
+
+- **`scripts/e2e-popup.js` (new, in `npm run test:e2e`)** gives the popup /
+  side panel offline coverage for the first time: 8 phases over the message →
+  UI and storage contracts. Read its header before touching it — the three
+  stub traps in there each cost a debugging round.
+- **`resolveListFormat()`** in `src/utils/downloadFormats.ts` is now the only
+  place the list-mode format is resolved, and `LIST_MODE_DEFAULTS` must not
+  carry a `listFormat` key (a fixture asserts its absence). Before this the
+  documented single-title inheritance was dead in every path.
+- **Settings panes never write on render.** `renderNamePreview(false)` /
+  `renderTemplatePreview(...)`; only a `change` handler writes.
+- Suite totals: Chrome **310 passing / 4 pending**, smoke 7 PASS, e2e 101 PASS
+  lines; Firefox 166 passing / 4 pending, smoke 5 PASS, e2e 46 PASS.
+
+**Open, in the order I would take them:** worklist **37** (Firefox panel
+harness — the only thing standing between the Firefox folder and being
+verifiable), **38** (options-page harness), **39** (empty-token separators —
+needs a decision, not code), **40**, **41**; then the carried-over items: P3
+queue UI, raw retry follow-ups, raw list-mode verification, real-browser pass,
+Firefox port (item 27). Full specs: "Next backlog (worklist)" below and
+IMPROVEMENT_BACKLOG.md items 35-41. Judgement calls a reviewer should look at:
+"Open questions" 14-19.
+
+**Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`) — **3.6.4: item
+33, one format decision per job.** `resolveJobFormat(override, stored)` in
+`src/utils/downloadFormats.ts` is now the only place a job's output format is
+decided; the worker fallback, the offscreen document, the history records,
+the retry jobs and the merged artifact naming all read that one value. The
+concrete defect this closes: `resolveMergedBatchName` computed its disk
+candidates from the raw request (`formatOverride || "zip"`), so a merged job
+with no explicit format looked for `.zip` while the artifact is `.cbz`/`.pdf`
+— warn-first could never fire and re-runs grew `_partN` forever. All
+numbered items from the 2026-09-05 review (28–34) are now closed. Remaining:
+P3 queue UI, raw retry follow-ups, real-browser verification, Firefox port.
+
 **Updated:** 2026-09-05 (session `arena/01a06fb0-nh-dw-2-0`) — **3.6.3: item
 32, one shared batch pipeline.** Worker fallback and offscreen now wrap
 `src/utils/batchPipeline.ts` (storage-free core, injected IO). Suggested
@@ -164,7 +206,363 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
-### Shared batch pipeline (3.6.3 — newest)
+### Job format resolution (3.6.4 — newest)
+
+Item 33: one job, one format decision. `resolveJobFormat(override, stored)`
+(+ the moved `normalizeFormatOverride`) lives in `src/utils/downloadFormats.ts`
+and is the only place the per-job override, the stored default and the zip
+fallback are combined.
+
+- **The bug that was real.** `resolveMergedBatchName` resolved the format from
+  the raw request: `normalizeFormat(relayedMessage.formatOverride || "zip")`.
+  A merged job with no explicit override whose stored default is cbz/pdf
+  computed `.zip` candidates, so `presentBatchFilenames` /
+  `pickFreeBatchFilename` never saw the real artifact: the *you already have
+  this file* warning could not fire and every re-run grew another `_partN`.
+  The function now reads the job's resolved format (relay path) or resolves
+  override → stored `useZip` → zip itself, and the storage read moved above
+  the early `raw`/separate bail-out.
+- **Worker fallback single-title** (`downloadDoujinshi`) resolves the format
+  in its existing `chrome.storage.sync.get` (`useZip` added to the defaults)
+  and **always** sets `settings.useZip` + the concurrency caps, so the
+  Downloader never falls back to its own storage read and the record, retry
+  job and file are the same format by construction.
+- **Relay path** (`startRelayedJob`) sets `options.useZip =
+  resolveJobFormat(relayedMessage.formatOverride, options.useZip)`
+  unconditionally — the offscreen document has no `chrome.storage`, so it must
+  always receive a concrete format.
+- **Batch core** (`batchPipeline.ts`) resolves once and hands the *normalized*
+  format to the Downloader (`gallerySettings.useZip = format`), so
+  normalization happens once instead of again inside every Downloader;
+  `buildRetryJob` and the paged path use the same helper.
+- **Offscreen single-title** builds `jobFormat` once and uses it for the
+  Downloader settings, the history record and the retry job.
+- `background.ts` no longer carries its own copy of `normalizeFormatOverride`
+  (it was the second definition of the same rule).
+
+**Tests.** `test/list-mode.test.js` (5 cases: override wins, stored fallback,
+legacy `folder` on both sides, zip last resort, unusable override stays out);
+`test/batch-pipeline.test.js` "job format contract" (record + Downloader
+settings + `retryJob.formatOverride` agree for zip/cbz/pdf/raw/`folder`/none);
+`scripts/e2e-worker.js` phase 5i (stored cbz and legacy `folder` name both the
+artifact and the record with no override sent) and phase 5j (merged job with
+no override: artifact, record and warn-first all use `.cbz` — **fails on the
+pre-fix code**, verified by reverting the resolver line). Manifests 3.6.4.
+Verification this session: webpack clean, `tsc` both configs clean,
+`npm test` **291 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
+PASS; source `js/` byte-identical to `NHDW_Release_v3.0.0/js/`.
+
+**Scope note (honest):** the record/artifact mismatch the item described was
+already closed for single-title and batch jobs by 3.6.3's
+`resolveWorkerBatchOptions` (both derive from the same resolved value); the
+merged-naming pass was the live gap, and it was latent because every current
+UI caller sends `formatOverride`. The rest of this drop is the structural
+half: one resolution point, so the mismatch cannot come back.
+
+### Post-3.6.4 self-review — `[object Object]` was NOT swept (3.6.4)
+
+Reviewing this session's own change found a **live bug the previous two
+sessions' claims missed**. 3.6.1 states raw-mode failures no longer render
+`Error: [object Object]` and item 34 (3.6.2) states the message-first sweep is
+done. Neither covered the **batch-level catch**, which is the outermost
+user-facing error path in both pipelines:
+
+- `background.ts` `downloadAllDoujinshis` / `downloadAllPages` `.catch` and
+  `offscreen.ts`'s two equivalents all did `errorCallback(String(error))`;
+- `askOffscreen`'s two failure replies did `{ result: false, error:
+  String(error) }`, which the relay turns into the popup's `downloadError`.
+
+Proven, not theoretical: `scripts/e2e-worker.js` phase 12c makes the batch
+pipeline reject (the harness throws from `chrome.runtime.sendMessage` during
+`batchProgress`) and asserts what the popup receives. On the pre-fix bundle
+that assertion fails with **`got "[object Object]"`** — the exact string from
+the original 3.6.1 user report. Post-fix it is the thrown message alone, for
+both an object shape and an `Error` instance (no `Error: ` prefix either).
+
+Also hardened in the same pass (same class, lower reach): `popup.ts` preview
+`statusText` (2 sites), `options/apiKey.ts` verification failure, and
+`message.downloadError`'s own render. `errorMessage()` already existed in
+`utils/utils.ts` and was already imported in both bundles — the sweep had
+simply stopped short of these paths.
+
+**Remaining `String(error)` sites, intentionally:** `utils.ts` inside
+`errorMessage` itself (the documented fallback for a shapeless object — now
+pinned by a test) and `background.ts:954` / `downloadControl.ts:122`, which
+read `.message` after a guard.
+
+**Alignment fixes found in the same review:** `resolveWorkerBatchOptions`
+passed the *raw* stored `useZip` (so a legacy `"folder"` travelled unnormalized
+into the pipeline), and three consumers re-derived the format with
+`normalizeFormat(...)` instead of `resolveJobFormat(...)`
+(`background.ts` retry job, single-title record, fallback batch record). All
+five now go through the single resolver.
+
+### Deeper review of 3.6.0 / 3.6.1 / 3.5.0 / 3.4.x code (3.6.4)
+
+The first review pass only covered the 3.6.4 change surface plus the
+`String(error)` class. A second pass read the earlier sessions' modules end to
+end. **Found clean, with the specific reason:**
+
+- `downloadControl.ts` (3.6.0): `signal.aborted` is checked *before* the
+  listener is registered (no missed-abort hang); `waiters` supports several
+  waiters per id and `settle` removes only itself, so the worker's 45 s
+  `awaitDownload` slices can hand over to the next slice without losing a
+  terminal event that lands in between (it is parked in `recentTerminal`);
+  first empty `search` tolerated, later empty = erased; timeout cancels then
+  reports; `onTimeout:"report"` answers `pending` and leaves it running;
+  `recentTerminal` is FIFO-capped at 200.
+- `failedGalleries.ts` (3.6.0): `queue()` serializes read-modify-write and
+  swallows storage errors; `mergeFailures` replaces same-id entries and
+  `slice(merged.length - cap)` keeps the NEWEST; `readPendingFailuresSettled`
+  waits for in-flight writes so a popup asking right after a job sees them.
+- `downloadVerify.ts` / `downloadHistory.ts` (3.5.0): `recordedFilenameRegex`
+  escapes and anchors with a separator boundary (so `MyNHDW/Title.zip` cannot
+  match `NHDW/Title.zip`); `normalizeHistory` cannot throw on malformed
+  stored data; `historyRecords` returns `[]` for an unclean merged job;
+  `applyBatchDate` never double-stamps; `pickFreeBatchFilename` falls through
+  to Chrome's `uniquify` past 10 parts.
+- `downloadNaming.ts` (3.4.1): all five documented drain paths exist and each
+  ends in `persistSession()` + `syncListener()` — suggestion consumed (`:237`),
+  TTL prune (`:134`), FIFO cap (`:142`), `discardDownloadRequest` (`:321`),
+  `forgetDownload` (`:332`, called from the `onChanged` hygiene listener at
+  `:412`).
+- Offscreen `awaitDownloadViaServiceWorker` (3.6.0/3.6.1): re-asks while
+  `pending`, gives up at 4 min with `cancelDownload`, treats a missing /
+  non-`result:true` answer as "older worker, assume saved".
+- `selectedGalleryResolver.ts` (item 7): sequential same-tab resolution, no
+  tab creation anywhere in `src/`.
+
+**Two defects found and fixed here:**
+
+1. **Item 7's backlog text described code that does not exist.** It claimed
+   the popup opens "one bounded temporary tab at a time" and closes each one,
+   and that `test/resolver.test.js` verifies "sequential tab usage, cleanup".
+   There is no `chrome.tabs.create` / `tabs.remove` in `src/` at all, and the
+   test asserts the opposite (*"without creating or navigating tabs"*). A
+   future session could have "fixed" tab cleanup that was never missing.
+   Item 8's "temporary-tab resolver" reference was stale for the same reason.
+   Both corrected; the original plan is kept but marked superseded.
+2. **`attachHistoryOverrides` had no failure path at two of its three call
+   sites.** The relay path already fell back to an empty history list, but the
+   two worker-fallback handlers chain straight off the promise with no
+   `.catch`, so a rejection would leave `sendResponse` uncalled — Chrome logs
+   "message channel closed" and the job never starts. The fallback now lives
+   inside `attachHistoryOverrides` itself, so the invariant holds for every
+   caller. **Honest severity: unreachable today** — `readHistory`,
+   `readVerificationSetting` and `verifyHistoryOnDisk` all resolve rather than
+   reject, so this is insurance against a future change, and it is therefore
+   not covered by a test. The relay path's now-redundant `.catch` was left in
+   place rather than removed.
+
+### Third pass — list mode, PDF-merge guard, retry UI, CDN service (3.6.4)
+
+The modules the second pass listed as unreviewed have now been read.
+
+**Defect found and fixed — the PDF-merge downgrade skipped the history guard.**
+Merged mode deliberately keeps every selected title, so the 3.5.0
+already-downloaded filter is applied *only* when the job is separate. But the
+PDF-merge warning can turn a merged job into a separate one **after** that
+filter has run (`mode = "separate"` in `listControls.startDownload`,
+`outputMode = "separate"` in the popup's `buildJobOptions`). The job then went
+out in separate mode still carrying recorded galleries, so:
+
+- `resolveSelectedGalleries` resolved metadata for galleries the worker was
+  about to skip — the exact API calls the skip exists to avoid ("skipped ids
+  are removed before metadata resolution so they cost ZERO API calls", 3.5.0);
+- the panel/page counts (`N selected · M already downloaded · K will
+  download`, the button label, the in-page flash) described a different job
+  than the one sent.
+
+Three call sites, all fixed by applying the partition after the warning:
+`listControls.ts` `startDownload`, `popup.ts` "Download selected", `popup.ts`
+"Download all (N pages)" (where an empty result is still allowed — other pages
+may have work). Reachable by: list mode = PDF + *Single merged file*, select
+titles including already-downloaded ones, then choose **Switch to separate
+files**. Proven by test — the new `e2e-list-controls` phase fails on the
+pre-fix bundle with `a separate-mode job must not carry the already-downloaded
+title, got {"111111":"Title 1","222222":"Title 2","333333":"Title 3"}`. A
+second new phase pins the other direction: confirming the merge still keeps the
+recorded title, because the skip belongs to separate mode only.
+
+**Defect found and fixed — the failed-gallery notice vanished on a failed
+retry.** `retryFailedGalleries` hides `#failedNotice` when the first retry
+command is sent, before knowing whether it started. If the worker answered
+`error` (e.g. "Unable to start the offscreen download document"), the panel was
+left with no failed list and no Retry button until it was closed and reopened —
+even though the worker still holds the failures. The `error` branch now calls
+`refreshFailedNotice()`.
+
+**Read and found clean:** `pdfMergeWarning.ts` (safe button focused so Enter
+picks one-PDF-per-title; "don't warn me again" honoured only when the user
+proceeds; Escape/overlay cancel; `settled` guard; keydown listener removed and
+overlay detached on close); `listSettings.ts`; `cdnConfigService.ts` (memory
+then session cache, in-flight dedupe, 6 s timeout, permission filtering, stale
+cache kept on failure); `groupRetryMessages` (per-settings batching, forced
+`redownloadIds`, active tab preferred over the original).
+
+**Noted, deliberately not changed:** `retryFailedGalleries` keeps sending the
+remaining grouped commands after one answers `error` (a partially-failed retry
+still queues the rest — matches the batch continue-after-failure rule);
+`wireRetryButton` leaves its button disabled if `groupRetryMessages` produces
+nothing, which needs an entry with no id to happen.
+
+**Verification gap closed the same session — `scripts/e2e-popup.js` (new).**
+The panel's message -> UI layer had no offline coverage at all (only the
+real-browser `e2e-browser.js`), which is exactly where item 29 and the
+failed-notice defect lived. The new harness loads the built `js/preview.js` in
+a VM with a DOM stub and drives it with the messages the worker/offscreen
+document send, then clicks the buttons those messages render. Five phases:
+
+1. an object-shaped `downloadError` renders its message (never
+   `[object Object]`) with Retry + Go Back;
+2. a batch-level error still leaves a clickable Go Back (item 29, at bundle
+   level rather than only in `test/message.test.js`);
+3. a `batchSummary` names the failed galleries and offers `Retry failed (N)`;
+4. clicking Retry re-sends exactly those ids with the failed job's settings as
+   separate files, and when the worker answers `error` the failed notice comes
+   **back** — this is the regression test for the notice defect, and it fails
+   on the pre-fix bundle with `a refused retry must restore the failed notice,
+   got hidden=true`;
+5. Dismiss asks the worker to forget the list and hides the notice.
+
+Added to `npm run test:e2e`. Two harness notes so nobody mistakes its limits:
+the panel registers **two** `onMessage` listeners (`popup.ts` and
+`preview.ts`), so the harness delivers to all of them — keeping only the last
+silently tests the wrong half; and the stub keeps one node per id, so
+"click the current button" means the last listener wired for it (a real
+`innerHTML` re-render destroys the old element). It does **not** bootstrap a
+listing page, so the popup's list-job / PDF-merge / similar-galleries paths
+are still only covered by the equivalent content-script phases.
+
+**Found by that harness, and fixed:** `popup.ts` did
+`message.downloadError(String(request.error), …)` — the last hop before the
+user, stringifying an error that `message.downloadError` already knows how to
+unwrap. Latent (every sender upstream sends `errorMessage(error)`), but it is
+the same class the 3.6.1/3.6.4 sweeps targeted, and phase 1 now pins it.
+
+**`NHDW_Firefox_v1.0.0` error parity backported.** Its seven user-facing
+`String(error)` sites (`background.ts:281,423,506,725,737`,
+`offscreen.ts:470,547,616`) plus `options/apiKey.ts` and the two popup
+`statusText` sites now use `errorMessage()`, added to its `utils/utils.ts`
+verbatim from the Chrome tree. Its own suite passes: **166 passing / 4
+pending**, smoke 5 PASS, e2e exit 0, including a backported worker phase 11
+that fails on the pre-backport bundle with `got "[object Object]"`. Its
+manifest still says 3.3.1 and it still lacks all 3.4.0+ work — item 27.
+
+### Fourth pass — the settings pane and downloadVerify (3.6.4)
+
+**Review pass 4 — the two modules with zero test references
+(`src/preview/popupSettings.ts`, 551 lines, and `src/utils/downloadVerify.ts`).**
+`grep -rl popupSettings test/ scripts/` returned nothing before this pass;
+`downloadVerify.ts` is called from `background.ts` (`verifyHistoryOnDisk`,
+`presentBatchFilenames`) but had no test either. Two real defects came out of
+the settings pane, both found by extending `scripts/e2e-popup.js` to render
+it (new phases 6-8):
+
+1. **Opening the Settings tab rewrote the file-name template.** The
+   file-name section's `renderNamePreview()` both saved and previewed, and it
+   ran on first paint. `buildTemplate` always emits the canonical order with
+   `" - "` separators, and `isTokenOnlyTemplate("{id} - {pretty}")` is `true`
+   (the leftover `" - "` matches its separator class), so a user-ordered
+   template was silently rewritten to `"{pretty} - {id}"` by merely opening
+   the tab. Fixed with a `persist` flag: only a checkbox `change` writes.
+   Phase 6 fails on the pre-fix bundle with `opening the Settings tab must not
+   rewrite downloadName, it wrote [{"downloadName":"{pretty} - {id}"}]`;
+   phase 7 pins that an explicit tick still saves (the fix must not make the
+   section read-only).
+2. **The documented list-format inheritance never worked anywhere.**
+   `listFormat` has no stored value until the user sets one, and list mode is
+   documented to inherit the single-title format until then
+   (`buildListSettings`: "The list format defaults to the single-title format
+   the first time"). That chain was written inline in three places, and every
+   runtime reader defeated it: `LIST_MODE_DEFAULTS` carried `listFormat: "zip"`
+   and is spread into the `chrome.storage.get` defaults of both
+   `listSettings.SYNC_DEFAULTS` and `listControls.readSettings`, so an unset key
+   arrived as `"zip"` and could never fall through to `useZip`. Both panels did
+   the same with their own `listFormat: "zip"` default. Net effect before the
+   fix: everything resolved ZIP, consistently, and the inheritance comment was
+   dead code.
+   Fixed in two steps. First `resolveListFormat(storedListFormat, storedUseZip)`
+   was extracted into `downloadFormats.ts` (the same shape as the existing
+   `resolveListTemplate`), used at all four call sites, and the `listFormat`
+   default dropped from both panels. **That alone was not enough and briefly
+   made things worse** — the panels then inherited (showing CBZ) while both
+   readers still resolved ZIP, i.e. a display/runtime mismatch where before
+   there had been a consistent wrong answer. The pre-merge review caught it;
+   the completing fix is removing `listFormat` from `LIST_MODE_DEFAULTS`
+   itself, so no reader can supply the default.
+   Covered at both layers now: `test/list-mode.test.js` has "list format
+   inheritance" (5 fixtures on the helper) and "list format inheritance through
+   the real reader" (4 fixtures driving `readListSettings` through a
+   `chrome.storage` stub that merges stored values over the caller's defaults,
+   which is what Chrome does); `e2e-popup.js` phase 8 asserts the panel shows
+   the inherited format, and `e2e-list-controls.js` asserts a card download
+   actually sends it. Reintroducing `listFormat: "zip"` into
+   `LIST_MODE_DEFAULTS` fails two fixtures and makes the list-controls phase
+   fail with `must inherit cbz, got …"formatOverride":"zip"`.
+3. `src/options/options.ts` ended `initNameTemplate` with
+   `saveTemplate(storedTemplate)` — writing the stored value straight back on
+   every page open, firing `storage.onChanged` for a value nobody changed.
+   Split into `renderTemplatePreview` + `saveTemplate`; only a change writes.
+
+**Harness additions needed to reach the settings pane** (all now in
+`scripts/e2e-popup.js`, so the next reader does not rediscover them):
+`classList.toggle`, a `chrome.storage.sync` that actually stores what it is
+given (plus a `syncWrites` log), and — the important one — assigning `.id` on
+a `createElement` node must register it with `getElementById`, because
+`popupSettings` builds its checkboxes that way and then looks them up by id.
+Registration is last-write-wins, matching a real document after a re-render.
+
+**Noted, deliberately not changed:** with `{language}`/`{group}`/`{artist}` in
+the template and no matching tag, the token resolves to empty and the
+separator survives — `getDownloadName("{id} - {pretty} - {language}", …, [])`
+yields `"123456 - 123456 - "`, which `cleanName` trims to a dangling
+`"123456_-"`. The empty-token behaviour is pinned on purpose by
+`test/parsing.test.js` ("leaves placeholders empty when tags are absent",
+asserting `"Pretty||"`), so this is a naming-engine contract, not an oversight
+in the panel; changing it would mean changing that test.
+`archiveLayout`/`archiveMasterFolder` have no UI by design —
+`background.ts:278` sets `archiveLayout: "flat"` for single-title jobs and
+`jobOverridesFromRequest` maps `request.masterFolder` onto both master-folder
+keys, so the panel's example path is right for raw and archive alike.
+
+**Firefox snapshot:** defect 1 exists verbatim there
+(`NHDW_Firefox_v1.0.0/src/preview/popupSettings.ts`) and the same `persist`
+fix is backported, together with the `options.ts` preview/save split. It has
+no list mode (3.3.1), so defect 2 does not apply. That tree has **no** panel
+harness, so the backport is verified only by a clean build plus its existing
+suite (166 passing / 4 pending, smoke 5 PASS, e2e exit 0) and by the code
+being identical to the Chrome fix that phase 6 pins — recorded here as an
+open gap rather than claimed as tested.
+
+**Pre-merge self-review (same session) found one of my own fixes incomplete.**
+The first pass-4 change made the two panels inherit the list format while
+`readListSettings` and `listControls.readSettings` still resolved ZIP, because
+`LIST_MODE_DEFAULTS.listFormat = "zip"` was spread into their storage defaults.
+Before the change everything agreed on ZIP; after it the panels would have
+shown CBZ for a job that downloads ZIP. Completed by removing the key from
+`LIST_MODE_DEFAULTS` (defect 2 above) and pinned at both layers. The lesson for
+the next reviewer: when a fix changes what a *display* resolves, grep for every
+other consumer of the same storage defaults before calling it done —
+`grep -rn LIST_MODE_DEFAULTS src/` is the whole check.
+
+**`downloadVerify.ts` pinned.** It was the other zero-reference module. Its
+pure logic is now covered by `test/download-verify.test.js` (10 tests): the
+tail-anchored regex matches on POSIX and Windows separators, refuses
+`MyNHDW/Title.zip` and `NHDW-old/Title.zip`, is anchored at the end, escapes
+metacharacters; `fileExistsOnDisk` resolves `false` (never throws, never
+blocks a download) when `chrome.downloads` is missing or throws;
+`verifyHistoryOnDisk` returns exactly the ids still on disk and skips empty
+records; `presentBatchFilenames` reports the taken `_part2/_part3` candidates.
+Removing the `(?:^|[\\/])` anchor from the compiled helper fails the
+lookalike-parent test, so the suite is not vacuous.
+
+**Gotcha worth remembering:** the `test` script in `package.json` lists mocha
+files **explicitly** — adding `test/foo.test.js` without adding it there
+silently runs nothing (the count stays put and the suite still passes). New
+fixture files must be appended to that list.
+
+### Shared batch pipeline (3.6.3)
 
 Item 32: one storage-free `downloadAllDoujinshis` core used by the worker
 fallback and the offscreen document, so the two copies cannot drift again.
@@ -297,6 +695,14 @@ synced). Known-review note: the 3.6.0 "no more [object Object]" claim was only
 true for the creation-failure path it fixed (and only while worker and
 offscreen are the same lockstep build); these boundary hardenings remove the
 mixed-version footgun.
+
+**Correction (3.6.4):** that note still understated it. The **batch-level
+catch** in both pipelines (`downloadAllDoujinshis` / `downloadAllPages` in the
+worker fallback and in the offscreen document) kept doing
+`errorCallback(String(error))`, so a batch failure with an object-shaped
+reason rendered `[object Object]` in the popup — reproduced on the pre-fix
+bundle by worker e2e phase 12c. Fixed in 3.6.4; see "Post-3.6.4
+self-review" above.
 
 ### Failed-gallery reporting + raw completion tracking (3.6.0 — newest)
 
@@ -833,7 +1239,11 @@ workflow edit has already been committed, drop it with
 
 **PR #37 is merged** (2026-09-05, merge commit `8e32768`): it deleted
 `new 19.txt` from `main` and recorded the 2026-09-05 review findings as
-backlog items 28–34. Nothing else is pending on the CI/workflow side: the
+backlog items 28–34. **PR #38 is merged too** (merge commit `08148a6`): it
+landed 3.6.2 + 3.6.3 (items 28–32 and 34) on `main`. Both are noted here
+because earlier revisions of this document stopped at PR #37 and a reader
+could otherwise assume the 3.6.2/3.6.3 work was still unmerged.
+Nothing else is pending on the CI/workflow side: the
 queued trigger-paths change was applied by the user through the GitHub web
 editor on 2026-09-04 as commit `840d79e` ("Add additional files to extension
 tests workflow"); the live workflow and
@@ -1001,6 +1411,59 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
    longer participates when idle, but the two fixes have never been observed
    together on a real profile.
 
+### From the 2026-09-05 review passes (3.6.4, passes 1-4)
+
+14. **A non-canonical separator is still lost on the first explicit tick.**
+    The pass-4 fix stops the Settings tab from rewriting the template on
+    *open*, but the checkbox UI itself can only build `" - "` separators.
+    `isTokenOnlyTemplate("{pretty}_{id}")` is `true`, so the checkboxes are
+    offered, and the first tick writes `buildTemplate(checked)` =
+    `"{pretty} - {id}"` — the user's `_` is gone. Same for any custom
+    ordering, which is now at least explicit. Suggested fix if anyone cares:
+    add an `isCanonicalTemplate()` check (tokens in `TEMPLATE_TOKENS` order,
+    joined by exactly `" - "`) and route anything else to the manual input the
+    way a truly custom template already is. Not done: it changes which users
+    see checkboxes, which is a UX decision.
+15. **Panel settings are write-only; nothing verifies the reader re-reads.**
+    `verifyDownloadedFiles`, `batchNameDate`, `uiMode`, `inPageControls` and
+    the list-mode keys are written by `popupSettings.ts` and read elsewhere
+    (`background.ts` reads `uiMode` on `storage.onChanged`; `listControls.ts`
+    reads `inPageControls` and the list keys at inject time). The panel's own
+    hints tell the user to reload the page / reopen the extension, and that is
+    never asserted anywhere. A listener-based refresh would remove the
+    instruction but has not been built or tested.
+16. **The popup harness drives a hand-rolled DOM, not a real one.**
+    `scripts/e2e-popup.js` proves the message -> UI contract and the storage
+    contract; it cannot prove layout, focus, `hidden` CSS, or that Chrome
+    really delivers to both `onMessage` listeners in this order. Anything
+    visual is still on the real-browser list.
+17. **`downloadVerify.ts` is unit-pinned but never observed against a real
+    `chrome.downloads`.** In particular the assumption that
+    `downloads.search({ filenameRegex })` matches a Windows path with
+    backslashes, and that `item.exists` is `false` (not missing) for a file the
+    user deleted. If `exists` were absent rather than false, a recorded gallery
+    would be re-downloaded forever - safe, but silently slower.
+18. **`resolveListFormat` centralised the chain but not the *write*.** Both
+    panels display the inherited format and both readers now resolve the same
+    value, but neither writes it back unless the user changes it. That is
+    deliberate (a stored `listFormat` would freeze list mode against later
+    single-title changes), but it means the panel can show CBZ while the stored
+    key is still empty — do not "fix" that by persisting on render, which is
+    exactly defect 1's shape. **Behaviour change to confirm with the user:**
+    someone who set `useZip` to CBZ/PDF/raw and never touched list mode now
+    gets that format from listing pages too, where they previously got ZIP.
+    That is the documented intent, but it is a visible change.
+
+19. **CI logs cannot be read from this environment.** `gh run view --log` and
+    the `actions/runs/<id>/logs` API both fail with
+    `failed to get run log: … results-receiver.actions.githubusercontent.com …
+    EOF`, on every run, including successful ones. So CI is verified by run
+    status plus the workflow's step list (`extension-tests.yml` runs
+    `npm test`, `test:smoke`, `test:e2e` in that order), **not** by reading the
+    per-phase PASS lines. A local run is the only way to see them. If a future
+    session needs log output, that is a runner/credential question, not
+    something to re-debug with `gh`.
+
 ### Structural
 
 9. **`NHDW_Firefox_v1.0.0` is not cleared.** It still ships the 3.3.1 guard in
@@ -1022,8 +1485,58 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 ## Next backlog (worklist — statuses as of 2026-09-05)
 
 Newest additions first (from the 2026-09-05 codebase review; full specs in
-IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–32 and 34 are done in
-3.6.2/3.6.3. Remaining: 33.
+IMPROVEMENT_BACKLOG.md session log 2026-09-05). **28–36 are all done**
+(3.6.2 / 3.6.3 / 3.6.4). **37–41 are new and open** — they came out of the
+four review passes on 2026-09-05 and are the honest remainder of this
+session.
+
+- [x] **35. Settings-pane audit (review pass 4, three real defects).** DONE
+  2026-09-05. Opening the Settings tab rewrote the file-name template
+  (`"{id} - {pretty}"` -> `"{pretty} - {id}"`); the documented list-format
+  inheritance was dead in every path (a `listFormat: "zip"` storage default,
+  supplied by `LIST_MODE_DEFAULTS` for both readers and by each panel for
+  itself, hid "never set"); `options.ts` wrote the template back on every page
+  open. Fixed with a `persist` flag, a shared `resolveListFormat()` in
+  `downloadFormats.ts`, removal of the key from `LIST_MODE_DEFAULTS`, and a
+  preview/save split. Pinned by `scripts/e2e-popup.js` phases 6-8, the
+  `e2e-list-controls.js` inheritance phase and 19 fixtures in
+  `test/list-mode.test.js`. The panels-only half of the format fix was caught
+  incomplete by the pre-merge review — see the pass-4 section.
+- [x] **36. `downloadVerify.ts` pinned (review pass 4).** DONE 2026-09-05 —
+  `test/download-verify.test.js`, 10 tests (tail-anchored regex, lookalike
+  parents refused, escapes metacharacters, "cannot verify -> never block",
+  history partitioning, `_part2` candidates). It was the last module in `src/`
+  with zero test references.
+- [ ] **37. Firefox panel harness (new, blocks clearing `NHDW_Firefox_v1.0.0`).**
+  That tree has no offline coverage of its popup/Settings pane at all, so the
+  pass-4 `persist` fix and the options preview/save split are backported but
+  only build- and suite-verified there. Port `scripts/e2e-popup.js` (its DOM
+  stub is reusable verbatim) and wire it into its `npm run test:e2e`.
+- [ ] **38. Options-page harness (new).** `js/options.js` has no VM harness, so
+  `options.ts`'s DOM wiring — the generic `Select`/`CheckBox`/`InputField`
+  init, the `listFormat` inheritance line added in pass 4, the API-key panel —
+  is only typechecked. Needs a stub that models `<select>.options` and
+  `selectedIndex` (which `Select.init`/`update` read) plus the real
+  `options.html` option lists.
+- [ ] **39. Decide the empty-token separator (needs a human call).** With
+  `{language}`/`{group}`/`{artist}` in the template and no matching tag, the
+  separator survives: `getDownloadName("{id} - {pretty} - {language}", …, [])`
+  -> `"123456 - 123456 - "` -> `cleanName` -> `"123456_-"`. The empty-token
+  behaviour is pinned on purpose by `test/parsing.test.js` (`"Pretty||"`), so
+  this is a contract, not a bug — but the resulting file name is ugly. Options:
+  collapse dangling separators in `cleanName` (touches every name), or drop
+  empty tokens with their separator in `getDownloadName` (breaks that test on
+  purpose). Deliberately not changed in this session.
+- [ ] **40. Popup harness does not bootstrap a listing page (new, known
+  limit).** So the panel's list-job / PDF-merge / similar-galleries paths are
+  still covered only by the equivalent content-script phases
+  (`e2e-list-controls.js`). Extending it means stubbing `getGalleries` +
+  `activeTabGallery`, which is a real piece of work.
+- [ ] **41. Non-canonical separators are still canonicalised on tick (new,
+  UX decision).** See open question 14: `isTokenOnlyTemplate("{pretty}_{id}")`
+  is `true`, so the checkboxes are offered and the first tick rewrites it to
+  `"{pretty} - {id}"`. Suggested: an `isCanonicalTemplate()` gate that routes
+  odd separators to the manual input.
 
 - [x] **28. Batch metadata: non-gallery JSON must fail ONE gallery, not the
   whole batch (review finding M1, high).** DONE in 3.6.2 (`requireGallery`
@@ -1042,13 +1555,15 @@ IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–32 and 34 are done in
   `test/batch-pipeline.test.js`). The core never imports `chrome.storage` /
   `chrome.downloads`. Paged jobs remember failed galleries the same way a
   selected-gallery batch does.
-- [ ] **33. Fallback-path format must not silently default to zip (L3, low).**
-  In the no-offscreen fallback the record/retry format comes from
-  `options.useZip ?? "zip"` while each Downloader reads the stored format when
-  no override is present → record/extension mismatch for any caller that omits
-  `formatOverride` (all current callers send it). Harden the contract and add
-  a unit test that the record format always equals the Downloader's resolved
-  format.
+- [x] **33. Fallback-path format must not silently default to zip (L3, low).**
+  DONE in 3.6.4. `resolveJobFormat(override, stored)` in
+  `src/utils/downloadFormats.ts` is the single resolution point; the worker
+  fallback always sets `settings.useZip` + caps, the relay always sends a
+  concrete format, the batch core hands the normalized format to the
+  Downloader, and `resolveMergedBatchName` names candidates from the job's
+  resolved format (the live gap: merged warn-first searched `.zip` for a
+  `.cbz` artifact). Tests: resolver units, the batch "job format contract"
+  block, worker e2e 5i/5j (5j fails on the pre-fix code).
 - [x] **34. Message-first sweep for remaining console paths (L4, cosmetic).**
   DONE in 3.6.2. Downloader retry / server-archive `console.warn` use
   `errorMessage()`.
@@ -1176,6 +1691,16 @@ IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–32 and 34 are done in
 - Do not put `chrome.storage`, `chrome.downloads`, `chrome.scripting`, or `chrome.permissions` in the offscreen document.
 - Do not use `/api/v2/auth/*` or `/api/v2/user/keys`.
 - Do not remove tab-first fetching or claim Cloudflare bypass.
+- Do not add a `test/*.test.js` file without appending it to the mocha list in
+  `package.json`'s `test` script. The list is explicit; a new file silently
+  runs nothing and the suite still reports success.
+- Do not let a settings pane write on render. `popupSettings.ts` and
+  `options.ts` must write only from an explicit `change` handler (review pass
+  4, defect 1); first paint takes `renderNamePreview(false)` /
+  `renderTemplatePreview(...)`.
+- Do not give `listFormat` a `chrome.storage.get` default again. An unset key
+  means "follow the single-title format"; a `"zip"` default erases that and
+  makes both panels lie about the format in use. Use `resolveListFormat()`.
 - Do not run `npm audit fix --force`.
 - Do not expand web-accessible resources.
 - Do not add `<all_urls>` (or any non-nhentai host) to host/optional-host permissions; all image hosts must validate as HTTPS `*.nhentai.net` origins.

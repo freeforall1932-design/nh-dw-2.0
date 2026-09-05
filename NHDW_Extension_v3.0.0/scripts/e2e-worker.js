@@ -42,6 +42,11 @@ const apiRequestLog = [];
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
+// When set, the NEXT batchProgress broadcast throws this value (an object or
+// an Error) so the batch pipeline rejects at top level - the only way to
+// reach the batch-level .catch, whose text is what the popup renders.
+let sendMessageThrows = null;
+
 // GET /api/v2/cdn fixture: reports a mirror OUTSIDE the hardcoded set so the
 // phase asserts prove the worker actually resolved runtime CDN config.
 const CDN_CONFIG_FIXTURE = JSON.stringify({
@@ -78,7 +83,14 @@ const chromeStub = {
     },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
-        sendMessage(msg) { sentMessages.push(msg); },
+        sendMessage(msg) {
+            if (sendMessageThrows && msg && msg.action === "batchProgress") {
+                const thrown = sendMessageThrows;
+                sendMessageThrows = null;
+                throw thrown;
+            }
+            sentMessages.push(msg);
+        },
         lastError: null
     },
     downloads: {
@@ -897,6 +909,93 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     syncSettings.verifyDownloadedFiles = false;
     syncSettings.batchNameDate = false;
 
+    // ---- Phase 5i: a job with NO format override uses the STORED format for
+    // both the artifact and the history record (backlog item 33). The record
+    // and the file must carry the same extension, or "verify before skip"
+    // searches for a name that was never written and re-downloads the gallery
+    // on every listing run.
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    syncSettings = { useZip: "cbz", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW", verifyDownloadedFiles: true };
+    fireDownload("Downloads/CbzStored", "CbzStored");
+    await waitFor(() => downloads.length === 1, "a stored-cbz single title must deliver one archive");
+    if (downloads[0].filename !== "Downloads/CbzStored.cbz") {
+        fail("the stored format must name the artifact, got " + downloads[0].filename);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "stored-cbz job marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === "Downloads/CbzStored.cbz",
+        "the record must use the SAME cbz name the file was saved under"
+    );
+    // A stored setting left over from before PDF replaced the folder mode.
+    localSettings.downloadHistory = {};
+    downloads.length = 0;
+    syncSettings = { useZip: "folder", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW", verifyDownloadedFiles: true };
+    fireDownload("Downloads/LegacyFolder", "LegacyFolder");
+    await waitFor(() => downloads.length === 1, "a legacy folder-format single title must deliver one artifact");
+    if (downloads[0].filename !== "Downloads/LegacyFolder.pdf") {
+        fail("the retired folder format must produce a PDF, got " + downloads[0].filename);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "legacy-folder job marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === "Downloads/LegacyFolder.pdf",
+        "the record must follow the legacy folder -> pdf mapping too"
+    );
+    console.log("PASS phase 5i: a job with no format override records the stored format (cbz + legacy folder->pdf)");
+
+    // ---- Phase 5j: merged naming follows the STORED format too (item 33).
+    // The disk candidates / part numbering used to be computed from the raw
+    // request, so a merged job with no override searched for ".zip" while the
+    // artifact on disk is ".cbz": the "you already have this file" warning
+    // could never fire and every re-run grew another _partN.
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    syncSettings = {
+        useZip: "cbz",
+        maxConcurrentDownloads: "3",
+        rawMasterFolder: "NHDW",
+        verifyDownloadedFiles: true,
+        batchNameDate: false
+    };
+    const mergedStoredName = "Downloads/MergedStored.cbz";
+    const mergedRun = {
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/MergedStored"
+    };
+    onMessageHandler(mergedRun, {}, (result) => {
+        if (!result || result.result !== "started") {
+            fail("merged stored-format run did not answer {result:'started'}, got " + JSON.stringify(result));
+        }
+    });
+    await waitFor(() => downloads.length === 1, "the merged run must deliver one archive");
+    if (downloads[0].filename !== mergedStoredName) {
+        fail("merged artifact must use the stored cbz format, got " + downloads[0].filename);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "merged stored-format marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
+            localSettings.downloadHistory[String(GALLERY_ID)].filename === mergedStoredName,
+        "the merged record must use the same cbz name as the artifact"
+    );
+    // Re-run WITHOUT confirmation: the warn-first check must now find the real
+    // cbz artifact instead of looking for a .zip that was never written.
+    const mergedAgain = await new Promise((resolve) => {
+        onMessageHandler(mergedRun, {}, resolve);
+    });
+    if (!mergedAgain || mergedAgain.result !== "existing" || mergedAgain.filename !== mergedStoredName) {
+        fail("warn-first must match the real cbz artifact, got " + JSON.stringify(mergedAgain));
+    }
+    if (sessionStore.downloadJob && sessionStore.downloadJob.active) {
+        fail("the warn-first answer must NOT start a job");
+    }
+    console.log("PASS phase 5j: merged naming + warn-first follow the stored format (no override sent)");
+    syncSettings.verifyDownloadedFiles = false;
+
     // ---- Phase 6: interrupted-job detection --------------------------------
     // A job marker without an active downloader means a previous download died
     // with the worker/document; isDownloadFinished must report interrupted so
@@ -1197,6 +1296,47 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     galleryJson2.title = savedTitle2;
     syncSettings.duplicateBehaviour = "rename";
     console.log("PASS phase 12b: separate ignore-dup counts the dropped title in skipped");
+
+    // ---- Phase 12c: a batch-level failure shows its real reason -------------
+    // The batch .catch is the last user-facing error path; it used to do
+    // String(error), so an Error rendered as "Error: <msg>" and a plain object
+    // as "[object Object]" - the exact report shape 3.6.1 removed everywhere
+    // else. Both shapes must now arrive readable.
+    for (const thrown of [{ message: "channel closed (fixture)" }, new Error("worker restarted (fixture)")]) {
+        localSettings.downloadHistory = {};
+        sentMessages.length = 0;
+        downloads.length = 0;
+        syncSettings = { useZip: "zip", maxConcurrentDownloads: "3", verifyDownloadedFiles: false };
+        sendMessageThrows = thrown;
+        onMessageHandler(
+            {
+                action: "downloadAllDoujinshis",
+                allDoujinshis: { [GALLERY_ID]: "One" },
+                finalName: "Downloads/BatchThrow",
+                separate: true
+            },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => sentMessages.some((m) => m.action === "downloadError"),
+            "a batch-level throw must reach the popup as downloadError"
+        );
+        const batchError = sentMessages.find((m) => m.action === "downloadError");
+        const text = String(batchError.error);
+        const expectedText = thrown instanceof Error ? thrown.message : thrown.message;
+        if (text !== expectedText) {
+            fail("the batch error must be the thrown message alone, got " + JSON.stringify(text));
+        }
+        if (/\[object Object\]/.test(text)) {
+            fail("a batch-level failure must never render [object Object], got " + JSON.stringify(text));
+        }
+        if (/^Error:/.test(text)) {
+            fail("a batch-level failure must not carry an 'Error: ' prefix, got " + JSON.stringify(text));
+        }
+        await waitFor(() => sessionStore.downloadJob === undefined, "batch-level throw must clear the job marker");
+    }
+    console.log("PASS phase 12c: batch-level failures render their real reason (object + Error shapes)");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

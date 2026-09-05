@@ -1,3 +1,5 @@
+import { errorMessage } from "../utils/utils";
+
 export interface ApiKeyStorage {
     get(defaults: any, callback: (items: any) => void): void;
     set(items: any, callback?: () => void): void;
@@ -36,7 +38,7 @@ export async function verifyAndSaveApiKey(
         await new Promise<void>((resolve) => storage.set({ apiKey: apiKey }, resolve));
         return { ok: true, username: profile.username };
     } catch (error) {
-        return { ok: false, error: String(error) };
+        return { ok: false, error: errorMessage(error) };
     }
 }
 

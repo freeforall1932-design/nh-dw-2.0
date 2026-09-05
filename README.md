@@ -146,7 +146,38 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.6.3 (current): one shared batch pipeline.**
+* **v3.6.4 (current): one format decision per job.**
+  A download job's output format used to be derived in several places from
+  several inputs (per-job override here, stored default there, `"zip"` as a
+  last resort). One real consequence: a merged (single-file) batch with no
+  explicit format choice computed its disk candidates and part numbering for
+  `.zip` while the archive on disk was `.cbz`/`.pdf` — so the *you already
+  have this file* warning could never match, and every re-run grew another
+  `_partN`. The format is now resolved **once** per job
+  (`resolveJobFormat`: per-job override → stored default → zip) and that one
+  value is used for the Downloader settings, the history record, the retry job
+  and the merged artifact name. Retired `"folder"` settings map to PDF on both
+  sides. Tests: unit cases for the resolver plus a batch-level contract (the
+  record, the Downloader settings and the retry job must all agree for every
+  format, including when no format is sent) and two end-to-end worker phases
+  (stored CBZ names both the file and the record; a merged re-run warns with
+  the real `.cbz` name instead of starting a duplicate).
+  A self-review of this change also closed a gap two earlier releases missed:
+  the **batch-level** error path (`downloadAllDoujinshis` /
+  `downloadAllPages`, worker fallback *and* offscreen, plus the
+  "unable to start the offscreen document" reply) still stringified its error,
+  so an object-shaped batch failure rendered `[object Object]` in the popup —
+  the same report shape 3.6.1 removed elsewhere. Those paths, the popup
+  preview status line, the API-key verification failure and the error panel
+  itself are message-first now; a worker e2e phase reproduces the old
+  `[object Object]` output on the pre-fix build.
+  Two more defects from the same review: choosing *Switch to separate files*
+  in the batch-PDF warning used to send the already-downloaded titles anyway
+  (they were resolved, then skipped downstream, and the on-screen counts
+  described a different job than the one sent) — the history skip is now
+  applied after the warning in all three entry points; and a failed **Retry
+  failed** attempt no longer leaves the panel without the failed list.
+* **v3.6.3: one shared batch pipeline.**
   The worker fallback and the offscreen document used to each keep a copy of
   `downloadAllDoujinshisAsync`; they had already drifted (HTML second-chance
   parse, tab refetch, `Authorization` on the direct fetch, queued progress).

@@ -19,13 +19,16 @@ const {
     formatLabel,
     isInheritedListTemplate,
     normalizeFormat,
+    normalizeFormatOverride,
     normalizeOutputMode,
     outputModeToSeparate,
+    resolveJobFormat,
+    resolveListFormat,
     resolveListTemplate,
     shouldWarnPdfMerge,
     supportsBatchMerge
 } = require('../build/test/utils/downloadFormats.js');
-const { buildListSettings, resolveMasterFolder } = require('../build/test/utils/listSettings.js');
+const { buildListSettings, readListSettings, resolveMasterFolder } = require('../build/test/utils/listSettings.js');
 
 describe('shared download format registry', () => {
     it('exposes exactly the four formats offered on a title page', () => {
@@ -61,6 +64,45 @@ describe('shared download format registry', () => {
         assert.strictEqual(formatLabel('zip'), 'ZIP');
         assert.ok(/testing/i.test(formatLabel('raw')),
             'raw must be visibly labelled as under test rather than silently missing');
+    });
+});
+
+// Backlog item 33: one job, one format decision. Every consumer of a job -
+// the Downloader settings, the history record, the retry job and the merged
+// artifact name - must read the SAME resolved value, or "verify before skip"
+// searches for a file that was never written and the gallery re-downloads on
+// every listing run.
+describe('job format resolution (item 33)', () => {
+    it('lets a per-job override win over the stored default', () => {
+        assert.strictEqual(resolveJobFormat('cbz', 'zip'), 'cbz');
+        assert.strictEqual(resolveJobFormat('raw', 'cbz'), 'raw');
+        assert.strictEqual(resolveJobFormat('pdf', 'raw'), 'pdf');
+    });
+
+    it('falls back to the stored default when no override is sent', () => {
+        assert.strictEqual(resolveJobFormat(undefined, 'cbz'), 'cbz');
+        assert.strictEqual(resolveJobFormat(null, 'pdf'), 'pdf');
+        assert.strictEqual(resolveJobFormat('', 'raw'), 'raw');
+        assert.strictEqual(resolveJobFormat('rar', 'cbz'), 'cbz',
+            'an unrecognized override must not silently become zip');
+    });
+
+    it('maps the retired "folder" value on both sides', () => {
+        assert.strictEqual(resolveJobFormat('folder', 'zip'), 'pdf');
+        assert.strictEqual(resolveJobFormat(undefined, 'folder'), 'pdf');
+    });
+
+    it('ends at zip when neither side names a format', () => {
+        assert.strictEqual(resolveJobFormat(undefined, undefined), 'zip');
+        assert.strictEqual(resolveJobFormat(undefined), 'zip');
+    });
+
+    it('keeps an unusable override out of the resolution', () => {
+        assert.strictEqual(normalizeFormatOverride(''), undefined);
+        assert.strictEqual(normalizeFormatOverride(null), undefined);
+        assert.strictEqual(normalizeFormatOverride('rar'), undefined);
+        assert.strictEqual(normalizeFormatOverride('folder'), 'pdf');
+        assert.strictEqual(normalizeFormatOverride('cbz'), 'cbz');
     });
 });
 
@@ -127,6 +169,73 @@ describe('list-mode filename template', () => {
     it('uses its own template once one is set', () => {
         assert.strictEqual(resolveListTemplate('{id}', '{pretty}'), '{id}');
     });
+});
+
+describe('list format inheritance', () => {
+    it('follows the single-title format while list mode has no key of its own', () => {
+        assert.strictEqual(resolveListFormat(undefined, 'cbz'), 'cbz');
+        assert.strictEqual(resolveListFormat(undefined, 'pdf'), 'pdf');
+    });
+
+    it('prefers the list key once the user sets one', () => {
+        assert.strictEqual(resolveListFormat('zip', 'cbz'), 'zip');
+        assert.strictEqual(resolveListFormat('raw', 'raw'), 'raw');
+    });
+
+    it('falls back to zip when neither key is set', () => {
+        assert.strictEqual(resolveListFormat(undefined, undefined), 'zip');
+    });
+
+    it('normalises the legacy "folder" alias before inheriting', () => {
+        assert.strictEqual(resolveListFormat(undefined, 'folder'), 'pdf');
+        assert.strictEqual(resolveListFormat('folder', 'zip'), 'pdf');
+    });
+
+    it('is what buildListSettings uses, so the panels and the worker agree', () => {
+        assert.strictEqual(buildListSettings({ useZip: 'cbz' }).format, resolveListFormat(undefined, 'cbz'));
+        assert.strictEqual(buildListSettings({ useZip: 'cbz', listFormat: 'zip' }).format,
+            resolveListFormat('zip', 'cbz'));
+    });
+});
+
+// readListSettings goes through chrome.storage.sync.get(defaults, cb), so this
+// stub reproduces what Chrome actually does: merge the stored values OVER the
+// caller's defaults. That merge is the whole point - a "zip" default for
+// listFormat used to make an unset key indistinguishable from a chosen one,
+// which is what killed the documented single-title inheritance.
+function withSyncStore(store, fn) {
+    global.chrome = {
+        storage: {
+            sync: { get(defaults, cb) { cb(Object.assign({}, defaults, store)); } },
+            local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
+        }
+    };
+    return Promise.resolve()
+        .then(fn)
+        .finally(() => { delete global.chrome; });
+}
+
+describe('list format inheritance through the real reader', () => {
+    it('LIST_MODE_DEFAULTS must not define listFormat', () => {
+        assert.strictEqual(LIST_MODE_DEFAULTS.listFormat, undefined,
+            'a listFormat default here is spread into storage.get and hides "never set"');
+        assert.ok(!Object.prototype.hasOwnProperty.call(LIST_MODE_DEFAULTS, 'listFormat'));
+    });
+
+    it('readListSettings inherits the single-title format when list mode has none', () =>
+        withSyncStore({ useZip: 'cbz' }, async () => {
+            assert.strictEqual((await readListSettings()).format, 'cbz');
+        }));
+
+    it('readListSettings keeps an explicit list format over the single-title one', () =>
+        withSyncStore({ useZip: 'cbz', listFormat: 'zip' }, async () => {
+            assert.strictEqual((await readListSettings()).format, 'zip');
+        }));
+
+    it('readListSettings falls back to zip when neither key is stored', () =>
+        withSyncStore({}, async () => {
+            assert.strictEqual((await readListSettings()).format, 'zip');
+        }));
 });
 
 describe('list-mode settings resolution', () => {
