@@ -154,7 +154,10 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   (worker → offscreen relay → Downloader) now unwraps the error's `.message`
   first and falls back to readable text, so the retry loop and the panel name
   the actual reason (invalid filename, permission, disk error …). The stale
-  `NHDW_Firefox_v1.0.0` snapshot received the same hardening.
+  `NHDW_Firefox_v1.0.0` snapshot received the same hardening. *If you ever see
+  this `[object Object]` message, the extension you ran was **older than
+  3.6.0** — reload the current build; the error itself was reported from
+  exactly the v3.4.1 `offscreen.js` in the filed log.*
 * **v3.6.0: Named failures with Retry; raw mode waits for every page.**
   Every failed gallery is now reported **by name** (title, id and the reason)
   — in the single-title error, in the end-of-batch summary and in a notice at

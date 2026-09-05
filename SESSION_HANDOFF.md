@@ -144,6 +144,17 @@ bullet fixed in PR #30)
 [object Object])., tries remaining: 1` from `js/offscreen.js`. The [object
 Object] hid the real browser reason.
 
+**Confirmed build (fingerprint).** The full log was later uploaded to `main`
+(`new 19.txt`, commit `54b03d9`; it is safe — this branch's commits never
+touched `main`, which only gained that file). The minified `offscreen.js`
+embedded in the error page is **byte-identical** (sha256 body match) to
+`NHDW_Extension_v3.0.0/js/offscreen.js` at commit `7aa438e4` — i.e. the
+failing install was **v3.4.1** (the 3.4.1 merge, pre-3.5.0/pre-3.6.0). The
+log exercises none of the 3.6.0/3.6.1 code: no `failedGalleries`, no
+`awaitDownload` relay, and the old `String(…lastError…)` save path is present.
+Upgrading to 3.6.1 (this branch) is the fix; with 3.6.1 the same situation
+reports the REAL `lastError` string instead.
+
 **Exact old chain (matches the report byte for byte).** `chrome.downloads.download`
 callback → `downloadId === undefined` → old worker replied
 `String(chrome.runtime.lastError || …)`; `lastError` is an object `{message}`,
