@@ -146,7 +146,16 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.6.2 (current): batch metadata, error UI, history names, merged duplicates.**
+* **v3.6.3 (current): one shared batch pipeline.**
+  The worker fallback and the offscreen document used to each keep a copy of
+  `downloadAllDoujinshisAsync`; they had already drifted (HTML second-chance
+  parse, tab refetch, `Authorization` on the direct fetch, queued progress).
+  Both now wrap one storage-free core (`src/utils/batchPipeline.ts`) with
+  injected IO, so metadata validation, retry jobs and history records cannot
+  diverge again. The core never touches `chrome.storage` / `chrome.downloads`
+  (offscreen still uses `chrome.runtime` only). Download-all-pages now
+  remembers failed galleries the same way a selected-gallery batch does.
+* **v3.6.2: batch metadata, error UI, history names, merged duplicates.**
   Four follow-ups from the 3.6.0/3.6.1 review. (1) A metadata route that
   returns 200 with non-gallery JSON (`{}`, `{error:…}`) now fails **that
   gallery only** — remaining titles continue, the summary names it, and

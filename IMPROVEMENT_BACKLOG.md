@@ -17,12 +17,12 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Fix `content.ts` / `updateContent.ts` caption-loop crash on pages without `.caption` cards; scope gallery IDs to each card's own gallery link (`closest('a[href*="/g/"]')` — the caption sits inside the cover link on nhentai) instead of a document-wide regex matched by index; verified by `scripts/e2e-content.js`
 - [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
 - [x] Raw-mode failures never render `Error: [object Object]` (3.6.1): the browser's object `lastError` was stringified at the worker, wrapped in an `Error`, then stringified again by the raw catch. Every boundary (worker reply, downloadControl interrupted/start errors, offscreen `saveViaServiceWorker`/`awaitDownloadViaServiceWorker`, and the stale Firefox snapshot) is now message-first — `.message` is unwrapped and shapeless objects fall back to readable text. Regression unit tests + an e2e phase with an Error-instance answer.
-- [~] 2026-09-05 codebase-review backlog, **items 28–34**: 28–31 and 34 done
-  in 3.6.2 (batch metadata validation, popup Go Back always, sanitized
+- [~] 2026-09-05 codebase-review backlog, **items 28–34**: 28–32 and 34 done
+  in 3.6.2/3.6.3 (batch metadata validation, popup Go Back always, sanitized
   history names, merged ignore no longer drops titles, console
-  `errorMessage()` sweep). Still open: **32** deduplicate the twin
-  worker/offscreen batch pipelines, **33** fallback-path format default.
-  Full specs in the session log at the end of this file.
+  `errorMessage()` sweep, shared storage-free batch core). Still open:
+  **33** fallback-path format default. Full specs in the session log at
+  the end of this file.
 - [x] Fix `downloadAllPages`: stop mutating `pagesArr` while iterating so the final ZIP is actually downloaded
 - [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
 - [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
@@ -1072,19 +1072,16 @@ config/optional-host flow; manifest permissions; build reproducibility.
   in the summary counts in both modes. Tests: merged two-gallery job with
   duplicate titles under "ignore" and under "rename".
 
-- **[ ] 32. Deduplicate the twin worker/offscreen batch pipelines (L2,
-  structural).** Two hand-maintained copies of `downloadAllDoujinshisAsync`
-  (~17 KB worker vs ~21 KB offscreen) have already drifted: the offscreen copy
-  gained the metadata HTML second-chance parse, an extra tab fetch, and the
-  `queued` progress field; the worker copy lacks those and drops the
-  `Authorization` header on its direct fetch. Every fix currently has to be
-  applied twice — which is exactly how item 28 exists in one copy while the
-  other was only partially patched. Fix options: extract one shared,
-  storage-free core with injected IO (metadata resolver, tab fetcher, message
-  bus) that both the worker fallback and the offscreen document wrap; or at
-  minimum add a parity test that diffs the two loops' behavior. Constraint:
-  the shared core must not import `chrome.storage`/`chrome.downloads` (offscreen
-  only has `chrome.runtime`).
+- **[x] 32. Deduplicate the twin worker/offscreen batch pipelines (L2,
+  structural).** DONE in 3.6.3 (`src/utils/batchPipeline.ts`: storage-free
+  `runBatchDownload` / `runPagedBatchDownload` / `resolveGalleryMetadata`
+  with injected IO; worker `makeFallbackBatchHost` + offscreen
+  `makeOffscreenBatchHost`). The core never imports `chrome.storage` /
+  `chrome.downloads`. Unify on keyed API first → richer `getGalleryViaTab`
+  → tab fetch → `fetchImpl` with `Authorization` iff `apiKey`; HTML
+  second-chance on a once-read body; keyed `{}` fails that gallery only.
+  Worker `downloadAllPages` now remembers `failedGalleries` like
+  `downloadAllDoujinshis`. Tests: `test/batch-pipeline.test.js`.
 
 - **[ ] 33. Fallback-path format must not silently default to zip (L3, low).**
   In the no-offscreen fallback the batch record/retry format is
@@ -1131,4 +1128,24 @@ Version 3.6.2 in source + release manifests. New tests: parsing
 `requireGallery`, download-history sanitized records, `test/message.test.js`,
 worker e2e 11/12, offscreen equivalents. Verification: webpack clean,
 `npm test` **261 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
+PASS; source `js/` byte-identical to release `js/`.
+
+---
+
+## Session log — 2026-09-05: 3.6.3 shared batch pipeline (item 32)
+
+Follow-up session `arena/01a06fb0-nh-dw-2-0` after 3.6.2. Extracted one
+storage-free batch core so worker fallback and offscreen cannot drift again.
+Item **33** (fallback-path format default) is deliberately not in this drop.
+
+| Area | Change |
+| --- | --- |
+| Core | `src/utils/batchPipeline.ts`: `runBatchDownload`, `runPagedBatchDownload`, `resolveGalleryMetadata`, `getGalleryViaTab`, `tryParseGalleryText`, `buildRetryJob`. Host injects parsing/abort/sendMessage/fetchUrlFromTab/fetchImpl/newZip/downloadGallery. No `chrome.storage` / `chrome.downloads`. |
+| Routes | pre-resolved → keyed API first → richer `getGalleryViaTab` (`parsing.GetUrl`, clearnet api/gallery/page) → `fetchUrlFromTab(parsing.GetUrl)` then `fetchImpl` with `Authorization: Key` iff `apiKey`. Keyed `{}` → `requireGallery` throw → `countFailure`. HTML second-chance on the once-read body (replayable Response). |
+| Worker | `makeFallbackBatchHost` + `resolveWorkerBatchOptions` then core. `rememberFailedGalleries` on both `downloadAllDoujinshis` and `downloadAllPages`. |
+| Offscreen | `makeOffscreenBatchHost` (`saveUrl=saveArtifactSmart`, extras `{from:"offscreen", queued}`). History via `collectHistoryRecords`. Idle/queue/pause/save-via-worker unchanged. |
+| Tests | `test/batch-pipeline.test.js` (keyed auth, keyless no auth, HTML second-chance, fail-one, merged/separate ignore, history skip, extras, paged listing + aggregated paged failures). |
+
+Version 3.6.3 in source + release manifests. Verification: webpack clean,
+`npm test` **277 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
 PASS; source `js/` byte-identical to release `js/`.

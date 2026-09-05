@@ -1,5 +1,11 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-05 (session `arena/01a06fb0-nh-dw-2-0`) — **3.6.3: item
+32, one shared batch pipeline.** Worker fallback and offscreen now wrap
+`src/utils/batchPipeline.ts` (storage-free core, injected IO). Suggested
+remaining order: **33** (fallback format default). P3 queue UI, Firefox port,
+and real-browser verification are unchanged.
+
 **Updated:** 2026-09-05 (session `arena/01a06fb0-nh-dw-2-0`) — **3.6.2: review
 items 28–31 and 34 landed.** Follow-up to the 3.6.0/3.6.1 rewrite audit (PR
 #37 already merged as `8e32768`). Concrete bugs M1–M3 and L1 plus the console
@@ -158,7 +164,44 @@ bullet fixed in PR #30)
 
 ## Current implemented work
 
-### Batch metadata + error UI + history names + merged duplicates (3.6.2 — newest)
+### Shared batch pipeline (3.6.3 — newest)
+
+Item 32: one storage-free `downloadAllDoujinshis` core used by the worker
+fallback and the offscreen document, so the two copies cannot drift again.
+
+- **Core** (`src/utils/batchPipeline.ts`): `runBatchDownload`,
+  `runPagedBatchDownload`, `resolveGalleryMetadata`, `getGalleryViaTab`,
+  `tryParseGalleryText`, `buildRetryJob`. Hosts inject parsing, abort,
+  `sendMessage`, `fetchUrlFromTab`, `fetchImpl`, `newZip`, `downloadGallery`.
+  The core does **not** import `chrome.storage` / `chrome.downloads` (and
+  does not import `Downloader` or `tabImageFetch` — those stay at the host).
+- **Unify on the richer routes:** pre-resolved metadata → keyed official API
+  first (`Authorization: Key` iff `apiKey`) → `getGalleryViaTab`
+  (`parsing.GetUrl`, clearnet api/gallery/page) → tab refetch of
+  `parsing.GetUrl` then `fetchImpl` with Authorization iff keyed. Keyed `{}`
+  is `requireGallery` → `countFailure` (no fall-through). HTML second-chance
+  reads the body **once** (replayable Response).
+- **Worker:** `makeFallbackBatchHost` + `resolveWorkerBatchOptions` then
+  core. `rememberFailedGalleries` on both `downloadAllDoujinshis` **and**
+  `downloadAllPages` (paged used to drop the list). History via
+  `historyRecords` / `recordHistory`.
+- **Offscreen:** `makeOffscreenBatchHost` (`saveUrl = saveArtifactSmart`,
+  extras `{from:"offscreen", queued}`). History via `collectHistoryRecords`.
+  Idle / queue / pause / save-via-worker unchanged.
+- **Effective separate** is still `downloadSeparately || format === "raw"`;
+  `archiveLayout` is still `downloadSeparately ? flat : nested`.
+
+**Tests.** `test/batch-pipeline.test.js` (keyed auth, keyless no auth, HTML
+second-chance, fail-one, merged/separate ignore, history skip, extras,
+paged listing, aggregated paged failures). Manifests 3.6.3. Verification
+this session: webpack clean, `npm test` **277 passing / 4 pending**, smoke
+7 PASS, `npm run test:e2e` all PASS; source `js/` byte-identical to
+`NHDW_Release_v3.0.0/js/`.
+
+**Not in this drop:** item 33 (fallback format default — theoretical; all
+current callers send `formatOverride`).
+
+### Batch metadata + error UI + history names + merged duplicates (3.6.2)
 
 Four follow-ups from the 2026-09-05 rewrite audit (items 28–31, 34).
 
@@ -189,9 +232,9 @@ offscreen phases. Manifests 3.6.2. Verification this session: webpack clean,
 `npm test` **261 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
 PASS; source `js/` byte-identical to `NHDW_Release_v3.0.0/js/`.
 
-**Not in this drop:** item 32 (dedupe the twin pipelines — structural), item
-33 (fallback format default — theoretical; all current callers send
-`formatOverride`).
+**Not in this drop (3.6.2):** item 32 (dedupe the twin pipelines —
+structural; done in 3.6.3), item 33 (fallback format default — theoretical;
+all current callers send `formatOverride`).
 
 ### Raw-mode error readability (3.6.1)
 
@@ -979,8 +1022,8 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 ## Next backlog (worklist — statuses as of 2026-09-05)
 
 Newest additions first (from the 2026-09-05 codebase review; full specs in
-IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–31 and 34 are done in
-3.6.2. Remaining: 32 then 33.
+IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–32 and 34 are done in
+3.6.2/3.6.3. Remaining: 33.
 
 - [x] **28. Batch metadata: non-gallery JSON must fail ONE gallery, not the
   whole batch (review finding M1, high).** DONE in 3.6.2 (`requireGallery`
@@ -993,13 +1036,12 @@ IMPROVEMENT_BACKLOG.md session log 2026-09-05). 28–31 and 34 are done in
 - [x] **31. Merged jobs must not silently drop duplicate-titled galleries
   under "ignore" (L1, medium).** DONE in 3.6.2 (merged id-suffixes; separate
   counts `skipped`; worker e2e 12a/12b).
-- [ ] **32. Deduplicate the twin worker/offscreen batch pipelines (L2,
-  structural).** Two hand-maintained copies of `downloadAllDoujinshisAsync`
-  (~17 KB vs ~21 KB) have drifted already (offscreen-only HTML second-chance,
-  tab refetch, `queued` field; worker drops the `Authorization` header on its
-  direct fetch). Extract one shared, storage-free core with injected IO so
-  fixes land once; at minimum add a parity test. This is why item 28 exists in
-  one copy and was only partially patched in the other.
+- [x] **32. Deduplicate the twin worker/offscreen batch pipelines (L2,
+  structural).** DONE in 3.6.3 (`src/utils/batchPipeline.ts` storage-free
+  core; worker `makeFallbackBatchHost` + offscreen `makeOffscreenBatchHost`;
+  `test/batch-pipeline.test.js`). The core never imports `chrome.storage` /
+  `chrome.downloads`. Paged jobs remember failed galleries the same way a
+  selected-gallery batch does.
 - [ ] **33. Fallback-path format must not silently default to zip (L3, low).**
   In the no-offscreen fallback the record/retry format comes from
   `options.useZip ?? "zip"` while each Downloader reads the stored format when
