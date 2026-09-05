@@ -419,6 +419,75 @@ pending**, smoke 5 PASS, e2e exit 0, including a backported worker phase 11
 that fails on the pre-backport bundle with `got "[object Object]"`. Its
 manifest still says 3.3.1 and it still lacks all 3.4.0+ work — item 27.
 
+**Review pass 4 — the two modules with zero test references
+(`src/preview/popupSettings.ts`, 551 lines, and `src/utils/downloadVerify.ts`).**
+`grep -rl popupSettings test/ scripts/` returned nothing before this pass;
+`downloadVerify.ts` is called from `background.ts` (`verifyHistoryOnDisk`,
+`presentBatchFilenames`) but had no test either. Two real defects came out of
+the settings pane, both found by extending `scripts/e2e-popup.js` to render
+it (new phases 6-8):
+
+1. **Opening the Settings tab rewrote the file-name template.** The
+   file-name section's `renderNamePreview()` both saved and previewed, and it
+   ran on first paint. `buildTemplate` always emits the canonical order with
+   `" - "` separators, and `isTokenOnlyTemplate("{id} - {pretty}")` is `true`
+   (the leftover `" - "` matches its separator class), so a user-ordered
+   template was silently rewritten to `"{pretty} - {id}"` by merely opening
+   the tab. Fixed with a `persist` flag: only a checkbox `change` writes.
+   Phase 6 fails on the pre-fix bundle with `opening the Settings tab must not
+   rewrite downloadName, it wrote [{"downloadName":"{pretty} - {id}"}]`;
+   phase 7 pins that an explicit tick still saves (the fix must not make the
+   section read-only).
+2. **Both settings panels advertised a list format that was not the one in
+   use.** `listFormat` has no stored value until the user sets one, and list
+   mode then inherits the single-title format — that chain lived inline in
+   three places (`listSettings.buildListSettings`, `listControls.ts:107`,
+   `popupSettings.ts`) and both panels defeated it by passing
+   `listFormat: "zip"` as a `chrome.storage.get` **default**, which erases the
+   difference between "never set" and "deliberately zip". With `useZip: "cbz"`
+   the panels showed ZIP while `listControls`/`buildListSettings` used CBZ for
+   the same storage. Fixed by extracting `resolveListFormat(storedListFormat,
+   storedUseZip)` into `downloadFormats.ts` (the same shape as the existing
+   `resolveListTemplate`), using it in all four places, and dropping the
+   `listFormat` default from both panels' `get()` calls. Covered by five new
+   fixtures in `test/list-mode.test.js` ("list format inheritance") and by
+   phase 8, which fails on a bundle with only that fix reverted with
+   `must show the inherited format cbz, got zip`.
+3. `src/options/options.ts` ended `initNameTemplate` with
+   `saveTemplate(storedTemplate)` — writing the stored value straight back on
+   every page open, firing `storage.onChanged` for a value nobody changed.
+   Split into `renderTemplatePreview` + `saveTemplate`; only a change writes.
+
+**Harness additions needed to reach the settings pane** (all now in
+`scripts/e2e-popup.js`, so the next reader does not rediscover them):
+`classList.toggle`, a `chrome.storage.sync` that actually stores what it is
+given (plus a `syncWrites` log), and — the important one — assigning `.id` on
+a `createElement` node must register it with `getElementById`, because
+`popupSettings` builds its checkboxes that way and then looks them up by id.
+Registration is last-write-wins, matching a real document after a re-render.
+
+**Noted, deliberately not changed:** with `{language}`/`{group}`/`{artist}` in
+the template and no matching tag, the token resolves to empty and the
+separator survives — `getDownloadName("{id} - {pretty} - {language}", …, [])`
+yields `"123456 - 123456 - "`, which `cleanName` trims to a dangling
+`"123456_-"`. The empty-token behaviour is pinned on purpose by
+`test/parsing.test.js` ("leaves placeholders empty when tags are absent",
+asserting `"Pretty||"`), so this is a naming-engine contract, not an oversight
+in the panel; changing it would mean changing that test.
+`archiveLayout`/`archiveMasterFolder` have no UI by design —
+`background.ts:278` sets `archiveLayout: "flat"` for single-title jobs and
+`jobOverridesFromRequest` maps `request.masterFolder` onto both master-folder
+keys, so the panel's example path is right for raw and archive alike.
+
+**Firefox snapshot:** defect 1 exists verbatim there
+(`NHDW_Firefox_v1.0.0/src/preview/popupSettings.ts`) and the same `persist`
+fix is backported, together with the `options.ts` preview/save split. It has
+no list mode (3.3.1), so defect 2 does not apply. That tree has **no** panel
+harness, so the backport is verified only by a clean build plus its existing
+suite (166 passing / 4 pending, smoke 5 PASS, e2e exit 0) and by the code
+being identical to the Chrome fix that phase 6 pins — recorded here as an
+open gap rather than claimed as tested.
+
 ### Shared batch pipeline (3.6.3)
 
 Item 32: one storage-free `downloadAllDoujinshis` core used by the worker

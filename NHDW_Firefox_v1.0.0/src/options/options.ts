@@ -77,11 +77,14 @@ function initNameTemplate(storedTemplate: string) {
         return;
     }
 
-    const saveTemplate = (template: string) => {
-        chrome.storage.sync.set({ downloadName: template });
+    const renderTemplatePreview = (template: string) => {
         preview.textContent = template !== ""
             ? "File name will use: " + template
             : "Nothing checked - the file name falls back to the gallery ID.";
+    };
+    const saveTemplate = (template: string) => {
+        chrome.storage.sync.set({ downloadName: template });
+        renderTemplatePreview(template);
     };
 
     if (!isTokenOnlyTemplate(storedTemplate)) {
@@ -122,7 +125,9 @@ function initNameTemplate(storedTemplate: string) {
             saveTemplate(buildTemplate(checked));
         });
     }
-    saveTemplate(storedTemplate); // renders the preview line
+    // Preview only: opening this page must not write the template back (it
+    // would fire storage.onChanged with a value nobody changed).
+    renderTemplatePreview(storedTemplate); // renders the preview line
 }
 
 // ---- API key ---------------------------------------------------------------

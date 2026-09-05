@@ -146,6 +146,15 @@ export function isInheritedListTemplate(value: any): boolean {
     return value === undefined || value === null || value === LIST_TEMPLATE_INHERIT;
 }
 
+// The list-mode format follows the single-title one until the user gives list
+// mode its own key. Callers must pass the RAW stored values: a
+// chrome.storage.get default of "zip" for listFormat erases the difference
+// between "never set" and "deliberately zip", which is what made both settings
+// panels show ZIP while list downloads actually used the single-title format.
+export function resolveListFormat(storedListFormat: any, storedUseZip: any): DownloadFormat {
+    return normalizeFormat(storedListFormat, normalizeFormat(storedUseZip, "zip"));
+}
+
 export function resolveListTemplate(listTemplate: any, singleTemplate: string): string {
     return isInheritedListTemplate(listTemplate) ? String(singleTemplate) : String(listTemplate);
 }

@@ -10,7 +10,8 @@ import {
     isInheritedListTemplate,
     LIST_TEMPLATE_INHERIT,
     normalizeFormat,
-    normalizeOutputMode
+    normalizeOutputMode,
+    resolveListFormat
 } from "../utils/downloadFormats";
 
 // downloadName is handled below by the template checkboxes (with a manual
@@ -46,7 +47,9 @@ chrome.storage.sync.get({
     maxConcurrentDownloads: "3",
     rawMaxConcurrent: "3",
     rawMasterFolder: "NHDW",
-    listFormat: "zip",
+    // listFormat has NO default here on purpose: an unset key means "follow
+    // the single-title format", and a "zip" default would hide that (the panel
+    // would then show ZIP while list downloads used e.g. CBZ).
     listOutputMode: "separate",
     listMasterFolder: true,
     listDownloadName: LIST_TEMPLATE_INHERIT,
@@ -64,6 +67,12 @@ chrome.storage.sync.get({
             }
         })
     })
+    // Show the inherited list format before anything reads the select.
+    const listFormatSelect = document.getElementById("listFormat") as HTMLSelectElement | null;
+    if (listFormatSelect) {
+        listFormatSelect.value = resolveListFormat((elems as any).listFormat, (elems as any).useZip);
+    }
+
     initNameTemplate(elems.downloadName);
 
     // Master folder for raw downloads. Saved verbatim — the empty string is
@@ -162,11 +171,14 @@ function initNameTemplate(storedTemplate: string) {
         return;
     }
 
-    const saveTemplate = (template: string) => {
-        chrome.storage.sync.set({ downloadName: template });
+    const renderTemplatePreview = (template: string) => {
         preview.textContent = template !== ""
             ? "File name will use: " + template
             : "Nothing checked - the file name falls back to the gallery ID.";
+    };
+    const saveTemplate = (template: string) => {
+        chrome.storage.sync.set({ downloadName: template });
+        renderTemplatePreview(template);
     };
 
     if (!isTokenOnlyTemplate(storedTemplate)) {
@@ -207,7 +219,9 @@ function initNameTemplate(storedTemplate: string) {
             saveTemplate(buildTemplate(checked));
         });
     }
-    saveTemplate(storedTemplate); // renders the preview line
+    // Preview only: opening this page must not write the template back (it
+    // would fire storage.onChanged with a value nobody changed).
+    renderTemplatePreview(storedTemplate);
 }
 
 // ---- API key ---------------------------------------------------------------

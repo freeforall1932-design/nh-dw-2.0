@@ -28,6 +28,7 @@ import {
     normalizeOutputMode,
     outputModeToSeparate,
     shouldWarnPdfMerge,
+    resolveListFormat,
     resolveListTemplate,
     LIST_MODE_DEFAULTS,
     PDF_MERGE_WARNING_KEY
@@ -104,7 +105,7 @@ function readSettings(): Promise<boolean> {
         try {
             chrome.storage.sync.get(defaults, (elems: any) => {
                 const stored = elems || defaults;
-                settings.format = normalizeFormat(stored.listFormat, normalizeFormat(stored.useZip, "zip"));
+                settings.format = resolveListFormat(stored.listFormat, stored.useZip);
                 settings.outputMode = normalizeOutputMode(stored.listOutputMode, "separate");
                 settings.masterFolder = stored.listMasterFolder === undefined ? true : !!stored.listMasterFolder;
                 settings.masterFolderName = String(stored.rawMasterFolder === undefined ? "NHDW" : stored.rawMasterFolder);

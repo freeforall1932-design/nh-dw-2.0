@@ -19,6 +19,7 @@ import {
     isInheritedListTemplate,
     LIST_TEMPLATE_INHERIT,
     normalizeFormat,
+    resolveListFormat,
     normalizeOutputMode
 } from "../utils/downloadFormats";
 
@@ -188,14 +189,21 @@ export function renderSettings(container: HTMLElement): void {
         }
 
         const inUse = templateTokensInUse(storedTemplate);
-        const renderNamePreview = () => {
+        // persist=false is for the first paint only. buildTemplate always emits
+        // the canonical order with " - " separators, so saving on render would
+        // silently rewrite a template the user ordered themselves
+        // ("{id} - {pretty}" -> "{pretty} - {id}") merely because they opened
+        // this tab. Only an explicit checkbox change may write.
+        const renderNamePreview = (persist: boolean = true) => {
             const checked: Record<string, boolean> = {};
             for (const t of TEMPLATE_TOKENS) {
                 const box = document.getElementById("psTpl_" + t) as HTMLInputElement | null;
                 checked[t] = !!(box && box.checked);
             }
             const template = buildTemplate(checked);
-            chrome.storage.sync.set({ downloadName: template });
+            if (persist) {
+                chrome.storage.sync.set({ downloadName: template });
+            }
             // Show a concrete example of the resulting file name.
             const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
             const clean = utils.cleanName(rendered, spacesBox.checked, "123456");
@@ -211,12 +219,13 @@ export function renderSettings(container: HTMLElement): void {
             box.type = "checkbox";
             box.id = "psTpl_" + token;
             box.checked = !!inUse[token];
-            box.addEventListener("change", renderNamePreview);
+            // Explicit user action - this is the only write in this section.
+            box.addEventListener("change", () => renderNamePreview(true));
             label.appendChild(box);
             label.appendChild(document.createTextNode(" " + TEMPLATE_LABELS[token]));
             checksBox.appendChild(label);
         }
-        renderNamePreview();
+        renderNamePreview(false);
     });
 
     renderHistorySection(container);
@@ -400,13 +409,14 @@ function renderListModeSection(container: HTMLElement): void {
         downloadName: "{pretty}",
         replaceSpaces: true,
         rawMasterFolder: "NHDW",
-        listFormat: "zip",
+        // listFormat has NO default here on purpose: an unset key means
+        // "follow the single-title format", and a "zip" default would hide that.
         listOutputMode: "separate",
         listMasterFolder: true,
         listDownloadName: LIST_TEMPLATE_INHERIT
     }, (elems: any) => {
         const singleTemplate = String(elems.downloadName || "{pretty}");
-        formatSelect.value = normalizeFormat(elems.listFormat, normalizeFormat(elems.useZip, "zip"));
+        formatSelect.value = resolveListFormat(elems.listFormat, elems.useZip);
         modeSelect.value = normalizeOutputMode(elems.listOutputMode, "separate");
         masterBox.checked = elems.listMasterFolder === undefined ? true : !!elems.listMasterFolder;
         const inherited = isInheritedListTemplate(elems.listDownloadName);

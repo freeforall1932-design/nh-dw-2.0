@@ -1308,3 +1308,29 @@ current caller) the resolved format is identical to before.
   passing / 4 pending, smoke 5 PASS, e2e exit 0, plus a backported worker
   phase 11 that fails pre-backport with `got "[object Object]"`. Still 3.3.1
   and still missing 3.4.0+ work (item 27).
+
+### Addendum — review pass 4: the settings pane (same session)
+
+- **Fixed: opening the Settings tab rewrote the name template.**
+  `popupSettings.ts` saved on first paint; `buildTemplate` canonicalises order
+  and separator, so `"{id} - {pretty}"` became `"{pretty} - {id}"` with no user
+  action. Now only a checkbox change writes. Pinned by `e2e-popup.js` phase 6
+  (fails pre-fix) and phase 7 (an explicit tick still saves).
+- **Fixed: the panels showed a list format that was not in use.** The
+  `listFormat` inheritance chain (`listFormat` -> `useZip` -> zip) is now one
+  helper, `resolveListFormat()` in `downloadFormats.ts`, used by
+  `buildListSettings`, `listControls.ts`, `popupSettings.ts` and `options.ts`;
+  both panels no longer pass `listFormat: "zip"` as a storage default, which is
+  what hid "never set". 5 new fixtures + phase 8 (fails with `got zip` on a
+  bundle with only that fix reverted).
+- **Fixed: `options.ts` wrote the template back on every page open**
+  (`saveTemplate(storedTemplate)` -> `renderTemplatePreview`).
+- **`e2e-popup.js` grew what it needed to render the settings pane:**
+  `classList.toggle`, a stateful `chrome.storage.sync` with a write log, and
+  `.id` assignment registering a `createElement` node with `getElementById`
+  (last write wins). Without the last one, `popupSettings` reads back fresh
+  unchecked boxes instead of the ones it just built.
+- **Backported to `NHDW_Firefox_v1.0.0`:** the same `persist` fix and the
+  options preview/save split. No list mode there, so no inheritance fix. No
+  panel harness in that tree — the backport is build-verified and
+  suite-verified (166 passing / 4 pending), not behaviour-verified.

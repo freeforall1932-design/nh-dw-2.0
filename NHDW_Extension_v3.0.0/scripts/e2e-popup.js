@@ -40,7 +40,6 @@ const nodes = new Map();
 function makeNode(tag, id) {
     const node = {
         tagName: String(tag || "div").toUpperCase(),
-        id: id || "",
         children: [],
         _classes: [],
         _listeners: {},
@@ -58,7 +57,12 @@ function makeNode(tag, id) {
                 const i = node._classes.indexOf(name);
                 if (i !== -1) node._classes.splice(i, 1);
             },
-            contains(name) { return node._classes.includes(name); }
+            contains(name) { return node._classes.includes(name); },
+            toggle(name, force) {
+                const on = force === undefined ? !node._classes.includes(name) : !!force;
+                if (on) { node.classList.add(name); } else { node.classList.remove(name); }
+                return on;
+            }
         },
         setAttribute(k, v) { node[k] = v; },
         getAttribute(k) { return node[k]; },
@@ -96,6 +100,23 @@ function makeNode(tag, id) {
         querySelector() { return null; },
         querySelectorAll() { return []; }
     };
+    // In a real DOM, assigning .id makes an element findable by
+    // getElementById. The settings pane builds its checkboxes with
+    // createElement and then looks them up by id, so without this the panel
+    // would read back fresh unchecked nodes instead of the ones it made.
+    let nodeId = "";
+    Object.defineProperty(node, "id", {
+        get() { return nodeId; },
+        set(value) {
+            nodeId = String(value);
+            // Last write wins, like a real document: renderSettings clears its
+            // pane and appends fresh elements, so the newest node with an id is
+            // the one getElementById must return.
+            if (nodeId) nodes.set(nodeId, node);
+        },
+        enumerable: true
+    });
+    if (id) node.id = id;
     return node;
 }
 
@@ -132,6 +153,9 @@ const sentMessages = [];
 let failedStore = [];
 // What the worker answers for a retry command; phases flip this to "error".
 let retryAnswer = { result: "started" };
+// chrome.storage.sync as the panel sees it, plus every write it makes.
+const syncStore = {};
+const syncWrites = [];
 
 const chromeStub = {
     runtime: {
@@ -158,7 +182,16 @@ const chromeStub = {
         getURL: (p) => p
     },
     storage: {
-        sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); }, set(_items, cb) { if (cb) cb(); } },
+        // Stateful: the settings pane reads what it wrote moments earlier.
+        sync: {
+            get(defaults, cb) { cb(Object.assign({}, defaults, syncStore)); },
+            set(items, cb) {
+                syncWrites.push(Object.assign({}, items));
+                Object.assign(syncStore, items);
+                if (cb) cb();
+            },
+            remove(key, cb) { delete syncStore[key]; if (cb) cb(); }
+        },
         local: {
             // apiKeyGate: "skipped" = the first-run gate was already answered,
             // so the panel renders its normal preview instead of the key box
@@ -336,6 +369,79 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("Dismiss must hide the notice");
     }
     console.log("PASS phase 5: Dismiss forgets the failed list and hides the notice");
+
+    // ---- Phase 6: opening Settings must not rewrite stored settings --------
+    // A token-only template in the user's OWN order ("{id} - {pretty}") is
+    // representable by the checkboxes, so the panel takes the checkbox branch.
+    // Merely opening the tab used to rebuild it in canonical order and save
+    // that, silently reordering the file names with no user action.
+    syncStore.downloadName = "{id} - {pretty}";
+    const writesBefore = syncWrites.length;
+    byId("tabSettings").dispatchLast("click");
+    await wait(30);
+    const tplPreview = byId("psTemplatePreview");
+    if (!/Example file name/.test(tplPreview.textContent)) {
+        fail("the settings tab must render the template example, got \"" + tplPreview.textContent + "\"");
+    }
+    const unsolicited = syncWrites.slice(writesBefore).filter((w) => "downloadName" in w);
+    if (unsolicited.length > 0) {
+        fail("opening the Settings tab must not rewrite downloadName, it wrote " + JSON.stringify(unsolicited));
+    }
+    if (syncStore.downloadName !== "{id} - {pretty}") {
+        fail("the stored template must survive opening Settings untouched, got " + syncStore.downloadName);
+    }
+    console.log("PASS phase 6: opening Settings leaves the stored name template alone");
+
+    // ---- Phase 7: ticking a token still saves -----------------------------
+    // The fix must not turn the section read-only: an explicit change writes.
+    const exampleBefore = tplPreview.textContent;
+    const languageBox = byId("psTpl_language");
+    if (!languageBox._listeners.change || languageBox._listeners.change.length === 0) {
+        fail("the settings tab must wire a change handler to each template checkbox");
+    }
+    languageBox.checked = true;
+    const writesBefore2 = syncWrites.length;
+    languageBox.dispatchLast("change");
+    await wait(20);
+    const saved = syncWrites.slice(writesBefore2).filter((w) => "downloadName" in w).pop();
+    if (!saved) {
+        fail("ticking a token must save the template");
+    }
+    if (saved.downloadName.indexOf("{language}") === -1) {
+        fail("the saved template must contain the newly ticked token, got " + saved.downloadName);
+    }
+    if (saved.downloadName.indexOf("{id}") === -1 || saved.downloadName.indexOf("{pretty}") === -1) {
+        fail("the saved template must keep the tokens already in use, got " + saved.downloadName);
+    }
+    // The example is a CONCRETE name, so an optional token with no matching tag
+    // shows as an empty segment rather than as "{language}"; what matters is
+    // that the example was rebuilt at all.
+    if (tplPreview.textContent === exampleBefore) {
+        fail("the example file name must be rebuilt after a change, still " + tplPreview.textContent);
+    }
+    if (!/^Example file name: /.test(tplPreview.textContent)) {
+        fail("the example file name must stay readable, got " + tplPreview.textContent);
+    }
+    console.log("PASS phase 7: ticking a token saves the template it builds");
+
+    // ---- Phase 8: the list format shown must be the one that will be used --
+    // listFormat has no stored value here, so list mode inherits the
+    // single-title format (cbz). The panel used to default the key to "zip" in
+    // its storage.get call, which made it advertise ZIP while listControls and
+    // buildListSettings inherited CBZ for the very same storage.
+    syncStore.useZip = "cbz";
+    delete syncStore.listFormat;
+    byId("tabSettings").dispatchLast("click");
+    await wait(30);
+    const listFormat = byId("psListFormat");
+    if (listFormat.value !== "cbz") {
+        fail("with no list key set the panel must show the inherited format cbz, got " + listFormat.value);
+    }
+    const listPreview = byId("psListTemplatePreview");
+    if (listPreview.textContent.indexOf(".cbz") === -1) {
+        fail("the list-mode example must use the inherited format, got " + listPreview.textContent);
+    }
+    console.log("PASS phase 8: the list-mode format shown is the one that will be used");
 
     console.log("PASS: popup message layer behaves correctly in a window-less context.");
     process.exit(0);

@@ -23,6 +23,7 @@ const {
     normalizeOutputMode,
     outputModeToSeparate,
     resolveJobFormat,
+    resolveListFormat,
     resolveListTemplate,
     shouldWarnPdfMerge,
     supportsBatchMerge
@@ -167,6 +168,33 @@ describe('list-mode filename template', () => {
 
     it('uses its own template once one is set', () => {
         assert.strictEqual(resolveListTemplate('{id}', '{pretty}'), '{id}');
+    });
+});
+
+describe('list format inheritance', () => {
+    it('follows the single-title format while list mode has no key of its own', () => {
+        assert.strictEqual(resolveListFormat(undefined, 'cbz'), 'cbz');
+        assert.strictEqual(resolveListFormat(undefined, 'pdf'), 'pdf');
+    });
+
+    it('prefers the list key once the user sets one', () => {
+        assert.strictEqual(resolveListFormat('zip', 'cbz'), 'zip');
+        assert.strictEqual(resolveListFormat('raw', 'raw'), 'raw');
+    });
+
+    it('falls back to zip when neither key is set', () => {
+        assert.strictEqual(resolveListFormat(undefined, undefined), 'zip');
+    });
+
+    it('normalises the legacy "folder" alias before inheriting', () => {
+        assert.strictEqual(resolveListFormat(undefined, 'folder'), 'pdf');
+        assert.strictEqual(resolveListFormat('folder', 'zip'), 'pdf');
+    });
+
+    it('is what buildListSettings uses, so the panels and the worker agree', () => {
+        assert.strictEqual(buildListSettings({ useZip: 'cbz' }).format, resolveListFormat(undefined, 'cbz'));
+        assert.strictEqual(buildListSettings({ useZip: 'cbz', listFormat: 'zip' }).format,
+            resolveListFormat('zip', 'cbz'));
     });
 });
 
