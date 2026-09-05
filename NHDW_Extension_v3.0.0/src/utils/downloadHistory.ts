@@ -30,6 +30,8 @@
 // recorded galleries) but must never call the storage functions — it has no
 // chrome.storage there (only chrome.runtime is exposed).
 
+import { sanitizeArtifactFilename } from "./artifactName";
+
 export const DOWNLOAD_HISTORY_KEY = "downloadHistory";
 
 export interface DownloadRecord {
@@ -104,10 +106,12 @@ export function artifactRecordFilename(opts: { format: string; name: string; mas
     const format = String(opts.format === "folder" ? "pdf" : String(opts.format || "zip")).toLowerCase().trim();
     const folder = String(opts.masterFolder || "").replace(/^\/+|\/+$/g, "").trim();
     const prefix = folder === "" ? "" : folder + "/";
-    if (format === "raw") {
-        return prefix + String(opts.name) + "/001.jpg";
-    }
-    return prefix + String(opts.name) + "." + format;
+    const constructed = format === "raw"
+        ? prefix + String(opts.name) + "/001.jpg"
+        : prefix + String(opts.name) + "." + format;
+    // Record the same name chrome.downloads actually saved, so
+    // verify-before-skip (downloads.search) can match the on-disk file.
+    return sanitizeArtifactFilename(constructed, String(opts.name || "download"));
 }
 
 // Outcome of one downloadAllDoujinshisAsync invocation, used to decide what

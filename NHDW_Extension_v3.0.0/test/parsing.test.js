@@ -7,7 +7,7 @@ const ApiParsing = require('../build/test/parsing/ApiParsing.js').default;
 const { isCloudflareResponse, isCloudflareBody } = require('../build/test/parsing/ApiParsing.js');
 const HtmlParsing = require('../build/test/parsing/HtmlParsing.js').default;
 const { parseGalleryCardsFromHtml, extractFirstLine } = require('../build/test/parsing/CardParsing.js');
-const { extractGalleryFromHtml, looksLikeGallery, normalizeGalleryV2, coerceGallery } = require('../build/test/parsing/GalleryEmbed.js');
+const { extractGalleryFromHtml, looksLikeGallery, normalizeGalleryV2, coerceGallery, requireGallery } = require('../build/test/parsing/GalleryEmbed.js');
 const { utils, classifyError } = require('../build/test/utils/utils.js');
 const { clearnetSource } = require('../build/test/sources/GallerySource.js');
 
@@ -170,6 +170,16 @@ describe('GalleryEmbed', () => {
         assert.strictEqual(looksLikeGallery(null), false);
         assert.strictEqual(looksLikeGallery({ title: {}, images: { pages: [] } }), false);
         assert.strictEqual(looksLikeGallery({ media_id: '1', title: {}, images: {} }), false);
+        assert.strictEqual(looksLikeGallery({}), false);
+        assert.strictEqual(looksLikeGallery({ error: 'nope' }), false);
+    });
+
+    it('requireGallery accepts a gallery and rejects non-gallery JSON', () => {
+        assert.strictEqual(requireGallery(gallery), gallery);
+        assert.throws(() => requireGallery({}), /not gallery metadata/);
+        assert.throws(() => requireGallery({ error: 'nope' }), /Unexpected response type/);
+        assert.throws(() => requireGallery(null), /Unexpected response type/);
+        assert.strictEqual(classifyError('Unexpected response type (not gallery metadata).').kind, 'metadata');
     });
 
     it('extracts window._gallery JSON.parse embeds with \\u0022 escapes', () => {
@@ -430,6 +440,7 @@ describe('classifyError', () => {
     it('classifies metadata failures', () => {
         assert.deepStrictEqual(classifyError('Can\'t download 123456 (Code 404: not found).').kind, 'metadata');
         assert.deepStrictEqual(classifyError('Unexpected response type "text/html" (HTTP 200).').kind, 'metadata');
+        assert.deepStrictEqual(classifyError('Unexpected response type (not gallery metadata).').kind, 'metadata');
         assert.deepStrictEqual(classifyError('Unknown page format x').kind, 'metadata');
     });
 

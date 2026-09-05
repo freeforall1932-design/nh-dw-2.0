@@ -253,11 +253,15 @@ chrome.runtime.onMessage.addListener(function(request) {
             : [];
         const retryable = failed.length > 0;
         document.getElementById('action')!.innerHTML = message.downloadError(String(request.error), request.galleryName, retryable);
-        if (retryable) {
-            setTimeout(() => {
+        setTimeout(() => {
+            if (retryable) {
                 wireRetryButton(pendingFromMessage(failed, request.retryJob));
-                wireBackButton();
-            }, 0);
+            }
+            // Go Back is always rendered (item 29); wire it even when the
+            // error is not retryable so the popup is never a dead-end.
+            wireBackButton();
+        }, 0);
+        if (retryable) {
             // The worker is remembering this failure at the same time; refresh
             // the session list once it has had a moment to land.
             setTimeout(refreshFailedNotice, 500);

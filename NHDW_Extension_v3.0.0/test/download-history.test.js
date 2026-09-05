@@ -103,6 +103,31 @@ describe('download history (pure)', () => {
         assert.strictEqual(artifactRecordFilename({ format: "zip", name: "Test", masterFolder: "/NHDW/" }), "NHDW/Test.zip");
     });
 
+    it('records the sanitized on-disk name so verify-before-skip can match', () => {
+        const { sanitizeArtifactFilename } = require('../build/test/utils/artifactName.js');
+        const cases = [
+            { format: "zip", name: "Test", masterFolder: "NHDW:stash" },
+            { format: "raw", name: "Title. ", masterFolder: "NHDW. " },
+            { format: "cbz", name: "X", masterFolder: "A".repeat(150) }
+        ];
+        for (const c of cases) {
+            const folder = String(c.masterFolder || "").replace(/^\/+|\/+$/g, "").trim();
+            const prefix = folder === "" ? "" : folder + "/";
+            const constructed = c.format === "raw"
+                ? prefix + c.name + "/001.jpg"
+                : prefix + c.name + "." + c.format;
+            assert.strictEqual(
+                artifactRecordFilename(c),
+                sanitizeArtifactFilename(constructed, c.name),
+                "record must equal the sanitized save path for " + JSON.stringify(c)
+            );
+        }
+        assert.strictEqual(artifactRecordFilename({ format: "zip", name: "Test", masterFolder: "NHDW:stash" }), "NHDWstash/Test.zip");
+        assert.ok(!artifactRecordFilename({ format: "cbz", name: "X", masterFolder: "A".repeat(150) }).includes(":"));
+        const longRecord = artifactRecordFilename({ format: "cbz", name: "X", masterFolder: "A".repeat(150) });
+        assert.ok(longRecord.split("/")[0].length <= 120, "over-long master folder must be capped, got " + longRecord);
+    });
+
     it('keeps separate-mode per-gallery records as-is', () => {
         const outcome = {
             records: [{ id: "1", filename: "A.zip" }, { id: "2", filename: "B.zip" }],

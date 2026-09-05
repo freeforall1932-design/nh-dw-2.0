@@ -146,7 +146,22 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.6.1 (current): raw-mode failures always show their real reason.**
+* **v3.6.2 (current): batch metadata, error UI, history names, merged duplicates.**
+  Four follow-ups from the 3.6.0/3.6.1 review. (1) A metadata route that
+  returns 200 with non-gallery JSON (`{}`, `{error:…}`) now fails **that
+  gallery only** — remaining titles continue, the summary names it, and
+  nothing is recorded for it; previously `json.title.pretty` threw outside
+  the per-gallery try and killed the whole batch. (2) A popup error always
+  offers **Go Back** (Retry still only when the gallery can be re-added), so
+  a batch-level failure no longer leaves the panel with zero buttons.
+  (3) History records now use the same filename sanitizer as the save path,
+  so verify-before-skip can match files whose master folder or name contained
+  `:`, trailing dots/spaces, or over-long segments. (4) Merged jobs never
+  silently drop a duplicate-titled gallery under *Ignore* — the second title
+  is id-suffixed so the archive still contains every selected gallery;
+  separate-mode Ignore counts the skip in the summary. Console retry/archive
+  warnings also unwrap object errors (no more `[object Object]` in the log).
+* **v3.6.1: raw-mode failures always show their real reason.**
   A raw page that Chrome refuses to start used to surface as
   *Failed to download original image (Error: [object Object])* — the browser's
   error object was stringified (`[object Object]`), wrapped in an `Error`, and

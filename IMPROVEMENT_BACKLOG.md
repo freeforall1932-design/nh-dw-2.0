@@ -17,13 +17,12 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Fix `content.ts` / `updateContent.ts` caption-loop crash on pages without `.caption` cards; scope gallery IDs to each card's own gallery link (`closest('a[href*="/g/"]')` — the caption sits inside the cover link on nhentai) instead of a document-wide regex matched by index; verified by `scripts/e2e-content.js`
 - [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
 - [x] Raw-mode failures never render `Error: [object Object]` (3.6.1): the browser's object `lastError` was stringified at the worker, wrapped in an `Error`, then stringified again by the raw catch. Every boundary (worker reply, downloadControl interrupted/start errors, offscreen `saveViaServiceWorker`/`awaitDownloadViaServiceWorker`, and the stale Firefox snapshot) is now message-first — `.message` is unwrapped and shapeless objects fall back to readable text. Regression unit tests + an e2e phase with an Error-instance answer.
-- [ ] 2026-09-05 codebase-review backlog, **items 28–34** (open; full specs in
-  the session log at the end of this file): 28 batch metadata validation
-  (non-gallery JSON must not kill the batch), 29 popup error always offers an
-  action, 30 history records = sanitized on-disk name, 31 merged jobs never
-  drop duplicate-titled galleries under "ignore", 32 deduplicate the twin
-  worker/offscreen batch pipelines, 33 fallback-path format default, 34
-  message-first console sweep.
+- [~] 2026-09-05 codebase-review backlog, **items 28–34**: 28–31 and 34 done
+  in 3.6.2 (batch metadata validation, popup Go Back always, sanitized
+  history names, merged ignore no longer drops titles, console
+  `errorMessage()` sweep). Still open: **32** deduplicate the twin
+  worker/offscreen batch pipelines, **33** fallback-path format default.
+  Full specs in the session log at the end of this file.
 - [x] Fix `downloadAllPages`: stop mutating `pagesArr` while iterating so the final ZIP is actually downloaded
 - [x] Remove dangling `web_accessible_resources` entries (`js/jszip/...`, `js/FileSaver.js/...`) from the release manifest
 - [x] Add window-less service-worker tests (`scripts/smoke-mv3.js`, `scripts/e2e-worker.js`): load the built worker in a no-`window` VM context and drive ZIP, raw, and error paths through `chrome.downloads` with zero network access
@@ -1007,8 +1006,9 @@ config/optional-host flow; manifest permissions; build reproducibility.
 
 ### New backlog items
 
-- **[ ] 28. Batch metadata must be validated as a gallery before use (M1,
-  high).** Symptom: a metadata route that returns 200 with non-gallery JSON
+- **[x] 28. Batch metadata must be validated as a gallery before use (M1,
+  high).** DONE in 3.6.2 (`requireGallery` after every metadata route in both
+  pipelines; worker e2e phase 11). Original symptom: a metadata route that returns 200 with non-gallery JSON
   (`{}`, `{error:...}`) crashes at `json.title.pretty` **outside** the
   metadata try/catch, rejecting the entire `downloadAllDoujinshisAsync`:
   remaining titles are skipped, no `batchSummary` is sent, failures are never
@@ -1026,8 +1026,9 @@ config/optional-host flow; manifest permissions; build reproducibility.
   Also review batch-level `.catch` so it never ends without a summary/back
   (see item 29).
 
-- **[ ] 29. Popup error screen must always offer an action (M2, medium).**
-  Symptom: `message.downloadError(error, galleryName?, canRetry)` renders Go
+- **[x] 29. Popup error screen must always offer an action (M2, medium).**
+  DONE in 3.6.2 (Go Back always rendered + wired; `test/message.test.js`).
+  Original symptom: `message.downloadError(error, galleryName?, canRetry)` renders Go
   Back / Retry only when `canRetry` (`src/preview/message.ts:264-279`), and
   the popup wires buttons only for retryable errors (`popup.ts`). Batch-level
   errors carry no `galleryId` (top-level `.catch` in `downloadAllDoujinshis`/
@@ -1038,8 +1039,9 @@ config/optional-host flow; manifest permissions; build reproducibility.
   only when retryable. Test in e2e/popup-stub: a `downloadError` without
   `galleryId` leaves a clickable Go Back.
 
-- **[ ] 30. History records must use the sanitized on-disk name (M3,
-  medium).** Symptom: every save is sanitized (`sanitizeArtifactFilename`;
+- **[x] 30. History records must use the sanitized on-disk name (M3,
+  medium).** DONE in 3.6.2 (`artifactName.ts` + `artifactRecordFilename`
+  sanitizes). Original symptom: every save is sanitized (`sanitizeArtifactFilename`;
   the raw path also strips `\:*?"<>|` from the folder), but history records
   are built from the unsanitized inputs, so "verify before skip"
   (`chrome.downloads.search` on the recorded filename) can never match and the
@@ -1055,8 +1057,9 @@ config/optional-host flow; manifest permissions; build reproducibility.
   space and an over-length segment records exactly the filename the disk
   verify would search.
 
-- **[ ] 31. Merged jobs must not silently drop duplicate-titled galleries
-  under "ignore" (L1, medium).** Symptom: with `duplicateBehaviour =
+- **[x] 31. Merged jobs must not silently drop duplicate-titled galleries
+  under "ignore" (L1, medium).** DONE in 3.6.2 (merged id-suffixes; separate
+  counts `skipped`; worker e2e 12a/12b). Original symptom: with `duplicateBehaviour =
   "ignore"`, two *different* galleries sharing one title inside a merged
   (batch) job cause the second to be skipped by an uncounted `continue`
   (`background.ts:661`, `offscreen.ts:618`); if a later gallery is the final
@@ -1094,11 +1097,9 @@ config/optional-host flow; manifest permissions; build reproducibility.
   jobs and Downloader settings are built; add a unit test that the record
   format always equals the Downloader's resolved format.
 
-- **[ ] 34. Message-first sweep for remaining console paths (L4, cosmetic).**
-  `Downloader.ts:278` (retry `console.warn`) and `:242` (server-archive
-  fallback `console.warn`) still concatenate a raw error, so an object-shaped
-  throw can print `[object Object]` in the *console* (all user-facing paths
-  were fixed in 3.6.1). Fix: route both through `errorMessage()`.
+- **[x] 34. Message-first sweep for remaining console paths (L4, cosmetic).**
+  DONE in 3.6.2. Downloader retry / server-archive `console.warn` use
+  `errorMessage()`.
 
 ### Also noticed (no new item — already tracked)
 
@@ -1106,3 +1107,28 @@ The Firefox snapshot's `manifest.json` still reports 3.3.1 even though its
 content received the 3.6.1 error-parity backports and its suite passes (166 /
 4 pending); tracked under structural open question 9 and backlog item 27
 (Firefox port). PR #37 (deletion + these doc updates) is open awaiting merge.
+error-parity backports and its suite passes (166 /
+4 pending); tracked under structural open question 9 and backlog item 27
+(Firefox port). PR #37 (deletion + these doc updates) is merged.
+
+---
+
+## Session log — 2026-09-05: 3.6.2 review follow-up (items 28–31, 34)
+
+Follow-up session `arena/01a06fb0-nh-dw-2-0` after PR #37. Landed the
+concrete bugs from the rewrite audit; left the structural twin-pipeline
+dedupe (32) and the theoretical fallback-format default (33) for later.
+
+| Item | Change |
+| --- | --- |
+| 28 | `requireGallery()` after every metadata route in worker + offscreen |
+| 29 | `message.downloadError` always has Go Back; popup always wires it |
+| 30 | shared `sanitizeArtifactFilename` in `utils/artifactName.ts`; records use it |
+| 31 | merged "ignore" id-suffixes; separate "ignore" counts `skipped` |
+| 34 | Downloader console.warn → `errorMessage()` |
+
+Version 3.6.2 in source + release manifests. New tests: parsing
+`requireGallery`, download-history sanitized records, `test/message.test.js`,
+worker e2e 11/12, offscreen equivalents. Verification: webpack clean,
+`npm test` **261 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
+PASS; source `js/` byte-identical to release `js/`.

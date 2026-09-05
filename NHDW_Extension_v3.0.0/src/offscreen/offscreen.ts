@@ -4,7 +4,7 @@ import HtmlParsing from "../parsing/HtmlParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import Downloader from "../background/Downloader";
 import { utils, classifyError, errorMessage } from "../utils/utils";
-import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
+import { extractGalleryFromHtml, looksLikeGallery, coerceGallery, requireGallery } from "../parsing/GalleryEmbed";
 import { fetchUrlFromTab, TabUrlResult } from "../background/tabImageFetch";
 import { fetchNhentaiApi } from "../utils/apiAuth";
 import { setImageServers } from "../sources/cdnConfig";
@@ -605,9 +605,13 @@ async function downloadAllDoujinshisAsync(
                         } catch (_) {}
                     }
                 }
+                // After every metadata route: require a real gallery before
+                // touching json.title. Non-gallery JSON ({}, {error:...}) used
+                // to throw outside this try and reject the whole batch (item 28).
+                json = requireGallery(json);
             } catch (error) {
                 countFailure(key, error);
-                errorCallback("Can't download " + key + " (" + String(error) + ").");
+                errorCallback("Can't download " + key + " (" + errorMessage(error) + ").");
                 continue;
             }
 
@@ -615,7 +619,13 @@ async function downloadAllDoujinshisAsync(
                 json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                 json.title.english, json.title.japanese, key, json.tags);
             if (names.includes(title)) {
-                if (duplicateBehaviour === "ignore") {
+                // "ignore" only skips a duplicate FILE in separate mode,
+                // and that skip is counted so the summary stays honest.
+                // Merged jobs must never drop a gallery silently (item 31):
+                // the second title is id-suffixed so the archive still
+                // contains every selected gallery.
+                if (duplicateBehaviour === "ignore" && effectiveSeparate) {
+                    skipped++;
                     continue;
                 }
                 let tmp = title;

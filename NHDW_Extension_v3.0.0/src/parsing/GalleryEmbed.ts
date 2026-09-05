@@ -120,6 +120,22 @@ export function coerceGallery(value: any): any | null {
     return normalizeGalleryV2(value);
 }
 
+/**
+ * Accept either schema and return the legacy gallery shape, or throw.
+ * Batch loops MUST call this after every metadata route (keyed API, tab,
+ * extension fetch, pre-resolved metadata) BEFORE reading json.title:
+ * GetJsonAsync returns non-gallery JSON as-is (`coerceGallery(parsed) ||
+ * parsed`), so `{}` / `{error:...}` would otherwise throw outside the
+ * per-gallery try and reject the whole batch.
+ */
+export function requireGallery(value: any): any {
+    const coerced = coerceGallery(value) || value;
+    if (!looksLikeGallery(coerced)) {
+        throw new Error("Unexpected response type (not gallery metadata).");
+    }
+    return coerced;
+}
+
 function unescapeGalleryJson(escaped: string): string {
     return escaped.replace(/\\u[\dA-F]{4}/gi, function (match) {
         return String.fromCharCode(parseInt(match.replace(/\\u/g, ""), 16));

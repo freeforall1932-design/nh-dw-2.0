@@ -6,7 +6,7 @@ import Downloader from "./Downloader";
 import { utils, classifyError, errorMessage } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
 import { clearnetSource } from "../sources/GallerySource";
-import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
+import { extractGalleryFromHtml, looksLikeGallery, coerceGallery, requireGallery } from "../parsing/GalleryEmbed";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 import { fetchNhentaiApi } from "../utils/apiAuth";
@@ -647,10 +647,17 @@ module background
                     if (!json) {
                         json = await parsing.GetJsonAsync(resp);
                     }
+                    // After any metadata route (pre-resolved, keyed API, tab,
+                    // or this fetch): require a real gallery before touching
+                    // json.title. GetJsonAsync returns non-gallery JSON as-is,
+                    // so `{}` / `{error:...}` used to throw outside this try
+                    // and reject the whole batch (item 28).
+                    json = requireGallery(json);
                 } catch (error) {
-                    // Metadata parse failure (e.g. a Cloudflare HTML page).
+                    // Metadata parse failure (e.g. a Cloudflare HTML page or
+                    // a 200 that was not gallery metadata).
                     countFailure(key, error);
-                    errorCallback("Can't download " + key + " (" + String(error) + ").");
+                    errorCallback("Can't download " + key + " (" + errorMessage(error) + ").");
                     continue; // Keep going with the remaining galleries.
                 }
 
@@ -658,7 +665,13 @@ module background
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, key, json.tags);
                 if (names.includes(title)) {
-                    if (duplicateBehaviour === "ignore") {
+                    // "ignore" only skips a duplicate FILE in separate mode,
+                    // and that skip is counted so the summary stays honest.
+                    // Merged jobs must never drop a gallery silently (item 31):
+                    // the second title is id-suffixed so the archive still
+                    // contains every selected gallery.
+                    if (duplicateBehaviour === "ignore" && effectiveSeparate) {
+                        skipped++;
                         continue;
                     }
                     let tmp = title;

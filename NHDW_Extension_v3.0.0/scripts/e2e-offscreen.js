@@ -1095,6 +1095,103 @@ function askOffscreen(message) {
     saveDownloadErrorScript = null;
     console.log("PASS: raw page failure reason survives the offscreen/worker boundary as readable text");
 
+    // ---- Non-gallery JSON fails ONE gallery, not the whole batch (item 28) --
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    rawDownloadScript = null;
+    const emptyJsonStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "9": "EmptyJson", [GALLERY_ID]: "Test" },
+        galleryMetadata: { "9": {} },
+        finalName: "Downloads/EmptyJsonBatch",
+        options: relayedOptions
+    });
+    if (!emptyJsonStart || emptyJsonStart.result !== "started") {
+        fail("empty-json batch did not answer {result:'started'}, got " + JSON.stringify(emptyJsonStart));
+    }
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "non-gallery JSON must not kill the batch: no batchSummary was sent"
+    );
+    const emptyJsonSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!emptyJsonSummary || emptyJsonSummary.succeeded !== 1 || emptyJsonSummary.failed !== 1 || emptyJsonSummary.total !== 2) {
+        fail("empty-json batch must report 1/1/2, got " + JSON.stringify(emptyJsonSummary));
+    }
+    if (!emptyJsonSummary.failedKinds || emptyJsonSummary.failedKinds.metadata !== 1) {
+        fail("non-gallery JSON is a metadata failure, got " + JSON.stringify(emptyJsonSummary.failedKinds));
+    }
+    if (!Array.isArray(emptyJsonSummary.failedGalleries) || emptyJsonSummary.failedGalleries.length !== 1
+        || emptyJsonSummary.failedGalleries[0].id !== "9" || emptyJsonSummary.failedGalleries[0].name !== "EmptyJson"
+        || !/not gallery metadata/.test(emptyJsonSummary.failedGalleries[0].error)) {
+        fail("empty-json batch must name the failed gallery, got " + JSON.stringify(emptyJsonSummary.failedGalleries));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("the remaining gallery must still deliver a ZIP, got " + anchorDownloads.length);
+    }
+    const emptyJsonRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (emptyJsonRecords && emptyJsonRecords.some((r) => String(r.id) === "9")) {
+        fail("the non-gallery title must not be recorded, got " + JSON.stringify(emptyJsonRecords));
+    }
+    console.log("PASS: non-gallery JSON fails one gallery by name; the batch continues and records nothing for it");
+
+    // ---- Merged "ignore" must not silently drop a duplicate title (item 31) --
+    const savedTitle2 = galleryJson2.title;
+    galleryJson2.title = { english: "Test", japanese: "", pretty: "Test" };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    const dupMergedStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/DupIgnore",
+        options: Object.assign({}, relayedOptions, { duplicateBehaviour: "ignore" })
+    });
+    if (!dupMergedStart || dupMergedStart.result !== "started") {
+        fail("merged ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(dupMergedStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "merged ignore-dup batch must finish");
+    const dupMergedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupMergedSummary || dupMergedSummary.succeeded !== 2 || dupMergedSummary.failed !== 0 || dupMergedSummary.skipped !== 0) {
+        fail("merged ignore-dup must keep both galleries, got " + JSON.stringify(dupMergedSummary));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("merged ignore-dup must deliver one archive, got " + anchorDownloads.length);
+    }
+    const dupZip = await JSZip.loadAsync(Buffer.from(await objectBlobs[anchorDownloads[0].href].arrayBuffer()));
+    const dupEntries = Object.keys(dupZip.files).filter((n) => !dupZip.files[n].dir).sort();
+    const hasFirst = dupEntries.some((n) => n.indexOf("Test/") === 0);
+    const hasSecond = dupEntries.some((n) => n.indexOf("Test_(" + GALLERY_ID2 + ")") === 0);
+    if (!hasFirst || !hasSecond) {
+        fail("merged ignore-dup ZIP must contain both galleries, got " + JSON.stringify(dupEntries));
+    }
+    console.log("PASS: merged ignore-dup id-suffixes the second title instead of dropping it");
+
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    const dupSepStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/DupIgnoreSep",
+        options: Object.assign({}, relayedOptions, { duplicateBehaviour: "ignore", downloadSeparately: true })
+    });
+    if (!dupSepStart || dupSepStart.result !== "started") {
+        fail("separate ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(dupSepStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "separate ignore-dup batch must finish");
+    const dupSepSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupSepSummary || dupSepSummary.succeeded !== 1 || dupSepSummary.failed !== 0 || dupSepSummary.skipped !== 1 || dupSepSummary.total !== 2) {
+        fail("separate ignore-dup must count the drop as skipped:1, got " + JSON.stringify(dupSepSummary));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("separate ignore-dup must deliver one archive, got " + anchorDownloads.length);
+    }
+    galleryJson2.title = savedTitle2;
+    console.log("PASS: separate ignore-dup counts the dropped title in skipped");
+
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {
         fail("offscreen document touched forbidden APIs: storage=" + forbidden.storage +

@@ -1077,6 +1077,127 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     console.log("PASS phase 10: keyless batch sends no Authorization header");
 
+    // ---- Phase 11: non-gallery JSON fails ONE gallery, not the whole batch --
+    // A metadata route that returns 200 with `{}` used to throw at
+    // json.title.pretty outside the per-gallery try, rejecting the entire
+    // downloadAllDoujinshisAsync: remaining titles skipped, no batchSummary,
+    // failures never remembered (item 28).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    localSettings = {};
+    syncSettings = { useZip: "zip", maxConcurrentDownloads: "3", duplicateBehaviour: "rename", verifyDownloadedFiles: false, batchNameDate: false };
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { "9": "EmptyJson", [GALLERY_ID]: "Test" },
+            galleryMetadata: { "9": {} },
+            finalName: "Downloads/EmptyJsonBatch"
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("empty-json batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "non-gallery JSON must not kill the batch: no batchSummary was sent"
+    );
+    const emptyJsonSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!emptyJsonSummary || emptyJsonSummary.succeeded !== 1 || emptyJsonSummary.failed !== 1 || emptyJsonSummary.total !== 2) {
+        fail("empty-json batch must report 1/1/2, got " + JSON.stringify(emptyJsonSummary));
+    }
+    if (!emptyJsonSummary.failedKinds || emptyJsonSummary.failedKinds.metadata !== 1) {
+        fail("non-gallery JSON is a metadata failure, got " + JSON.stringify(emptyJsonSummary.failedKinds));
+    }
+    if (!Array.isArray(emptyJsonSummary.failedGalleries) || emptyJsonSummary.failedGalleries.length !== 1
+        || emptyJsonSummary.failedGalleries[0].id !== "9" || emptyJsonSummary.failedGalleries[0].name !== "EmptyJson"
+        || !/not gallery metadata/.test(emptyJsonSummary.failedGalleries[0].error)) {
+        fail("empty-json batch must name the failed gallery, got " + JSON.stringify(emptyJsonSummary.failedGalleries));
+    }
+    if (downloads.length !== 1) {
+        fail("the remaining gallery must still deliver a ZIP, got " + downloads.length);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "empty-json batch marker must clear");
+    if (localSettings.downloadHistory && localSettings.downloadHistory["9"]) {
+        fail("the non-gallery title must not be recorded");
+    }
+    console.log("PASS phase 11: non-gallery JSON fails one gallery by name; the batch continues and records nothing for it");
+
+    // ---- Phase 12: merged "ignore" must not silently drop a duplicate title --
+    // Two different galleries sharing pretty title "Test", duplicateBehaviour
+    // ignore: merged mode used to `continue` uncounted and could record the
+    // archive as clean while missing a gallery (item 31). Now the second is
+    // id-suffixed and both land in the ZIP. Separate mode counts the skip.
+    const savedTitle2 = galleryJson2.title;
+    galleryJson2.title = { english: "Test", japanese: "", pretty: "Test" };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    localSettings = {};
+    syncSettings.duplicateBehaviour = "ignore";
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/DupIgnore"
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("merged ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "merged ignore-dup batch must finish");
+    const dupMergedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupMergedSummary || dupMergedSummary.succeeded !== 2 || dupMergedSummary.failed !== 0 || dupMergedSummary.skipped !== 0) {
+        fail("merged ignore-dup must keep both galleries (id-suffix the second), got " + JSON.stringify(dupMergedSummary));
+    }
+    if (downloads.length !== 1) {
+        fail("merged ignore-dup must deliver one archive, got " + downloads.length);
+    }
+    const dupZip = await JSZip.loadAsync(Buffer.from(downloads[0].url.split(",")[1], "base64"));
+    const dupEntries = Object.keys(dupZip.files).filter((n) => !dupZip.files[n].dir).sort();
+    const hasFirst = dupEntries.some((n) => n.indexOf("Test/") === 0);
+    const hasSecond = dupEntries.some((n) => n.indexOf("Test_(" + GALLERY_ID2 + ")") === 0);
+    if (!hasFirst || !hasSecond) {
+        fail("merged ignore-dup ZIP must contain both galleries (original + id-suffixed), got " + JSON.stringify(dupEntries));
+    }
+    console.log("PASS phase 12a: merged ignore-dup id-suffixes the second title instead of dropping it");
+
+    sentMessages.length = 0;
+    downloads.length = 0;
+    localSettings = {};
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/DupIgnoreSep",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("separate ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "separate ignore-dup batch must finish");
+    const dupSepSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupSepSummary || dupSepSummary.succeeded !== 1 || dupSepSummary.failed !== 0 || dupSepSummary.skipped !== 1 || dupSepSummary.total !== 2) {
+        fail("separate ignore-dup must count the drop as skipped:1, got " + JSON.stringify(dupSepSummary));
+    }
+    if (downloads.length !== 1) {
+        fail("separate ignore-dup must deliver one archive (the first title), got " + downloads.length);
+    }
+    galleryJson2.title = savedTitle2;
+    syncSettings.duplicateBehaviour = "rename";
+    console.log("PASS phase 12b: separate ignore-dup counts the dropped title in skipped");
+
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);
 })();

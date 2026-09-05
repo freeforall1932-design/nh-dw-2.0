@@ -4,6 +4,11 @@ import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
 import { startTrackedDownload, normalizeRawConcurrency } from "./downloadControl";
+import { errorMessage } from "../utils/utils";
+import { sanitizeArtifactFilename } from "../utils/artifactName";
+// Re-export so existing tests (`require('../build/test/background/Downloader.js')`)
+// keep importing the sanitizer from here.
+export { sanitizeArtifactFilename };
 
 export default class Downloader
 {
@@ -239,7 +244,7 @@ export default class Downloader
             if (this.#isAborted() || error === "Download was aborted" || (error && (error as any).name === "AbortError")) {
                 throw error;
             }
-            console.warn("Server archive unavailable for gallery " + galleryId + " (" + error + "); falling back to page-by-page download.");
+            console.warn("Server archive unavailable for gallery " + galleryId + " (" + errorMessage(error) + "); falling back to page-by-page download.");
             return false;
         }
     }
@@ -275,7 +280,7 @@ export default class Downloader
                             // deterministic failure fixtures opt out to keep
                             // test output focused on assertion failures.
                             if (!(globalThis as any).__NHDW_SILENT_RETRY_LOGS__) {
-                                console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
+                                console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + errorMessage(error) + ", tries remaining: " + nbTries);
                             }
                             nbTries--;
                             // Surface the retry in the progress UI so the user can
@@ -750,34 +755,6 @@ export default class Downloader
     #progressName: string | null;
     #progressZipping: boolean;
     #progressRetry: string | null = null;
-}
-// Make a downloads-API filename safe enough that Chrome never discards it:
-// keep the subfolder structure (a/b/c.jpg), strip control and reserved
-// characters per segment, drop leading dots and trailing dots/spaces (Windows
-// rejects those), bound segment length, and fall back to the gallery name when
-// nothing usable is left. This runs right before chrome.downloads.download for
-// every artifact (archives, PDFs, raw pages).
-export function sanitizeArtifactFilename(filename: string, fallbackStem: string): string {
-    const segments = String(filename).split("/");
-    const cleanedSegments: string[] = [];
-    for (const segment of segments) {
-        let cleaned = segment
-            .replace(/[\x00-\x1f\x7f]/g, "")
-            .replace(/[\\:*?"<>|]/g, "")
-            .replace(/^\.+/, "")
-            .replace(/[. ]+$/g, "");
-        if (cleaned.length > 120) {
-            cleaned = cleaned.slice(0, 120).replace(/[. ]+$/g, "");
-        }
-        if (cleaned !== "") {
-            cleanedSegments.push(cleaned);
-        }
-    }
-    let joined = cleanedSegments.join("/");
-    if (joined === "" || joined === "/") {
-        joined = sanitizeArtifactFilename(String(fallbackStem || "download"), "download");
-    }
-    return joined;
 }
 
 // Master folder for raw (loose image) downloads: every gallery's titled
