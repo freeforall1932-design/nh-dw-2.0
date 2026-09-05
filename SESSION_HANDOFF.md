@@ -1,5 +1,21 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-05 (session `arena/01a06f95-nh-dw-2-0`) — **housekeeping +
+full-code review after the 3.6.0/3.6.1 rewrite.** `new 19.txt` (a v3.4.1
+raw-failure error log) was deleted from the tree — commit `83a13b7`, open as
+**PR #37** (merge pending; the PR also carries this audit's doc updates). The
+post-rewrite source was then reviewed end to end (worker + offscreen batch
+pipelines, `downloadControl`, `failedGalleries`, history/verify, popup/retry
+UI, `Downloader`, parsers, naming guard) and the verification suite re-run:
+webpack rebuild reproduces the committed/release `js/` byte-identically,
+**258 unit passing / 4 pending, smoke 7 PASS, e2e all PASS**. Verdict: the
+3.6.0/3.6.1 code is a real fix, not garbage. The review still found **four
+concrete bugs (M1–M3, L1) and three hardening/structural items** — recorded as
+**backlog items 28–34** (see "Review log" and the worklist below; full specs in
+IMPROVEMENT_BACKLOG.md, session log 2026-09-05). No source changes were made
+this session beyond the log deletion; the fixes are queued for a follow-up
+session.
+
 **Updated:** 2026-09-05 — **3.6.1 follow-up (review of 3.6.0 against a live
 report): raw-mode failures no longer render "Error: [object Object]".** The
 user's report was `Failed to download original image (Error:
@@ -732,9 +748,13 @@ workflow edit has already been committed, drop it with
 
 ### Pending, waiting for a human
 
-**Nothing pending.** The queued trigger-paths change was applied by the user
-through the GitHub web editor on 2026-09-04 as commit `840d79e` ("Add
-additional files to extension tests workflow"); the live workflow and
+**PR #37 is open and awaiting merge** (created 2026-09-05 from
+`arena/01a06f95-nh-dw-2-0`, commit `83a13b7` + this audit's doc updates): it
+deletes `new 19.txt` from `main` and records the 2026-09-05 review findings as
+backlog items 28–34. Nothing else is pending on the CI/workflow side: the
+queued trigger-paths change was applied by the user through the GitHub web
+editor on 2026-09-04 as commit `840d79e` ("Add additional files to extension
+tests workflow"); the live workflow and
 `NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml` are now
 byte-identical, and the run it triggered passed in 1m19s. Keep the copy in
 `ci/pending-workflows/` in sync whenever the live workflow changes, and add a
@@ -820,6 +840,40 @@ Reload unpacked `NHDW_Release_v3.0.0` through `chrome://extensions` or `brave://
 8. Keep the source gallery tab backgrounded on another site; confirm completion.
 9. CDN hardening: `/api/v2/cdn` fetched once per session (worker console); `chrome.storage.session.get("cdnConfig")` shows the merged list; grant-notice flow when a host lacks permission.
 
+## Review log — 3.6.0/3.6.1 rewrite audit (2026-09-05)
+
+Trigger: user asked to verify the previous session's fix against `new 19.txt`
+and then audit the whole codebase for breakage after the 3.6.0 rewrite (2
+sessions back). Outcome: the fix is real and the rewrite is sound — no
+garbage code — but the audit found genuine defects that are **not yet fixed**.
+They are tracked as **backlog items 28–34** in the worklist below and fully
+specified in IMPROVEMENT_BACKLOG.md (session log 2026-09-05). Priority order
+for a follow-up session: **28 first**, then 29/30/31, then 32/33/34.
+
+| Item | Finding | Severity | Evidence |
+| --- | --- | --- | --- |
+| **28 (M1)** | Batch metadata that resolves to non-gallery JSON (e.g. `{}`, an error object) crashes `json.title.pretty` *outside* the try → the whole batch rejects, remaining titles are skipped, `failedGalleries` is never reported or remembered, popup dead-ends | High — can eat an entire batch and its failure report | worker `background.ts:648` (try) vs `:657` (deref outside); offscreen `offscreen.ts:596` vs `:614`. `ApiParsing.GetJsonAsync` returns non-gallery JSON as-is (`coerceGallery(parsed) || parsed`) |
+| **29 (M2)** | Non-retryable `downloadError` renders with **zero buttons** (Go Back only exists when `canRetry`) → popup stuck until reopened | Medium — UX dead-end on batch-level errors | `src/preview/message.ts:264-279`; `popup.ts` `downloadError` branch wires buttons only when retryable |
+| **30 (M3)** | History records store the *unsanitized* filename while saves sanitize → "verify before skip" (`chrome.downloads.search`) can never match → repeat downloads + `(1)`/`(2)` growth whenever a master folder/name sanitizes | Medium — silent re-download loop (edge cases: master folders with `:` / trailing dot-space / >120 chars) | records at `background.ts:388,708`, `offscreen.ts:382,660` vs `sanitizeArtifactFilename` at save (`Downloader.ts` `#saveArtifact`, raw path) |
+| **31 (L1)** | Merged job + `duplicateBehaviour = "ignore"` + two *different* galleries sharing a title → second is silently dropped (no counter) and the archive can be recorded complete while missing titles | Medium — incomplete merged archive recorded as clean | `background.ts:661`, `offscreen.ts:618` (`continue` uncounted); merged-clean logic needs `failed === 0` only |
+| **32 (L2)** | The worker and offscreen batch pipelines are maintained as twins and have already drifted (offscreen gained an HTML second-chance parse + tab refetch + `queued` field; the worker lacks them and drops the `Authorization` header on its direct fetch). Every fix must be applied twice — this is how 28 exists in one copy while the other was partially patched | Structural — drift source | `downloadAllDoujinshisAsync` in `background.ts` vs `offscreen.ts` (~17 KB vs ~21 KB, whitespace-normalized diff) |
+| **33 (L3)** | No-offscreen fallback records/retry with `normalizeFormat(options.useZip ?? "zip")` while Downloaders read the *stored* format when no override is sent → record/extension mismatch for any caller that omits `formatOverride` (today all callers send it — theoretical) | Low | `downloadAllDoujinshis` record block vs `Downloader.startAsync` storage default |
+| **34 (L4)** | Console/internal stringify spots remain: `Downloader.ts:278` retry `console.warn` and `:242` server-archive warn still concatenate a raw error, so object-shaped errors can still print `[object Object]` in the *console* (never in user-facing messages since 3.6.1) | Cosmetic | `Downloader.ts:242,278` |
+
+**Found clean during the same sweep** (no action needed): raw completion
+tracking + concurrency + abort-cancels-loose-pages; the failed-gallery session
+store (serialized writes, cap, dedupe, drop-on-success); the retry round-trip
+(popup → `groupRetryMessages` → worker → offscreen → `jobFinished` → history);
+history/verify semantics and merged naming (date + part); download-name
+sanitization and the `onDeterminingFilename` guard lifetime; PDF merge guard;
+raw master-folder parity; CDN/image-URL validation; and build reproducibility
+(source → committed js → release js are byte-identical). 3.6.1 itself needed
+no follow-up code change.
+
+Also noticed (already tracked elsewhere, no new item): the Firefox snapshot's
+manifest still says 3.3.1 although its content received the 3.6.1 error-parity
+backports — see structural open question 9 and backlog item 27.
+
 ## Open questions and things that still need review
 
 Nothing here is known to be broken. These are the places where the current
@@ -884,7 +938,66 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 13. **`npm run test:browser` has never run in this environment.** Every
     real-browser claim in this document is an expectation, not an observation.
 
-## Next backlog (worklist — statuses as of 2026-09-04)
+## Next backlog (worklist — statuses as of 2026-09-05)
+
+Newest additions first (from the 2026-09-05 codebase review; full specs in
+IMPROVEMENT_BACKLOG.md session log 2026-09-05). Fix order suggested: 28 first,
+then 29/30/31, then 32/33/34.
+
+- [ ] **28. Batch metadata: non-gallery JSON must fail ONE gallery, not the
+  whole batch (review finding M1, high).** After any metadata route returns a
+  200, validate `looksLikeGallery(json)` before touching `json.title`; on
+  failure `countFailure(key, …)` + named `errorCallback` + `continue` exactly
+  like the existing metadata-parse catch. Today a non-gallery JSON (`{}`,
+  `{error:…}`) throws at `json.title.pretty` outside the try
+  (`background.ts:657`, `offscreen.ts:614`) and kills the entire batch —
+  remaining titles skipped, no `batchSummary`, failures never remembered, and
+  the popup gets the item-29 dead-end. Regression test: a batch whose one
+  gallery resolves to `{}` must continue, report that gallery by name, and
+  record nothing for it.
+- [ ] **29. Popup error state must always leave an action (M2, medium).**
+  `message.downloadError` only renders buttons when `canRetry`, so batch-level
+  errors (top-level `.catch`, "Unable to start the offscreen download
+  document.") leave the popup with zero buttons until it is reopened. Fix:
+  always render Go Back; keep Retry only when retryable.
+- [ ] **30. History records must mirror the sanitized on-disk filename (M3,
+  medium).** Records are built from unsanitized inputs
+  (`background.ts:388,708`, `offscreen.ts:382,660`) while saves run through
+  `sanitizeArtifactFilename` (+ raw path strips `\:*?"<>|`), so
+  verify-before-skip can never match and the gallery re-downloads with
+  `(1)`/`(2)` growth whenever a master folder/name sanitizes. Fix: one shared
+  helper producing the final artifact-relative path, used by both the save and
+  the record paths; test with a master folder containing `:`, a trailing dot/
+  space, and an over-120-char segment.
+- [ ] **31. Merged jobs must not silently drop duplicate-titled galleries
+  under "ignore" (L1, medium).** `background.ts:661` / `offscreen.ts:618`:
+  with `duplicateBehaviour = "ignore"` and two different galleries sharing one
+  title in a merged job, the second is dropped uncounted and the archive can
+  be recorded complete while missing titles. Decide + implement: in merged
+  mode never drop silently (force the id-suffixed rename, or count the drop
+  and refuse to record the job as clean); make every drop visible in the
+  summary counts in both modes.
+- [ ] **32. Deduplicate the twin worker/offscreen batch pipelines (L2,
+  structural).** Two hand-maintained copies of `downloadAllDoujinshisAsync`
+  (~17 KB vs ~21 KB) have drifted already (offscreen-only HTML second-chance,
+  tab refetch, `queued` field; worker drops the `Authorization` header on its
+  direct fetch). Extract one shared, storage-free core with injected IO so
+  fixes land once; at minimum add a parity test. This is why item 28 exists in
+  one copy and was only partially patched in the other.
+- [ ] **33. Fallback-path format must not silently default to zip (L3, low).**
+  In the no-offscreen fallback the record/retry format comes from
+  `options.useZip ?? "zip"` while each Downloader reads the stored format when
+  no override is present → record/extension mismatch for any caller that omits
+  `formatOverride` (all current callers send it). Harden the contract and add
+  a unit test that the record format always equals the Downloader's resolved
+  format.
+- [ ] **34. Message-first sweep for remaining console paths (L4, cosmetic).**
+  `Downloader.ts:278` (retry `console.warn`) and `:242` (server-archive warn)
+  still stringify raw errors → `[object Object]` can appear in the console for
+  object-shaped throws (user-facing paths are fixed since 3.6.1). Reuse
+  `errorMessage()` there.
+- [ ] Housekeeping note: merge **PR #37** (`new 19.txt` deletion + this
+  audit's doc updates).
 
 - [ ] **P3 — queue UI with thumbnails (carried over from the user's brief, not
   started).** Replace the name-only queue list with a Twitter/X- or
