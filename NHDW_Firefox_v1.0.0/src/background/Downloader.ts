@@ -422,7 +422,16 @@ export default class Downloader
         await new Promise<void>((resolve, reject) => {
             chrome.downloads.download({ url: url, filename: safeName }, function(downloadId) {
                 if (downloadId === undefined) {
-                    reject(new Error(String(chrome.runtime.lastError || "Unable to start download")));
+                    // Message-first, never String(plainObject): the browser's
+                    // lastError is an object ({message}) — String() renders it
+                    // "[object Object]" and, once the raw-mode catch below
+                    // stringifies the resulting Error, the report becomes the
+                    // unreadable "Error: [object Object]".
+                    const lastError: any = chrome.runtime.lastError;
+                    const reason = (lastError && typeof lastError.message === "string" && lastError.message !== "")
+                        ? lastError.message
+                        : (typeof lastError === "string" && lastError !== "" ? lastError : "Unable to start download");
+                    reject(new Error(reason));
                 } else {
                     resolve();
                 }
@@ -500,8 +509,12 @@ export default class Downloader
                 // segment independently at save time.
                 const masterPrefix = this.#rawMasterFolder !== "" ? this.#rawMasterFolder + "/" : "";
                 await this.#saveArtifact(imageUrl, masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
-            } catch (error) {
-                throw "Failed to download original image (" + error + ").";
+            } catch (error: any) {
+                // Use the Error's message, not the Error itself: stringifying
+                // an Error([object Object]) is what produced
+                // "Failed to download original image (Error: [object Object])."
+                const reason = error && error.message !== undefined ? error.message : error;
+                throw "Failed to download original image (" + reason + ").";
             }
             return;
         }

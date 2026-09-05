@@ -97,8 +97,18 @@ function nowMs(): number {
 
 // Human-readable reason for an interrupted download. Chrome reports an
 // InterruptReason such as NETWORK_FAILED, FILE_NO_SPACE or USER_CANCELED.
+// Message-first and never plain String(reason): a structured-cloned or
+// object-shaped error (e.g. {message}) would otherwise render as
+// "[object Object]" and hide the real reason from the retry loop's report.
 export function interruptedMessage(reason: any): string {
-    const text = reason === undefined || reason === null ? "" : String(reason);
+    let text = "";
+    if (reason !== undefined && reason !== null) {
+        if (typeof reason === "string") {
+            text = reason;
+        } else if (reason && typeof reason.message === "string" && reason.message !== "") {
+            text = reason.message;
+        }
+    }
     return text === "" ? "Download interrupted" : "Download interrupted (" + text + ")";
 }
 
@@ -341,7 +351,18 @@ export function startBrowserDownload(url: string, filename: string): Promise<num
             });
         } catch (error) {
             discardDownloadRequest(url);
-            reject(error instanceof Error ? error : new Error(String(error)));
+            // Never new Error(String(plainObject)): a synchronous throw that is
+            // a bare object would otherwise become an Error whose message is
+            // "[object Object]" and surface as "Error: [object Object]" once
+            // the Downloader wraps it. Unwrap .message when present, otherwise
+            // fall back to a readable constant instead of the object's default
+            // toString.
+            const message = typeof error === "string" && error !== ""
+                ? error
+                : (error && typeof error.message === "string" && error.message !== ""
+                    ? error.message
+                    : "Unable to start download");
+            reject(new Error(message));
         }
     });
 }

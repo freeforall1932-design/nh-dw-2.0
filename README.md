@@ -130,7 +130,10 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   a name, Chrome gives the last-installed extension the final say — disable it
   for the duration of the download.
 * **The Firefox port lags.** `NHDW_Firefox_v1.0.0` is still at 3.3.1 and has
-  none of the 3.4.0 list-mode or 3.4.1 naming work.
+  none of the 3.4.0 list-mode or 3.4.1 naming work. It received the 3.6.1
+  error-message hardening so a failed raw page shows its real reason instead
+  of `[object Object]`, but the 3.6.0 completion tracking and retry UI are not
+  ported there yet.
 * **The queue list is still name-only.** Thumbnails, per-item progress, and
   per-item cancel/retry are planned, not built.
 * **Download history is local and starts empty.** The remembered list lives
@@ -143,7 +146,19 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.6.0 (current): Named failures with Retry; raw mode waits for every page.**
+* **v3.6.1 (current): raw-mode failures always show their real reason.**
+  A raw page that Chrome refuses to start used to surface as
+  *Failed to download original image (Error: [object Object])* — the browser's
+  error object was stringified (`[object Object]`), wrapped in an `Error`, and
+  then stringified again (adding `Error:`). Every boundary in the save path
+  (worker → offscreen relay → Downloader) now unwraps the error's `.message`
+  first and falls back to readable text, so the retry loop and the panel name
+  the actual reason (invalid filename, permission, disk error …). The stale
+  `NHDW_Firefox_v1.0.0` snapshot received the same hardening. *If you ever see
+  this `[object Object]` message, the extension you ran was **older than
+  3.6.0** — reload the current build; the error itself was reported from
+  exactly the v3.4.1 `offscreen.js` in the filed log.*
+* **v3.6.0: Named failures with Retry; raw mode waits for every page.**
   Every failed gallery is now reported **by name** (title, id and the reason)
   — in the single-title error, in the end-of-batch summary and in a notice at
   the top of the panel that persists for the browser session (the worker keeps

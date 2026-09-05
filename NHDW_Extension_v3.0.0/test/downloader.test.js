@@ -334,6 +334,23 @@ describe('Downloader (raw mode)', () => {
         assert.strictEqual(chrome.downloads.calls.length, 3 * 6, '3 pages x (1 attempt + 5 retries)');
     });
 
+    it('never renders "Error: [object Object]" for a synchronous object throw', async () => {
+        // Regression for the raw-mode report "Failed to download original
+        // image (Error: [object Object]).": the download API threw a bare
+        // object; String()-ing it wrapped Error("[object Object]") and the
+        // raw catch then stringified the Error itself. Both layers must now
+        // unwrap .message (or fall back to a readable constant).
+        chrome.downloads.download = () => { throw { message: 'download failed (sync object)' }; };
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/FailObj', (e) => { error = e; }, () => {}, 'FailObj', new JSZip(), null);
+        downloader.retryBackoffMs = 0;
+        await assert.rejects(downloader.startAsync());
+        assert.ok(/Failed to download original image/.test(error));
+        assert.ok(/download failed \(sync object\)/.test(error), 'the object\u0027s message must survive, got: ' + error);
+        assert.ok(!/\[object Object\]/.test(error), 'no [object Object] may reach the report, got: ' + error);
+        assert.ok(!/Error:/.test(error), 'no "Error:" double-wrap, got: ' + error);
+    });
+
     // ---- completion tracking (3.6.0) -------------------------------------
     // With chrome.downloads.onChanged available, a page only counts as saved
     // once its download reaches state "complete". The stub below drives the
