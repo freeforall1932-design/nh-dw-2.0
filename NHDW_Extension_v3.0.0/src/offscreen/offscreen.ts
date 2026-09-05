@@ -454,7 +454,7 @@ function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName:
         })
         .catch(function(error) {
             if (!jobWasAborted()) {
-                errorCallback(String(error));
+                errorCallback(errorMessage(error));
             }
             notifyJobFinished();
             scheduleIdleClose();
@@ -483,7 +483,7 @@ function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array
         })
         .catch(function(error) {
             if (!jobWasAborted()) {
-                errorCallback(String(error));
+                errorCallback(errorMessage(error));
             }
             notifyJobFinished();
             scheduleIdleClose();

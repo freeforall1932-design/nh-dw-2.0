@@ -1,6 +1,6 @@
 import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
-import { utils, escapeHtml } from "../utils/utils";
+import { utils, escapeHtml, errorMessage } from "../utils/utils";
 import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl } from "../sources"
@@ -447,7 +447,7 @@ export default class Popup
                     keyedRejected = true;
                 }
             } catch (error) {
-                statusText = String(error);
+                statusText = errorMessage(error);
             }
         }
 
@@ -471,7 +471,7 @@ export default class Popup
                     json = await this.parsing!.GetJsonAsync(resp);
                 }
             } catch (error) {
-                statusText = String(error);
+                statusText = errorMessage(error);
             }
         }
         if (json === null) {

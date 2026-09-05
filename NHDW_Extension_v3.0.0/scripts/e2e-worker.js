@@ -42,6 +42,11 @@ const apiRequestLog = [];
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
+// When set, the NEXT batchProgress broadcast throws this value (an object or
+// an Error) so the batch pipeline rejects at top level - the only way to
+// reach the batch-level .catch, whose text is what the popup renders.
+let sendMessageThrows = null;
+
 // GET /api/v2/cdn fixture: reports a mirror OUTSIDE the hardcoded set so the
 // phase asserts prove the worker actually resolved runtime CDN config.
 const CDN_CONFIG_FIXTURE = JSON.stringify({
@@ -78,7 +83,14 @@ const chromeStub = {
     },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
-        sendMessage(msg) { sentMessages.push(msg); },
+        sendMessage(msg) {
+            if (sendMessageThrows && msg && msg.action === "batchProgress") {
+                const thrown = sendMessageThrows;
+                sendMessageThrows = null;
+                throw thrown;
+            }
+            sentMessages.push(msg);
+        },
         lastError: null
     },
     downloads: {
@@ -1284,6 +1296,47 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     galleryJson2.title = savedTitle2;
     syncSettings.duplicateBehaviour = "rename";
     console.log("PASS phase 12b: separate ignore-dup counts the dropped title in skipped");
+
+    // ---- Phase 12c: a batch-level failure shows its real reason -------------
+    // The batch .catch is the last user-facing error path; it used to do
+    // String(error), so an Error rendered as "Error: <msg>" and a plain object
+    // as "[object Object]" - the exact report shape 3.6.1 removed everywhere
+    // else. Both shapes must now arrive readable.
+    for (const thrown of [{ message: "channel closed (fixture)" }, new Error("worker restarted (fixture)")]) {
+        localSettings.downloadHistory = {};
+        sentMessages.length = 0;
+        downloads.length = 0;
+        syncSettings = { useZip: "zip", maxConcurrentDownloads: "3", verifyDownloadedFiles: false };
+        sendMessageThrows = thrown;
+        onMessageHandler(
+            {
+                action: "downloadAllDoujinshis",
+                allDoujinshis: { [GALLERY_ID]: "One" },
+                finalName: "Downloads/BatchThrow",
+                separate: true
+            },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => sentMessages.some((m) => m.action === "downloadError"),
+            "a batch-level throw must reach the popup as downloadError"
+        );
+        const batchError = sentMessages.find((m) => m.action === "downloadError");
+        const text = String(batchError.error);
+        const expectedText = thrown instanceof Error ? thrown.message : thrown.message;
+        if (text !== expectedText) {
+            fail("the batch error must be the thrown message alone, got " + JSON.stringify(text));
+        }
+        if (/\[object Object\]/.test(text)) {
+            fail("a batch-level failure must never render [object Object], got " + JSON.stringify(text));
+        }
+        if (/^Error:/.test(text)) {
+            fail("a batch-level failure must not carry an 'Error: ' prefix, got " + JSON.stringify(text));
+        }
+        await waitFor(() => sessionStore.downloadJob === undefined, "batch-level throw must clear the job marker");
+    }
+    console.log("PASS phase 12c: batch-level failures render their real reason (object + Error shapes)");
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

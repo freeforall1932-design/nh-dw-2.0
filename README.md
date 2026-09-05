@@ -162,6 +162,15 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   format, including when no format is sent) and two end-to-end worker phases
   (stored CBZ names both the file and the record; a merged re-run warns with
   the real `.cbz` name instead of starting a duplicate).
+  A self-review of this change also closed a gap two earlier releases missed:
+  the **batch-level** error path (`downloadAllDoujinshis` /
+  `downloadAllPages`, worker fallback *and* offscreen, plus the
+  "unable to start the offscreen document" reply) still stringified its error,
+  so an object-shaped batch failure rendered `[object Object]` in the popup —
+  the same report shape 3.6.1 removed elsewhere. Those paths, the popup
+  preview status line, the API-key verification failure and the error panel
+  itself are message-first now; a worker e2e phase reproduces the old
+  `[object Object]` output on the pre-fix build.
 * **v3.6.3: one shared batch pipeline.**
   The worker fallback and the offscreen document used to each keep a copy of
   `downloadAllDoujinshisAsync`; they had already drifted (HTML second-chance

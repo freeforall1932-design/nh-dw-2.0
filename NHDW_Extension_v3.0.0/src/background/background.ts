@@ -304,7 +304,7 @@ module background
                 // and a retry can never change the format of the job.
                 const buildRetryJob = (): any => {
                     const retryJob: any = {};
-                    const format = normalizeFormat((currentDownloader && currentDownloader.useZip) || settings.useZip || "zip", "zip");
+                    const format = resolveJobFormat((currentDownloader && currentDownloader.useZip) || settings.useZip);
                     retryJob.formatOverride = format;
                     if (typeof sourceTabId === "number") retryJob.tabId = sourceTabId;
                     const retryFolder = format === "raw" ? settings.rawMasterFolder : settings.archiveMasterFolder;
@@ -332,7 +332,7 @@ module background
                         // Record history ONLY after a fully successful download.
                         // The Downloader resolved the effective format from its
                         // settings by now, so the record always matches the file.
-                        const format = normalizeFormat(downloader.useZip || settings.useZip || "zip", "zip");
+                        const format = resolveJobFormat(downloader.useZip || settings.useZip);
                         const masterFolder = format === "raw"
                             ? String(settings.rawMasterFolder || "NHDW")
                             : String(settings.archiveMasterFolder || "");
@@ -438,7 +438,7 @@ module background
                 if (!jobWasAborted() && outcome.failedGalleries && outcome.failedGalleries.length > 0) {
                     rememberFailedGalleries(outcome.failedGalleries, buildRetryJob(sourceTabId, resolved));
                 }
-                const format = normalizeFormat(resolved.useZip, "zip");
+                const format = resolveJobFormat(resolved.useZip);
                 const effectiveSeparate = !!(resolved.downloadSeparately || format === "raw");
                 const records = historyRecords(outcome, {
                     effectiveSeparate: effectiveSeparate,
@@ -453,7 +453,7 @@ module background
             }).catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
-                    errorCallback(String(error));
+                    errorCallback(errorMessage(error));
                 }
             });
         });
@@ -482,7 +482,7 @@ module background
             }).catch(function(error) {
                 clearJobMarker();
                 if (!jobWasAborted()) {
-                    errorCallback(String(error));
+                    errorCallback(errorMessage(error));
                 }
             });
         });
@@ -776,7 +776,7 @@ function askOffscreen(message: any, callback?: (response: any) => void) {
                                 if (callback) callback(response2);
                             }))
                             .catch((error) => {
-                                if (callback) callback({ result: false, error: String(error) });
+                                if (callback) callback({ result: false, error: errorMessage(error) });
                             });
                     }, 250);
                     return;
@@ -788,7 +788,7 @@ function askOffscreen(message: any, callback?: (response: any) => void) {
         })
         .catch((error) => {
             if (callback) {
-                callback({ result: false, error: String(error) });
+                callback({ result: false, error: errorMessage(error) });
             }
         });
 }
@@ -859,7 +859,7 @@ function resolveWorkerBatchOptions(options?: BatchJobOptions): Promise<BatchJobO
     return new Promise<BatchJobOptions>((resolve) => {
         const finish = (stored: any, localApi: { apiKey: string; useServerArchive: boolean }) => {
             const merged: BatchJobOptions = {
-                useZip: stored && stored.useZip ? stored.useZip : "zip",
+                useZip: resolveJobFormat(undefined, stored && stored.useZip),
                 downloadName: stored && stored.downloadName ? stored.downloadName : "{pretty}",
                 duplicateBehaviour: stored && stored.duplicateBehaviour ? stored.duplicateBehaviour : "rename",
                 replaceSpaces: stored && stored.replaceSpaces !== undefined ? stored.replaceSpaces : true,
@@ -875,7 +875,7 @@ function resolveWorkerBatchOptions(options?: BatchJobOptions): Promise<BatchJobO
                 if (typeof options.downloadName === "string") merged.downloadName = options.downloadName;
                 if (typeof options.rawMasterFolder === "string") merged.rawMasterFolder = options.rawMasterFolder;
                 if (typeof options.archiveMasterFolder === "string") merged.archiveMasterFolder = options.archiveMasterFolder;
-                if (options.useZip) merged.useZip = options.useZip;
+                if (options.useZip) merged.useZip = resolveJobFormat(options.useZip, merged.useZip);
                 if (typeof options.duplicateBehaviour === "string") merged.duplicateBehaviour = options.duplicateBehaviour;
                 if (options.replaceSpaces !== undefined) merged.replaceSpaces = options.replaceSpaces;
                 if (options.maxConcurrentDownloads !== undefined) merged.maxConcurrentDownloads = options.maxConcurrentDownloads;

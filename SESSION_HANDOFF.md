@@ -219,7 +219,7 @@ artifact and the record with no override sent) and phase 5j (merged job with
 no override: artifact, record and warn-first all use `.cbz` — **fails on the
 pre-fix code**, verified by reverting the resolver line). Manifests 3.6.4.
 Verification this session: webpack clean, `tsc` both configs clean,
-`npm test` **289 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
+`npm test` **291 passing / 4 pending**, smoke 7 PASS, `npm run test:e2e` all
 PASS; source `js/` byte-identical to `NHDW_Release_v3.0.0/js/`.
 
 **Scope note (honest):** the record/artifact mismatch the item described was
@@ -228,6 +228,44 @@ already closed for single-title and batch jobs by 3.6.3's
 merged-naming pass was the live gap, and it was latent because every current
 UI caller sends `formatOverride`. The rest of this drop is the structural
 half: one resolution point, so the mismatch cannot come back.
+
+### Post-3.6.4 self-review — `[object Object]` was NOT swept (3.6.4)
+
+Reviewing this session's own change found a **live bug the previous two
+sessions' claims missed**. 3.6.1 states raw-mode failures no longer render
+`Error: [object Object]` and item 34 (3.6.2) states the message-first sweep is
+done. Neither covered the **batch-level catch**, which is the outermost
+user-facing error path in both pipelines:
+
+- `background.ts` `downloadAllDoujinshis` / `downloadAllPages` `.catch` and
+  `offscreen.ts`'s two equivalents all did `errorCallback(String(error))`;
+- `askOffscreen`'s two failure replies did `{ result: false, error:
+  String(error) }`, which the relay turns into the popup's `downloadError`.
+
+Proven, not theoretical: `scripts/e2e-worker.js` phase 12c makes the batch
+pipeline reject (the harness throws from `chrome.runtime.sendMessage` during
+`batchProgress`) and asserts what the popup receives. On the pre-fix bundle
+that assertion fails with **`got "[object Object]"`** — the exact string from
+the original 3.6.1 user report. Post-fix it is the thrown message alone, for
+both an object shape and an `Error` instance (no `Error: ` prefix either).
+
+Also hardened in the same pass (same class, lower reach): `popup.ts` preview
+`statusText` (2 sites), `options/apiKey.ts` verification failure, and
+`message.downloadError`'s own render. `errorMessage()` already existed in
+`utils/utils.ts` and was already imported in both bundles — the sweep had
+simply stopped short of these paths.
+
+**Remaining `String(error)` sites, intentionally:** `utils.ts` inside
+`errorMessage` itself (the documented fallback for a shapeless object — now
+pinned by a test) and `background.ts:954` / `downloadControl.ts:122`, which
+read `.message` after a guard.
+
+**Alignment fixes found in the same review:** `resolveWorkerBatchOptions`
+passed the *raw* stored `useZip` (so a legacy `"folder"` travelled unnormalized
+into the pipeline), and three consumers re-derived the format with
+`normalizeFormat(...)` instead of `resolveJobFormat(...)`
+(`background.ts` retry job, single-title record, fallback batch record). All
+five now go through the single resolver.
 
 ### Shared batch pipeline (3.6.3)
 
@@ -362,6 +400,14 @@ synced). Known-review note: the 3.6.0 "no more [object Object]" claim was only
 true for the creation-failure path it fixed (and only while worker and
 offscreen are the same lockstep build); these boundary hardenings remove the
 mixed-version footgun.
+
+**Correction (3.6.4):** that note still understated it. The **batch-level
+catch** in both pipelines (`downloadAllDoujinshis` / `downloadAllPages` in the
+worker fallback and in the offscreen document) kept doing
+`errorCallback(String(error))`, so a batch failure with an object-shaped
+reason rendered `[object Object]` in the popup — reproduced on the pre-fix
+bundle by worker e2e phase 12c. Fixed in 3.6.4; see "Post-3.6.4
+self-review" above.
 
 ### Failed-gallery reporting + raw completion tracking (3.6.0 — newest)
 

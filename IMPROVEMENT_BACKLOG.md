@@ -17,6 +17,13 @@ This document tracks future work for the NHentai Downloader extension. Items are
 - [x] Fix `content.ts` / `updateContent.ts` caption-loop crash on pages without `.caption` cards; scope gallery IDs to each card's own gallery link (`closest('a[href*="/g/"]')` — the caption sits inside the cover link on nhentai) instead of a document-wide regex matched by index; verified by `scripts/e2e-content.js`
 - [x] Promise-wrap the raw-mode `chrome.downloads.download` callback so failures feed the retry loop and error callback instead of being thrown in a bare callback and silently dropped
 - [x] Raw-mode failures never render `Error: [object Object]` (3.6.1): the browser's object `lastError` was stringified at the worker, wrapped in an `Error`, then stringified again by the raw catch. Every boundary (worker reply, downloadControl interrupted/start errors, offscreen `saveViaServiceWorker`/`awaitDownloadViaServiceWorker`, and the stale Firefox snapshot) is now message-first — `.message` is unwrapped and shapeless objects fall back to readable text. Regression unit tests + an e2e phase with an Error-instance answer.
+  **Correction (3.6.4): that sweep stopped short of the batch-level catch.**
+  `downloadAllDoujinshis` / `downloadAllPages` in both pipelines still did
+  `errorCallback(String(error))`, so an object-shaped batch failure rendered
+  `[object Object]` in the popup — reproduced on the pre-fix bundle by worker
+  e2e phase 12c, which reports `got "[object Object]"`. Fixed in 3.6.4
+  together with `askOffscreen`'s failure replies, the popup preview
+  `statusText`, `apiKey.ts` verification failures and `message.downloadError`.
 - [x] 2026-09-05 codebase-review backlog, **items 28–34**: all closed.
   28–32 and 34 in 3.6.2/3.6.3 (batch metadata validation, popup Go Back
   always, sanitized history names, merged ignore no longer drops titles,
@@ -1102,7 +1109,10 @@ config/optional-host flow; manifest permissions; build reproducibility.
 
 - **[x] 34. Message-first sweep for remaining console paths (L4, cosmetic).**
   DONE in 3.6.2. Downloader retry / server-archive `console.warn` use
-  `errorMessage()`.
+  `errorMessage()`. **Reopened and finished in 3.6.4:** the item was scoped to
+  the console, which left the *user-facing* batch-level catch un-swept — the
+  same `[object Object]` the whole 3.6.1 entry exists to remove. See the
+  3.6.4 session log.
 
 ### Also noticed (no new item — already tracked)
 
@@ -1219,11 +1229,41 @@ phase 5j fail with `warn-first must match the real cbz artifact, got
   regression test; 5i is a pinning test (it passes on the pre-fix code, which
   was already correct for single-title records).
 
+### Self-review after the change (same session)
+
+Reviewing the diff for collateral damage found a **live bug that two previous
+sessions' claims said was already gone**:
+
+- 3.6.1 says raw failures no longer render `Error: [object Object]`; item 34
+  (3.6.2) says the message-first sweep is done. Both were scoped too narrowly.
+  The **batch-level `.catch`** — the outermost user-facing error path in
+  `background.ts` (`downloadAllDoujinshis`, `downloadAllPages`) and
+  `offscreen.ts` (both equivalents) — still did `errorCallback(String(error))`,
+  and `askOffscreen`'s two failure replies did `error: String(error)`, which
+  the relay renders as the popup's `downloadError`.
+- **Reproduced, not assumed.** New worker e2e phase 12c throws from
+  `chrome.runtime.sendMessage` during `batchProgress` so the batch pipeline
+  rejects at top level. On the pre-fix bundle the assertion fails with
+  `got "[object Object]"` — the exact string from the original 3.6.1 user
+  report. Post-fix both an object shape and an `Error` instance arrive as
+  their message alone (no `Error: ` prefix).
+- Same pass, lower reach: `popup.ts` preview `statusText` (2 sites),
+  `options/apiKey.ts` verification failure, `message.downloadError`'s own
+  render. `errorMessage()` already existed and was already imported in both
+  bundles. Deliberately left alone: `utils.ts` inside `errorMessage` (the
+  documented shapeless-object fallback, now pinned by a test) and the two
+  guarded `.message` reads.
+- **Alignment fixes** the review also caught: `resolveWorkerBatchOptions`
+  passed the raw stored `useZip` (a legacy `"folder"` travelled unnormalized),
+  and three consumers re-derived the format with `normalizeFormat` instead of
+  the new resolver (single-title retry job, single-title record, fallback
+  batch record). All five now go through `resolveJobFormat`.
+
 ### Verification
 
 webpack clean; `tsc -p tsconfig.json` and `tsconfig.test.json` clean;
-`npm test` **289 passing / 4 pending** (was 277/4 — +12 new cases); smoke
-**7 PASS**; `npm run test:e2e` all PASS incl. the two new worker phases;
+`npm test` **291 passing / 4 pending** (was 277/4 — +14 new cases); smoke
+**7 PASS**; `npm run test:e2e` all PASS incl. worker phases 5i, 5j and 12c;
 source `js/` byte-identical to `NHDW_Release_v3.0.0/js/`; manifests 3.6.4 in
 source + release.
 
