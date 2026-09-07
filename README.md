@@ -14,6 +14,7 @@ A Chrome extension for batch downloading full-size image archives directly from 
 * **Separate files or one merged file (3.4.0):** list downloads default to **one file per title**, named from the gallery's own metadata. The old "everything in one archive" behaviour is still there as an explicit opt-in.
 * **Never an accidental tankoubon (3.4.0):** merging several *different* titles into one PDF always asks for confirmation first, with "one PDF per title" as the default answer.
 * **Side panel (3.4.0):** the toolbar button opens a dockable, resizable side panel instead of the hovering popup. The popup is kept as a fallback and you can switch back in Settings.
+* **Bookmark queue (3.7.0):** click the **☆** on any gallery card and the title waits for you in a new **Queue** tab — with its cover thumbnail, its page count and a per-row Download button. The list lives in `chrome.storage.local`, so it is still exactly what you clicked after you close the browser, restart the PC and come back. The tab doubles as a **taskbar-style dock**: one button collapses it to a single bar and the flag is remembered too. A **paste box** takes ids or links (`366224`, `https://nhentai.net/g/366224/`, `https://cin.lat/v/366224`, ranges like `366220-366224`, mixed and separated by commas, spaces or new lines) and either bookmarks them or downloads them straight away — one title or a whole batch. Downloads are one file per title, named by the same list-mode template the in-page bar uses, so the two can never disagree. **Auto-capture** (Settings, off by default) bookmarks every card as you scroll instead of one click per title.
 * **In-page Download / Select buttons (3.4.0):** every gallery card on a listing page gets its own Download button and Select box, plus a floating bar showing "N selected -> format -> Download" — so you never have to open the extension.
 * **Remembers what you downloaded (3.5.0):** re-running the same listing (search / tag / artist / homepage) skips galleries that finished downloading before, so you stop getting "Title (1).zip", "Title (2).zip" duplicates. Already-downloaded rows show a ✓ badge with the saved file name and their own *Download anyway* link; the in-page bar shows "N selected · M already downloaded · K will download" and skipped galleries cost **zero** API calls. Skipping is **verify-then-redownload**: a recorded gallery is only skipped while its file still exists on disk (Settings → *Verify downloaded files exist*, default ON), so a deleted file is fetched again on the next run. A single-file (merged) job never skips — one archive needs every selected title — and it is remembered only when the whole job finished; if the merged file already exists it warns first and then saves a new copy as `_part2`, `_part3` …. Merged / batch names carry the date stamp (`search_31082026.zip`, Settings → *Date in merged names*, default ON) and the history records that exact dated file name. The list lives in this browser only, and Settings has a *Clear history* button.
 * **Manifest V3 Compliant:** Fully updated for the latest Chrome extension requirements.
@@ -69,6 +70,42 @@ You can work either from the page itself or from the panel — both do exactly t
 > combination (PDF + *Single merged file* + more than one title) always asks first,
 > with **Switch to separate files** as the default answer. It is independent of the
 > existing "you are going to download N pages" confirmation; both can appear.
+
+### Bookmark queue (the Queue tab)
+
+The panel has three tabs: **Download**, **Queue** and **Settings**. Queue is the
+persistent bookmark list.
+
+1. **Bookmark.** Click the **☆** on a gallery card on any listing page. It fills
+   to **★** and the title joins the Queue with its cover, its page count and the
+   page it came from. Click the filled star again to take it off the list.
+2. **Or paste.** Open the Queue tab and drop ids or links into the box —
+   `366224, 177013`, `https://nhentai.net/g/366224/`, `https://cin.lat/v/366224`,
+   `366220-366224`, or the whole `?id=366224,177013` query string, mixed freely.
+   **Add to queue** bookmarks them (titles and covers resolve in the background
+   through your open nhentai tab); **Download now** fetches them immediately
+   without bookmarking anything.
+3. **Or let it collect.** Settings -> *Bookmark queue* -> **Auto-capture**
+   bookmarks every card as you scroll. It is off by default: on a 60-card search
+   page it would quietly build a 60-item list you never asked for.
+4. **Download.** Tick rows and press **Download N selected**, or use a row's own
+   **Download** button for just that title. Either way it is **one file per
+   title**, named by the list-mode template, in list order. Galleries the
+   download history already records are skipped and counted; tick *include
+   already downloaded* to fetch them again.
+5. **Dock it.** The **Minimise** button collapses the tab to one bar showing the
+   counts and the download button. The list and the collapsed state are both
+   stored, so the Queue comes back the way you left it — after closing the panel,
+   after closing the browser, and after restarting the machine.
+
+Rows report their own state: `bookmarked` -> `downloading` -> `done` (with the
+file name it saved) or `failed` (with the reason). A title counts as done no
+matter which entry point downloaded it, because the download history is the
+authority.
+
+> **The bookmark list is local.** It lives in this browser profile's
+> `chrome.storage.local` and is not synced to other devices, and it is not
+> nhentai's own account favourites. Clearing it never deletes a file on disk.
 
 ### Where the list-mode settings live
 
@@ -134,8 +171,15 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   error-message hardening so a failed raw page shows its real reason instead
   of `[object Object]`, but the 3.6.0 completion tracking and retry UI are not
   ported there yet.
-* **The queue list is still name-only.** Thumbnails, per-item progress, and
-  per-item cancel/retry are planned, not built.
+* **The bookmark queue has no per-item cancel.** Rows show
+  `bookmarked / downloading / done / failed` and each has its own Download and
+  Remove, but stopping one specific in-flight job still means the existing
+  global pause/clear controls. Cancelling one row needs the offscreen job queue
+  mirrored into `chrome.storage.session` — the structural work
+  `IMPROVEMENT_BACKLOG.md` records for the old "P3 queue UI". Reordering the
+  list by drag is also not built, though downloads already follow list order.
+* **The bookmark queue is Chrome-only for now.** `NHDW_Firefox_v1.0.0` has
+  neither the Queue tab nor the ☆ button; that port still lags at 3.3.1.
 * **Download history is local and starts empty.** The remembered list lives
   in `chrome.storage.local` of this browser (never synced) and only knows
   downloads that finished after v3.5.0 was installed. Re-installing the
@@ -146,7 +190,31 @@ Settings tab of the panel (or the full Options page) -> **List mode**:
   again (you keep the newest copy). The record itself is the durable link.
 
 ## 📝 Version History
-* **v3.6.4 (current): one format decision per job.**
+* **v3.7.0 (current): the bookmark queue.**
+  A third panel tab, **Queue**, holding a persistent list of the titles you
+  clicked **☆** on — the counterpart of the side-panel queue in the sibling
+  `twitter-batch-download` extension, but a *bookmark* you build by hand rather
+  than a queue auto-collected while you scroll.
+  Rows carry the card's own cover thumbnail (read from the lazyloaded
+  `data-src`, never from the download path), the caption's page count and the
+  page they came from. The list, its selection and its collapsed dock state all
+  live in `chrome.storage.local`, so a browser close, a PC restart and a reopen
+  bring back exactly what you clicked; a row persisted mid-download comes back
+  actionable instead of stranded, and a finished row is re-checked against the
+  download history so it never claims a download the extension has forgotten.
+  Three ways in: the per-card star, a paste box that reads ids, nhentai links,
+  `cin.lat` links, ranges and `?id=` query strings (single or batch, bookmark or
+  download straight away), and an off-by-default auto-capture toggle. Downloads
+  reuse the existing pipeline with the existing list-mode settings — always one
+  file per title — so the queue and the in-page floating bar cannot disagree.
+  Settings also gains **Open the dockable Queue panel** (`chrome.sidePanel.open`,
+  Chrome 116+), the escape hatch from the hovering popup, which cannot stay open
+  long enough to watch a queue.
+  Design and rationale: `BOOKMARK_QUEUE_PLAN.md`. Tests: 51 new unit cases in
+  `test/bookmark-queue.test.js` (361 passing overall), worker e2e phase 13a-13h
+  including a simulated service-worker restart, and 6 new content-script e2e
+  checks for the star and auto-capture.
+* **v3.6.4: one format decision per job.**
   A download job's output format used to be derived in several places from
   several inputs (per-job override here, stored default there, `"zip"` as a
   last resort). One real consequence: a merged (single-file) batch with no
@@ -313,3 +381,20 @@ so no real nhentai account or Cloudflare clearance is needed.
   extension harness (Chrome `Runtime.enable` timeout / Brave SIGTRAP, on every run since it
   was introduced; see `IMPROVEMENT_BACKLOG.md` item 10). Run `npm run test:browser` on a
   machine with a full Chrome/Brave build instead.
+
+## 📚 Project documents
+
+Where the working context lives. If you are picking this project up, read them in
+this order.
+
+| Document | Read it for |
+| :--- | :--- |
+| **`WORKLIST.md`** | What to do next. The live, ordered, statused list of open work, plus the mandatory *review the previous session's diff first* rule and the harness gotchas that cost a round if you miss them. **Start here.** |
+| **`SESSION_HANDOFF.md`** | What the last session changed and why. Its top block is the current handoff; it also holds the **"Do not" rules** (each one is a bug that already happened) and the real-browser verification steps. |
+| **`IMPROVEMENT_BACKLOG.md`** | Full specs and history for every numbered item, oldest first, including every past session log. |
+| **`BOOKMARK_QUEUE_PLAN.md`** | Design and rationale for the 3.7.0 bookmark queue specifically — the two-lists rule, the restart semantics, and what was deliberately *not* copied from the sibling `twitter-batch-download` repo. |
+| **`FOLDER_NAMING_STUDY.md`** | Why download names get lost when another extension registers a filename listener (Chromium bug 579563), and the guard that works around it. |
+
+Item numbers are shared across all of them and are never reused, so
+`WORKLIST.md` **45**, `IMPROVEMENT_BACKLOG.md` **45** and a session log's
+"item 45" are the same thing.

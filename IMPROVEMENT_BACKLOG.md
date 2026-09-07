@@ -1455,3 +1455,157 @@ audit), not from a user report.
 - **A display fix is not a fix until every reader of the same storage agrees.**
   `grep -rn LIST_MODE_DEFAULTS src/` was the entire check that caught the
   incomplete half of item 35.
+
+## Session log — 2026-09-08: bookmark queue (3.7.0), items 42–46 added
+
+### Context and goal
+
+Session `arena/01a07d48-nh-dw-2-0`. The user asked for a **bookmark queue**
+modelled on the sibling `freeforall1932-design/twitter-batch-download`
+extension's side-panel queue, but different in the way that matters: a list
+built by **hand** (click a ☆) rather than auto-collected while scrolling, which
+**survives a browser close and a PC restart**, shows the card's **cover
+thumbnail**, minimises into a **dock**, accepts **pasted ids or links** for
+single or batch download, and can be downloaded from **in batch or one at a
+time**. Reference UI: `https://cin.lat/bulk?id=366224,177013`, minus that site's
+"View Online" button.
+
+This closes the long-carried **P3 queue UI** item *for the bookmark half only*.
+The structural blocker recorded in the 2026-09-04 log — "the queue lives
+entirely inside the offscreen document (`queuedJobs`) and is only surfaced as a
+count" — is **still true of the download job queue** and is now item **45**.
+What changed is that there is a second, persistent list which does not have that
+problem, because it was never a job queue.
+
+### Correction recorded (a premise I misread)
+
+The user's statement that the toolbar click "is still pop up first instead of
+queue sidebar/side panel" was about the **Twitter repo**, not this one, and it
+is **correct there**: `twitter-batch-download/extension/manifest.json` sets
+`action.default_popup: popup.html` and has **no** `setPanelBehavior` anywhere;
+`popup.html` is a pure launcher ("Everything now lives in the Side Panel queue")
+whose single button calls `chrome.sidePanel.open({ windowId })` at
+`popup.js:37`. This repo has defaulted to the side panel since 3.4.0
+(`background.ts:71`), so the two repos start from opposite places.
+
+The design consequence, and why the Twitter shape was **not** copied wholesale:
+that repo's popup had nothing left to do, so hollowing it into a launcher was
+free. This repo's popup is the primary UI for single-title and list-mode
+downloads. It stays functional; the launcher button was added to the **Queue tab
+header** (hidden when the document already is the panel) with the Settings copy
+kept. Full reasoning in `BOOKMARK_QUEUE_PLAN.md` §3.
+
+### Landed
+
+New: `src/utils/bookmarkQueue.ts` (pure core), `src/background/bookmarkService.ts`
+(worker as single writer), `src/preview/bookmarkPanel.ts` (Queue tab),
+`test/bookmark-queue.test.js` (51 cases), `BOOKMARK_QUEUE_PLAN.md`.
+Changed: `src/preview/activeTabGallery.ts` (`getActiveNhentaiTabId`),
+`src/content/listControls.ts` (☆ + `autoCaptureCards` + paint overlay),
+`src/background/background.ts` (routing + two bookkeeping hooks),
+`src/preview/popupSettings.ts`, `index.html`, both CSS files, `README.md`,
+version 3.6.4 → **3.7.0** in both manifests, `NHDW_Release_v3.0.0` re-synced.
+
+### The review this session ran on its own output
+
+Standing rule now recorded in `SESSION_HANDOFF.md`: **review the previous
+session's diff before building**, hunting for missing logic (a handler with no
+caller, a setting with no reader, a notice that promises what the code never
+does), misaligned code (a guard in one path but not its sibling), and broken
+code (a state read that clobbers a concurrent write). Six defects found, each
+with a test failing on the pre-fix build:
+
+1. **Unguarded tab id.** `enrichBookmarks` used `getActiveTabId()`; the Queue tab
+   can be open on any website and `fetchGalleryViaTab` injects into whatever tab
+   it is handed. → `getActiveNhentaiTabId()`, used by enrichment *and* the
+   Queue's `startDownload`.
+2. **Reconcile race.** `mutateBookmarks(() => capturedSnapshot)` clobbered
+   concurrent mutations. → applied as a function of the freshly-read state.
+3. **Dead auto-capture on an open page.** It lived inside the idempotent
+   `injectCardControls`, which skips decorated cards, so flipping the setting
+   bookmarked nothing — the exact case its `sync.onChanged` listener existed
+   for. → own pass.
+4. **Optimistic paint wiped by a re-read.** Star state shared a `Set` that
+   `readBookmarkState()` clears, so a sweep re-sent already-queued cards. →
+   `bookmarkOverlay` cleared only by the storage-change event. **Found by a test
+   that failed first.**
+5. **A notice that lied.** "Resolving titles…" never corrected itself when no
+   nhentai tab existed. → `{ resolved, skipped }` reported truthfully.
+6. **Dead code.** `bookmarkSetStatus` (no sender), `resetBookmarkReconciliationForTests`,
+   `fallbackBookmarkState` (no references). → removed.
+
+Plus: `cardPages` regex anchored to end-of-caption (an unanchored match reads a
+false page count out of any title containing "<number> pages").
+
+### Verification
+
+`npm test` **366 passing / 4 pending** (from 310/4) · `npm run build` clean ·
+`npm run test:smoke` worker + offscreen clean · `npm run test:e2e` **117 PASS,
+0 FAIL** (from 101). Load-bearing: worker e2e **13f** re-runs the built
+`js/background.js` in the same VM against the same `chrome.storage.local` stub
+and proves an in-flight row recovers while a history-backed `done` row and the
+dock flag survive.
+
+**Harness gotcha:** bare `npx mocha test/x.test.js` uses a stale `build/test/`;
+only `npm test` runs `build:test` first.
+
+**Still unverified:** everything real-browser. `npm run test:browser` has never
+run in this environment.
+
+## New backlog items — 2026-09-08 (items 42–46)
+
+### 42. Real-browser pass for the Queue tab
+
+- **Status:** open. **Priority:** highest of the new items.
+- Every 3.7.0 claim about rendering, restart and the panel API is a VM result or
+  an expectation. Verify, in a real Chrome 116+ profile: bookmark three cards →
+  close the browser → restart the machine → reopen → the list, its selection and
+  its collapsed state are identical; thumbnails paint from `t.nhentai.net`;
+  "Open docked ↗" opens the side panel from the popup and is hidden inside the
+  panel; paste `366224,177013` → **Download now** → both files land under the
+  list-mode template; auto-capture on a real infinite-scroll page.
+- Add the steps to "Required real-browser verification before PR" in
+  `SESSION_HANDOFF.md` once run.
+
+### 43. ☆ on the single-title preview and on similar-gallery rows
+
+- **Status:** open, worker side ready.
+- `bookmarkAdd` already accepts `source: "page"` and `"similar"`, and
+  `thumbnailUrlFromGallery` derives a cover from resolved `media_id`, so both
+  sites only need a button and a message. Two render sites:
+  `popup.ts #doujinshiPreviewAsync` (single title) and the similar-galleries
+  list built by `message.similarList`.
+- Decide: does bookmarking from a title page use the resolved `media_id`
+  thumbnail, or none until enrichment? Prefer the derived one — the metadata is
+  already in hand there.
+
+### 44. Drag-reorder the bookmark list
+
+- **Status:** open, low cost.
+- `planBookmarkDownload` already emits ids **in list order**, so reordering the
+  list already reorders the batch — only the affordance is missing. Persist
+  order implicitly (it is array order in storage); add no new field.
+- Must not fight the row's checkbox / Download / Remove hit targets.
+
+### 45. Per-row cancel of an in-flight download
+
+- **Status:** open. This is the surviving half of the old **P3 queue UI**.
+- Still blocked by the same structural fact: the job queue is `queuedJobs` in the
+  offscreen document and is surfaced only as a count. Cancelling one specific
+  gallery needs the worker to mirror job state into `chrome.storage.session`
+  with per-item identity, and the offscreen loop to check it between pages.
+- Do **not** solve this by growing the bookmark list into a job queue. See the
+  "Do not" rules.
+- Existing global pause / clear / `clearQueue` remain the only stop controls
+  until this lands.
+
+### 46. Firefox port of the bookmark queue
+
+- **Status:** open. `NHDW_Firefox_v1.0.0` is untouched by 3.7.0 and still lags
+  at 3.3.1.
+- `chrome.sidePanel` has no Firefox equivalent — the analogue is
+  `sidebar_action`, and the "Open docked ↗" button must degrade to a message
+  rather than a failed call. The rest (storage, worker messages, content-script
+  star) ports directly; `bookmarkQueue.ts` is storage-agnostic.
+- Blocked behind worklist **37** (the Firefox panel harness) — without it there
+  is no way to verify the port.

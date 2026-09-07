@@ -3,36 +3,54 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { message } from "./message";
 import { renderSettings } from "./popupSettings";
+import { renderBookmarks, watchBookmarkChanges } from "./bookmarkPanel";
 import { readListSettings } from "../utils/listSettings";
 
 let popup = Popup.getInstance();
 
-// Popup tabs: "Download" (the preview/batch/progress UI rendered into #action)
-// and "Settings" (API key + file-name template, editable on the fly without
-// opening the separate options page). Switching only toggles visibility, so an
-// in-progress download keeps updating #action in the background.
+// Panel tabs: "Download" (the preview/batch/progress UI rendered into #action),
+// "Queue" (the persistent bookmark list) and "Settings" (API key + file-name
+// template, editable on the fly without opening the separate options page).
+// Switching only toggles visibility, so an in-progress download keeps updating
+// #action in the background and a half-typed paste survives a tab switch.
+type PanelTab = "download" | "queue" | "settings";
+
 function initPopupTabs() {
     const tabDownload = document.getElementById("tabDownload");
+    const tabQueue = document.getElementById("tabQueue");
     const tabSettings = document.getElementById("tabSettings");
     const actionPane = document.getElementById("action");
+    const queuePane = document.getElementById("queuePane");
     const settingsPane = document.getElementById("settingsPane");
-    if (!tabDownload || !tabSettings || !actionPane || !settingsPane) {
+    if (!tabDownload || !tabQueue || !tabSettings || !actionPane || !queuePane || !settingsPane) {
         return;
     }
-    const show = (which: "download" | "settings") => {
-        const isSettings = which === "settings";
-        actionPane.hidden = isSettings;
-        settingsPane.hidden = !isSettings;
-        tabDownload.classList.toggle("active", !isSettings);
-        tabSettings.classList.toggle("active", isSettings);
-        if (isSettings) {
+    const show = (which: PanelTab) => {
+        actionPane.hidden = which !== "download";
+        queuePane.hidden = which !== "queue";
+        settingsPane.hidden = which !== "settings";
+        tabDownload.classList.toggle("active", which === "download");
+        tabQueue.classList.toggle("active", which === "queue");
+        tabSettings.classList.toggle("active", which === "settings");
+        if (which === "settings") {
             // Re-render on every open so the saved key state and template are
             // always reflected accurately.
             renderSettings(settingsPane);
         }
+        if (which === "queue") {
+            // The bookmark list is storage-backed, so it is re-read on every
+            // open: another tab, a card click or a settled download may have
+            // changed it while this pane was hidden. The chrome is built once,
+            // so what the user typed is kept.
+            renderBookmarks(queuePane);
+        }
     };
     tabDownload.addEventListener("click", () => show("download"));
+    tabQueue.addEventListener("click", () => show("queue"));
     tabSettings.addEventListener("click", () => show("settings"));
+    // Live row updates (a card bookmarked on the page, a download settling)
+    // arrive whether or not this pane is the visible one.
+    watchBookmarkChanges();
 }
 
 if (document.readyState === "loading") {

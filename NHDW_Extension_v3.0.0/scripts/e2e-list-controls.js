@@ -164,20 +164,26 @@ function makeDocument(ids) {
     body.appendChild(container);
     html.appendChild(body);
 
-    const addCard = (id, title) => {
+    const addCard = (id, title, pages) => {
         const gallery = makeEl("div");
         gallery.className = "gallery";
         const cover = makeEl("a", { href: "/g/" + id + "/" });
         cover.className = "cover";
+        // nhentai lazyloads covers: the real address is in data-src while src
+        // holds a placeholder. The bookmark star has to read data-src.
+        const img = makeEl("img");
+        img.setAttribute("data-src", "https://t.nhentai.net/galleries/" + id + "0/thumb.jpg");
+        img.setAttribute("src", "data:image/gif;base64,placeholder");
+        cover.appendChild(img);
         const caption = makeEl("div");
         caption.className = "caption";
-        caption.textContent = title;
+        caption.textContent = title + "\n" + (pages || 71) + " pages";
         cover.appendChild(caption);
         gallery.appendChild(cover);
         container.appendChild(gallery);
         return gallery;
     };
-    ids.forEach((id, index) => addCard(id, "Title " + (index + 1)));
+    ids.forEach((id, index) => addCard(id, "Title " + (index + 1), 71 + index));
 
     const document = {
         documentElement: html,
@@ -208,6 +214,7 @@ function run(options) {
     const syncWrites = [];
     const localWrites = [];
     const sentMessages = [];
+    const syncChangeCallbacks = [];
     const confirmAnswers = options.confirmAnswers || [];
     const dom = makeDocument(options.ids || ["111111", "222222", "333333"]);
     const mutationCallbacks = [];
@@ -225,7 +232,8 @@ function run(options) {
         storage: {
             sync: {
                 get(defaults, cb) { cb(Object.assign({}, defaults, settings)); },
-                set(items) { syncWrites.push(items); }
+                set(items) { syncWrites.push(items); },
+                onChanged: { addListener(fn) { syncChangeCallbacks.push(fn); } }
             },
             local: {
                 get(defaults, cb) { cb(Object.assign({}, defaults, localStore)); },
@@ -264,6 +272,7 @@ function run(options) {
         dom: dom,
         localStore: localStore,
         syncWrites: syncWrites,
+        syncChangeCallbacks: syncChangeCallbacks,
         localWrites: localWrites,
         sentMessages: sentMessages,
         mutationCallbacks: mutationCallbacks
@@ -601,6 +610,143 @@ function wait(ms) {
             fail("with no listFormat stored a card download must inherit cbz, got " + JSON.stringify(job));
         }
         console.log("PASS: in-page card downloads inherit the single-title format");
+    }
+
+    // --- N+1. the bookmark star -------------------------------------------
+    {
+        const ctx = run({});
+        await wait(0);
+        const controls = cardControls(ctx.dom);
+        if (controls.length !== 3) {
+            fail("expected 3 control boxes for the bookmark check, got " + controls.length);
+        }
+        for (const box of controls) {
+            if (!box.querySelector(".nhdw-bookmark")) {
+                fail("a card is missing its bookmark star");
+            }
+        }
+        console.log("PASS: every listing card gets a bookmark star");
+
+        // A click must carry the card's OWN cover: that is the thumbnail the
+        // Queue row shows, and it is only readable from the page.
+        controls[0].querySelector(".nhdw-bookmark").dispatch("click");
+        const add = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!add || add.action !== "bookmarkAdd") {
+            fail("clicking the star must send bookmarkAdd, got " + JSON.stringify(add));
+        }
+        const item = add.items[0];
+        if (item.id !== "111111") {
+            fail("the bookmark must carry the card's gallery id, got " + item.id);
+        }
+        if (item.thumbnail !== "https://t.nhentai.net/galleries/1111110/thumb.jpg") {
+            fail("the bookmark must carry the card's lazyloaded cover (data-src, not the placeholder), got " + item.thumbnail);
+        }
+        if (item.pages !== 71) {
+            fail("the bookmark must carry the caption's page count, got " + item.pages);
+        }
+        if (item.source !== "card" || item.sourceUrl !== "") {
+            fail("a manual card bookmark must report source=card, got " + JSON.stringify(item));
+        }
+        console.log("PASS: the star sends the card's id, title, page count and cover thumbnail");
+
+        // The star is a toggle: it is the only un-bookmark affordance on the page.
+        controls[0].querySelector(".nhdw-bookmark").dispatch("click");
+        const remove = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!remove || remove.action !== "bookmarkRemove" || String(remove.ids[0]) !== "111111") {
+            fail("clicking a filled star must send bookmarkRemove for that id, got " + JSON.stringify(remove));
+        }
+        console.log("PASS: clicking a filled star takes the title off the list");
+    }
+
+    // --- N+2. auto-capture -------------------------------------------------
+    {
+        // Off by default: on a 60-card search page it would silently build a
+        // 60-item list the user never asked for.
+        const off = run({});
+        await wait(0);
+        if (off.sentMessages.some((message) => message.action === "bookmarkAdd")) {
+            fail("auto-capture must be OFF by default");
+        }
+        console.log("PASS: auto-capture stays off unless the user turns it on");
+
+        const on = run({ settings: { bookmarkAutoCapture: true } });
+        await wait(0);
+        const adds = on.sentMessages.filter((message) => message.action === "bookmarkAdd");
+        if (adds.length !== 3) {
+            fail("auto-capture must bookmark every card, got " + adds.length + " messages");
+        }
+        if (adds[0].items[0].source !== "auto") {
+            fail("an auto-captured row must report source=auto, got " + adds[0].items[0].source);
+        }
+        if (!adds[0].items[0].thumbnail) {
+            fail("an auto-captured row must still carry the card's cover");
+        }
+        console.log("PASS: auto-capture bookmarks every card without a click when it is on");
+
+        // Flipping the setting on a page that is ALREADY open must still
+        // collect it. Card injection is idempotent and skips decorated cards,
+        // so auto-capture has to be its own pass or this silently does nothing.
+        const flipped = run({});
+        await wait(0);
+        if (flipped.sentMessages.some((message) => message.action === "bookmarkAdd")) {
+            fail("the flip fixture must start with auto-capture off");
+        }
+        if (cardControls(flipped.dom).length !== 3) {
+            fail("the flip fixture must have decorated its cards first");
+        }
+        if (flipped.syncChangeCallbacks.length === 0) {
+            fail("the content script must listen for the auto-capture setting to change");
+        }
+        for (const callback of flipped.syncChangeCallbacks) {
+            callback({ bookmarkAutoCapture: { newValue: true } }, "sync");
+        }
+        await wait(0);
+        const swept = flipped.sentMessages.filter((message) => message.action === "bookmarkAdd");
+        if (swept.length !== 3) {
+            fail("turning auto-capture on mid-page must bookmark the cards already there, got " + swept.length);
+        }
+        if (swept[0].items[0].source !== "auto") {
+            fail("a mid-page auto-capture must report source=auto");
+        }
+        console.log("PASS: turning auto-capture on mid-page still collects the cards already there");
+
+        // And it must not re-send what is already bookmarked.
+        for (const callback of flipped.syncChangeCallbacks) {
+            callback({ bookmarkAutoCapture: { newValue: true } }, "sync");
+        }
+        await wait(0);
+        const afterSecondSweep = flipped.sentMessages.filter((message) => message.action === "bookmarkAdd").length;
+        if (afterSecondSweep !== 3) {
+            fail("a second auto-capture sweep must add nothing, got " + afterSecondSweep + " total sends");
+        }
+        console.log("PASS: a repeated auto-capture sweep adds nothing");
+    }
+
+    // --- N+3. an already-bookmarked card renders a filled star -------------
+    {
+        const ctx = run({
+            history: {
+                bookmarkQueue: {
+                    v: 1,
+                    collapsed: false,
+                    items: [{ id: "222222", title: "Title 2", selected: true, status: "saved" }]
+                }
+            }
+        });
+        await wait(0);
+        const controls = cardControls(ctx.dom);
+        const filled = controls[1].querySelector(".nhdw-bookmark");
+        if (!filled.classList.contains("nhdw-bookmark-on")) {
+            fail("a bookmarked card must render a filled star, got class=" + filled.className);
+        }
+        if (filled.textContent !== "\u2605") {
+            fail("a bookmarked card must show the filled star glyph, got " + filled.textContent);
+        }
+        const empty = controls[0].querySelector(".nhdw-bookmark");
+        if (empty.classList.contains("nhdw-bookmark-on") || empty.textContent !== "\u2606") {
+            fail("an unbookmarked card must show the empty star glyph");
+        }
+        console.log("PASS: bookmarked cards come back with a filled star after a reload");
     }
 
     console.log("PASS: in-page listing card controls behave correctly.");

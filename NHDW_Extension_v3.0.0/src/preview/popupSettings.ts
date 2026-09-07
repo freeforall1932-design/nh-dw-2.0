@@ -543,19 +543,74 @@ function renderInterfaceSection(container: HTMLElement): void {
     section.appendChild(controlsLabel);
 
     const controlsHint = el("small");
-    controlsHint.textContent = "Adds a Download button and a Select box to every gallery card, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
+    controlsHint.textContent = "Adds a Download button, a Bookmark star and a Select box to every gallery card, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
     section.appendChild(controlsHint);
+
+    // ---- bookmark queue ------------------------------------------------
+    const bookmarkHeading = el("h4");
+    bookmarkHeading.textContent = "Bookmark queue";
+    section.appendChild(bookmarkHeading);
+
+    const autoLabel = el("label");
+    autoLabel.className = "psInline";
+    const autoBox = el("input");
+    autoBox.type = "checkbox";
+    autoBox.id = "psBookmarkAutoCapture";
+    autoLabel.appendChild(autoBox);
+    autoLabel.appendChild(document.createTextNode(" Auto-capture: bookmark every gallery card as you scroll"));
+    section.appendChild(autoLabel);
+
+    const autoHint = el("small");
+    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Queue tab without a click per card. Clicking a card's filled star always removes it again.";
+    section.appendChild(autoHint);
+
+    // The "advanced feature" entry point: from the hovering popup there is no
+    // way to watch a queue, because the popup dies the moment it loses focus.
+    // chrome.sidePanel.open() needs a user gesture, which this click is.
+    const openPanelButton = el("button");
+    openPanelButton.type = "button";
+    openPanelButton.textContent = "Open the dockable Queue panel";
+    openPanelButton.title = "Open the bookmark queue in the resizable side panel, which stays open while you browse";
+    const openPanelStatus = el("small");
+    openPanelButton.addEventListener("click", () => {
+        const sidePanelApi: any = (chrome as any).sidePanel;
+        if (!sidePanelApi || typeof sidePanelApi.open !== "function") {
+            openPanelStatus.textContent = "This browser has no side panel (Chrome 116+). The Queue tab here still works - the list is saved either way.";
+            return;
+        }
+        try {
+            chrome.windows.getCurrent((currentWindow: any) => {
+                const options: any = currentWindow && currentWindow.id !== undefined
+                    ? { windowId: currentWindow.id }
+                    : {};
+                const opened = sidePanelApi.open(options);
+                if (opened && typeof opened.catch === "function") {
+                    opened.catch((error: any) => {
+                        openPanelStatus.textContent = "Chrome refused to open the panel: " + (error && error.message ? error.message : String(error));
+                    });
+                }
+            });
+        } catch (error: any) {
+            openPanelStatus.textContent = "Could not open the panel: " + (error && error.message ? error.message : String(error));
+        }
+    });
+    section.appendChild(openPanelButton);
+    section.appendChild(openPanelStatus);
 
     container.appendChild(section);
 
-    chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true }, (elems: any) => {
+    chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true, bookmarkAutoCapture: false }, (elems: any) => {
         panelSelect.value = elems.uiMode === "popup" ? "popup" : "sidepanel";
         controlsBox.checked = elems.inPageControls === undefined ? true : !!elems.inPageControls;
+        autoBox.checked = !!elems.bookmarkAutoCapture;
         panelSelect.addEventListener("change", () => {
             chrome.storage.sync.set({ uiMode: panelSelect.value === "popup" ? "popup" : "sidepanel" });
         });
         controlsBox.addEventListener("change", () => {
             chrome.storage.sync.set({ inPageControls: controlsBox.checked });
+        });
+        autoBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ bookmarkAutoCapture: autoBox.checked });
         });
     });
 }

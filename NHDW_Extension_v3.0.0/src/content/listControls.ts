@@ -34,6 +34,11 @@ import {
     PDF_MERGE_WARNING_KEY
 } from "../utils/downloadFormats";
 import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
+// Bookmark queue: the persistent "titles I clicked ☆ on" list. The content
+// script only READS the stored list directly (to render ☆ vs ★) — every WRITE
+// goes through the worker, which is the single writer, so a card bookmark
+// landing while the panel mutates the list cannot clobber it.
+import { BOOKMARK_QUEUE_KEY, BookmarkState, normalizeBookmarkState } from "../utils/bookmarkQueue";
 
 interface CardInfo {
     id: string;
@@ -50,7 +55,11 @@ let settings = {
     masterFolder: true,
     masterFolderName: "NHDW",
     template: "{pretty}",
-    pdfMergeWarnDismissed: false
+    pdfMergeWarnDismissed: false,
+    // Auto-capture: while on, every listing card found is bookmarked without a
+    // click. Default OFF — on a 60-card search page it would silently build a
+    // 60-item list the user never asked for. One click turns it on.
+    bookmarkAutoCapture: false
 };
 
 const selected = new Set<string>();
@@ -67,6 +76,131 @@ function readHistoryState(): Promise<void> {
     return readHistory().then((stored) => {
         history = stored;
     });
+}
+
+// ---- bookmark queue ------------------------------------------------------
+
+// Mirror of the stored bookmark list, read directly so rendering a ☆ does not
+// cost a worker round trip. Writes always go through the worker. The Set is the
+// id index: it is rebuilt on every storage read and updated optimistically on
+// click, so a ☆ flips the instant it is clicked instead of after the round
+// trip (the storage event then confirms it).
+let bookmarkState: BookmarkState = normalizeBookmarkState(null);
+/** Ids confirmed by the last storage read. */
+const bookmarkedIds = new Set<string>();
+// Unconfirmed optimistic paint: true = "I just bookmarked this", false = "I
+// just removed it". A click has to feel instant, but the worker's write has not
+// landed yet when the click returns - and a storage re-read in that window
+// (a settings flip, a history change) would otherwise wipe the paint and make
+// the next auto-capture sweep re-send cards that are already queued.
+//
+// Cleared ONLY by the bookmarkQueue storage-change event, because that event
+// fires after the worker's write landed, which makes storage authoritative
+// again. A plain read must never clear it.
+const bookmarkOverlay = new Map<string, boolean>();
+
+function readBookmarkState(): Promise<void> {
+    return new Promise((resolve) => {
+        try {
+            const defaults: any = {};
+            defaults[BOOKMARK_QUEUE_KEY] = null;
+            chrome.storage.local.get(defaults, (elems: any) => {
+                bookmarkState = normalizeBookmarkState(elems && elems[BOOKMARK_QUEUE_KEY]);
+                bookmarkedIds.clear();
+                for (const item of bookmarkState.items) {
+                    bookmarkedIds.add(item.id);
+                }
+                resolve();
+            });
+        } catch (_) {
+            resolve();
+        }
+    });
+}
+
+function isBookmarked(id: string): boolean {
+    return bookmarkOverlay.has(id) ? bookmarkOverlay.get(id) === true : bookmarkedIds.has(id);
+}
+
+// nhentai lazyloads covers: the real address sits in data-src while src holds a
+// placeholder. Either absolute http(s) URL is usable as an <img> source in the
+// panel; a data: placeholder is not worth persisting.
+function cardThumbnail(card: HTMLElement): string {
+    const img = card.querySelector("img");
+    if (img === null) {
+        return "";
+    }
+    const candidates = [img.getAttribute("data-src"), img.getAttribute("src")];
+    for (const candidate of candidates) {
+        const url = String(candidate || "").trim();
+        if (/^https?:\/\//i.test(url)) {
+            return url;
+        }
+    }
+    return "";
+}
+
+// The caption's second line carries "N pages"; reading it here means a
+// bookmarked row knows its page count without a metadata request.
+function cardPages(card: HTMLElement): number {
+    const caption = card.querySelector(".caption");
+    const text = caption === null ? "" : (caption.textContent || "");
+    // Anchored to the end of the caption: unanchored, a title containing
+    // "<number> pages" would be read as the page count. 0 (unknown) is the
+    // correct answer when the count is not where we expect it.
+    const match = /([0-9]+)\s*pages?\s*$/i.exec(text);
+    return match === null ? 0 : parseInt(match[1], 10) || 0;
+}
+
+function sendBookmarkMessage(message: any): void {
+    try {
+        chrome.runtime.sendMessage(message, () => {
+            // Reading lastError keeps Chrome quiet when the worker is
+            // mid-restart; a missed bookmark is recoverable by clicking again.
+            try { void chrome.runtime.lastError; } catch (_) { /* no runtime */ }
+        });
+    } catch (_) { /* worker unreachable from this page */ }
+}
+
+function bookmarkCard(info: CardInfo, source: "card" | "auto"): void {
+    sendBookmarkMessage({
+        action: "bookmarkAdd",
+        items: [{
+            id: info.id,
+            title: info.title || info.id,
+            thumbnail: cardThumbnail(info.card),
+            pages: cardPages(info.card),
+            source: source,
+            sourceUrl: typeof location !== "undefined" ? location.href : ""
+        }]
+    });
+}
+
+function unbookmarkCard(id: string): void {
+    sendBookmarkMessage({ action: "bookmarkRemove", ids: [id] });
+}
+
+function applyBookmarkButton(button: HTMLElement, id: string): void {
+    const on = isBookmarked(id);
+    button.textContent = on ? "\u2605" : "\u2606";
+    button.className = "nhdw-bookmark" + (on ? " nhdw-bookmark-on" : "");
+    button.title = on
+        ? "Bookmarked - click to take it off the bookmark list"
+        : "Bookmark this title: it waits in the Queue panel and survives a browser restart";
+}
+
+// Repaint every ☆/★ on the page. Called after the stored list changes, so a
+// bookmark made from the panel (or removed from it) is reflected here too.
+function refreshBookmarkButtons(): void {
+    const cards = document.querySelectorAll("[" + MARKER_ATTR + "]");
+    for (let i = 0; i < cards.length; i++) {
+        const card = cards[i] as HTMLElement;
+        const id = card.getAttribute(MARKER_ATTR) || "";
+        const button = card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
+        if (button !== null && id !== "") {
+            applyBookmarkButton(button, id);
+        }
+    }
 }
 
 // ---- storage helpers -----------------------------------------------------
@@ -100,7 +234,8 @@ function readSettings(): Promise<boolean> {
             useZip: "zip",
             downloadName: "{pretty}",
             rawMasterFolder: "NHDW",
-            inPageControls: true
+            inPageControls: true,
+            bookmarkAutoCapture: false
         }, LIST_MODE_DEFAULTS);
         try {
             chrome.storage.sync.get(defaults, (elems: any) => {
@@ -110,6 +245,7 @@ function readSettings(): Promise<boolean> {
                 settings.masterFolder = stored.listMasterFolder === undefined ? true : !!stored.listMasterFolder;
                 settings.masterFolderName = String(stored.rawMasterFolder === undefined ? "NHDW" : stored.rawMasterFolder);
                 settings.template = resolveListTemplate(stored.listDownloadName, String(stored.downloadName || "{pretty}"));
+                settings.bookmarkAutoCapture = !!stored.bookmarkAutoCapture;
                 const enabled = stored.inPageControls === undefined ? true : !!stored.inPageControls;
                 try {
                     const localDefaults: any = {};
@@ -193,6 +329,28 @@ function buildCardControls(info: CardInfo): HTMLElement {
     selectLabel.appendChild(selectBox);
     box.appendChild(selectLabel);
 
+    // ☆ / ★ — bookmark this title into the persistent Queue list. Deliberately
+    // a toggle: the star is the only un-bookmark affordance on the page, and a
+    // one-way button would force the user into the panel to undo a misclick.
+    const bookmarkButton = document.createElement("button");
+    bookmarkButton.type = "button";
+    applyBookmarkButton(bookmarkButton, info.id);
+    bookmarkButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (isBookmarked(info.id)) {
+            bookmarkOverlay.set(info.id, false);
+            unbookmarkCard(info.id);
+        } else {
+            bookmarkOverlay.set(info.id, true);
+            bookmarkCard(info, "card");
+        }
+        // Optimistic paint: the storage round trip lands in a few ms and the
+        // onChanged listener confirms it, but the click must feel instant.
+        applyBookmarkButton(bookmarkButton, info.id);
+    });
+    box.appendChild(bookmarkButton);
+
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.className = "nhdw-download";
@@ -253,11 +411,41 @@ function injectCardControls(): void {
             if (existingButton) {
                 existingButton.textContent = history[info.id] ? "Downloaded" : "Download";
             }
+            const existingBookmark = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
+            if (existingBookmark) {
+                applyBookmarkButton(existingBookmark, info.id);
+            }
             continue;
         }
         info.card.setAttribute(MARKER_ATTR, info.id);
         info.card.classList.add("nhdw-card");
         info.card.appendChild(buildCardControls(info));
+    }
+}
+
+// Auto-capture (Settings -> Bookmark auto-capture, off by default): bookmark
+// every card on the page, so scrolling a listing collects it without a click
+// per title.
+//
+// Deliberately its OWN pass rather than a branch of injectCardControls:
+// injection is idempotent by design and skips cards it already decorated, so
+// auto-capture living inside it would bookmark nothing at all when the user
+// flips the setting on a page that is already open. Idempotent on its own
+// terms - an id already bookmarked is skipped here AND by the worker's dedupe.
+function autoCaptureCards(): void {
+    if (!settings.bookmarkAutoCapture) {
+        return;
+    }
+    for (const info of findCards()) {
+        if (isBookmarked(info.id)) {
+            continue;
+        }
+        bookmarkOverlay.set(info.id, true);
+        bookmarkCard(info, "auto");
+        const button = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
+        if (button !== null) {
+            applyBookmarkButton(button, info.id);
+        }
     }
 }
 
@@ -553,6 +741,7 @@ function flashStatus(text: string): void {
 function start(): void {
     document.documentElement.classList.add("nhdw-controls-on");
     injectCardControls();
+    autoCaptureCards();
     if (actionBar === null) {
         actionBar = buildActionBar();
         document.body.appendChild(actionBar);
@@ -570,6 +759,7 @@ function start(): void {
         pending = setTimeout(() => {
             pending = null;
             injectCardControls();
+            autoCaptureCards();
         }, 150);
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -595,6 +785,31 @@ function start(): void {
                     renderActionBar();
                 });
             }
+            if (changes[BOOKMARK_QUEUE_KEY]) {
+                // The bookmark list changed — from a card click here, from the
+                // panel, or from the worker settling a download. Re-read and
+                // repaint the stars; never re-run the full injection, so an
+                // auto-capture write cannot feed back into itself.
+                readBookmarkState().then(refreshBookmarkButtons);
+            }
+        });
+    } catch (_) { /* not fatal */ }
+
+    // Auto-capture is a Settings toggle: flipping it must apply to the page
+    // that is already open, without a reload. Reached through `as any` because
+    // the pinned @types/chrome (0.0.154, 2021) predates
+    // StorageArea.onChanged — the same workaround the worker uses for
+    // chrome.sidePanel.
+    try {
+        (chrome.storage.sync as any).onChanged.addListener((changes: any, area: string) => {
+            if (area === "sync" && changes && changes.bookmarkAutoCapture) {
+                settings.bookmarkAutoCapture = !!(changes.bookmarkAutoCapture.newValue);
+                if (settings.bookmarkAutoCapture) {
+                    // Read first so an id already bookmarked from elsewhere is
+                    // not sent again, then sweep the cards already on the page.
+                    readBookmarkState().then(autoCaptureCards);
+                }
+            }
         });
     } catch (_) { /* not fatal */ }
 }
@@ -607,11 +822,13 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") 
         }
         readSelection().then(() => {
             readHistoryState().then(() => {
-                if (document.readyState === "loading") {
-                    document.addEventListener("DOMContentLoaded", start);
-                } else {
-                    start();
-                }
+                readBookmarkState().then(() => {
+                    if (document.readyState === "loading") {
+                        document.addEventListener("DOMContentLoaded", start);
+                    } else {
+                        start();
+                    }
+                });
             });
         });
     });

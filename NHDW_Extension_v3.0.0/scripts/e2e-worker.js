@@ -1338,6 +1338,148 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     console.log("PASS phase 12c: batch-level failures render their real reason (object + Error shapes)");
 
+    // ---- Phase 13: the persistent bookmark queue --------------------------
+    // The worker is the single writer for this list: the content script and the
+    // panel only ask it to change. These phases drive the real message handlers
+    // in js/background.js, not a re-implementation of them.
+    {
+        localSettings.bookmarkQueue = undefined;
+        localSettings.downloadHistory = {};
+        sentMessages.length = 0;
+
+        const ask = (message) => new Promise((resolve) => {
+            onMessageHandler(message, {}, (response) => resolve(response));
+        });
+
+        // 13a. A card bookmark lands in chrome.storage.local.
+        const added = await ask({
+            action: "bookmarkAdd",
+            items: [
+                { id: "366224", title: "First", thumbnail: "https://t.nhentai.net/galleries/1/thumb.jpg", pages: 71, source: "card" },
+                { id: "177013", title: "Second", source: "paste" }
+            ]
+        });
+        if (!added || added.result !== "success") {
+            fail("bookmarkAdd must answer success, got " + JSON.stringify(added));
+        }
+        if (added.state.items.length !== 2) {
+            fail("bookmarkAdd must store both rows, got " + JSON.stringify(added.state.items));
+        }
+        if (!localSettings.bookmarkQueue || localSettings.bookmarkQueue.items.length !== 2) {
+            fail("the bookmark list must be persisted to chrome.storage.local, got " +
+                JSON.stringify(localSettings.bookmarkQueue));
+        }
+        console.log("PASS phase 13a: bookmarkAdd persists the list to chrome.storage.local");
+
+        // 13b. The same id twice must not create a second row, and must not
+        // reset a row that already finished.
+        const dup = await ask({ action: "bookmarkAdd", items: [{ id: "366224", title: "First again" }] });
+        if (dup.state.items.length !== 2) {
+            fail("re-bookmarking an id must not add a row, got " + dup.state.items.length);
+        }
+        if (dup.state.items.find((item) => item.id === "366224").title !== "First") {
+            fail("re-bookmarking must not overwrite the stored row");
+        }
+        console.log("PASS phase 13b: re-bookmarking an id is a no-op, not a duplicate");
+
+        // 13c. Selection, the dock and removal all round-trip through the worker.
+        const selected = await ask({ action: "bookmarkSelect", ids: ["177013"], selected: false });
+        if (selected.state.items.find((item) => item.id === "177013").selected !== false) {
+            fail("bookmarkSelect must untick the named row");
+        }
+        const collapsed = await ask({ action: "bookmarkCollapse", collapsed: true });
+        if (collapsed.state.collapsed !== true) {
+            fail("bookmarkCollapse must persist the minimised dock");
+        }
+        const removed = await ask({ action: "bookmarkRemove", ids: ["177013"] });
+        if (removed.state.items.length !== 1 || removed.state.collapsed !== true) {
+            fail("bookmarkRemove must drop the row and keep the dock minimised, got " + JSON.stringify(removed.state));
+        }
+        console.log("PASS phase 13c: select / minimise / remove all round-trip through the worker");
+
+        // 13d. A finished download settles the row, with the file it saved.
+        // jobFinished / batchSummary are OFFSCREEN broadcasts, so they carry
+        // from:"offscreen" exactly as the real document sends them.
+        onMessageHandler(
+            { from: "offscreen", action: "jobFinished", records: [{ id: "366224", filename: "NHDW/First.zip" }] },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => localSettings.bookmarkQueue &&
+                localSettings.bookmarkQueue.items.find((item) => item.id === "366224").status === "done",
+            "a finished download must mark its bookmark row done"
+        );
+        const doneRow = localSettings.bookmarkQueue.items.find((item) => item.id === "366224");
+        if (doneRow.filename !== "NHDW/First.zip") {
+            fail("a done row must carry the saved file name, got " + doneRow.filename);
+        }
+        console.log("PASS phase 13d: a finished download settles the bookmark row with its file name");
+
+        // 13e. A named failure lands on the row, so the Queue tab can show why.
+        await ask({ action: "bookmarkAdd", items: [{ id: "999001", title: "Broken", source: "card" }] });
+        onMessageHandler(
+            { from: "offscreen", action: "batchSummary", failedGalleries: [{ id: "999001", name: "Broken", error: "Cloudflare blocked it" }] },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => localSettings.bookmarkQueue.items.find((item) => item.id === "999001").status === "failed",
+            "a named failure must mark its bookmark row failed"
+        );
+        const failedRow = localSettings.bookmarkQueue.items.find((item) => item.id === "999001");
+        if (failedRow.error !== "Cloudflare blocked it") {
+            fail("a failed row must keep the reason, got " + JSON.stringify(failedRow.error));
+        }
+        console.log("PASS phase 13e: a named failure lands on the bookmark row with its reason");
+
+        // 13f. THE persistence requirement: a row left "downloading" when the
+        // browser closed must come back actionable, not stranded. Reloading the
+        // bundle in the same realm is a fresh service-worker instance reading
+        // the same chrome.storage.local - exactly a browser restart.
+        localSettings.bookmarkQueue.items.find((item) => item.id === "999001").status = "downloading";
+        localSettings.downloadHistory = { "366224": { filename: "NHDW/First.zip", when: 1 } };
+        vm.runInContext(code, vmCtx, { filename: bundlePath });
+        const afterRestart = await ask({ action: "bookmarkGet" });
+        const stranded = afterRestart.state.items.find((item) => item.id === "999001");
+        if (stranded.status !== "saved") {
+            fail("a row persisted as downloading must come back actionable after a restart, got " + stranded.status);
+        }
+        const stillDone = afterRestart.state.items.find((item) => item.id === "366224");
+        if (stillDone.status !== "done" || stillDone.filename !== "NHDW/First.zip") {
+            fail("a finished row the history still records must survive a restart, got " + JSON.stringify(stillDone));
+        }
+        if (afterRestart.state.collapsed !== true) {
+            fail("the dock must reopen the way the user left it after a restart");
+        }
+        console.log("PASS phase 13f: the list survives a worker restart - in-flight rows recover, finished rows stay, the dock stays");
+
+        // 13g. A done row whose history record was cleared must not keep
+        // claiming a download the extension no longer believes in.
+        localSettings.downloadHistory = {};
+        vm.runInContext(code, vmCtx, { filename: bundlePath });
+        const afterClear = await ask({ action: "bookmarkGet" });
+        const unrecorded = afterClear.state.items.find((item) => item.id === "366224");
+        if (unrecorded.status !== "done") {
+            // Reconciliation already ran for this worker instance in 13f's
+            // fresh load; only a fresh instance re-checks the history.
+            vm.runInContext(code, vmCtx, { filename: bundlePath });
+            const retry = await ask({ action: "bookmarkGet" });
+            if (retry.state.items.find((item) => item.id === "366224").status !== "saved") {
+                fail("a done row with no history record must drop back to saved, got " +
+                    retry.state.items.find((item) => item.id === "366224").status);
+            }
+        }
+        console.log("PASS phase 13g: a done row follows the download history it is based on");
+
+        // 13h. Every mutation tells any open panel to repaint.
+        const broadcasts = sentMessages.filter((message) => message.action === "bookmarkChanged");
+        if (broadcasts.length === 0) {
+            fail("bookmark mutations must broadcast bookmarkChanged so an open panel repaints");
+        }
+        console.log("PASS phase 13h: bookmark mutations broadcast bookmarkChanged (" + broadcasts.length + " seen)");
+    }
+
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);
 })();

@@ -6,16 +6,20 @@
         <script src="js/preview.js"></script>
     </head>
     <body>
-        <!-- Popup tabs: Download (everything the popup renders today) and
-             Settings (API key + file-name template, editable on the fly). -->
+        <!-- Panel tabs: Download (everything the popup renders today), Queue
+             (the persistent bookmark list) and Settings (API key + file-name
+             template, editable on the fly). The same document is the toolbar
+             popup AND the side panel, so all three exist in both. -->
         <div id="popupTabs" class="popupTabs">
             <button id="tabDownload" class="popupTab active" type="button">Download</button>
+            <button id="tabQueue" class="popupTab" type="button">Queue</button>
             <button id="tabSettings" class="popupTab" type="button">Settings</button>
         </div>
         <!-- Failed-gallery notice (hidden unless the worker remembers galleries
              that failed in this session; see popup.ts refreshFailedNotice). -->
         <div id="failedNotice" class="failedNotice" hidden></div>
         <div id="action">Loading...</div>
+        <div id="queuePane" hidden></div>
         <div id="settingsPane" hidden></div>
         <!-- CDN host-grant notice (hidden unless nhentai reports image hosts the
              extension has no host permission for; see preview.ts refreshCdnNotice). -->
