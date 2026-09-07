@@ -33,6 +33,11 @@ import { presentBatchFilenames, verifyHistoryOnDisk } from "../utils/downloadVer
 // Failed galleries of the session (chrome.storage.session): remembered so the
 // popup can name them and re-add them even after it was closed mid-job.
 import { rememberFailedGalleries, forgetFailedGalleries, readPendingFailuresSettled, clearPendingFailures } from "../utils/failedGalleries";
+// Persistent bookmark queue (chrome.storage.local): the "titles I clicked ☆
+// on" list. The worker is its single writer because the content script and the
+// panel both mutate it. It OUTLIVES the offscreen job queue, which is
+// memory-only; bookmark rows feed the download pipeline, they never replace it.
+import { handleBookmarkMessage, markBookmarksDownloaded, markBookmarksFailed, markBookmarksDownloading } from "./bookmarkService";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
@@ -1031,6 +1036,10 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         if (Array.isArray(request.records) && request.records.length > 0) {
             recordHistory(request.records);
             forgetRecordedFailures(request.records);
+            // The same records settle any bookmark rows for those ids, so a
+            // bookmarked title reads "done" with its file name no matter which
+            // entry point started the download.
+            markBookmarksDownloaded(request.records);
         }
         return false;
     }
@@ -1041,11 +1050,13 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
         try {
             if (request.action === "batchSummary" && Array.isArray(request.failedGalleries) && request.failedGalleries.length > 0) {
                 rememberFailedGalleries(request.failedGalleries, request.retryJob || null);
+                markBookmarksFailed(request.failedGalleries);
             } else if (request.action === "downloadError" && request.galleryId) {
                 rememberFailedGalleries(
                     [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: String(request.error) }],
                     request.retryJob || null
                 );
+                markBookmarksFailed([{ id: String(request.galleryId), error: errorMessage(request.error) }]);
             }
         } catch (_) { /* bookkeeping only */ }
         return false;
@@ -1103,6 +1114,13 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 missingOrigins: status.missingOrigins
             });
         });
+        return true;
+    }
+    if (handleBookmarkMessage(request, sendResponse)) {
+        // Bookmark queue mutations (bookmarkAdd / bookmarkGet / ...). The
+        // worker owns the stored list; the content script and the panel only
+        // ask it to change. Every branch above answered asynchronously, so the
+        // channel stays open.
         return true;
     }
     if (request.from === "offscreen") {

@@ -456,3 +456,370 @@ html.nhdwPanel body {
 #htmlDark .nhdwSummary.nhdwSummaryWarn {
     color: #f2a154;
 }
+
+/* ---- Queue pane (persistent bookmark list) -------------------------------
+   The same markup serves the toolbar popup and the side panel. Rows are
+   display-only about the thumbnail: no cover image is ever part of the
+   download path. ---- */
+
+#queuePane {
+    text-align: left;
+}
+
+.nhdwBmHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid #999;
+    border-radius: 5px;
+    margin-bottom: 8px;
+}
+
+#htmlDark .nhdwBmHeader {
+    border-color: #555;
+}
+
+.nhdwBmHeader strong {
+    display: block;
+    font-size: 14px;
+}
+
+.nhdwBmCounts {
+    display: block;
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+.nhdwBmToggle {
+    border: 1px solid #e31b53;
+    background: transparent;
+    color: #e31b53;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.nhdwBmToggle:hover {
+    background: #e31b53;
+    color: #fff;
+}
+
+.nhdwBmNotice {
+    font-size: 12px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    background: #eef6ff;
+    border: 1px solid #b8d8f5;
+}
+
+.nhdwBmNoticeError {
+    background: #fff0f0;
+    border-color: #f0b8b8;
+}
+
+#htmlDark .nhdwBmNotice {
+    background: #1d2b3a;
+    border-color: #35506b;
+}
+
+#htmlDark .nhdwBmNoticeError {
+    background: #3a1d1d;
+    border-color: #6b3535;
+}
+
+.nhdwBmPasteBox {
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 8px;
+    margin-bottom: 8px;
+}
+
+#htmlDark .nhdwBmPasteBox {
+    border-color: #555;
+}
+
+.nhdwBmPasteBox label {
+    display: block;
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+.nhdwBmPasteBox textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 12px;
+    resize: vertical;
+}
+
+.nhdwBmPasteBox small {
+    display: block;
+    font-size: 10px;
+    opacity: 0.75;
+    margin: 4px 0;
+}
+
+.nhdwBmActions {
+    display: flex;
+    gap: 6px;
+}
+
+.nhdwBmActions button,
+.nhdwBmToolbar button {
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.nhdwBmActions button:hover,
+.nhdwBmToolbar button:hover {
+    border-color: #e31b53;
+    color: #e31b53;
+}
+
+.nhdwBmToolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.nhdwBmCheck {
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.nhdwBmDanger:hover {
+    border-color: #c0392b;
+    color: #c0392b;
+}
+
+.nhdwBmList {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 46vh;
+    overflow-y: auto;
+}
+
+.nhdwBmEmpty {
+    font-size: 12px;
+    opacity: 0.75;
+    padding: 12px 4px;
+    text-align: center;
+}
+
+.nhdwBmRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 6px;
+}
+
+#htmlDark .nhdwBmRow {
+    border-color: #4a4a4a;
+}
+
+.nhdwBmRow.nhdwBmStatus-done {
+    border-color: #4caf50;
+}
+
+.nhdwBmRow.nhdwBmStatus-failed {
+    border-color: #c0392b;
+}
+
+.nhdwBmRow.nhdwBmStatus-downloading {
+    border-color: #e31b53;
+}
+
+.nhdwBmThumb {
+    flex: 0 0 auto;
+    width: 46px;
+    height: 66px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #ddd;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+}
+
+#htmlDark .nhdwBmThumb {
+    background: #333;
+    color: #888;
+}
+
+.nhdwBmThumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.nhdwBmInfo {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.nhdwBmTitle {
+    font-size: 12px;
+    font-weight: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nhdwBmMeta,
+.nhdwBmSaved {
+    font-size: 10px;
+    opacity: 0.75;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nhdwBmSaved {
+    color: #2e7d32;
+}
+
+#htmlDark .nhdwBmSaved {
+    color: #7bc47f;
+}
+
+.nhdwBmError {
+    font-size: 10px;
+    color: #c0392b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nhdwBmRight {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+.nhdwBmStatus {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 8px;
+    background: #eee;
+    color: #333;
+}
+
+#htmlDark .nhdwBmStatus {
+    background: #3a3a3a;
+    color: #ddd;
+}
+
+.nhdwBmStatusBadge-downloading {
+    background: #e31b53;
+    color: #fff;
+}
+
+.nhdwBmStatusBadge-done {
+    background: #4caf50;
+    color: #fff;
+}
+
+.nhdwBmStatusBadge-failed {
+    background: #c0392b;
+    color: #fff;
+}
+
+.nhdwBmDownload {
+    border: 1px solid #e31b53;
+    background: #e31b53;
+    color: #fff;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.nhdwBmDownload:hover {
+    background: transparent;
+    color: #e31b53;
+}
+
+.nhdwBmDownload:disabled {
+    border-color: #999;
+    background: #999;
+    color: #eee;
+    cursor: default;
+}
+
+.nhdwBmRemove {
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+.nhdwBmRemove:hover {
+    opacity: 1;
+    color: #c0392b;
+}
+
+.nhdwBmFooter {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #ccc;
+}
+
+#htmlDark .nhdwBmFooter {
+    border-color: #4a4a4a;
+}
+
+.nhdwBmFooter small {
+    font-size: 10px;
+    opacity: 0.7;
+}
+
+.nhdwBmPrimary {
+    border: none;
+    background: #e31b53;
+    color: #fff;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.nhdwBmPrimary:hover {
+    background: #c2174a;
+}
+
+.nhdwBmPrimary:disabled {
+    background: #999;
+    color: #eee;
+    cursor: default;
+}

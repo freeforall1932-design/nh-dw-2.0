@@ -158,3 +158,41 @@ input[type="checkbox"] {
     cursor: pointer;
     accent-color: #e31b53;
 }
+
+/* ---- Bookmark star on a gallery card -----------------------------------
+   Sits in the same control strip as Select / Download. A filled star stays
+   visible without hovering: "which of these did I already bookmark" has to be
+   answerable at a glance while scrolling a long listing. ---- */
+
+.nhdw-card-controls .nhdw-bookmark {
+    background: rgba(0, 0, 0, 0.6);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.nhdw-card-controls .nhdw-bookmark:hover {
+    background: #fff;
+    color: #e31b53;
+}
+
+.nhdw-card-controls .nhdw-bookmark-on {
+    background: #e31b53;
+    color: #fff;
+}
+
+.nhdw-card-controls .nhdw-bookmark-on:hover {
+    background: #fff;
+    color: #e31b53;
+}
+
+/* A bookmarked card keeps its controls legible instead of fading to 55%. */
+.nhdw-card:has(.nhdw-bookmark-on) .nhdw-card-controls {
+    opacity: 1;
+}

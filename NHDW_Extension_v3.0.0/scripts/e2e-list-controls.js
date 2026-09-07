@@ -164,20 +164,26 @@ function makeDocument(ids) {
     body.appendChild(container);
     html.appendChild(body);
 
-    const addCard = (id, title) => {
+    const addCard = (id, title, pages) => {
         const gallery = makeEl("div");
         gallery.className = "gallery";
         const cover = makeEl("a", { href: "/g/" + id + "/" });
         cover.className = "cover";
+        // nhentai lazyloads covers: the real address is in data-src while src
+        // holds a placeholder. The bookmark star has to read data-src.
+        const img = makeEl("img");
+        img.setAttribute("data-src", "https://t.nhentai.net/galleries/" + id + "0/thumb.jpg");
+        img.setAttribute("src", "data:image/gif;base64,placeholder");
+        cover.appendChild(img);
         const caption = makeEl("div");
         caption.className = "caption";
-        caption.textContent = title;
+        caption.textContent = title + "\n" + (pages || 71) + " pages";
         cover.appendChild(caption);
         gallery.appendChild(cover);
         container.appendChild(gallery);
         return gallery;
     };
-    ids.forEach((id, index) => addCard(id, "Title " + (index + 1)));
+    ids.forEach((id, index) => addCard(id, "Title " + (index + 1), 71 + index));
 
     const document = {
         documentElement: html,
@@ -601,6 +607,105 @@ function wait(ms) {
             fail("with no listFormat stored a card download must inherit cbz, got " + JSON.stringify(job));
         }
         console.log("PASS: in-page card downloads inherit the single-title format");
+    }
+
+    // --- N+1. the bookmark star -------------------------------------------
+    {
+        const ctx = run({});
+        await wait(0);
+        const controls = cardControls(ctx.dom);
+        if (controls.length !== 3) {
+            fail("expected 3 control boxes for the bookmark check, got " + controls.length);
+        }
+        for (const box of controls) {
+            if (!box.querySelector(".nhdw-bookmark")) {
+                fail("a card is missing its bookmark star");
+            }
+        }
+        console.log("PASS: every listing card gets a bookmark star");
+
+        // A click must carry the card's OWN cover: that is the thumbnail the
+        // Queue row shows, and it is only readable from the page.
+        controls[0].querySelector(".nhdw-bookmark").dispatch("click");
+        const add = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!add || add.action !== "bookmarkAdd") {
+            fail("clicking the star must send bookmarkAdd, got " + JSON.stringify(add));
+        }
+        const item = add.items[0];
+        if (item.id !== "111111") {
+            fail("the bookmark must carry the card's gallery id, got " + item.id);
+        }
+        if (item.thumbnail !== "https://t.nhentai.net/galleries/1111110/thumb.jpg") {
+            fail("the bookmark must carry the card's lazyloaded cover (data-src, not the placeholder), got " + item.thumbnail);
+        }
+        if (item.pages !== 71) {
+            fail("the bookmark must carry the caption's page count, got " + item.pages);
+        }
+        if (item.source !== "card" || item.sourceUrl !== "") {
+            fail("a manual card bookmark must report source=card, got " + JSON.stringify(item));
+        }
+        console.log("PASS: the star sends the card's id, title, page count and cover thumbnail");
+
+        // The star is a toggle: it is the only un-bookmark affordance on the page.
+        controls[0].querySelector(".nhdw-bookmark").dispatch("click");
+        const remove = ctx.sentMessages[ctx.sentMessages.length - 1];
+        if (!remove || remove.action !== "bookmarkRemove" || String(remove.ids[0]) !== "111111") {
+            fail("clicking a filled star must send bookmarkRemove for that id, got " + JSON.stringify(remove));
+        }
+        console.log("PASS: clicking a filled star takes the title off the list");
+    }
+
+    // --- N+2. auto-capture -------------------------------------------------
+    {
+        // Off by default: on a 60-card search page it would silently build a
+        // 60-item list the user never asked for.
+        const off = run({});
+        await wait(0);
+        if (off.sentMessages.some((message) => message.action === "bookmarkAdd")) {
+            fail("auto-capture must be OFF by default");
+        }
+        console.log("PASS: auto-capture stays off unless the user turns it on");
+
+        const on = run({ settings: { bookmarkAutoCapture: true } });
+        await wait(0);
+        const adds = on.sentMessages.filter((message) => message.action === "bookmarkAdd");
+        if (adds.length !== 3) {
+            fail("auto-capture must bookmark every card, got " + adds.length + " messages");
+        }
+        if (adds[0].items[0].source !== "auto") {
+            fail("an auto-captured row must report source=auto, got " + adds[0].items[0].source);
+        }
+        if (!adds[0].items[0].thumbnail) {
+            fail("an auto-captured row must still carry the card's cover");
+        }
+        console.log("PASS: auto-capture bookmarks every card without a click when it is on");
+    }
+
+    // --- N+3. an already-bookmarked card renders a filled star -------------
+    {
+        const ctx = run({
+            history: {
+                bookmarkQueue: {
+                    v: 1,
+                    collapsed: false,
+                    items: [{ id: "222222", title: "Title 2", selected: true, status: "saved" }]
+                }
+            }
+        });
+        await wait(0);
+        const controls = cardControls(ctx.dom);
+        const filled = controls[1].querySelector(".nhdw-bookmark");
+        if (!filled.classList.contains("nhdw-bookmark-on")) {
+            fail("a bookmarked card must render a filled star, got class=" + filled.className);
+        }
+        if (filled.textContent !== "\u2605") {
+            fail("a bookmarked card must show the filled star glyph, got " + filled.textContent);
+        }
+        const empty = controls[0].querySelector(".nhdw-bookmark");
+        if (empty.classList.contains("nhdw-bookmark-on") || empty.textContent !== "\u2606") {
+            fail("an unbookmarked card must show the empty star glyph");
+        }
+        console.log("PASS: bookmarked cards come back with a filled star after a reload");
     }
 
     console.log("PASS: in-page listing card controls behave correctly.");
