@@ -214,6 +214,7 @@ function run(options) {
     const syncWrites = [];
     const localWrites = [];
     const sentMessages = [];
+    const syncChangeCallbacks = [];
     const confirmAnswers = options.confirmAnswers || [];
     const dom = makeDocument(options.ids || ["111111", "222222", "333333"]);
     const mutationCallbacks = [];
@@ -231,7 +232,8 @@ function run(options) {
         storage: {
             sync: {
                 get(defaults, cb) { cb(Object.assign({}, defaults, settings)); },
-                set(items) { syncWrites.push(items); }
+                set(items) { syncWrites.push(items); },
+                onChanged: { addListener(fn) { syncChangeCallbacks.push(fn); } }
             },
             local: {
                 get(defaults, cb) { cb(Object.assign({}, defaults, localStore)); },
@@ -270,6 +272,7 @@ function run(options) {
         dom: dom,
         localStore: localStore,
         syncWrites: syncWrites,
+        syncChangeCallbacks: syncChangeCallbacks,
         localWrites: localWrites,
         sentMessages: sentMessages,
         mutationCallbacks: mutationCallbacks
@@ -679,6 +682,44 @@ function wait(ms) {
             fail("an auto-captured row must still carry the card's cover");
         }
         console.log("PASS: auto-capture bookmarks every card without a click when it is on");
+
+        // Flipping the setting on a page that is ALREADY open must still
+        // collect it. Card injection is idempotent and skips decorated cards,
+        // so auto-capture has to be its own pass or this silently does nothing.
+        const flipped = run({});
+        await wait(0);
+        if (flipped.sentMessages.some((message) => message.action === "bookmarkAdd")) {
+            fail("the flip fixture must start with auto-capture off");
+        }
+        if (cardControls(flipped.dom).length !== 3) {
+            fail("the flip fixture must have decorated its cards first");
+        }
+        if (flipped.syncChangeCallbacks.length === 0) {
+            fail("the content script must listen for the auto-capture setting to change");
+        }
+        for (const callback of flipped.syncChangeCallbacks) {
+            callback({ bookmarkAutoCapture: { newValue: true } }, "sync");
+        }
+        await wait(0);
+        const swept = flipped.sentMessages.filter((message) => message.action === "bookmarkAdd");
+        if (swept.length !== 3) {
+            fail("turning auto-capture on mid-page must bookmark the cards already there, got " + swept.length);
+        }
+        if (swept[0].items[0].source !== "auto") {
+            fail("a mid-page auto-capture must report source=auto");
+        }
+        console.log("PASS: turning auto-capture on mid-page still collects the cards already there");
+
+        // And it must not re-send what is already bookmarked.
+        for (const callback of flipped.syncChangeCallbacks) {
+            callback({ bookmarkAutoCapture: { newValue: true } }, "sync");
+        }
+        await wait(0);
+        const afterSecondSweep = flipped.sentMessages.filter((message) => message.action === "bookmarkAdd").length;
+        if (afterSecondSweep !== 3) {
+            fail("a second auto-capture sweep must add nothing, got " + afterSecondSweep + " total sends");
+        }
+        console.log("PASS: a repeated auto-capture sweep adds nothing");
     }
 
     // --- N+3. an already-bookmarked card renders a filled star -------------

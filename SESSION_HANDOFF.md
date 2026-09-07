@@ -1,7 +1,74 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`, final) — **read
-this block first.** After item 33 this session ran **four review passes** over
+**Updated:** 2026-09-08 (session `arena/01a07d48-nh-dw-2-0`) — **3.7.0: the
+bookmark queue.** **Read this block first.** A third panel tab (**Queue**)
+holding a persistent list of the titles the user clicked the new per-card **☆**
+on — the counterpart of the side-panel queue in the sibling
+`twitter-batch-download` repo, but a *bookmark built by hand* rather than a
+queue auto-collected while scrolling. Merged as **PR #40**. What changed
+structurally, so a fresh session does not re-derive it:
+
+- **Two lists, and they must stay separate.** The download *job* queue still
+  lives in the offscreen document (`queuedJobs`, memory-only, means *work in
+  flight*). The new *bookmark* queue lives in
+  `chrome.storage.local["bookmarkQueue"]` and means *intent*. A bookmark row
+  **feeds** `downloadAllDoujinshis`; it never replaces the pipeline. Merging
+  them is the one architectural mistake that would undo this work.
+- **Three new modules, one rule each.**
+  `src/utils/bookmarkQueue.ts` = pure core, **no `chrome.*` at module scope**
+  (that is what makes the 51 unit cases possible).
+  `src/background/bookmarkService.ts` = the worker is the **single writer**;
+  every mutation arrives as a `bookmark*` message.
+  `src/preview/bookmarkPanel.ts` = the Queue tab; **static chrome is built
+  once** and only the row list re-renders, so a `bookmarkChanged` broadcast
+  cannot wipe what the user is typing in the paste box.
+- **`getActiveNhentaiTabId()`** in `src/preview/activeTabGallery.ts` is new and
+  **mandatory for any caller outside the preview flow.** Neither the worker's
+  `resolveTabId()` nor `batchPipeline.getGalleryViaTab()` validates the tab it
+  is handed — pre-existing callers were safe only because the popup renders on
+  nhentai and nowhere else. The Queue tab can be opened on any website. See
+  "Do not" below.
+- **Restart semantics** (`reconcileBookmarksAfterRestart`, once per worker
+  lifetime, mirroring `getQueueState()` in the sibling repo): `downloading` →
+  `saved` (the offscreen document that ran it is gone); `done` is re-checked
+  against the download history and drops back to `saved` if the record was
+  cleared; `failed` keeps its reason; everything else — order, selection,
+  thumbnails, the collapsed dock flag — is untouched.
+- **The Queue always downloads `separate: true`** (one file per title). It is a
+  set of individual titles; merging them would decide on the user's behalf that
+  they wanted one archive, and it sidesteps the PDF-merge warning path entirely.
+  Format / master folder / name template come from the existing list-mode
+  settings, so the Queue and the in-page floating bar cannot disagree.
+- **`bookmarkSetStatus` does not exist any more.** It had no sender and was
+  removed as dead code during review. Status transitions come only from
+  `bookmarkMarkDownloading` (panel → worker at send time) and the worker's own
+  `markBookmarksDownloaded` / `markBookmarksFailed`, hooked into the existing
+  `jobFinished` / `batchSummary` branches of `handleOffscreenMessage`.
+- Suite totals: Chrome **366 passing / 4 pending** (was 310/4), smoke 7 PASS,
+  e2e **117 PASS lines** (was 101). Firefox folder **untouched** — it has
+  neither the Queue tab nor the ☆ button.
+
+**Mandatory first step for the next session — review before building.** This is
+now a standing rule, not a suggestion: before writing new code, re-read the
+previous session's diff and hunt specifically for (a) **missing logic** — a
+handler with no caller, a setting with no reader, a notice that promises
+something the code never does; (b) **misaligned code** — a guard applied in one
+path but not its sibling, a default that contradicts its own comment; (c)
+**broken code** — a state read that clobbers a concurrent write, an optimistic
+UI update wiped by the next refresh. This session ran that review over its own
+output and found **six defects**; all six are listed in "Review pass — 3.7.0"
+below, and each has a test that fails on the pre-fix build. Do the same to this
+one.
+
+**Open, in the order I would take them:** **42** (real-browser pass for the
+Queue — the only unverifiable-here claims left), **43** (☆ on the single-title
+preview and similar-gallery rows), **44** (drag-reorder), **45** (per-row cancel
+of an in-flight job), **46** (Firefox port of the Queue); then the carried-over
+items: raw retry follow-ups, raw list-mode verification, worklist 37–41. Full
+specs: `WORKLIST.md` and IMPROVEMENT_BACKLOG.md items 42–46.
+
+**Updated:** 2026-09-05 (session `arena/01a0701c-nh-dw-2-0`, final) — **read this block first** (superseded 2026-09-08 — kept for the
+suite totals and the structural notes that still hold).** After item 33 this session ran **four review passes** over
 the pipeline, the older versions' code and the settings UI, and merged as
 **PR #39** (tip `c55e4ac`). Eight defects were found by review, reproduced by a
 test that fails on the pre-fix build, and fixed — the list is in the PR body
@@ -195,6 +262,160 @@ bullet fixed in PR #30)
   archives, PDF output, CDN hardening) and re-validation of the combined
   tree (149 passing / 1 pending, all smoke + e2e green). Follow-up work
   starts from `main` on a fresh session branch.
+
+## Session log — 2026-09-08: bookmark queue (3.7.0), session `arena/01a07d48-nh-dw-2-0`
+
+### What the user asked for
+
+Six requirements, in their words, plus one design question:
+
+1. A **manual bookmark** — a button clicked on a gallery card, "like the Twitter
+   repo's queue list but as a bookmark".
+2. The row shows the **cover thumbnail and the title** taken from the card.
+3. A **taskbar-like dock** that minimises and expands, with a button for it.
+4. **Survives restart** — "if I close the browser and then restart the pc and
+   open it again I want it to be back exactly what I click bookmark". They noted
+   nhentai's own favourites are tag/account oriented, not this.
+5. **Batch by id** — a paste box taking ids or links, single or batch, because
+   "pop up might no longer facilitate this feature". Both an auto-fetch option
+   and manual click, feeding one list.
+6. **Download from the list** — batch, one at a time, or in a chosen order.
+7. Design question: dual popup + side panel, or side panel only? Their proposal
+   was to keep the popup largely as-is and add an "advance feature" button that
+   calls the side panel UI.
+
+Reference UI they pointed at: `https://cin.lat/bulk?id=366224,177013` — paste
+ids, each row shows title + page count + Download. They explicitly did **not**
+want that site's "View Online" button.
+
+### The one thing I got wrong, and the correction
+
+The user said the toolbar click "is still pop up first instead of queue
+sidebar/side panel". I answered that this was false **of this repo** — the side
+panel has been the default here since 3.4.0 (`background.ts:71`
+`UI_MODE_DEFAULT = "sidepanel"`). That was a misattribution: **they were
+describing the sibling `twitter-batch-download` repo**, where it is exactly
+true. Verified in that repo:
+
+| | `twitter-batch-download` | this repo (before 3.7.0) |
+|---|---|---|
+| `action.default_popup` | `popup.html` — a **pure launcher** | `index.html` — the full UI |
+| `setPanelBehavior` / `openPanelOnActionClick` | **absent everywhere** | set by `applyUiMode()` |
+| what the toolbar click opens | the popup | the side panel (default) |
+| how you reach the panel | `popup.js:37` `chrome.sidePanel.open({windowId})` | the toolbar click itself |
+
+Its `popup.html` says so outright: *"Everything now lives in the Side Panel
+queue."* And `popup.js`'s header explains why the popup was hollowed out —
+"two competing engines meant the popup could scroll a page while the panel was
+mid-capture".
+
+So the user's premise was correct about the repo they meant, and their
+"advance feature button" idea *is* the Twitter pattern, implemented there as
+`popup.js:37`.
+
+### The design answer, and why it is not a straight copy
+
+**Dual use, one document, panel as the queue's real home** — `Download | Queue |
+Settings`, identical in both modes.
+
+The reason not to copy the Twitter repo directly: over there the popup had
+nothing left to do, so hollowing it into a launcher cost nothing. Here the popup
+is the primary UI for single-title and list-mode downloads, progress and
+settings. Turning it into a launcher would delete working functionality to copy
+a shape that only made sense in the other repo's context.
+
+What *was* taken from the Twitter pattern: the launcher button. It now lives in
+the **Queue tab header** ("Open docked ↗"), not only in Settings — because the
+Queue tab is precisely where a hovering popup is the wrong surface (it dies on
+blur and a queue is meant to be watched). It is hidden when this document
+already *is* the panel. The Settings copy stays.
+
+Honesty note recorded here because it will come up: there is **no Chrome API for
+"am I running as a side panel"**. The button's visibility keys off the
+`nhdwPanel` class that `preview.ts` applies from the stored `uiMode` — the same
+value the worker uses to decide what the toolbar click opens. It is a
+setting-driven proxy, not context detection, and it is re-evaluated on every
+render because `applyUiModeClass()` resolves asynchronously.
+
+### What landed
+
+| File | Role |
+|---|---|
+| `src/utils/bookmarkQueue.ts` (new) | Pure core: `parseGalleryInput`, mutations, `reconcileBookmarksAfterRestart`, `thumbnailUrlFromGallery`, `planBookmarkDownload`, serialized storage |
+| `src/background/bookmarkService.ts` (new) | Worker as single writer; `handleBookmarkMessage`, `markBookmarks{Downloaded,Failed,Downloading}`, `enrichBookmarks` |
+| `src/preview/bookmarkPanel.ts` (new) | Queue tab: thumbnails, dock, paste box, per-row + batch download |
+| `src/preview/activeTabGallery.ts` | `getActiveNhentaiTabId()` — the guarded tab lookup |
+| `src/content/listControls.ts` | Per-card ☆ (a toggle), `autoCaptureCards()`, optimistic-paint overlay |
+| `src/background/background.ts` | `handleBookmarkMessage` routing + the two bookkeeping hooks |
+| `src/preview/popupSettings.ts` | Auto-capture toggle + "Open the dockable Queue panel" |
+| `index.html`, `css/style.css`, `css/content.css` | Queue tab markup and styling |
+
+Storage shape: `{ v: 1, items: BookmarkItem[], collapsed: boolean }` under
+`chrome.storage.local["bookmarkQueue"]`. `local`, not `sync`, for the same
+reason `downloadHistory` uses it — `sync` is capped at ~100 KB / 512 items.
+
+Paste parsing accepts, mixed and separated by commas, spaces, newlines,
+semicolons or pipes: bare ids, `nhentai.net/g/<id>/`, `/g/<id>/1/`,
+`cin.lat/v/<id>`, `?id=<id>`, and `a-b` ranges. Caps: `MAX_PASTE_RANGE` 200 per
+range, `MAX_PASTE_IDS` 500 per paste, `MAX_BOOKMARK_ITEMS` 2000 total. Unreadable
+tokens come back in `rejected` so the UI names them instead of dropping them.
+
+Auto-capture defaults **off**: on a 60-card search page it would quietly build a
+60-item list the user never asked for.
+
+### Review pass — 3.7.0 (six defects, all found by reviewing my own output)
+
+Every one has a test that fails on the pre-fix build.
+
+| # | Kind | Defect | Fix | Test |
+|---|---|---|---|---|
+| 1 | **broken** | `bookmarkService.enrichBookmarks` called the **unguarded** `getActiveTabId()`. The Queue tab can be open on any website, and `fetchGalleryViaTab` injects into whatever tab it is handed. `chrome.host_permissions` would reject a foreign injection, but leaning on a permission error as the only guard is not a design. | New `getActiveNhentaiTabId()`; used by enrichment **and** by the Queue's `startDownload` (which passes `tabId` into the pipeline). `undefined` is the correct answer there — the pipeline already falls back to extension-origin metadata. | `test/resolver.test.js` "nhentai-only active tab guard", 5 cases incl. `nhentai.net.evil.com`, `evil-nhentai.net`, `http://` |
+| 2 | **broken** | `getBookmarkState()` reconciled by calling `mutateBookmarks(() => reconciledState)` with a **captured snapshot**, clobbering any mutation that landed between the read and the write. | Reconciliation is now applied as a *function of the freshly-read state*: `mutateBookmarks((state) => reconcileBookmarksAfterRestart(state, knownIds))` | covered by worker e2e 13f |
+| 3 | **missing logic** | `autoCaptureCards` lived **inside** `injectCardControls`, which is idempotent and `continue`s past cards it already decorated. Flipping auto-capture on an already-open page therefore bookmarked **nothing at all** — the exact case the `storage.sync.onChanged` listener was added for. | Extracted into its own pass, called from `start()`, the `MutationObserver` and the settings listener. | e2e "turning auto-capture on mid-page still collects the cards already there" |
+| 4 | **broken** | The content script's optimistic star paint lived in the same `Set` that `readBookmarkState()` **clears and rebuilds from storage**. Any storage re-read before the worker's write landed wiped the paint, so the next auto-capture sweep re-sent cards already queued. | Separate `bookmarkOverlay: Map<id, boolean>` for unconfirmed paint, cleared **only** by the `bookmarkQueue` storage-change event (which fires after the worker's write landed, making storage authoritative). A plain read never clears it. | e2e "a repeated auto-capture sweep adds nothing" — **this test failed first and found the bug** |
+| 5 | **misleading** | After **Add to queue**, the notice said "Resolving titles…" and never corrected itself when there was no nhentai tab to resolve through. | `enrichBookmarks` returns `{ resolved, skipped }`; the panel now reports the real outcome, including "Open an nhentai.net tab to fill in the titles and covers." | manual/real-browser |
+| 6 | **dead code** | `bookmarkSetStatus` message handler had **no sender anywhere**; `resetBookmarkReconciliationForTests` and `fallbackBookmarkState` were exported and referenced nowhere. | All three removed. | grep: zero references |
+
+Two further defects were caught while writing the tests in the first pass and
+are recorded for completeness: `markBookmarksDownloading` answered before its
+write settled (now awaits), and worker e2e 13d/13e initially sent
+`jobFinished`/`batchSummary` **without** `from: "offscreen"` and timed out —
+those branches live in `handleOffscreenMessage` (`background.ts:944`), so the
+test now sends the shape the real offscreen document sends.
+
+Also tightened during review: `cardPages` now anchors its match
+(`/([0-9]+)\s*pages?\s*$/i`). Unanchored, any title containing "<number> pages"
+would be read as the page count. 0 (unknown) is the right answer when the count
+is not where we expect it.
+
+### Verification actually run
+
+| Command | Result |
+|---|---|
+| `npm test` | **366 passing / 4 pending** (baseline 310/4; +51 `test/bookmark-queue.test.js`, +5 in `test/resolver.test.js`) |
+| `npm run build` | webpack clean; `js/background.js`, `js/preview.js`, `js/listControls.js` re-emitted and copied into `NHDW_Release_v3.0.0` |
+| `npm run test:smoke` | worker **and** offscreen load clean, still no global `onDeterminingFilename` listener |
+| `npm run test:e2e` | **117 PASS, 0 FAIL** (was 101) |
+
+The load-bearing test is **worker e2e phase 13f**: it forces a row to
+`downloading` in storage, re-runs the built `js/background.js` in the same VM
+(a fresh service-worker instance reading the same `chrome.storage.local`), and
+asserts `bookmarkGet` returns it as `saved` while a history-backed `done` row
+stays `done` and the dock stays collapsed.
+
+**Gotcha for the next session:** `npx mocha test/x.test.js` run directly uses a
+**stale** `build/test/`. Only `npm test` runs `build:test` first. This cost a
+round here — a new export looked "not a function" purely because `tsc` had not
+re-run.
+
+### Not verified (owed, not skipped)
+
+`npm run test:browser` has **never** run in this environment — every
+real-browser claim in this repo's docs is an expectation, not an observation,
+and 3.7.0's are no different. Specifically unverified: restart persistence in an
+actual Chrome profile (proven only in a VM), thumbnails actually painting from
+`t.nhentai.net`, the dock animating, `chrome.sidePanel.open()` firing from both
+the Queue header and Settings, and pasting `366224,177013` → both files landing.
 
 ## Repository and branch
 
@@ -1484,6 +1705,11 @@ deliberate trade-off, and a reviewer should decide whether they are acceptable.
 
 ## Next backlog (worklist — statuses as of 2026-09-05)
 
+> **Moved.** The live, ordered worklist is now **`WORKLIST.md`** at the repo
+> root — it carries items 37–46 with current statuses and the mandatory
+> review-first rule. The list below is kept as the 2026-09-05 snapshot and
+> is not updated any more.
+
 Newest additions first (from the 2026-09-05 codebase review; full specs in
 IMPROVEMENT_BACKLOG.md session log 2026-09-05). **28–36 are all done**
 (3.6.2 / 3.6.3 / 3.6.4). **37–41 are new and open** — they came out of the
@@ -1688,6 +1914,43 @@ session.
 - Do not drop `action.default_popup` from the manifest: the popup is the
   documented fallback for builds without `chrome.sidePanel` and for users who
   prefer it.
+- **Do not call `getActiveTabId()` from outside the preview flow.** It returns
+  the active tab whatever site it is on, and neither `resolveTabId()` nor
+  `batchPipeline.getGalleryViaTab()` validates the tab before injecting into it.
+  Pre-existing preview callers are safe only because the popup renders on
+  nhentai and nowhere else; the Queue tab has no such guarantee. Use
+  `getActiveNhentaiTabId()` (review pass 3.7.0, defect 1). Do not "fix" this by
+  trusting `host_permissions` to reject the injection — a permission error is
+  not a guard.
+- **Do not merge the bookmark queue into the offscreen job queue.** One means
+  intent and lives in `chrome.storage.local`; the other means work in flight and
+  is memory-only. Bookmark rows *feed* `downloadAllDoujinshis`.
+- **Do not make the bookmark queue write to `chrome.storage.sync`.** It carries
+  titles and thumbnail URLs; sync is capped at ~100 KB / 512 items and would
+  silently truncate the list the user is relying on to survive a restart.
+- **Do not reconcile the bookmark list on every read.** `reconciled` is
+  once-per-worker-lifetime on purpose: while the worker is alive the offscreen
+  document may legitimately be mid-download, and resetting a `downloading` row
+  on each `bookmarkGet` would blank real progress.
+- **Do not reset a bookmark row's status when it is re-bookmarked.** Clicking ☆
+  on a card whose title already downloaded must not turn a finished row back
+  into a pending one — `addBookmarks` reports it in `duplicates` and leaves the
+  row alone.
+- **Do not clear `bookmarkOverlay` in `readBookmarkState()`.** It is cleared
+  only by the `bookmarkQueue` storage-change event, which is the one moment
+  storage is provably authoritative. Clearing it on a plain read re-opens the
+  re-send bug (review pass 3.7.0, defect 4).
+- **Do not put auto-capture back inside `injectCardControls()`.** Injection is
+  idempotent and skips decorated cards; auto-capture must stay its own pass or
+  flipping the setting on an open page does nothing (defect 3).
+- **Do not route a bookmark thumbnail into the download path.** `t.nhentai.net`
+  is display-only and deliberately absent from `host_permissions`; an `<img>` in
+  an extension page needs neither a host permission nor a CORS preflight.
+- **Do not make the Queue tab download in merged mode.** It is always
+  `separate: true`; merging a bookmark list is a decision the user did not make.
+- **Do not re-add `bookmarkSetStatus`.** It was removed as a handler with no
+  sender. Status comes from `bookmarkMarkDownloading` and the worker's
+  `markBookmarks{Downloaded,Failed}` hooks on `jobFinished` / `batchSummary`.
 - Do not put `chrome.storage`, `chrome.downloads`, `chrome.scripting`, or `chrome.permissions` in the offscreen document.
 - Do not use `/api/v2/auth/*` or `/api/v2/user/keys`.
 - Do not remove tab-first fetching or claim Cloudflare bypass.

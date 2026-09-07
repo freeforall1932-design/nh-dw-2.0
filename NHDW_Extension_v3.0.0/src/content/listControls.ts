@@ -86,7 +86,18 @@ function readHistoryState(): Promise<void> {
 // click, so a ☆ flips the instant it is clicked instead of after the round
 // trip (the storage event then confirms it).
 let bookmarkState: BookmarkState = normalizeBookmarkState(null);
+/** Ids confirmed by the last storage read. */
 const bookmarkedIds = new Set<string>();
+// Unconfirmed optimistic paint: true = "I just bookmarked this", false = "I
+// just removed it". A click has to feel instant, but the worker's write has not
+// landed yet when the click returns - and a storage re-read in that window
+// (a settings flip, a history change) would otherwise wipe the paint and make
+// the next auto-capture sweep re-send cards that are already queued.
+//
+// Cleared ONLY by the bookmarkQueue storage-change event, because that event
+// fires after the worker's write landed, which makes storage authoritative
+// again. A plain read must never clear it.
+const bookmarkOverlay = new Map<string, boolean>();
 
 function readBookmarkState(): Promise<void> {
     return new Promise((resolve) => {
@@ -108,7 +119,7 @@ function readBookmarkState(): Promise<void> {
 }
 
 function isBookmarked(id: string): boolean {
-    return bookmarkedIds.has(id);
+    return bookmarkOverlay.has(id) ? bookmarkOverlay.get(id) === true : bookmarkedIds.has(id);
 }
 
 // nhentai lazyloads covers: the real address sits in data-src while src holds a
@@ -134,7 +145,10 @@ function cardThumbnail(card: HTMLElement): string {
 function cardPages(card: HTMLElement): number {
     const caption = card.querySelector(".caption");
     const text = caption === null ? "" : (caption.textContent || "");
-    const match = /([0-9]+)\s*pages?/i.exec(text);
+    // Anchored to the end of the caption: unanchored, a title containing
+    // "<number> pages" would be read as the page count. 0 (unknown) is the
+    // correct answer when the count is not where we expect it.
+    const match = /([0-9]+)\s*pages?\s*$/i.exec(text);
     return match === null ? 0 : parseInt(match[1], 10) || 0;
 }
 
@@ -325,10 +339,10 @@ function buildCardControls(info: CardInfo): HTMLElement {
         event.preventDefault();
         event.stopPropagation();
         if (isBookmarked(info.id)) {
-            bookmarkedIds.delete(info.id);
+            bookmarkOverlay.set(info.id, false);
             unbookmarkCard(info.id);
         } else {
-            bookmarkedIds.add(info.id);
+            bookmarkOverlay.set(info.id, true);
             bookmarkCard(info, "card");
         }
         // Optimistic paint: the storage round trip lands in a few ms and the
@@ -406,17 +420,31 @@ function injectCardControls(): void {
         info.card.setAttribute(MARKER_ATTR, info.id);
         info.card.classList.add("nhdw-card");
         info.card.appendChild(buildCardControls(info));
-        // Auto-capture (Settings -> Bookmark auto-capture, off by default):
-        // bookmark every card as it appears, so scrolling a listing collects it
-        // without a click per title. Idempotent by construction — an id that is
-        // already bookmarked is skipped here AND by the worker's dedupe.
-        if (settings.bookmarkAutoCapture && !isBookmarked(info.id)) {
-            bookmarkedIds.add(info.id);
-            bookmarkCard(info, "auto");
-            const autoButton = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
-            if (autoButton) {
-                applyBookmarkButton(autoButton, info.id);
-            }
+    }
+}
+
+// Auto-capture (Settings -> Bookmark auto-capture, off by default): bookmark
+// every card on the page, so scrolling a listing collects it without a click
+// per title.
+//
+// Deliberately its OWN pass rather than a branch of injectCardControls:
+// injection is idempotent by design and skips cards it already decorated, so
+// auto-capture living inside it would bookmark nothing at all when the user
+// flips the setting on a page that is already open. Idempotent on its own
+// terms - an id already bookmarked is skipped here AND by the worker's dedupe.
+function autoCaptureCards(): void {
+    if (!settings.bookmarkAutoCapture) {
+        return;
+    }
+    for (const info of findCards()) {
+        if (isBookmarked(info.id)) {
+            continue;
+        }
+        bookmarkOverlay.set(info.id, true);
+        bookmarkCard(info, "auto");
+        const button = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
+        if (button !== null) {
+            applyBookmarkButton(button, info.id);
         }
     }
 }
@@ -713,6 +741,7 @@ function flashStatus(text: string): void {
 function start(): void {
     document.documentElement.classList.add("nhdw-controls-on");
     injectCardControls();
+    autoCaptureCards();
     if (actionBar === null) {
         actionBar = buildActionBar();
         document.body.appendChild(actionBar);
@@ -730,6 +759,7 @@ function start(): void {
         pending = setTimeout(() => {
             pending = null;
             injectCardControls();
+            autoCaptureCards();
         }, 150);
     });
     observer.observe(document.body, { childList: true, subtree: true });
@@ -775,7 +805,9 @@ function start(): void {
             if (area === "sync" && changes && changes.bookmarkAutoCapture) {
                 settings.bookmarkAutoCapture = !!(changes.bookmarkAutoCapture.newValue);
                 if (settings.bookmarkAutoCapture) {
-                    readBookmarkState().then(injectCardControls);
+                    // Read first so an id already bookmarked from elsewhere is
+                    // not sent again, then sweep the cards already on the page.
+                    readBookmarkState().then(autoCaptureCards);
                 }
             }
         });

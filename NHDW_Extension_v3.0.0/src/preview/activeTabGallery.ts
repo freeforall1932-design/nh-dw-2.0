@@ -53,6 +53,40 @@ export async function getActiveTabId(): Promise<number | undefined> {
     });
 }
 
+/**
+ * The active tab id ONLY when that tab is actually on nhentai, else undefined.
+ *
+ * Why this exists separately from getActiveTabId: every pre-existing caller of
+ * getActiveTabId lives inside the preview flow, and the preview only ever
+ * renders on nhentai.net — so "the active tab" and "an nhentai tab" were the
+ * same thing by construction. The bookmark Queue tab breaks that assumption:
+ * it can be opened while the user is on any website at all.
+ *
+ * That matters because neither the worker's resolveTabId() nor the batch
+ * pipeline's getGalleryViaTab() validates the tab: both inject into / fetch
+ * through whatever id they are handed. Chrome's host_permissions would reject
+ * an injection into a foreign tab, but leaning on a permission error as the
+ * only guard is not a design. Callers outside the preview must use this.
+ *
+ * undefined is a safe answer, not a failure: the download pipeline treats a
+ * missing tab as "resolve metadata from the extension origin instead", which
+ * is exactly the fallback it already has.
+ */
+export async function getActiveNhentaiTabId(): Promise<number | undefined> {
+    return new Promise((resolve) => {
+        try {
+            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                const tab = tabs && tabs[0];
+                const url = tab && typeof tab.url === "string" ? tab.url : "";
+                const onNhentai = /^https:\/\/nhentai\.net(?:\/|$)/i.test(url);
+                resolve(onNhentai && tab && typeof tab.id === "number" ? tab.id : undefined);
+            });
+        } catch (_) {
+            resolve(undefined);
+        }
+    });
+}
+
 function sleep(ms: number): Promise<void> {
     return new Promise((r) => setTimeout(r, ms));
 }

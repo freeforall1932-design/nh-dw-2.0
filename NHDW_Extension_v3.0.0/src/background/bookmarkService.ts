@@ -14,7 +14,6 @@ import {
     BookmarkState,
     addBookmarks,
     clearBookmarks,
-    emptyBookmarkState,
     mutateBookmarks,
     patchBookmark,
     readBookmarks,
@@ -28,7 +27,7 @@ import {
     pagesFromGallery
 } from "../utils/bookmarkQueue";
 import { historyIds, readHistory } from "../utils/downloadHistory";
-import { fetchGalleryViaTab, getActiveTabId } from "../preview/activeTabGallery";
+import { fetchGalleryViaTab, getActiveNhentaiTabId } from "../preview/activeTabGallery";
 
 // Reconciliation runs once per worker lifetime, exactly like getQueueState()
 // in the sibling Twitter repo. While this worker is alive the offscreen
@@ -38,27 +37,20 @@ import { fetchGalleryViaTab, getActiveTabId } from "../preview/activeTabGallery"
 let reconciled = false;
 
 export async function getBookmarkState(): Promise<BookmarkState> {
-    const stored = await readBookmarks();
-    if (reconciled) {
-        return stored;
+    if (!reconciled) {
+        reconciled = true;
+        let knownIds: string[] | undefined;
+        try {
+            knownIds = historyIds(await readHistory());
+        } catch (_) {
+            knownIds = undefined;
+        }
+        // Applied as a function of the freshly-read state, never as a captured
+        // snapshot: a mutation landing between the read and the write (a card
+        // bookmarked while the worker was waking) must not be clobbered.
+        return mutateBookmarks((state) => reconcileBookmarksAfterRestart(state, knownIds));
     }
-    reconciled = true;
-    let knownIds: string[] | undefined;
-    try {
-        knownIds = historyIds(await readHistory());
-    } catch (_) {
-        knownIds = undefined;
-    }
-    const reconciledState = reconcileBookmarksAfterRestart(stored, knownIds);
-    if (reconciledState !== stored) {
-        await mutateBookmarks(() => reconciledState);
-    }
-    return reconciledState;
-}
-
-/** Reset the once-per-worker reconciliation (test hook). */
-export function resetBookmarkReconciliationForTests(): void {
-    reconciled = false;
+    return readBookmarks();
 }
 
 export function broadcastBookmarkChanged(state: BookmarkState): void {
@@ -127,20 +119,20 @@ export function markBookmarksDownloading(ids: Array<string | number>): Promise<v
 // resolver uses (src/preview/selectedGalleryResolver.ts). A failure leaves the
 // row alone: an unresolved row is still downloadable, it just shows its id.
 
-export async function enrichBookmarks(ids: Array<string | number>): Promise<BookmarkState> {
+export async function enrichBookmarks(ids: Array<string | number>): Promise<{ state: BookmarkState; resolved: number; skipped: boolean }> {
     const wanted = (ids || []).map((id) => String(id)).filter((id) => /^[0-9]+$/.test(id));
     if (wanted.length === 0) {
-        return getBookmarkState();
+        return { state: await getBookmarkState(), resolved: 0, skipped: false };
     }
-    let tabId: number | undefined;
-    try {
-        tabId = await getActiveTabId();
-    } catch (_) {
-        tabId = undefined;
-    }
+    // Guarded on purpose: the Queue tab can be opened on any website, and
+    // fetchGalleryViaTab injects into whatever tab it is given. With no
+    // nhentai tab open there is nothing to resolve through, and saying so is
+    // better than injecting into the user's banking tab and failing there.
+    const tabId = await getActiveNhentaiTabId();
     if (typeof tabId !== "number") {
-        return getBookmarkState();
+        return { state: await getBookmarkState(), resolved: 0, skipped: true };
     }
+    let resolved = 0;
     for (const id of wanted) {
         let gallery: any = null;
         try {
@@ -157,10 +149,11 @@ export async function enrichBookmarks(ids: Array<string | number>): Promise<Book
             pages: pagesFromGallery(gallery)
         };
         await mutateBookmarks((state) => patchBookmark(state, id, patch));
+        resolved++;
     }
     const state = await getBookmarkState();
     broadcastBookmarkChanged(state);
-    return state;
+    return { state: state, resolved: resolved, skipped: false };
 }
 
 // ---- message handling ----------------------------------------------------
@@ -232,18 +225,6 @@ export function handleBookmarkMessage(request: any, sendResponse: (response: any
         return true;
     }
 
-    if (action === "bookmarkSetStatus") {
-        mutateBookmarks((state) => patchBookmark(state, request.id, {
-            status: request.status,
-            error: request.error,
-            filename: request.filename
-        })).then((state) => {
-            broadcastBookmarkChanged(state);
-            sendResponse({ result: "success", state: state });
-        });
-        return true;
-    }
-
     if (action === "bookmarkMarkDownloading") {
         // Sent by the panel the moment it hands a selection to the download
         // pipeline, so the rows read "downloading" before the first byte
@@ -256,7 +237,14 @@ export function handleBookmarkMessage(request: any, sendResponse: (response: any
 
     if (action === "bookmarkEnrich") {
         enrichBookmarks(Array.isArray(request.ids) ? request.ids : [])
-            .then((state) => sendResponse({ result: "success", state: state }))
+            .then((outcome) => sendResponse({
+                result: "success",
+                state: outcome.state,
+                resolved: outcome.resolved,
+                // True when there was no nhentai tab to resolve through, so the
+                // panel can say that instead of a vague "resolving...".
+                skipped: outcome.skipped
+            }))
             .catch(() => sendResponse({ result: "error" }));
         return true;
     }
@@ -264,9 +252,4 @@ export function handleBookmarkMessage(request: any, sendResponse: (response: any
     // Unknown bookmark* action: answer instead of leaving the channel open.
     sendResponse({ result: "error", error: "Unknown bookmark action: " + action });
     return true;
-}
-
-/** The state an empty/unreadable store reports, so callers never see null. */
-export function fallbackBookmarkState(): BookmarkState {
-    return emptyBookmarkState();
 }

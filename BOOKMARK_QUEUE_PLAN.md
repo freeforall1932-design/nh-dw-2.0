@@ -1,9 +1,11 @@
 # Bookmark queue — design and approach
 
-**Status:** plan approved by the user's 2026-09-07 request; Phase 1 implemented on
-branch `arena/01a07d48-nh-dw-2-0`.
+**Status:** **shipped as 3.7.0**, session `arena/01a07d48-nh-dw-2-0`, merged as PR #40.
+A self-review of this session's own output found six defects; all six are fixed and
+listed in the 2026-09-08 session log of `SESSION_HANDOFF.md`.
 **Sibling implementation studied:** `freeforall1932-design/twitter-batch-download`
-(v3.15.0), whose Side Panel queue this borrows its shape from.
+(v3.15.0), whose Side Panel queue this borrows its shape from — see §3a for what was
+*not* copied, and why.
 
 ---
 
@@ -90,6 +92,36 @@ So: `Download | Queue | Settings`, identical in both modes, plus the Settings bu
 Rejected alternative — panel-only: it would strand popup-mode users (older Chromium, and
 the Firefox port where `chrome.sidePanel` does not exist) with no way to reach the feature
 at all.
+
+### 3a. What was *not* copied from the Twitter repo, and why
+
+The premise in the original request — "the toolbar click is still pop up first instead of
+queue sidebar/side panel" — was about **that repo**, and it is correct there. Verified:
+
+| | `twitter-batch-download` | this repo (before 3.7.0) |
+|---|---|---|
+| `action.default_popup` | `popup.html`, a **pure launcher** | `index.html`, the full UI |
+| `setPanelBehavior` / `openPanelOnActionClick` | **absent everywhere** | set by `applyUiMode()` |
+| toolbar click opens | the popup | the side panel (default since 3.4.0) |
+| how you reach the panel | `popup.js:37` `chrome.sidePanel.open({windowId})` | the toolbar click itself |
+
+Its `popup.html` states the intent outright: *"Everything now lives in the Side Panel
+queue."* `popup.js`'s header explains the hollowing-out — "two competing engines meant the
+popup could scroll a page while the panel was mid-capture".
+
+So the "advance feature button" in the request **is** that repo's `popup.js:37`. It was
+implemented here, but **not** by hollowing out the popup: over there the popup had nothing
+left to do, so making it a launcher was free, while here it is the primary UI for
+single-title and list-mode downloads, progress and settings. Copying the shape would have
+meant deleting working functionality to match a decision that only made sense in the other
+repo's context. The launcher therefore lives in the **Queue tab header** ("Open docked ↗",
+hidden when this document already is the panel) with the Settings copy kept.
+
+Honesty note, because it will come up: **Chrome exposes no "am I a side panel" API.** The
+button's visibility keys off the `nhdwPanel` class that `preview.ts` applies from the stored
+`uiMode` — the same value the worker uses to decide what the toolbar click opens. It is a
+setting-driven proxy, not context detection, re-evaluated on every render because
+`applyUiModeClass()` resolves asynchronously.
 
 ---
 

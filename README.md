@@ -381,3 +381,20 @@ so no real nhentai account or Cloudflare clearance is needed.
   extension harness (Chrome `Runtime.enable` timeout / Brave SIGTRAP, on every run since it
   was introduced; see `IMPROVEMENT_BACKLOG.md` item 10). Run `npm run test:browser` on a
   machine with a full Chrome/Brave build instead.
+
+## 📚 Project documents
+
+Where the working context lives. If you are picking this project up, read them in
+this order.
+
+| Document | Read it for |
+| :--- | :--- |
+| **`WORKLIST.md`** | What to do next. The live, ordered, statused list of open work, plus the mandatory *review the previous session's diff first* rule and the harness gotchas that cost a round if you miss them. **Start here.** |
+| **`SESSION_HANDOFF.md`** | What the last session changed and why. Its top block is the current handoff; it also holds the **"Do not" rules** (each one is a bug that already happened) and the real-browser verification steps. |
+| **`IMPROVEMENT_BACKLOG.md`** | Full specs and history for every numbered item, oldest first, including every past session log. |
+| **`BOOKMARK_QUEUE_PLAN.md`** | Design and rationale for the 3.7.0 bookmark queue specifically — the two-lists rule, the restart semantics, and what was deliberately *not* copied from the sibling `twitter-batch-download` repo. |
+| **`FOLDER_NAMING_STUDY.md`** | Why download names get lost when another extension registers a filename listener (Chromium bug 579563), and the guard that works around it. |
+
+Item numbers are shared across all of them and are never reused, so
+`WORKLIST.md` **45**, `IMPROVEMENT_BACKLOG.md` **45** and a session log's
+"item 45" are the same thing.

@@ -31,7 +31,7 @@ import {
 } from "../utils/bookmarkQueue";
 import { historyIds, readHistory } from "../utils/downloadHistory";
 import { readListSettings, resolveMasterFolder, ListModeSettings } from "../utils/listSettings";
-import { getActiveTabId } from "./activeTabGallery";
+import { getActiveNhentaiTabId } from "./activeTabGallery";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K] {
     return document.createElement(tag);
@@ -94,7 +94,11 @@ async function startDownload(ids: string[], titles: Record<string, string>, from
         showNotice("Could not read the list-mode settings.", true);
         return;
     }
-    const tabId = await getActiveTabId();
+    // Guarded: the Queue tab can be open while the active tab is any website,
+    // and the pipeline injects into whatever tab id it is handed. undefined is
+    // the correct answer there - the pipeline then resolves metadata from the
+    // extension origin, which is the fallback it already has.
+    const tabId = await getActiveNhentaiTabId();
     if (fromQueue) {
         // Rows read "downloading" before the first byte arrives rather than
         // after the first broadcast.
@@ -191,7 +195,8 @@ async function addPasted(downloadNow: boolean): Promise<void> {
     }
     const added = Array.isArray(response.added) ? response.added.length : parsed.ids.length;
     box.value = "";
-    showNotice("Bookmarked " + added + (added === 1 ? " title" : " titles") + rejectedNote + truncatedNote + ". Resolving titles\u2026");
+    const bookmarkedNote = "Bookmarked " + added + (added === 1 ? " title" : " titles") + rejectedNote + truncatedNote + ".";
+    showNotice(bookmarkedNote + " Resolving titles\u2026");
     // A pasted id has no title and no thumbnail: ask the worker to resolve it
     // through the open nhentai tab, the same route the panel's own resolver
     // uses. Rows stay usable (and downloadable) even when this fails.
@@ -199,6 +204,19 @@ async function addPasted(downloadNow: boolean): Promise<void> {
     if (enriched && enriched.state) {
         state = normalizeBookmarkState(enriched.state);
         renderList();
+    }
+    // Say what actually happened. "Resolving..." that never resolves is worse
+    // than naming the reason, and the reason is actionable.
+    if (!enriched || enriched.result !== "success") {
+        showNotice(bookmarkedNote + " Titles could not be resolved - the rows are still downloadable by id.", true);
+    } else if (enriched.skipped) {
+        showNotice(bookmarkedNote + " Open an nhentai.net tab to fill in the titles and covers.", true);
+    } else if (enriched.resolved === 0) {
+        showNotice(bookmarkedNote + " No metadata came back - nhentai may be challenging this session. The rows are still downloadable by id.", true);
+    } else {
+        const missing = parsed.ids.length - enriched.resolved;
+        showNotice(bookmarkedNote + " Resolved " + enriched.resolved + (enriched.resolved === 1 ? " title." : " titles.")
+            + (missing > 0 ? " " + missing + " still unresolved." : ""));
     }
 }
 
@@ -361,6 +379,17 @@ function renderList(): void {
         body.hidden = !!state.collapsed;
     }
 
+    // Show the launcher only when this document is the hovering popup. The
+    // nhdwPanel class is applied by preview.ts from the stored uiMode - the same
+    // value the worker uses to decide what the toolbar click opens - so it is a
+    // setting-driven proxy, not true context detection: Chrome exposes no "am I
+    // a side panel" API. Re-evaluated on every render because applyUiModeClass
+    // resolves asynchronously and may not have run when the chrome was built.
+    const openPanel = document.getElementById("nhdwBmOpenPanel");
+    if (openPanel !== null) {
+        openPanel.hidden = document.documentElement.classList.contains("nhdwPanel");
+    }
+
     list.textContent = "";
     if (total === 0) {
         const empty = el("div");
@@ -394,6 +423,40 @@ function buildChrome(container: HTMLElement): void {
     counts.id = "nhdwBmCounts";
     heading.appendChild(counts);
     header.appendChild(heading);
+
+    // The Twitter sibling makes its popup a pure launcher for the side panel,
+    // because its popup had nothing else to do. This popup is the primary UI
+    // for single-title and list downloads, so it stays functional - but the
+    // launcher belongs HERE, not buried in Settings: the Queue tab is the one
+    // place where a hovering popup is actively the wrong surface, since it dies
+    // on blur and a queue is meant to be watched.
+    const openPanel = el("button");
+    openPanel.type = "button";
+    openPanel.id = "nhdwBmOpenPanel";
+    openPanel.className = "nhdwBmToggle";
+    openPanel.textContent = "Open docked \u2197";
+    openPanel.title = "Open this queue in the resizable side panel, which stays open while you browse";
+    openPanel.addEventListener("click", () => {
+        const sidePanelApi: any = (chrome as any).sidePanel;
+        if (!sidePanelApi || typeof sidePanelApi.open !== "function") {
+            showNotice("This browser has no side panel (Chrome 116+). The list is saved either way.", true);
+            return;
+        }
+        try {
+            chrome.windows.getCurrent((currentWindow: any) => {
+                const options: any = currentWindow && currentWindow.id !== undefined ? { windowId: currentWindow.id } : {};
+                const opened = sidePanelApi.open(options);
+                if (opened && typeof opened.catch === "function") {
+                    opened.catch((error: any) => {
+                        showNotice("Chrome refused to open the panel: " + (error && error.message ? error.message : String(error)), true);
+                    });
+                }
+            });
+        } catch (error: any) {
+            showNotice("Could not open the panel: " + (error && error.message ? error.message : String(error)), true);
+        }
+    });
+    header.appendChild(openPanel);
 
     const toggle = el("button");
     toggle.type = "button";
