@@ -14,8 +14,10 @@
 // deliberately shaped after):
 //   * chrome.storage.local — never sync. A queue carries titles and thumbnail
 //     URLs; sync is capped at ~100 KB / 512 items and would silently truncate.
-//   * Keyed on the GALLERY ID. Titles change with templates and language
-//     edits; the id does not.
+//   * Keyed on the gallery id, namespaced by site (siteKeys.ts) since 3.8.0:
+//     rows keep their bare site gallery id for metadata resolution, while
+//     identity (dedupe, patch, remove, history checks) compares the composite
+//     "site:id" key so a second site can never shadow nhentai ids.
 //   * The pure helpers below never touch chrome.*. Storage lives in the
 //     readBookmarks/writeBookmarks functions at the bottom, so the whole core
 //     is unit-testable in Node with no browser.
@@ -25,6 +27,8 @@
 //     message (see the bookmark* handlers in src/background/background.ts).
 //   * Tolerant parsing everywhere: a corrupt or legacy record degrades to an
 //     empty list rather than throwing inside the panel.
+
+import { toGalleryKey, normalizeSite } from "./siteKeys";
 
 export const BOOKMARK_QUEUE_KEY = "bookmarkQueue";
 export const BOOKMARK_QUEUE_VERSION = 1;
@@ -40,8 +44,10 @@ export type BookmarkSource = "card" | "page" | "paste" | "similar" | "auto";
 export type BookmarkStatus = "saved" | "downloading" | "done" | "failed";
 
 export interface BookmarkItem {
-    /** Gallery id. The only identity that matters. */
+    /** Gallery id, in the site's own namespace (bare — never composite). */
     id: string;
+    /** Source site slug (siteKeys.ts); "nhentai" until adapters exist. */
+    site: string;
     /** Best title known at add time; "" for a freshly pasted id. */
     title: string;
     /** Absolute cover-thumbnail URL for the row's UI, "" when unknown. */
@@ -72,6 +78,14 @@ export interface BookmarkState {
 const BOOKMARK_SOURCES: BookmarkSource[] = ["card", "page", "paste", "similar", "auto"];
 const BOOKMARK_STATUSES: BookmarkStatus[] = ["saved", "downloading", "done", "failed"];
 
+// Composite identity of a row (siteKeys.ts): "<site>:<id>". Rows keep their
+// bare id for metadata resolution; every identity question (dedupe, patch,
+// remove, history check) compares composite keys, so ids from different
+// sites can never collide once adapters exist.
+function itemKey(item: BookmarkItem): string {
+    return toGalleryKey(item.id, item.site);
+}
+
 export function emptyBookmarkState(): BookmarkState {
     return { v: BOOKMARK_QUEUE_VERSION, items: [], collapsed: false };
 }
@@ -96,6 +110,8 @@ function normalizeItem(raw: any): BookmarkItem | null {
     }
     return {
         id: id,
+        // Rows persisted by 3.7.x have no site and read as the default site.
+        site: normalizeSite(raw.site),
         title: typeof raw.title === "string" ? raw.title : "",
         thumbnail: typeof raw.thumbnail === "string" ? raw.thumbnail : "",
         pages: Number.isFinite(Number(raw.pages)) && Number(raw.pages) > 0 ? Math.floor(Number(raw.pages)) : 0,
@@ -123,10 +139,10 @@ export function normalizeBookmarkState(raw: any): BookmarkState {
         const seen = new Set<string>();
         for (const entry of rawItems) {
             const item = normalizeItem(entry);
-            if (item === null || seen.has(item.id)) {
+            if (item === null || seen.has(itemKey(item))) {
                 continue;
             }
-            seen.add(item.id);
+            seen.add(itemKey(item));
             state.items.push(item);
         }
     }
@@ -146,7 +162,11 @@ export function normalizeBookmarkState(raw: any): BookmarkState {
 //   366224                                  bare id
 //   https://nhentai.net/g/366224/           gallery url (also /g/366224/1/)
 //   /g/366224/                              path-only gallery url
-//   https://cin.lat/v/366224                the reference site's viewer url
+//   https://cin.lat/v/366224                the reference viewer site's url —
+//                                          ANY of its mirrors works (cin.mom,
+//                                          cin.monster, cin.wiki, cin.wtf, ...):
+//                                          the SHAPES are matched, never the
+//                                          host, because the site rotates TLDs
 //   https://cin.lat/bulk?id=366224,177013   the reference site's bulk url
 //   366220-366224                           inclusive range (capped)
 // The parse is pure: no fetch, no DOM, so it is unit-tested without a browser.
@@ -295,6 +315,8 @@ export function pagesFromGallery(gallery: any): number {
 
 export interface BookmarkCandidate {
     id: string | number;
+    /** Source site slug; absent means the default site (siteKeys.ts). */
+    site?: string;
     title?: string;
     thumbnail?: string;
     pages?: number;
@@ -319,7 +341,7 @@ export interface AddResult {
  */
 export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate[], now: number = Date.now()): AddResult {
     const items = state.items.slice();
-    const known = new Set<string>(items.map((item) => item.id));
+    const known = new Set<string>(items.map(itemKey));
     const added: string[] = [];
     const duplicates: string[] = [];
 
@@ -328,16 +350,18 @@ export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate
         if (!/^[0-9]+$/.test(id)) {
             continue;
         }
-        if (known.has(id)) {
+        const key = toGalleryKey(id, candidate.site);
+        if (known.has(key)) {
             if (duplicates.indexOf(id) === -1) {
                 duplicates.push(id);
             }
             continue;
         }
-        known.add(id);
+        known.add(key);
         added.push(id);
         items.unshift({
             id: id,
+            site: normalizeSite(candidate.site),
             title: typeof candidate.title === "string" ? candidate.title : "",
             thumbnail: typeof candidate.thumbnail === "string" ? candidate.thumbnail : "",
             pages: Number.isFinite(Number(candidate.pages)) && Number(candidate.pages) > 0 ? Math.floor(Number(candidate.pages)) : 0,
@@ -361,11 +385,11 @@ export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate
 }
 
 export function removeBookmarks(state: BookmarkState, ids: Array<string | number>): BookmarkState {
-    const drop = new Set<string>((ids || []).map((id) => String(id)));
+    const drop = new Set<string>((ids || []).map((id) => toGalleryKey(id)));
     if (drop.size === 0) {
         return state;
     }
-    return { v: state.v, items: state.items.filter((item) => !drop.has(item.id)), collapsed: state.collapsed };
+    return { v: state.v, items: state.items.filter((item) => !drop.has(itemKey(item))), collapsed: state.collapsed };
 }
 
 export function clearBookmarks(state: BookmarkState): BookmarkState {
@@ -373,13 +397,13 @@ export function clearBookmarks(state: BookmarkState): BookmarkState {
 }
 
 export function setBookmarkSelected(state: BookmarkState, ids: Array<string | number>, selected: boolean): BookmarkState {
-    const touch = new Set<string>((ids || []).map((id) => String(id)));
+    const touch = new Set<string>((ids || []).map((id) => toGalleryKey(id)));
     if (touch.size === 0) {
         return state;
     }
     return {
         v: state.v,
-        items: state.items.map((item) => touch.has(item.id) ? Object.assign({}, item, { selected: selected }) : item),
+        items: state.items.map((item) => touch.has(itemKey(item)) ? Object.assign({}, item, { selected: selected }) : item),
         collapsed: state.collapsed
     };
 }
@@ -408,10 +432,10 @@ export interface StatusPatch {
 
 /** Update one row. Unknown ids are ignored rather than creating a ghost row. */
 export function patchBookmark(state: BookmarkState, id: string | number, patch: StatusPatch): BookmarkState {
-    const key = String(id);
+    const key = toGalleryKey(id);
     let touched = false;
     const items = state.items.map((item) => {
-        if (item.id !== key) {
+        if (itemKey(item) !== key) {
             return item;
         }
         touched = true;
@@ -459,14 +483,14 @@ export function patchBookmark(state: BookmarkState, id: string | number, patch: 
  * claims a download the extension no longer believes in.
  */
 export function reconcileBookmarksAfterRestart(state: BookmarkState, historyIds?: string[]): BookmarkState {
-    const known = historyIds === undefined ? null : new Set<string>(historyIds.map((id) => String(id)));
+    const known = historyIds === undefined ? null : new Set<string>(historyIds.map((id) => toGalleryKey(id)));
     let changed = false;
     const items = state.items.map((item) => {
         if (item.status === "downloading") {
             changed = true;
             return Object.assign({}, item, { status: "saved" as BookmarkStatus, error: "" });
         }
-        if (item.status === "done" && known !== null && !known.has(item.id)) {
+        if (item.status === "done" && known !== null && !known.has(itemKey(item))) {
             changed = true;
             return Object.assign({}, item, { status: "saved" as BookmarkStatus, filename: "" });
         }
@@ -492,8 +516,8 @@ export interface BookmarkDownloadPlan {
  * Order is list order, so "reorder the list" is also "reorder the batch".
  */
 export function planBookmarkDownload(state: BookmarkState, historyIds: Array<string | number>, redownloadIds: Array<string | number> = []): BookmarkDownloadPlan {
-    const recorded = new Set<string>((historyIds || []).map((id) => String(id)));
-    const forced = new Set<string>((redownloadIds || []).map((id) => String(id)));
+    const recorded = new Set<string>((historyIds || []).map((id) => toGalleryKey(id)));
+    const forced = new Set<string>((redownloadIds || []).map((id) => toGalleryKey(id)));
     const plan: BookmarkDownloadPlan = { download: [], skip: [], titles: {} };
     for (const item of state.items) {
         if (!item.selected) {
@@ -501,7 +525,7 @@ export function planBookmarkDownload(state: BookmarkState, historyIds: Array<str
         }
         // A title the row never learned is still traceable by its id.
         plan.titles[item.id] = item.title !== "" ? item.title : item.id;
-        if (recorded.has(item.id) && !forced.has(item.id)) {
+        if (recorded.has(itemKey(item)) && !forced.has(itemKey(item))) {
             plan.skip.push(item.id);
         } else {
             plan.download.push(item.id);
@@ -519,9 +543,9 @@ export function countSelectedBookmarks(state: BookmarkState): number {
 }
 
 export function findBookmark(state: BookmarkState, id: string | number): BookmarkItem | null {
-    const key = String(id);
+    const key = toGalleryKey(id);
     for (const item of state.items) {
-        if (item.id === key) {
+        if (itemKey(item) === key) {
             return item;
         }
     }

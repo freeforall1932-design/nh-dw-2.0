@@ -1,7 +1,8 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-08** (session `arena/01a07d48-nh-dw-2-0`,
-3.7.0, merged as PR #40).
+**Live, ordered. Updated 2026-09-14** (session
+`arena/01a09ee5-nh-dw-2-0`: **3.8.0 — item 47 landed**; items 48–52 planned,
+see `MULTISITE_V4_PLAN.md`. Previous: 3.7.0, PR #40).
 
 This is the single place to look for *what to do next*. The other two documents
 carry the depth:
@@ -12,6 +13,7 @@ carry the depth:
 | **`SESSION_HANDOFF.md`** | What the last session changed and why, the "Do not" rules, real-browser verification steps. Read its top block before touching code. |
 | **`IMPROVEMENT_BACKLOG.md`** | Full specs and history for every numbered item, oldest first. |
 | **`BOOKMARK_QUEUE_PLAN.md`** | Design and rationale for the 3.7.0 bookmark queue specifically. |
+| **`MULTISITE_V4_PLAN.md`** | Multi-site v4: decision record (merge vs new repo), site roster, cooldown analysis, bucket list. Planning mode, no code. |
 
 Item numbers are shared with `IMPROVEMENT_BACKLOG.md` and are never reused.
 
@@ -148,8 +150,92 @@ run in this environment**.
 
 ---
 
+## Planning mode — multi-site v4 (items 48–52, not scheduled)
+
+Settled in conversation on 2026-09-14; item 47 has since landed (3.8.0).
+Full design,
+decision record (merge vs new repo) and per-site facts:
+`MULTISITE_V4_PLAN.md`.
+
+- [ ] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
+      where the lab-clone UI rework lands if merged. Follows 49 on purpose.
+      Owns the per-site job-splitting design for mixed-site queue selections
+      and the site-aware worker messages (plan §4.2).
+- [ ] **49. Hitomi.la adapter** — first new site; avif plumbing; raw-mode
+      default for 1 GB-class galleries.
+- [ ] **50. Mirror-network adapter** (imhentai / hentaienvy / hentaiera, with
+      hentaifox pending spike) + reading-vs-zip comparison + per-site pacing.
+      No cooldown bypass — see the plan's Do-not rules.
+- [ ] **51. Streaming ZIP writer** — OPFS / File System Access, memory
+      O(one page) instead of O(gallery).
+- [ ] **52. History export/import (JSON)** — cross-machine carry-over.
+
+Order if called: **49 → 48 → 50 → 51 → 52** (hitomi validates the
+adapter contract before the panel rework bakes it in). Rename/rebrand the
+repo after 49 proves out; keep the nhentai adapter as the regression control
+throughout.
+
+### Pending on the USER (nothing here is scheduled until they act)
+
+- [ ] **⏳ Strategy C go-ahead (item 50).** Chosen and recorded, but the
+      user explicitly asked to WAIT for their confirmation before executing —
+      other projects are running. When they say go: build the reader-page
+      path, run the comparison, decide A vs B. Plain-language A/B/C
+      descriptions live in `MULTISITE_V4_PLAN.md` §3 so nothing is forgotten.
+- [ ] **⏳ Sample capture for the new sites (unblocks items 49 and 50).**
+      The user grabs page sources, reader HTML, image URLs, `gg.js`, and one
+      button-downloaded zip, per the checklist in `MULTISITE_V4_PLAN.md` §8.
+      The sandbox cannot reach these hosts, so no extractor work starts
+      before the captures exist.
+
+---
+
 ## Done recently
 
+- [x] **Self-review pass (2026-09-14, fourth session).** Ran the mandatory
+      own-output review over everything this day produced. Three defects
+      found and fixed: (1) the `downloadHistory.ts` header design comment
+      still described bare-id keying — the composite-keying comment had been
+      lost to a same-file parallel-edit race during implementation, so the
+      module doc contradicted its own code; (2) `sameGallery()` in
+      `siteKeys.ts` was a dead export (zero production callers) — removed
+      with its tests, `splitGalleryKey()` kept as the documented structural
+      inverse with its item-48 consumer named in a comment; (3) three
+      documents said "nine direct `history[id]` lookups" — the real count is
+      **ten** (7 listControls + 3 popup). Also documented the latent gap that
+      worker messages (`bookmarkAdd/Enrich/Select/Remove`, failed-gallery
+      retry/dismiss) carry only bare ids — harmless while only nhentai rows
+      exist, folded into item 48's scope. Verified clean: every remaining
+      `history[id]` use is filename-based or key-space-internal; all
+      bookmarkService markers route through `patchBookmark`; bookmarkPanel
+      routes through the composing queue functions. Suite 390 → **389** (the
+      dead test went with its export); e2e and smoke all PASS; bundles
+      rebuilt and synced to the release folder.
+- [x] **cin.* viewer mirrors (2026-09-14).** The paste box already accepts
+      every mirror of the reference viewer site (cin.lat / cin.mom /
+      cin.monster / cin.wiki / cin.wtf / …) because the parser matches URL
+      *shapes*, never hosts — the site rotates TLDs. Verified live against
+      the built module, pinned by three new test cases (mirror `/v/`, mirror
+      `?id=` bulk, mixed paste), and documented in the parser comment, the
+      README and the v4 plan. No behaviour change; `npm test` 387 → **390**.
+- [x] **README overhaul (2026-09-14).** Root README rewritten to the
+      high-star-repo format: feature list, site support matrix (shipped /
+      planned), install, usage, FAQ, roadmap pointing at
+      `MULTISITE_V4_PLAN.md`.
+- [x] **3.8.0 (2026-09-14) — item 47, composite (site, id) keys.** New pure
+      module `src/utils/siteKeys.ts` (`toGalleryKey`, `composeGalleryKey`,
+      `splitGalleryKey`, `sameGallery`); download history, bookmark queue and
+      failed galleries key identity as `"<site>:<id>"` with legacy bare rows
+      reading as `nhentai:<id>` (transparent migration, no version bump of
+      stored shapes). Every comparison point composes through `toGalleryKey`
+      on both sides: `normalizeHistory`/`recordHistory`/`partitionKnown`, the
+      batch-pipeline skip guard, bookmark row identity (add/remove/select/
+      patch/reconcile/plan/find), failed-gallery dedupe, and the ten direct
+      `history[id]` lookups in listControls/popup. Bookmark rows and failure
+      rows carry a `site` field (default `nhentai`). `npm test` 366 → **387
+      passing**; all six e2e scripts PASS (the worker script's history polls
+      now read composite keys); bundles rebuilt and copied to the release
+      folder; both manifests 3.8.0.
 - [x] **3.7.0 (2026-09-08) — bookmark queue.** New tab, persistent
       `chrome.storage.local` list, per-card ☆ with cover capture, collapsible
       dock, paste-by-id (single or batch, bookmark or download-now),

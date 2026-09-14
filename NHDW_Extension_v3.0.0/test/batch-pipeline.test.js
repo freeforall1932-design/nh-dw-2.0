@@ -298,6 +298,52 @@ describe('runBatchDownload', () => {
         assert.strictEqual(host.messages.filter((m) => m.action === 'batchProgress').length, 1);
     });
 
+    it('skips galleries relayed as composite site keys (item 47)', async () => {
+        // historyIds() returns "site:id" keys since 3.8.0; the guard must
+        // compose its bare pipeline keys to the same space.
+        const host = makeHost({
+            fetchImpl: async () => { throw new Error('must not fetch skipped galleries'); }
+        });
+        const outcome = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { '1': 'One', '2': 'Two' },
+            finalName: 'SkipComposite',
+            downloadAtEnd: true,
+            galleryMetadata: { '2': gallery(2, 'Two') },
+            options: {
+                useZip: 'zip',
+                downloadSeparately: true,
+                alreadyDownloadedIds: ['nhentai:1']
+            },
+            host: host
+        });
+        assert.strictEqual(outcome.skipped, 1);
+        assert.strictEqual(host.downloads.length, 1);
+        assert.strictEqual(host.downloads[0].json.id, 2);
+    });
+
+    it('a composite redownload override defeats the composite skip', async () => {
+        const host = makeHost({
+            fetchImpl: async () => { throw new Error('must not fetch skipped galleries'); }
+        });
+        const outcome = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { '1': 'One', '2': 'Two' },
+            finalName: 'ForceComposite',
+            downloadAtEnd: true,
+            galleryMetadata: { '1': gallery(1, 'One'), '2': gallery(2, 'Two') },
+            options: {
+                useZip: 'zip',
+                downloadSeparately: true,
+                alreadyDownloadedIds: ['nhentai:1'],
+                redownloadIds: ['1']
+            },
+            host: host
+        });
+        assert.strictEqual(outcome.skipped, 0);
+        assert.strictEqual(host.downloads.length, 2);
+    });
+
     it('records the resolved format (not a silent zip default)', async () => {
         const host = makeHost();
         const outcome = await runBatchDownload({

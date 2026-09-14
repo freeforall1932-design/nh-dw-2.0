@@ -1,5 +1,65 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-14 (session `arena/01a09ee5-nh-dw-2-0`) — **3.8.0:
+composite (site, id) keys, item 47.** Read this block first. What changed
+structurally, so a fresh session does not re-derive it:
+
+- **`src/utils/siteKeys.ts` is the one identity contract.** Keys are
+  `"<site>:<id>"` with default site `nhentai`; `toGalleryKey()` passes
+  already-composite ids through, so it is safe to apply on both the stored
+  side and the candidate side of any comparison. **Do not compare a bare id
+  against history / bookmark / failure keys directly any more** — wrap it in
+  `toGalleryKey()` (the ten lookups in listControls/popup and the
+  batch-pipeline guard are the examples to copy).
+- **Legacy rows migrate transparently:** bare keys read back as
+  `nhentai:<id>` and persist composite on the next write. No stored-shape
+  version bumps; no migration pass exists or is needed.
+- **`partitionKnown` returns the ORIGINAL candidate strings** (bare ids in,
+  bare ids out) — the pipeline and job messages still speak bare gallery
+  ids. Only storage and identity went composite.
+- **Bookmark and failure rows carry `site`** (default `nhentai`), while
+  their `id` stays bare for metadata resolution.
+- Test counts: `npm test` 366 → **387 passing**; all six e2e scripts PASS
+  (`scripts/e2e-worker.js` polls history via `historyKeyFor()`;
+  `e2e-list-controls.js` fixtures still seed bare keys on purpose — that is
+  the legacy-migration path being exercised). Bundles rebuilt and copied to
+  the release folder; both manifests 3.8.0.
+- Multi-site v4 planning (items 47–52, site roster, cooldown analysis) lives
+  in `MULTISITE_V4_PLAN.md`; item 47 is the only one with code so far.
+- **Same-day follow-ups (third session):** the `cin.*` viewer-mirror family
+  (cin.mom / cin.monster / cin.wiki / cin.wtf / …) was verified to ALREADY
+  parse in the paste box — `parseGalleryInput` matches URL shapes, never
+  hosts — and is now pinned by tests (390 passing) and documented. Strategy C
+  (reading-vs-zip comparison) is CHOSEN for the mirror-network sites but
+  execution waits for the user's explicit go-ahead; both are USER-owned
+  pending tasks in `WORKLIST.md`, with the sample-capture checklist in
+  `MULTISITE_V4_PLAN.md` §8 (items 49/50 are blocked on those captures).
+  The root README was rewritten to the polished format (support matrix,
+  features, FAQ, roadmap) — every claim kept truthful to 3.8.0.
+- **Fourth-session review pass** then audited the whole day's output: fixed
+  the race-lost `downloadHistory.ts` header comment, removed the dead
+  `sameGallery` export (suite now **389**), corrected "nine"→"ten" lookup
+  counts in three docs, and documented the bare-id worker-message gap as
+  item 48 scope (`MULTISITE_V4_PLAN.md` §4.2). Details in the fourth-session
+  backlog log.
+- **Fifth exchange (same session):** the user asked whether colliding ids
+  were covered for multi-site. Stores and tests: yes (composite
+  `<site>:<id>` keys everywhere, distinct-id tests in three suites). The
+  audit then found the LAST bare-id surface — the job payload
+  (`allDoujinshis` bare keys; the pipeline's skip guard composes with the
+  default site, marked by a NOTE comment in `batchPipeline.ts`). Item 48
+  owns the fix: split a mixed-site queue selection into one job per site
+  (`MULTISITE_V4_PLAN.md` §4.2). A doc de-staleness sweep followed (user
+  request): release README — the panel has had three tabs since 3.7.0, not
+  two; the 3.5.0 download-memory / 3.6.0 failure-retry / 3.7.0
+  bookmark-queue feature bullets and the 389 test count were added — and
+  `BOOKMARK_QUEUE_PLAN.md`'s data-model sketch gained the 3.8.0 `site`
+  field. Untouched on purpose: root README and v4 plan (already current),
+  `FOLDER_NAMING_STUDY.md`, `ci/README.md`, the legacy upstream README in
+  the source package, and the Firefox tree's own docs.
+
+**Previous handoff (2026-09-08):**
+
 **Updated:** 2026-09-08 (session `arena/01a07d48-nh-dw-2-0`) — **3.7.0: the
 bookmark queue.** **Read this block first.** A third panel tab (**Queue**)
 holding a persistent list of the titles the user clicked the new per-card **☆**

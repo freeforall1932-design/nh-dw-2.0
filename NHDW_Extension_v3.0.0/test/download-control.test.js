@@ -265,8 +265,8 @@ describe('failed-gallery bookkeeping (pure)', () => {
             { id: '2' }
         ]);
         assert.strictEqual(out.length, 2);
-        assert.deepStrictEqual(out[0], { id: '1', name: 'One', error: 'x', retryJob: job, at: 10 });
-        assert.deepStrictEqual(out[1], { id: '2', name: '2', error: '', retryJob: null, at: 0 });
+        assert.deepStrictEqual(out[0], { id: '1', name: 'One', error: 'x', site: undefined, retryJob: job, at: 10 });
+        assert.deepStrictEqual(out[1], { id: '2', name: '2', error: '', site: undefined, retryJob: null, at: 0 });
         assert.deepStrictEqual(normalizePendingFailures('garbage'), []);
     });
 
