@@ -19,6 +19,7 @@
 // storage functions are for the worker and the popup only (the offscreen
 // document has no chrome.storage and reports failures by message instead).
 import { FailedGallery } from "./downloadHistory";
+import { toGalleryKey } from "./siteKeys";
 
 export const FAILED_GALLERIES_KEY = "nhdwFailedGalleries";
 
@@ -54,11 +55,22 @@ export function normalizePendingFailures(value: any): PendingFailure[] {
             id: id,
             name: entry.name === undefined || entry.name === null || entry.name === "" ? id : String(entry.name),
             error: entry.error === undefined || entry.error === null ? "" : String(entry.error),
+            // Optional source site (siteKeys.ts); rows from 3.7.x and
+            // earlier carry none and read as the default site.
+            site: typeof entry.site === "string" && entry.site !== "" ? entry.site : undefined,
             retryJob: entry.retryJob && typeof entry.retryJob === "object" ? entry.retryJob : null,
             at: typeof entry.at === "number" ? entry.at : 0
         });
     }
     return out;
+}
+
+// Composite identity of a failure row (siteKeys.ts). The stored id stays
+// bare — retry messages resolve metadata with it — while dedupe and removal
+// compare in composite space so ids from different sites can never shadow
+// each other.
+function failureKey(id: string | number, site?: string): string {
+    return toGalleryKey(id, site);
 }
 
 // Add a job's failures. An id that failed before is replaced (latest error
@@ -68,18 +80,19 @@ export function mergeFailures(existing: PendingFailure[], incoming: FailedGaller
         id: entry && entry.id,
         name: entry && entry.name,
         error: entry && entry.error,
+        site: entry && (entry as any).site,
         retryJob: retryJob,
         at: now
     })));
-    const freshIds = new Set(fresh.map((entry) => entry.id));
-    const kept = existing.filter((entry) => !freshIds.has(entry.id));
+    const freshIds = new Set(fresh.map((entry) => failureKey(entry.id, entry.site)));
+    const kept = existing.filter((entry) => !freshIds.has(failureKey(entry.id, entry.site)));
     const merged = kept.concat(fresh);
     return merged.length > cap ? merged.slice(merged.length - cap) : merged;
 }
 
 export function dropFailures(existing: PendingFailure[], ids: Array<string | number>): PendingFailure[] {
-    const gone = new Set(ids.map(String));
-    return existing.filter((entry) => !gone.has(entry.id));
+    const gone = new Set(ids.map((id) => toGalleryKey(id)));
+    return existing.filter((entry) => !gone.has(failureKey(entry.id, entry.site)));
 }
 
 // Stable key for "same job settings": entries with the same key are retried

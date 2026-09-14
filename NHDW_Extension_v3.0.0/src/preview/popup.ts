@@ -17,6 +17,7 @@ import {
 } from "../utils/downloadFormats"
 import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
 import { readHistory, partitionKnown, applyBatchDate, DownloadHistory, FailedGallery } from "../utils/downloadHistory"
+import { toGalleryKey } from "../utils/siteKeys"
 import { PendingFailure, groupRetryMessages } from "../utils/failedGalleries"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 
@@ -521,7 +522,7 @@ export default class Popup
                 let alreadyNote: string = "";
                 try {
                     const history: DownloadHistory = await readHistory();
-                    const rec = history[id];
+                    const rec = history[toGalleryKey(id)];
                     if (rec) {
                         alreadyNote = escapeHtml(rec.filename) + (rec.when ? " (" + new Date(rec.when).toLocaleDateString() + ")" : "");
                     }
@@ -706,7 +707,7 @@ export default class Popup
             }
             titleById[card.id] = tmpName;
             finalHtml += '<input id="' + card.id + '" type="checkbox"/>' + escapeHtml(tmpName) + '<br/>';
-            const rec = history[card.id];
+            const rec = history[toGalleryKey(card.id)];
             if (rec) {
                 finalHtml += '<small class="nhdwAlready" id="done_' + card.id + '">&#10003; Already downloaded: '
                     + escapeHtml(rec.filename)
@@ -774,7 +775,7 @@ export default class Popup
                 const box = document.getElementById(id) as HTMLInputElement | null;
                 return !!(box && box.checked);
             });
-            const alreadySelected = selectedIds.filter((id) => !!history[id]);
+            const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id)]);
             const skipped = alreadySelected.filter((id) => !forceIds.has(id));
             const summary = document.getElementById('downloadedSummary');
             const mode = effectiveOutputMode(settings.format, settings.outputMode);

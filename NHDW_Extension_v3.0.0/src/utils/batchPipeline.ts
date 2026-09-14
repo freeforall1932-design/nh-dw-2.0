@@ -15,6 +15,7 @@ import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import { coerceGallery, extractGalleryFromHtml, looksLikeGallery, requireGallery } from "../parsing/GalleryEmbed";
 import { fetchNhentaiApi } from "./apiAuth";
 import { artifactRecordFilename, BatchOutcome, FailedGallery } from "./downloadHistory";
+import { toGalleryKey } from "./siteKeys";
 import { resolveJobFormat } from "./downloadFormats";
 import { clearnetSource } from "../sources/GallerySource";
 import { utils, classifyError, errorMessage } from "./utils";
@@ -314,11 +315,16 @@ export async function runBatchDownload(args: {
     let failed = 0;
     let skipped = 0;
     const failedKinds: Record<string, number> = {};
+    // Composite keys (siteKeys.ts): the relayed recorded list carries
+    // "site:id" keys, while this pipeline's gallery keys are bare ids, so
+    // both sets normalize through toGalleryKey before any comparison. A bare
+    // entry ("366224") reads as the default site, exactly like the history
+    // that produced it.
     const alreadySet = new Set<string>(
-        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map(String) : []
+        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map((id: string) => toGalleryKey(id)) : []
     );
     const redownloadSet = new Set<string>(
-        Array.isArray(options.redownloadIds) ? options.redownloadIds.map(String) : []
+        Array.isArray(options.redownloadIds) ? options.redownloadIds.map((id: string) => toGalleryKey(id)) : []
     );
     const records: Array<{ id: string; filename: string }> = [];
     const batchKeys: string[] = [];
@@ -339,7 +345,12 @@ export async function runBatchDownload(args: {
 
     for (let i = 0; i < length; i++) {
         const key = allKeys[i];
-        if (effectiveSeparate && alreadySet.has(key) && !redownloadSet.has(key)) {
+        // NOTE (item 48): toGalleryKey(key) composes with the DEFAULT site —
+        // this pipeline assumes every gallery of a job is nhentai, because
+        // allDoujinshis is keyed by bare ids. Multi-site support must split
+        // jobs per site (MULTISITE_V4_PLAN.md §4.2) or key the payload by
+        // composite id; do not "fix" this by guessing a site here.
+        if (effectiveSeparate && alreadySet.has(toGalleryKey(key)) && !redownloadSet.has(toGalleryKey(key))) {
             skipped++;
             continue;
         }

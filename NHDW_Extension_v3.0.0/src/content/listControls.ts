@@ -34,6 +34,7 @@ import {
     PDF_MERGE_WARNING_KEY
 } from "../utils/downloadFormats";
 import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
+import { toGalleryKey } from "../utils/siteKeys";
 // Bookmark queue: the persistent "titles I clicked ☆ on" list. The content
 // script only READS the stored list directly (to render ☆ vs ★) — every WRITE
 // goes through the worker, which is the single writer, so a card bookmark
@@ -354,7 +355,9 @@ function buildCardControls(info: CardInfo): HTMLElement {
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.className = "nhdw-download";
-    const recorded = history[info.id];
+    // Composite history key (siteKeys.ts): the card's bare gallery id is
+    // namespaced with the default site before the lookup.
+    const recorded = history[toGalleryKey(info.id)];
     downloadButton.textContent = recorded ? "Downloaded" : "Download";
     downloadButton.title = recorded
         ? "Already downloaded as " + recorded.filename + ". Click to download it again."
@@ -366,9 +369,9 @@ function buildCardControls(info: CardInfo): HTMLElement {
         single[info.id] = info.title || info.id;
         // Per-download "download anyway": an already-downloaded card asks for
         // an explicit confirmation instead of silently re-downloading.
-        if (history[info.id]) {
+        if (history[toGalleryKey(info.id)]) {
             const again = window.confirm(
-                "Already downloaded as:\n" + history[info.id].filename +
+                "Already downloaded as:\n" + history[toGalleryKey(info.id)].filename +
                 "\n\nDownload it again?");
             if (!again) {
                 flashStatus("Already downloaded - cancel again to re-download");
@@ -382,7 +385,7 @@ function buildCardControls(info: CardInfo): HTMLElement {
         startDownload(single, "separate", forcedIds.has(info.id) ? [info.id] : []);
         setTimeout(() => {
             downloadButton.disabled = false;
-            downloadButton.textContent = history[info.id] ? "Downloaded" : "Download";
+            downloadButton.textContent = history[toGalleryKey(info.id)] ? "Downloaded" : "Download";
         }, 2500);
     });
     box.appendChild(downloadButton);
@@ -409,7 +412,7 @@ function injectCardControls(): void {
             }
             const existingButton = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-download") as HTMLButtonElement | null;
             if (existingButton) {
-                existingButton.textContent = history[info.id] ? "Downloaded" : "Download";
+                existingButton.textContent = history[toGalleryKey(info.id)] ? "Downloaded" : "Download";
             }
             const existingBookmark = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
             if (existingBookmark) {
@@ -537,7 +540,7 @@ function buildActionBar(): HTMLElement {
         // "Download anyway" ids: per-card confirmations plus the bulk toggle.
         const forced: string[] = [];
         selected.forEach((id) => {
-            if (forcedIds.has(id) || (includeAlready && history[id])) {
+            if (forcedIds.has(id) || (includeAlready && history[toGalleryKey(id)])) {
                 forced.push(id);
             }
         });
@@ -571,7 +574,7 @@ function renderActionBar(): void {
     }
     const count = document.getElementById("nhdw-count");
     const selectedIds = Array.from(selected);
-    const alreadySelected = selectedIds.filter((id) => !!history[id]);
+    const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id)]);
     const skipped = alreadySelected.filter((id) => !forcedIds.has(id) && !includeAlready);
     const mode = effectiveOutputMode(settings.format, settings.outputMode);
     if (count) {

@@ -353,12 +353,17 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     console.log("PASS phase 1: ZIP (" + buf.length + " bytes) delivered as " + download.filename +
         " with entries " + names.join(", ") + " (" + zipProgress + " progress messages)");
 
-    // ---- Phase 1b: successful download is recorded into the persistent history
+    // 3.8.0 (item 47): history records are keyed "<site>:<id>" in
+// chrome.storage.local; every poll below reads through this helper.
+const historyKeyFor = (id) => "nhentai:" + String(id);
+
+// ---- Phase 1b: successful download is recorded into the persistent history
+    const historyKey = historyKeyFor(GALLERY_ID);
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)],
-        "a successful download must be recorded in the downloaded-history list"
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKey],
+        "a successful download must be recorded in the downloaded-history list (composite key " + historyKey + ")"
     );
-    const historyRecord = localSettings.downloadHistory[String(GALLERY_ID)];
+    const historyRecord = localSettings.downloadHistory[historyKey];
     if (historyRecord.filename !== "Downloads/Test.zip") {
         fail("history record filename must be the artifact name, got " + JSON.stringify(historyRecord));
     }
@@ -482,8 +487,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         () => Array.isArray(sessionStore.nhdwFailedGalleries) && sessionStore.nhdwFailedGalleries.some((f) => String(f.id) === String(GALLERY_ID)),
         "the failed gallery must be remembered in chrome.storage.session"
     );
-    if (localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-        /FailTest/.test(localSettings.downloadHistory[String(GALLERY_ID)].filename)) {
+    if (localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+        /FailTest/.test(localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename)) {
         fail("a raw gallery whose pages failed must never be recorded as downloaded");
     }
     console.log("PASS phase 3: failing raw downloads were retried (" + downloads.length +
@@ -635,10 +640,10 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     await waitFor(() => sessionStore.downloadJob === undefined,
         "worker marker must clear after the mixed batch");
     await new Promise((r) => setTimeout(r, 150));
-    if (!localSettings.downloadHistory || localSettings.downloadHistory["1"] !== undefined) {
+    if (!localSettings.downloadHistory || localSettings.downloadHistory[historyKeyFor("1")] !== undefined) {
         fail("the failed merged batch must not record the missing gallery (id '1')");
     }
-    if (localSettings.downloadHistory[String(GALLERY_ID)] === undefined) {
+    if (localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] === undefined) {
         fail("gallery 123456 must still carry its phase-1 record");
     }
     console.log("PASS phase 5b: an unclean merged batch records NO ids (the merge can be re-run)");
@@ -668,14 +673,14 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     await waitFor(() => sessionStore.downloadJob === undefined,
         "worker marker must clear after the clean merged batch");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] && localSettings.downloadHistory[String(GALLERY_ID2)],
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] && localSettings.downloadHistory[historyKeyFor(GALLERY_ID2)],
         "a clean merged batch must record BOTH galleries"
     );
-    const mergedRecord = localSettings.downloadHistory[String(GALLERY_ID)];
+    const mergedRecord = localSettings.downloadHistory[historyKeyFor(GALLERY_ID)];
     if (mergedRecord.filename !== "Downloads/MergedClean.zip") {
         fail("merged records must carry the merged artifact name, got " + JSON.stringify(mergedRecord));
     }
-    if (localSettings.downloadHistory[String(GALLERY_ID2)].filename !== "Downloads/MergedClean.zip") {
+    if (localSettings.downloadHistory[historyKeyFor(GALLERY_ID2)].filename !== "Downloads/MergedClean.zip") {
         fail("both merged ids must point at the same artifact, got " + JSON.stringify(localSettings.downloadHistory));
     }
     console.log("PASS phase 5c: clean merged batch recorded both ids under " + mergedRecord.filename);
@@ -733,9 +738,9 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     );
     await waitFor(() => downloads.length === 1, "redownloadIds must deliver the gallery again");
     await waitFor(
-        () => sessionStore.downloadJob === undefined && localSettings.downloadHistory[String(GALLERY_ID)] &&
+        () => sessionStore.downloadJob === undefined && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
             // The gallery fixture's title is "Test", so the new artifact is Test.zip.
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === "Test.zip",
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === "Test.zip",
         "the re-downloaded gallery must be recorded again"
     );
     console.log("PASS phase 5e: redownloadIds overrides the history guard and re-records");
@@ -816,8 +821,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     await waitFor(() => sessionStore.downloadJob === undefined, "dated merge marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === datedName,
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === datedName,
         "the dated merge must record both ids under the dated name"
     );
     // Same batch again WITHOUT confirmation: warn-only answer, no job started.
@@ -842,8 +847,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         "confirmed re-run must save the part-2 name, got " + JSON.stringify(downloads.map((d) => d.filename)));
     await waitFor(() => sessionStore.downloadJob === undefined, "part-2 merge marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === part2Name,
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === part2Name,
         "confirmed re-run must re-record both ids under the part-2 name"
     );
     console.log("PASS phase 5g: merged date stamp + part-2 numbering + warn-first, recorded under the exact name");
@@ -878,8 +883,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         JSON.stringify(downloads.map((d) => d.filename)));
     await waitFor(() => sessionStore.downloadJob === undefined, "multi-page merge marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === pageRunName,
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === pageRunName,
         "the multi-page merge must record both ids under the dated artifact name"
     );
     const pageExistingAnswer = await new Promise((resolve) => {
@@ -900,8 +905,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         JSON.stringify(downloads.map((d) => d.filename)));
     await waitFor(() => sessionStore.downloadJob === undefined, "multi-page part-2 marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === pageRunPart2,
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === pageRunPart2,
         "the multi-page part-2 merge must re-record both ids under the part-2 artifact name"
     );
     console.log("PASS phase 5h: multi-page merged naming keeps _part2 on the base (artifact + record + warn)");
@@ -925,8 +930,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     await waitFor(() => sessionStore.downloadJob === undefined, "stored-cbz job marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === "Downloads/CbzStored.cbz",
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === "Downloads/CbzStored.cbz",
         "the record must use the SAME cbz name the file was saved under"
     );
     // A stored setting left over from before PDF replaced the folder mode.
@@ -940,8 +945,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     await waitFor(() => sessionStore.downloadJob === undefined, "legacy-folder job marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === "Downloads/LegacyFolder.pdf",
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === "Downloads/LegacyFolder.pdf",
         "the record must follow the legacy folder -> pdf mapping too"
     );
     console.log("PASS phase 5i: a job with no format override records the stored format (cbz + legacy folder->pdf)");
@@ -978,8 +983,8 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     await waitFor(() => sessionStore.downloadJob === undefined, "merged stored-format marker must clear");
     await waitFor(
-        () => localSettings.downloadHistory && localSettings.downloadHistory[String(GALLERY_ID)] &&
-            localSettings.downloadHistory[String(GALLERY_ID)].filename === mergedStoredName,
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === mergedStoredName,
         "the merged record must use the same cbz name as the artifact"
     );
     // Re-run WITHOUT confirmation: the warn-first check must now find the real
@@ -1222,7 +1227,7 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("the remaining gallery must still deliver a ZIP, got " + downloads.length);
     }
     await waitFor(() => sessionStore.downloadJob === undefined, "empty-json batch marker must clear");
-    if (localSettings.downloadHistory && localSettings.downloadHistory["9"]) {
+    if (localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor("9")]) {
         fail("the non-gallery title must not be recorded");
     }
     console.log("PASS phase 11: non-gallery JSON fails one gallery by name; the batch continues and records nothing for it");

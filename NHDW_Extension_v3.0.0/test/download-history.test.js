@@ -63,9 +63,11 @@ describe('download history (pure)', () => {
             "111111": null
         };
         const history = normalizeHistory(raw);
-        assert.deepStrictEqual(historyIds(history), ["123456", "654321", "999999"]);
-        assert.strictEqual(history["123456"].filename, "NHDW/Title.zip");
-        assert.ok(history["999999"].when === 0, 'non-numeric when must fall back to 0');
+        // 3.8.0 (item 47): bare legacy keys migrate to the composite
+        // "nhentai:<id>" form on read.
+        assert.deepStrictEqual(historyIds(history), ["nhentai:123456", "nhentai:654321", "nhentai:999999"]);
+        assert.strictEqual(history["nhentai:123456"].filename, "NHDW/Title.zip");
+        assert.ok(history["nhentai:999999"].when === 0, 'non-numeric when must fall back to 0');
         assert.ok(!Object.prototype.hasOwnProperty.call(history, "000000"));
         assert.ok(!Object.prototype.hasOwnProperty.call(history, "111111"));
     });
@@ -276,8 +278,8 @@ describe('download history (chrome.storage.local)', () => {
         ]);
         const history = await readHistory();
         assert.strictEqual(countHistory(history), 1);
-        assert.strictEqual(history["123456"].filename, "NHDW/Title.zip");
-        assert.ok(typeof history["123456"].when === "number" && history["123456"].when > 0);
+        assert.strictEqual(history["nhentai:123456"].filename, "NHDW/Title.zip");
+        assert.ok(typeof history["nhentai:123456"].when === "number" && history["nhentai:123456"].when > 0);
         assert.deepStrictEqual(Object.keys(store), [DOWNLOAD_HISTORY_KEY]);
     });
 
@@ -285,7 +287,7 @@ describe('download history (chrome.storage.local)', () => {
         await recordHistory([{ id: "1", filename: "A.zip" }]);
         await recordHistory([{ id: "2", filename: "B.zip" }]);
         const history = await readHistory();
-        assert.deepStrictEqual(historyIds(history).sort(), ["1", "2"]);
+        assert.deepStrictEqual(historyIds(history).sort(), ["nhentai:1", "nhentai:2"]);
     });
 
     it('#clearHistory removes the whole list', async () => {
@@ -298,6 +300,43 @@ describe('download history (chrome.storage.local)', () => {
     it('normalizes whatever a corrupt store contains', async () => {
         store[DOWNLOAD_HISTORY_KEY] = { "1": { filename: "A.zip", when: 3 }, "2": "junk" };
         const history = await readHistory();
-        assert.deepStrictEqual(historyIds(history), ["1"]);
+        assert.deepStrictEqual(historyIds(history), ["nhentai:1"]);
+    });
+});
+
+
+describe('composite site keys (item 47)', () => {
+    it('keeps same-numbered ids from different sites distinct', () => {
+        // The collision the composite keys exist to prevent: nhentai #1 and
+        // another site's #1 must never merge into one record.
+        const history = normalizeHistory({
+            "nhentai:1": { filename: "A.zip", when: 3 },
+            "hitomi:1": { filename: "B.zip", when: 4 }
+        });
+        assert.deepStrictEqual(historyIds(history).sort(), ["hitomi:1", "nhentai:1"]);
+        assert.strictEqual(history["nhentai:1"].filename, "A.zip");
+        assert.strictEqual(history["hitomi:1"].filename, "B.zip");
+    });
+
+    it('passes already-composite keys through unchanged (no double prefix)', () => {
+        const history = normalizeHistory({ "nhentai:1": { filename: "A.zip", when: 3 } });
+        assert.deepStrictEqual(historyIds(history), ["nhentai:1"]);
+    });
+
+    it('partitionKnown accepts composite history with bare candidates', () => {
+        const history = normalizeHistory({ "111": { filename: "A.zip", when: 3 } });
+        // Bare candidates (the 3.7.0 caller space) still match the migrated
+        // history, and the returned lists keep the original bare strings so
+        // the pipeline keeps receiving gallery ids.
+        assert.deepStrictEqual(partitionKnown(history, ["111", "222"]), { download: ["222"], skip: ["111"] });
+        // A bare redownload override forces the download.
+        assert.deepStrictEqual(partitionKnown(history, ["111"], ["111"]), { download: ["111"], skip: [] });
+        // A composite redownload override forces it too.
+        assert.deepStrictEqual(partitionKnown(history, ["111"], ["nhentai:111"]), { download: ["111"], skip: [] });
+        // A composite candidate matches the same record.
+        assert.deepStrictEqual(partitionKnown(history, ["nhentai:111"]), { download: [], skip: ["nhentai:111"] });
+        // Another site's record never skips a bare candidate.
+        const mixed = normalizeHistory({ "hitomi:111": { filename: "B.zip", when: 3 } });
+        assert.deepStrictEqual(partitionKnown(mixed, ["111"]), { download: ["111"], skip: [] });
     });
 });

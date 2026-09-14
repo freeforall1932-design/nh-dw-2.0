@@ -9,8 +9,12 @@
 // Design (settled with the user):
 //  * chrome.storage.local — never sync. 6-digit IDs make ~10,000 entries only
 //    ~60-70 KB, while sync is capped at ~100 KB / 512 items.
-//  * Keyed on the GALLERY ID, never the title: it survives template changes,
-//    title/language edits and uniquify renames.
+//  * Keyed on the composite "<site>:<gallery id>" (siteKeys.ts) since 3.8.0:
+//    bare numeric keys from 3.7.0 and earlier are read as "nhentai:<id>" and
+//    migrate transparently on the next write. Keying on the id (never the
+//    title) survives template changes, title/language edits and uniquify
+//    renames; namespacing by site keeps a second site's ids from colliding
+//    with nhentai's.
 //  * A record is written ONLY after a download fully succeeded, never on
 //    enqueue — a cancelled or failed job cannot poison the history.
 //  * Store { filename, when } (not a bare ID set) so the UI can show what it
@@ -31,6 +35,7 @@
 // chrome.storage there (only chrome.runtime is exposed).
 
 import { sanitizeArtifactFilename } from "./artifactName";
+import { toGalleryKey } from "./siteKeys";
 
 export const DOWNLOAD_HISTORY_KEY = "downloadHistory";
 
@@ -57,7 +62,9 @@ export function normalizeHistory(raw: any): DownloadHistory {
         const filename = typeof entry.filename === "string" ? entry.filename : "";
         const when = Number.isFinite(entry.when) ? Number(entry.when) : 0;
         if (filename !== "" || when > 0) {
-            history[String(id)] = { filename: filename, when: when };
+            // Composite key (siteKeys.ts): legacy bare ids become
+            // "nhentai:<id>", already-composite keys pass through.
+            history[toGalleryKey(id)] = { filename: filename, when: when };
         }
     }
     return history;
@@ -76,6 +83,10 @@ export function countHistory(history: DownloadHistory): number {
 // downloaded. The pipeline guards relay only the recorded id list (the
 // offscreen document has no chrome.storage), so they keep their equivalent
 // set-based check instead of calling this with a history object.
+// Candidates may be bare ids (3.7.0 callers) or composite keys; both sides
+// go through toGalleryKey so the comparison never depends on which space the
+// caller happens to be in. The returned lists keep the ORIGINAL candidate
+// strings, so callers keep feeding the pipeline bare gallery ids.
 export function partitionKnown(
     history: DownloadHistory,
     candidates: Array<string | number>,
@@ -83,13 +94,14 @@ export function partitionKnown(
 ): { download: string[]; skip: string[] } {
     const force = new Set<string>();
     for (const id of redownloadIds) {
-        force.add(String(id));
+        force.add(toGalleryKey(id));
     }
     const download: string[] = [];
     const skip: string[] = [];
     for (const id of candidates) {
         const key = String(id);
-        if (Object.prototype.hasOwnProperty.call(history, key) && !force.has(key)) {
+        const recorded = toGalleryKey(key);
+        if (Object.prototype.hasOwnProperty.call(history, recorded) && !force.has(recorded)) {
             skip.push(key);
         } else {
             download.push(key);
@@ -145,6 +157,8 @@ export interface FailedGallery {
     id: string;
     name: string;
     error: string;
+    /** Source site slug (siteKeys.ts); absent means the default site. */
+    site?: string;
 }
 
 // Turn a BatchOutcome into the history entries to write.
@@ -292,7 +306,9 @@ function writeHistoryEntries(entries: Array<{ id: string; filename: string }>): 
                     const history = normalizeHistory(existing && existing[DOWNLOAD_HISTORY_KEY]);
                     const now = Date.now();
                     for (const entry of entries) {
-                        history[entry.id] = { filename: entry.filename, when: now };
+                        // Composite key (siteKeys.ts): a bare pipeline id
+                        // lands under "nhentai:<id>", a composite id as-is.
+                        history[toGalleryKey(entry.id)] = { filename: entry.filename, when: now };
                     }
                     const patch: any = {};
                     patch[DOWNLOAD_HISTORY_KEY] = history;

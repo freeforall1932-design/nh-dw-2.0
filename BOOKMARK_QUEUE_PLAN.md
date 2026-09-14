@@ -147,7 +147,8 @@ history skip, failure naming, retry — instead of re-implementing it.
 
 ```ts
 interface BookmarkItem {
-    id: string;          // gallery id — the only identity that matters
+    id: string;          // gallery id in the site's own namespace (bare)
+    site: string;        // source site slug, "nhentai" until adapters exist (added 3.8.0)
     title: string;       // best title known at add time (may be "" for a pasted id)
     thumbnail: string;   // absolute cover-thumb URL, "" when unknown
     pages: number;       // 0 when unknown
@@ -163,6 +164,13 @@ interface BookmarkItem {
 
 Storage shape: `{ v: 1, items: BookmarkItem[], collapsed: boolean }` under
 `chrome.storage.local["bookmarkQueue"]`.
+
+*3.8.0 update:* rows also carry the `site` field shown above, and row identity
+(id equality, dedupe, patch/remove/select, history checks) compares through
+the composite `<site>:<id>` keys of `src/utils/siteKeys.ts` — multi-site
+groundwork, see `MULTISITE_V4_PLAN.md` §4.1. The stored shape version stays
+`v: 1`; rows persisted by 3.7.x read back as site `nhentai`, so no migration
+was needed.
 
 Why `storage.local` and not `storage.sync`: this is requirement 4. `sync` is capped at
 ~100 KB / 512 items and a queue of thumbnails and titles would blow that; `local` is what

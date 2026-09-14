@@ -1609,3 +1609,259 @@ run in this environment.
   star) ports directly; `bookmarkQueue.ts` is storage-agnostic.
 - Blocked behind worklist **37** (the Firefox panel harness) — without it there
   is no way to verify the port.
+
+## Session log — 2026-09-14: multi-site v4 planning (docs only)
+
+**No code changed.** This session settled the multi-site direction in
+conversation and recorded it. Full design, decision record and per-site
+facts: `MULTISITE_V4_PLAN.md` (new document, same role as
+`BOOKMARK_QUEUE_PLAN.md`).
+
+What was settled:
+
+- **One extension end-state.** `chrome.storage` is per-extension-ID, so a
+  second installed extension would split history and the bookmark queue —
+  the exact failure that ruled out the reference desktop app for the user.
+  The user's clone of this repo is an experiment lab only; this repo is the
+  merge target; the nhentai adapter stays as the regression control until a
+  second site downloads end-to-end.
+- **The desktop app is not portable into MV3** (Python/Qt; Native Messaging
+  would reintroduce a host program). Only extractor knowledge ports, and
+  only for the sites the user actually visits — no 1000-site goal.
+- **Site roster:** hitomi.la (first new site, validates the adapter
+  contract), the imhentai/hentaienvy/hentaiera mirror network (one adapter,
+  pending spike), hentaifox.com (pending spike).
+- **Cooldown position:** the mirror network's ~60 s server-side zip cooldown
+  is not bypassed and never will be. The plan is reader-page downloads
+  (Strategy A), a cooldown-aware scheduler as fallback (Strategy B), decided
+  by the user's byte-level reader-vs-zip comparison (Strategy C).
+
+External checks made this session (the sandbox cannot resolve any of the
+sites — DNS failure — so nothing site-specific was verified locally):
+
+- KurtBestor/Hitomi-Downloader's supported-sites list does **not** include
+  imhentai, hentaifox, hentaienvy or hentaiera (hitomi.la, nhentai and
+  AsmHentai are there):
+  https://gitfreak.com/KurtBestor/Hitomi-Downloader (README mirror).
+- jingth/Hitomi-Downloader (the user's first reference link) is a fork of
+  the project's issues repo carrying the same supported-sites table;
+  lanyeeee/hitomi-downloader is a single-site Tauri desktop app. None of
+  the three reference repos covers the four sites the user listed, so
+  custom adapters it is.
+- Traffic-analysis affinity for hentaiera/hentaienvy/imhentai
+  (similarweb.com) supports the one-operator mirror-network assumption.
+
+## New backlog items — 2026-09-14 (items 47–52, planning mode)
+
+Planning only — no code exists. Depth and rationale:
+`MULTISITE_V4_PLAN.md`.
+
+### 47. Composite (site, id) keys for every persistent store
+
+- **Status:** landed in 3.8.0 (2026-09-14).
+- `downloadHistory.ts`, `bookmarkQueue.ts` and `failedGalleries.ts` are all
+  keyed by the bare numeric gallery id, which collides across sites the
+  moment a second adapter exists. Keys become `"<site>:<id>"`; existing rows
+  migrate as `nhentai:<id>`. Worth doing even if the multi-site direction
+  is later abandoned.
+
+### 48. Site adapter layer v2 + multi-site side panel + site-aware paste box
+
+- **Status:** open (planning); depends on 47.
+- Evolve `GallerySource` into a `SiteAdapter` owning metadata normalization
+  (pattern exists: `GalleryEmbed.normalizeGalleryV2`), per-page image URL
+  lists, paste-box URL patterns (today nhentai-only: `nhentai.net/g/<id>`,
+  `cin.lat/v/<id>`, `cin.lat/bulk?id=…`, bare ids), a per-site content-script
+  DOM module, per-site settings (default format, pacing, zip-button usage)
+  and manifest hosts. The side-panel multi-site rework being prototyped in
+  the user's lab clone lands here if merged. Deliberately follows the
+  hitomi spike (49) so the contract is proven before the UI bakes it in.
+  Also owns the last id-collision surface: the job payload
+  (`allDoujinshis`, bare-id keys, default-site skip checks in
+  `batchPipeline.ts`) — solved by splitting the queue's selection into one
+  job per site (design and rationale: `MULTISITE_V4_PLAN.md` §4.2).
+
+### 49. Hitomi.la adapter — first new site, the architecture validator
+
+- **Status:** open (planning); depends on 47.
+- Adapter + metadata (per-gallery JS under ltn.hitomi.la, current form to
+  verify in-spike) + a runtime-fetched, TTL-cached subdomain config (never
+  hardcoded — it rotates) + content script. Includes avif plumbing
+  (type-code map, `cdnConfig` allowlist; `image/*` validation already
+  passes). Default format **raw** for 1 GB-class galleries — the site's own
+  in-tab client-side zip crashes on 2000+ page gif/webp/avif titles; ours
+  must not replicate that.
+- Success criterion: a 2000-page hitomi gallery downloads end-to-end, the
+  gallery tab can be closed mid-job, and a restart resumes cleanly.
+
+### 50. Mirror-network adapter + reading-vs-zip comparison + pacing
+
+- **Status:** open (planning); depends on 47 and 48.
+- Sites: imhentai.xxx, hentaienvy.com, hentaiera.com (one adapter,
+  host-parameterized, pending spike) and hentaifox.com (pending spike).
+- Order: build the reader-page download path first; then the user's
+  comparison task (reader pages vs the site's server-side zip button:
+  hashes, dimensions, sizes, formats per page); then keep the reader path
+  (no cooldown), switch to a cooldown-aware scheduler (per-site token
+  bucket, persisted last-request timestamp, visible countdown), or hybrid.
+- **Do not** attempt to bypass the ~60 s server-side cooldown.
+
+### 51. Streaming ZIP writer (OPFS / File System Access)
+
+- **Status:** open (planning).
+- ZIP/CBZ still assembles the archive in memory in the offscreen document;
+  a 1 GB archive means ~GBs of RAM. A streaming writer to an OPFS file (or
+  an FSA handle picked in the panel — extension pages share one origin, so
+  the handle reaches the offscreen document) keeps memory O(one page) and
+  hands the disk-backed blob to `chrome.downloads`. The fix for 1 GB-class
+  jobs; hitomi's default archive mode once it exists.
+
+### 52. History export / import (JSON)
+
+- **Status:** open (planning).
+- Cross-machine carry-over. `chrome.storage.sync` is too small (~100 KB
+  total cap vs ~60–70 KB per 10 000 history entries), so a file round-trip
+  is the honest answer. Import merges by composite key (47) and never
+  silently overwrites a differing filename.
+
+## Session log — 2026-09-14 (second session): item 47 landed as 3.8.0
+
+The planning session above was followed by the implementation of item 47 in
+the same day. What changed:
+
+- **New pure module `src/utils/siteKeys.ts`** — the composite-key contract:
+  `"<site>:<id>"`, default site `nhentai`, `toGalleryKey()` passes
+  already-composite ids through unchanged so the same helper is safe on both
+  sides of every comparison. Gallery ids must not contain `":"` (documented
+  in the module; every planned site uses numeric ids).
+- **Migration semantics:** legacy bare rows read back as `nhentai:<id>` via
+  `normalizeHistory` / the bookmark and failure normalizers, and persist in
+  composite form on the next write. No stored-shape version bumps.
+- **Every identity comparison composes:** `normalizeHistory`,
+  `recordHistory`/`writeHistoryEntries`, `partitionKnown` (returns the
+  ORIGINAL candidate strings so the pipeline keeps receiving bare ids), the
+  batch-pipeline skip guard (`alreadySet`/`redownloadSet` and the per-gallery
+  check), bookmark row identity in `bookmarkQueue.ts` (normalize dedupe,
+  add/remove/select/patch/reconcile/plan/find), failed-gallery
+  merge/drop dedupe, and the ten direct `history[id]` lookups in
+  `listControls.ts` / `popup.ts`.
+- **New `site` field** on `BookmarkItem`, `BookmarkCandidate` and
+  `FailedGallery`/`PendingFailure`, defaulting to `nhentai`.
+- **Tests:** new `test/site-keys.test.js` (registered in the explicit mocha
+  list), composite-contract cases in the history, bookmark-queue and
+  batch-pipeline suites. Six old assertions that pinned the bare-key shape
+  were updated to the composite contract (the semantics they pin are
+  unchanged). `npm test` 366 → **387 passing**.
+- **e2e:** `scripts/e2e-worker.js` history polls read the composite key via a
+  `historyKeyFor()` helper; the list-controls fixtures keep seeding bare keys
+  on purpose — they now double as the legacy-migration path test. All six
+  e2e scripts PASS.
+- **Release:** webpack bundles rebuilt and copied to `NHDW_Release_v3.0.0`;
+  both manifests at 3.8.0.
+
+## Session log — 2026-09-14 (third session): cin.* mirrors pinned, C chosen, README overhaul
+
+- **cin.* viewer mirrors:** the user named the reference viewer site's mirror
+  family (cin.lat, cin.mom, cin.monster, cin.wiki, cin.wtf, …) and expected
+  paste-box work. None was needed: `parseGalleryInput` matches URL shapes
+  (`/g/<id>`, `/v/<id>`, `?id=…`) and never checks hosts, so every mirror
+  already parses. Verified against the built module, pinned by three new
+  tests (mirror `/v/`, mirror `?id=` bulk, mixed paste with nhentai links and
+  ranges), and the parser comment + README now state the contract explicitly.
+  `npm test` 387 → **390 passing**.
+- **Strategy C chosen (item 50):** the reading-vs-zip comparison is the
+  picked approach for the mirror-network sites, with plain-language
+  descriptions of what A (read pages directly, no button, no cooldown) and B
+  (server zip via their button, paced one-per-minute with a visible
+  countdown) actually do, recorded in `MULTISITE_V4_PLAN.md` §3. Execution
+  **waits for the user's explicit confirmation** — recorded as a pending
+  USER-owned task in `WORKLIST.md`.
+- **Sample-capture checklist (§8 of the v4 plan):** the exact page sources,
+  reader HTML, image URLs, `gg.js` and one button-zip the user will capture
+  for hitomi.la and the four mirror-network sites. Items 49/50 are blocked on
+  these captures; the sandbox cannot resolve any of the hosts.
+- **README rewritten** to the polished format the user asked for: feature
+  list, site support matrix (nhentai shipped; hitomi + mirror network
+  planned), installation, usage, FAQ, roadmap. All claims kept truthful to
+  the 3.8.0 code — nothing announced that does not exist yet.
+
+## Session log — 2026-09-14 (fourth session): self-review pass over the day's output
+
+The mandatory own-output review, run over everything the previous three
+sessions produced. Findings and fixes:
+
+1. **Lost doc-in-code comment (race casualty).** The `downloadHistory.ts`
+   header still said "Keyed on the GALLERY ID" — the composite-keying
+   comment was one of the edits clobbered when same-file parallel edits raced
+   during implementation. The module documentation contradicted its own
+   code. Restored.
+2. **Dead export.** `sameGallery()` in `siteKeys.ts` had zero production
+   callers (its test was its only user) — removed together with its tests,
+   per the standing dead-export rule. `splitGalleryKey()` also has no
+   production caller yet but stays deliberately: it is the structural
+   inverse of the key format, its tolerant legacy parsing is pinned by
+   tests, and item 48's per-site UI is its named consumer (now said in a
+   comment so a future review does not delete it or build a second parser).
+3. **Wrong count in three documents.** "Nine direct `history[id]` lookups"
+   was written into the worklist, backlog log and session handoff; the real
+   count is **ten** (seven in `listControls.ts`, three in `popup.ts`).
+   Corrected everywhere.
+4. **Latent misalignment documented (not a bug today).** Worker messages
+   (`bookmarkAdd` / `bookmarkEnrich` / `bookmarkSelect` / `bookmarkRemove`,
+   failed-gallery retry & dismiss) carry only bare ids. The queue functions
+   compose both sides, so nothing breaks while only nhentai rows exist, but
+   a non-default-site row could not be selected, retried or dismissed until
+   the messages carry its site. Folded into item 48's scope in
+   `MULTISITE_V4_PLAN.md` §4.2.
+
+Verified clean during the same pass: every remaining `history[id]` use
+(`background.ts` merged-name occupancy, `pickFreeBatchFilename`,
+`verifyHistoryOnDisk`) is filename-based or key-space-internal; all three
+bookmarkService status markers route through `patchBookmark` (composing);
+bookmarkPanel's history/plan calls route through the composing queue
+functions; options.ts reads counts only; updateContent.ts touches no
+history; document tails intact (no truncation from the mid-session stops);
+the cin.* mirror comment rendered correctly.
+
+Test counts after the pass: `npm test` 390 → **389 passing** (the dead test
+was removed with its export); all six e2e suites and the smoke suite PASS;
+bundles rebuilt and synced to `NHDW_Release_v3.0.0`.
+
+## Session log — 2026-09-14 (fifth exchange): id-collision audit + doc de-staleness sweep
+
+- The user asked whether colliding ids across sites were actually solved.
+  Audit answer: yes for every persistent store — history, bookmark queue and
+  failed galleries key records as `"<site>:<id>"`, with the
+  "same-numbered ids from different sites stay distinct" contract pinned by
+  tests in three suites (`site-keys`, `download-history`, `bookmark-queue`).
+- The same audit found the one REMAINING bare-id surface: the job payload.
+  `allDoujinshis` is keyed by bare gallery ids and the pipeline's skip guard
+  composes every key with the default site, so two same-numbered galleries
+  from different sites in one batch would collapse into one entry, and a
+  non-nhentai gallery would be skip-checked against `nhentai:<id>` records.
+  A mixed-site batch becomes real the moment the bookmark queue holds two
+  sites' rows and the user presses "Download N selected". Chosen fix
+  (item 48): the queue splits its selection into one job per site;
+  documented in `MULTISITE_V4_PLAN.md` §4.2 with a NOTE comment at the exact
+  code line so nobody "fixes" it by guessing a site. Composite payload keys
+  noted as the more invasive alternative, not needed.
+- Doc de-staleness sweep (user request: every MD current after this session,
+  untouched where nothing changed):
+  - `NHDW_Release_v3.0.0/README.md` — the panel has had THREE tabs since
+    3.7.0, not two; added the missing 3.5.0 download-memory, 3.6.0
+    failure-naming/retry and 3.7.0 bookmark-queue feature bullets (in its
+    own voice, version-labelled), and corrected the test count (149 → 389).
+    Auto-capture is mentioned in the queue bullet only — it lives in the
+    panel Settings tab, not the full options page (verified in
+    `popupSettings.ts`).
+  - `BOOKMARK_QUEUE_PLAN.md` — the `BookmarkItem` sketch gained the 3.8.0
+    `site` field plus a note that identity compares through
+    `src/utils/siteKeys.ts`; stored shape stays `v: 1` with legacy rows
+    reading as site `nhentai`.
+  - Untouched deliberately: root `README.md` (rewritten this session),
+    `MULTISITE_V4_PLAN.md` (current through this exchange),
+    `FOLDER_NAMING_STUDY.md` (historical study), `ci/README.md` (workflow
+    rules unchanged), the legacy upstream README inside
+    `NHDW_Extension_v3.0.0/` (upstream heritage, untouched through 3.x),
+    and the Firefox tree's README/PORTING_AUDIT (they describe that tree's
+    own lagging state, which the other docs already record).

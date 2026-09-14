@@ -486,3 +486,102 @@ describe('bookmark storage contract (chrome.storage.local)', () => {
         assert.deepStrictEqual(state.items, []);
     });
 });
+
+
+describe('composite site keys on bookmark rows (item 47)', () => {
+    it('normalizes legacy rows to the default site and preserves explicit ones', () => {
+        const state = normalizeBookmarkState({
+            items: [
+                { id: '1', title: 'Legacy' },
+                { id: '2', title: 'Other site', site: 'hitomi' },
+                { id: '3', title: 'Garbage site', site: 'bad:slug' }
+            ]
+        });
+        assert.strictEqual(state.items.length, 3);
+        assert.strictEqual(state.items[0].site, 'nhentai');
+        assert.strictEqual(state.items[1].site, 'hitomi');
+        assert.strictEqual(state.items[2].site, 'nhentai');
+    });
+
+    it('same id on different sites coexist; same site is a duplicate', () => {
+        const base = emptyBookmarkState();
+        const first = addBookmarks(base, [{ id: '1', title: 'Nhentai one' }]);
+        const second = addBookmarks(first.state, [{ id: '1', title: 'Hitomi one', site: 'hitomi' }]);
+        assert.deepStrictEqual(second.added, ['1']);
+        assert.deepStrictEqual(second.duplicates, []);
+        const third = addBookmarks(second.state, [{ id: '1', title: 'Nhentai one again' }]);
+        assert.deepStrictEqual(third.added, []);
+        assert.deepStrictEqual(third.duplicates, ['1']);
+        assert.strictEqual(countBookmarks(third.state), 2);
+    });
+
+    it('removes by bare id only the default-site row', () => {
+        let state = addBookmarks(emptyBookmarkState(), [
+            { id: '1', title: 'Nhentai one' },
+            { id: '1', title: 'Hitomi one', site: 'hitomi' }
+        ]).state;
+        state = removeBookmarks(state, ['1']);
+        assert.strictEqual(countBookmarks(state), 1);
+        assert.strictEqual(state.items[0].site, 'hitomi');
+    });
+
+    it('findBookmark matches across bare and composite references', () => {
+        const state = addBookmarks(emptyBookmarkState(), [
+            { id: '1', title: 'Nhentai one' },
+            { id: '1', title: 'Hitomi one', site: 'hitomi' }
+        ]).state;
+        assert.strictEqual(findBookmark(state, '1').site, 'nhentai');
+        assert.strictEqual(findBookmark(state, 'nhentai:1').site, 'nhentai');
+        assert.strictEqual(findBookmark(state, 'hitomi:1').site, 'hitomi');
+        assert.strictEqual(findBookmark(state, '999'), null);
+    });
+
+    it('planBookmarkDownload skips only the row the composite history records', () => {
+        const state = addBookmarks(emptyBookmarkState(), [
+            { id: '1', title: 'One' },
+            { id: '1', title: 'Hitomi one', site: 'hitomi' }
+        ]).state;
+        // historyIds() now returns composite keys (downloadHistory.normalizeHistory).
+        const plan = planBookmarkDownload(state, ['nhentai:1']);
+        assert.deepStrictEqual(plan.download, ['1']); // the hitomi row (bare id)
+        assert.deepStrictEqual(plan.skip, ['1']);     // ...both rows share the bare id; skip lists the nhentai one
+    });
+
+    it('reconcileBookmarksAfterRestart checks done rows against composite history ids', () => {
+        let state = addBookmarks(emptyBookmarkState(), [{ id: '1', title: 'One' }]).state;
+        state = patchBookmark(state, '1', { status: 'done', filename: 'One.zip' });
+        // The record still exists -> row stays done.
+        assert.strictEqual(reconcileBookmarksAfterRestart(state, ['nhentai:1']).items[0].status, 'done');
+        // The record was cleared -> row drops back to saved.
+        assert.strictEqual(reconcileBookmarksAfterRestart(state, []).items[0].status, 'saved');
+    });
+});
+
+
+describe('paste box: viewer mirror family (any cin.* TLD)', () => {
+    // The viewer site rotates its domain (cin.lat, cin.mom, cin.monster,
+    // cin.wiki, cin.wtf and more). The parser matches URL shapes, never
+    // hosts, so every mirror keeps working without a code change. These
+    // cases pin that contract so a future host check cannot break them.
+    it('accepts /v/<id> gallery links from every known mirror', () => {
+        for (const host of ['cin.lat', 'cin.mom', 'cin.monster', 'cin.wiki', 'cin.wtf']) {
+            const parsed = parseGalleryInput('https://' + host + '/v/366224');
+            assert.deepStrictEqual(parsed, { ids: ['366224'], rejected: [], truncated: false }, host);
+        }
+    });
+
+    it('accepts bulk ?id= lists from every known mirror', () => {
+        for (const host of ['cin.lat', 'cin.mom', 'cin.monster', 'cin.wiki', 'cin.wtf']) {
+            const parsed = parseGalleryInput('https://' + host + '/bulk?id=366224,177013');
+            assert.deepStrictEqual(parsed.ids, ['366224', '177013'], host);
+        }
+    });
+
+    it('mixes mirrors with nhentai links, bare ids and ranges in one paste', () => {
+        const parsed = parseGalleryInput(
+            'https://cin.mom/v/366224 https://nhentai.net/g/177013/ 366220-366222'
+        );
+        assert.deepStrictEqual(parsed.ids, ['366224', '177013', '366220', '366221', '366222']);
+        assert.deepStrictEqual(parsed.rejected, []);
+    });
+});
