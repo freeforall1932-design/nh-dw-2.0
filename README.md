@@ -23,9 +23,9 @@
 | :--- | :---: | :--- |
 | **nhentai.net** | ✅ Shipped | Full support: single titles, listings, search / tag / artist pages, queue, history. |
 | `cin.*` viewer links | ✅ Shipped | The paste box accepts every mirror of the viewer site (`cin.lat`, `cin.mom`, `cin.monster`, `cin.wiki`, `cin.wtf`, …) — URL shapes are matched, never hosts, because the site rotates TLDs. |
-| **hitomi.la** | 🚧 Planned (v4) | First new site. Blocked on captured page sources — see the roadmap. |
-| **imhentai.xxx / hentaienvy.com / hentaiera.com** | 🚧 Planned (v4) | One adapter for the mirror network; server-side zip button + ~1 min cooldown being designed around. |
-| **hentaifox.com** | 🚧 Planned (v4) | Pending spike. |
+| **hitomi.la** | 🚧 Planned (v4) | Client-rendered; needs rendered-DOM + `gg.js` capture (`ADAPTER_WIRING_PLAN.md` §7). CDN moved to `ltn.gold-usergeneratedcontent.net`. |
+| **imhentai.xxx / hentaienvy.com / hentaiera.com** | 🚧 Planned (v4) | Captures resolved (3 HARs); per-site adapters — two backends, four frontends, not one shared adapter. Wiring pending (`ADAPTER_WIRING_PLAN.md`). |
+| **hentaifox.com** | 🚧 Planned (v4) | Needs 1–2 HARs (`ADAPTER_WIRING_PLAN.md` §7). |
 
 The multi-site plan — decision record, cooldown analysis, per-site facts — lives in [`MULTISITE_V4_PLAN.md`](MULTISITE_V4_PLAN.md).
 
@@ -108,7 +108,7 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 One extension, several sites, one shared history. The full plan (merge-vs-fork decision record, cooldown strategies A/B/C, streaming ZIP writer, sample-capture checklist) lives in [`MULTISITE_V4_PLAN.md`](MULTISITE_V4_PLAN.md):
 
 - [x] **Composite `(site, id)` keys** — landed in 3.8.0; every store is collision-proof for a second site.
-- [ ] **hitomi.la adapter** — blocked on captured page sources (the sandbox can't reach the site).
+- [ ] **hitomi.la adapter** — blocked on rendered-DOM / `gg.js` captures; sandbox egress (not DNS) is blocked (`ADAPTER_WIRING_PLAN.md` §7).
 - [ ] **Multi-site side panel + site-aware paste box.**
 - [ ] **Mirror-network sites** — reading-vs-zip comparison first (Strategy C, awaiting the owner's go).
 - [ ] **Streaming ZIP writer** (OPFS / File System Access) — constant-memory archives for 1 GB-class galleries.
@@ -125,7 +125,7 @@ NHDW_Firefox_v1.0.0/     The (lagging) Firefox port
 ```bash
 cd NHDW_Extension_v3.0.0
 npm install
-npm test          # 389 unit tests (builds first)
+npm test          # 398 unit tests (builds first)
 npm run test:e2e  # six offline e2e suites against the built bundles
 npm run build     # webpack -> js/  (then copy into the release folder)
 ```

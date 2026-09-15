@@ -71,3 +71,16 @@ webpack-stats.json
 ehthumbs.db
 Thumbs.db
 ```
+# Local site captures (ignored by default)
+#
+# These hold raw page source from third-party sites and, for HAR exports, the
+# request headers of the capturing browser. They are analysis inputs, not
+# source, so they stay out of git unless deliberately committed.
+#
+# The owner has said they are fine with captures being public; if a capture is
+# worth keeping in history, `git add -f` it (or delete these lines) rather than
+# relying on the default. `captures/` is the agreed drop folder; *.har is
+# blocked anywhere in the tree so one cannot be committed by accident.
+captures/
+*.har
+*.har.json

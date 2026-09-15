@@ -165,7 +165,7 @@ cp -a js/. ../NHDW_Release_v3.0.0/js/
 ### Running tests
 
 ```bash
-npm test                          # 389 unit tests (offline)
+npm test                          # 398 unit tests (offline)
 npm run test:smoke                # smoke checks for background + offscreen
 npm run test:e2e                  # window-less end-to-end pipeline tests
 npm run test:live                 # optional live nhentai API test (anonymous)

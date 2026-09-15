@@ -175,6 +175,115 @@ adapter contract before the panel rework bakes it in). Rename/rebrand the
 repo after 49 proves out; keep the nhentai adapter as the regression control
 throughout.
 
+### 53. hentaiera adapter — first non-nhentai site, end to end (2026-09-15)
+
+**Scope narrowed by the user's call: one site, working like nhentai.** No
+cross-mirror fallback, no multi-site panel, no hitomi. Those stay in items
+48–50 and are explicitly not being pulled forward.
+
+Registered after `SITE_CAPTURE_AUDIT.md` audited the first captures. Three
+findings that changed the plan:
+
+1. **imhentai and hentaienvy share a content store but not gallery ids** —
+   19/19 shared `/033/<token>/` paths, 0/19 matching ids. Fallback between them
+   is a host swap on the token, never an id lookup. (Deferred, but recorded so
+   it is not re-derived.)
+2. **Two storage backends, four frontends** — not "one mirror network" as
+   `MULTISITE_V4_PLAN.md` §2.2 assumed. hentaiera serves images from
+   `hentaiera.site` (different TLD from the page host) with numeric media ids
+   and webp; imhentai/hentaienvy use `/033/<token>/`.
+3. **hitomi's CDN moved** to `ltn.gold-usergeneratedcontent.net`; §2.1 still
+   says `ltn.hitomi.la`.
+
+Why hentaiera goes first (measured, in `NEXT_CAPTURE.md`): its image path
+`/galleries/<id>/<n>.<ext>` already passes the existing `cdnConfig`
+`ALLOWED_IMAGE_PATH` regex **unmodified**; the other three need a new one.
+
+**RESOLVED 2026-09-15 (second capture round) — adapter unblocked, no HAR
+needed.** The gallery page (`origin/main:view-source era to gallery 694133
+.txt`, fetched via git, never switched branch) plus the user's DevTools
+screenshot together pin the whole contract:
+
+- Gallery URL `https://hentaiera.to/gallery/<id>/`; reader page N is
+  `/gallery/<id>/N/` (document navigations, not an SPA — `1/`, `3/` are type
+  `document` in the screenshot).
+- `media_id` and `num_pages` come clean from the `application/ld+json`
+  `ImageGallery` block: `image` = `galleries/4182258/cover.webp`,
+  `numberOfItems` = 396. Matches the listing extraction exactly.
+- Full-page image for N is read **off the reader page N's HTML** (screenshot:
+  `3.webp` initiated by `3/:234`). The gallery page only ships the first 12
+  thumbnails (`<N>t.webp`) — no full-page list — so the adapter must fetch each
+  reader page and take the one `galleries/<media>/N.<ext>` URL it declares.
+  That also removes any extension guesswork (thumbs all `.webp`; page 3
+  confirmed `webp`, 306 kB, type `webp`).
+
+So the earlier "blocked on 1 HAR" line is withdrawn for hentaiera: build it now.
+Fetch image/reader pages through the open tab (`tabImageFetch` pattern) so the
+browser sends its own Referer/cookies; a standalone Referer requirement (still
+unmeasured) then never bites. The HAR remains useful for the *other* sites.
+
+**LANDED this session (adapter core, pure + tested):**
+`src/sources/hentaieraSource.ts` (GallerySource impl: host consts, URL/id
+matchers, `getImageUrls` → `hentaiera.site/galleries/<media>/<file>`) and
+`src/parsing/hentaieraHtml.ts` (`extractHentaieraGallery` from the ld+json
+ImageGallery block + per-gallery extension read off the thumbnail strip;
+`extractHentaieraReaderImage` from `<img id="reader_img">`). Tests:
+`test/hentaiera.test.js` (9 new; 389→**398** passing); fixtures mirror the real
+captures incl. a `.jpg` gallery to pin "extension is read, not assumed".
+`tsc` build + smoke green. **Registration into `sources/index.ts` is
+deliberately deferred to item 48**: wiring it now would let `popup.ts` resolve a
+hentaiera id and feed it to the nhentai API (id collision → wrong-site
+metadata). The registry stays nhentai-only until the site-aware parsing
+selection lands with it.
+
+**Captures complete for three sites (2026-09-15):** `era to.zip` (hentaiera),
+`imhen xxx.zip` (imhentai), `envy com.zip` (hentaienvy) are each sufficient for
+their site. Envy is the richest — `#readerPagesJson` is a full per-page
+`{page,ext,w,h}` map, `data-reader-image-base` exposes the token, reader is
+`/g/<id>/n/`. The full per-site contract table, fox + hitomi capture lists, and
+next step live in `ADAPTER_WIRING_PLAN.md` §1/§7/§8. **hentaifox and hitomi
+remain uncaptured** (fox = 1–2 HARs — no age modal fires for `ID`; hitomi =
+HAR + rendered DOM + gallery JS + `gg.js`).
+
+**HAR settled the last unknowns (2026-09-15, `era to.zip` on origin/main):**
+full pages are `image/webp` and the reader page self-declares each one
+(`<img id="reader_img" src="…/<N>.webp">`); a `Referer` (origin
+`https://hentaiera.to/`) is always sent, so image fetches go through the open
+tab (`tabImageFetch` pattern) rather than a bare worker fetch; the capture was
+logged-out (zero cookies in the HAR).
+
+**Referer is a live risk the HAR exists to settle.** No code path in the
+extension sets one — the only custom header is `User-Agent` from
+`descriptiveUserAgentHeaders()` (`apiAuth.ts:56`), plus `Authorization` for the
+optional nhentai key. Image fetches are bare
+`fetch(url, { credentials: "include", cache: "no-store" })`
+(`Downloader.ts:692`, `tabImageFetch.ts:45`). If the CDN hotlink-gates on
+Referer, the adapter needs a header it currently has no way to send.
+
+**Not blocked, can land offline now:** the listing parser (verified 25/25
+cards from the committed capture — gallery id, `media_id`, page count, title),
+paste-box shapes (`/gallery/<numeric>/`, zero exceptions across all four
+sites), per-adapter `cdnConfig` allowlists, site slugs, and the two
+`host_permissions` entries (`hentaiera.to` + `hentaiera.site`).
+
+Correction carried forward: `MULTISITE_V4_PLAN.md` §2's "sandbox cannot resolve
+these hosts (DNS failure)" is wrong — DNS resolves; **egress** is blocked
+(`SSL_connect: SSL_ERROR_SYSCALL`, same for `example.com`).
+
+### Remaining from the 2026-09-15 session (carry into the next)
+
+1. **Implement the wiring** — `ADAPTER_WIRING_PLAN.md` §5, in order: registry
+   (`getAdapterForUrl`/`getParsingForUrl`) → imhentai adapter → flip the six
+   seams with the nhentai-API collision guard → `cdnConfig` per-adapter
+   allowlists → paste box + `host_permissions` → `test:e2e` → real-browser
+   check (the one verification this environment can't run).
+2. **Register `hentaieraSource`** only as part of step 1 (see the deferred
+   note under item 53).
+3. **Capture hentaifox** (1–2 HARs; no age modal fires for `ID`) and **hitomi**
+   (HAR + rendered DOM + gallery JS + `gg.js`) — lists in
+   `ADAPTER_WIRING_PLAN.md` §7; then add their adapters the same way.
+4. **Merge PR #42** (this session's groundwork).
+
 ### Pending on the USER (nothing here is scheduled until they act)
 
 - [ ] **⏳ Strategy C go-ahead (item 50).** Chosen and recorded, but the
@@ -183,10 +292,11 @@ throughout.
       path, run the comparison, decide A vs B. Plain-language A/B/C
       descriptions live in `MULTISITE_V4_PLAN.md` §3 so nothing is forgotten.
 - [ ] **⏳ Sample capture for the new sites (unblocks items 49 and 50).**
-      The user grabs page sources, reader HTML, image URLs, `gg.js`, and one
-      button-downloaded zip, per the checklist in `MULTISITE_V4_PLAN.md` §8.
-      The sandbox cannot reach these hosts, so no extractor work starts
-      before the captures exist.
+      Superseded 2026-09-15: the current per-site list is `CAPTURE_GUIDE.md`,
+      not `MULTISITE_V4_PLAN.md` §8. First round of captures landed as
+      `5 website page source` + `3 live testing note`; audited in
+      `SITE_CAPTURE_AUDIT.md`. Egress is still blocked here, so captures stay
+      user-owned.
 
 ---
 

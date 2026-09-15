@@ -54,15 +54,16 @@ This document records four things so no future session has to re-derive them:
 Fact labels: **[repo]** = verified in this codebase; **[user]** = reported by
 the user from real usage; **[external]** = checked from public sources on
 2026-09-14 (links in the backlog session log); **[spike]** = must be verified
-in the implementation spike before relying on it. The sandbox cannot resolve
-any of these hosts (DNS failure), so nothing site-specific was verified
-locally.
+in the implementation spike before relying on it. The sandbox has **no egress**
+to these hosts (DNS resolves, but the TLS connect dies — the same for
+`example.com`), so nothing site-specific was fetched locally; captures come
+from the user. (An earlier draft mislabelled this a DNS failure.)
 
 | Site(s) | Status | Notes |
 |---|---|---|
 | nhentai.net | Shipped (3.7.0) | Reference adapter. Keep. |
 | hitomi.la | First new site (item 49) — scaffolded, **blocked on user-captured samples** (see section 8) | See 2.1. |
-| imhentai.xxx, hentaienvy.com, hentaiera.com | Planned (item 50) — Strategy C chosen, awaiting the user's go | One adapter, host-parameterized. See 2.2. |
+| imhentai.xxx, hentaienvy.com, hentaiera.com | Planned (item 50) — Strategy C chosen, awaiting the user's go | Per-site adapters: imhentai+envy share a store, hentaiera separate. See 2.2 (corrected). |
 | hentaifox.com | Planned, pending spike (item 50) — samples pending | Separate platform unless the spike shows shared structure. See 2.3. |
 
 The **cin.* family** (cin.lat, cin.mom, cin.monster, cin.wiki, cin.wtf, …)
@@ -81,7 +82,8 @@ and every site the user does not actually visit.
   can reach 1 GB+ and crash the tab **[user]**. This is precisely the failure
   mode the offscreen pipeline + `chrome.downloads` exists to avoid.
 - Metadata: the known shape from public extractors is a per-gallery JS file
-  under `ltn.hitomi.la/galleries/<id>.js`; image addressing has historically
+  under `ltn.gold-usergeneratedcontent.net/galleries/<id>.js` (the captured shell
+references that host, **not** `ltn.hitomi.la`); image addressing has historically
   required a small runtime config (`gg.js`) that maps image numbers to CDN
   subdomain prefixes and rotates over time. **Verify the current form in the
   spike** — never hardcode subdomains; fetch the config at runtime and cache
@@ -98,6 +100,12 @@ and every site the user does not actually visit.
   frontend, shared galleries **[user]**; traffic-analysis affinity
   **[external]**. Working assumption: **one adapter, parameterized by
   host**. Confirm in the spike; if they diverge, split then — not before.
+- **Corrected 2026-09-15 (captures):** the "identical frontend / one adapter"
+  assumption is false. imhentai+envy share one content store (`/033/<token>/`,
+  0/19 matching gallery ids) but have different frontends (`thumbnail`/
+  `gallery_title` vs BEM `hnv-*`, reader `#gimg` vs `#readerImg`, `/view/` vs
+  `/g/`); hentaiera is a separate backend (`hentaiera.site`, numeric media
+  ids, webp). Plan per-site adapters — `ADAPTER_WIRING_PLAN.md` §1.
 - They expose a **server-side ZIP download button** (their bandwidth and
   CPU, not the user's RAM) with a **strict ~1 minute cooldown** between uses
   **[user]**.
@@ -271,7 +279,7 @@ defaults, and the site-aware paste box.
 - Does hentaifox share the cooldown mechanism?
 - Reader vs zip quality on the mirror network (Strategy C).
 - Does hitomi serve avif natively, and what is the current subdomain-config
-  form? (Verify in the spike; the sandbox cannot resolve hitomi hosts.)
+  form? (Verify in the spike; sandbox egress to hitomi hosts is blocked.)
 
 ## Do-not rules (planning level)
 
@@ -289,7 +297,8 @@ defaults, and the site-aware paste box.
 
 ## 8. Sample-capture checklist (unblocks items 49 and 50) — PENDING, user-owned
 
-The sandbox cannot resolve any of these hosts, so the extractors must be
+The sandbox has no egress to these hosts (DNS resolves, TLS blocked), so the
+extractors must be
 written against real captures. The user grabs these; nothing below is
 scheduled until they arrive. Save each item as a plain text / .html file and
 drop them into a folder for a future session.
