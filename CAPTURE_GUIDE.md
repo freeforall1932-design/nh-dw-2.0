@@ -205,7 +205,9 @@ The remaining four sites still want captures (§2–§5 below).
 *Known:* CDN `m11.imhentai.xxx`, path `/033/<token>/`, jpg thumbs, token in the
 listing (**20/20** cards). Gallery `1738518` = token `w62za5o4v3`.
 
-*Need:* one HAR from `https://imhentai.xxx/gallery/1738518/` → reader → pages 1–3.
+**RESOLVED (2026-09-15, `imhen xxx.zip`):** reader `/view/<id>/<n>/`, full image
+`<img id="gimg" src="…/033/<token>/<n>.webp">`, thumbs `.jpg` but pages
+`.webp`, **no Referer** sent. Facts in `ADAPTER_WIRING_PLAN.md` §1.
 
 *Gotcha:* behind Cloudflare — carries `window.__CF$cv$params` and loads
 Turnstile. Capture after the challenge clears.
@@ -217,9 +219,11 @@ the listing (**24/24** cards). Gallery `1606086` = token `w62za5o4v3` — the
 **same token** as imhentai 1738518, different gallery id. Different frontend
 (`hnv-gallery-card__*` BEM, Tailwind).
 
-*Need:* one HAR from `https://hentaienvy.com/gallery/1606086/` → reader → pages
-1–3. Same title as the imhentai capture on purpose: one pair of HARs proves
-whether the two mirrors' page images are interchangeable.
+**RESOLVED (2026-09-15, `envy com.zip`):** reader `/g/<id>/<n>/`, full image
+`<img id="readerImg" src="…/033/<token>/<n>.webp">`, plus `#readerPagesJson`
+(a complete per-page `{page,ext,w,h}` map) and `data-reader-image-base`
+(token). **Referer sent.** Confirms the shared store with imhentai (same
+token, different id). Facts in `ADAPTER_WIRING_PLAN.md` §1.
 
 *Two gotchas:*
 - The reader is script-gated. Your note says you had to block all scripts to
@@ -243,10 +247,11 @@ cards). Gallery `173098` = `media_id` 4190711 = "The Girllove Diary".
   `i3.hentaifox.com/004/…` (3 thumbs, older ids like 4164177) and
   `i3.hentaifox.com/005/…` (39 thumbs). Must be **read, never assumed** — hence
   the second HAR.
-- **An age modal gates you.** The page sets `window.__GEO__ = "ID"` against
-  `allowedGeos = ['US','FR','IT','GB']` — Indonesia isn't listed, so
-  `window.__SHOW_AGE_MODAL__` fires. Dismiss it before capturing. Also loads
-  Turnstile, and ships `jszip` + `FileSaver` (client-side zip).
+- **The age modal does NOT fire for you.** It shows only when
+  `allowedGeos.includes(window.__GEO__)`, and `__GEO__ = "ID"` is not in
+  `['US','FR','IT','GB']` (an earlier draft had this inverted) — nothing to
+  dismiss. It also loads Turnstile and ships `jszip` + `FileSaver`
+  (client-side zip).
 
 ### 5. hitomi.la — last, and HAR alone is NOT enough here
 
@@ -279,16 +284,17 @@ randomizes URL parameters, plus `glimmersmugglingsullen.com/on.js` and
 
 | # | Site | Files | Why here |
 |---:|---|---:|---|
-| 1 | hentaiera | 1 HAR | Already 25/25 parsed; image path passes the existing regex |
-| 2 | imhentai | 1 HAR | Unlocks hentaienvy almost for free |
-| 3 | hentaienvy | 1 HAR | Same store as imhentai; watch for the image-loader XHR |
+| 1 | hentaiera | done | Adapter core landed + tested; resolved by `era to.zip` |
+| 2 | imhentai | done | Resolved by `imhen xxx.zip` |
+| 3 | hentaienvy | done | Resolved by `envy com.zip` (`#readerPagesJson`) |
 | 4 | hentaifox | 2 HAR | Second one for the `/004/` prefix |
 | 5 | hitomi | 1 HAR + 3 files | Client-rendered; HAR can't capture the rendered DOM |
 
 Per your call, no cross-mirror fallback work — one site at a time.
 
-**Start with hentaiera only.** One HAR, and I can tell you whether the adapter
-is a day's work or a week's.
+**Hentaiera, imhentai and hentaienvy are done.** Next captures: hentaifox
+(1–2 HARs) and hitomi (HAR + 3 files). Next code: the wiring in
+`ADAPTER_WIRING_PLAN.md` §5.
 
 ## Part D — how to hand it over
 

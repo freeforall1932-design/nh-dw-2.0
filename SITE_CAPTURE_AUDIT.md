@@ -19,6 +19,16 @@ clean; this document is the only change.
 
 ---
 
+## 0. Status update (later on 2026-09-15)
+
+Subsequent captures (the `694133` gallery page + the hentaiera / imhentai /
+hentaienvy HARs on `origin/main`) **resolved hentaiera, imhentai and
+hentaienvy** — see `ADAPTER_WIRING_PLAN.md` §1/§7/§8 and `WORKLIST.md` item 53.
+The hentaiera adapter core landed with tests (389→398). This audit's "not
+enough" verdict applied to the **first capture round only**; only **hentaifox
+and hitomi** remain uncaptured, and the age-modal note below was inverted
+(corrected in `CAPTURE_GUIDE.md` / `ADAPTER_WIRING_PLAN.md`).
+
 ## 1. What was actually captured
 
 Five sections, each prefixed with its `view-source:` URL:

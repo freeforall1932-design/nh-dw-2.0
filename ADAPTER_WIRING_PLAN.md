@@ -170,8 +170,10 @@ id in the listing, path `/004/` or `/005/<numid>/`, jpg thumbs, `/gallery/<id>/`
 page URL. Unknown: reader URL scheme, reader image selector, full-page
 extension, and any JSON embed. A single HAR answers all of them.
 
-1. Dismiss the **age modal first** (`window.__GEO__ = "ID"` is not in
-   `allowedGeos = ['US','FR','IT','GB']`, so it fires for you).
+1. The **age modal does NOT fire for you** — it shows only when
+   `allowedGeos.includes(window.__GEO__)`, and `__GEO__ = "ID"` is not in
+   `['US','FR','IT','GB']` (an earlier draft had this inverted). Nothing to
+   dismiss; it would only appear for US/FR/IT/GB.
 2. DevTools → Network, tick Keep log + Disable cache, F5 on
    `https://hentaifox.com/gallery/173098/`.
 3. Open the reader, turn to pages 1, 2, 3.

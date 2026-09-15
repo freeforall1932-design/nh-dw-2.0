@@ -7,7 +7,8 @@
 > sanitized HAR per site, and the hentaiera gallery changed from `694109`
 > (2 pages, too few) to **`694132`** (10 pages).
 
-**Target: `hentaiera.to`.** Three files. That is the whole ask.
+**Target: `hentaiera.to`.** (Superseded — hentaiera is resolved; see the banner
+above and `CAPTURE_GUIDE.md`. Kept only for the adapter-contract rationale.)
 
 Scope discipline (your call, 2026-09-15): no cross-mirror fallback, no
 multi-site panel, no hitomi. One site downloading exactly the way nhentai does

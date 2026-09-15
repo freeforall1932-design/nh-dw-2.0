@@ -242,7 +242,7 @@ their site. Envy is the richest — `#readerPagesJson` is a full per-page
 `{page,ext,w,h}` map, `data-reader-image-base` exposes the token, reader is
 `/g/<id>/n/`. The full per-site contract table, fox + hitomi capture lists, and
 next step live in `ADAPTER_WIRING_PLAN.md` §1/§7/§8. **hentaifox and hitomi
-remain uncaptured** (fox = 1–2 HARs after dismissing its age modal; hitomi =
+remain uncaptured** (fox = 1–2 HARs — no age modal fires for `ID`; hitomi =
 HAR + rendered DOM + gallery JS + `gg.js`).
 
 **HAR settled the last unknowns (2026-09-15, `era to.zip` on origin/main):**
@@ -269,6 +269,20 @@ sites), per-adapter `cdnConfig` allowlists, site slugs, and the two
 Correction carried forward: `MULTISITE_V4_PLAN.md` §2's "sandbox cannot resolve
 these hosts (DNS failure)" is wrong — DNS resolves; **egress** is blocked
 (`SSL_connect: SSL_ERROR_SYSCALL`, same for `example.com`).
+
+### Remaining from the 2026-09-15 session (carry into the next)
+
+1. **Implement the wiring** — `ADAPTER_WIRING_PLAN.md` §5, in order: registry
+   (`getAdapterForUrl`/`getParsingForUrl`) → imhentai adapter → flip the six
+   seams with the nhentai-API collision guard → `cdnConfig` per-adapter
+   allowlists → paste box + `host_permissions` → `test:e2e` → real-browser
+   check (the one verification this environment can't run).
+2. **Register `hentaieraSource`** only as part of step 1 (see the deferred
+   note under item 53).
+3. **Capture hentaifox** (1–2 HARs; no age modal fires for `ID`) and **hitomi**
+   (HAR + rendered DOM + gallery JS + `gg.js`) — lists in
+   `ADAPTER_WIRING_PLAN.md` §7; then add their adapters the same way.
+4. **Merge PR #42** (this session's groundwork).
 
 ### Pending on the USER (nothing here is scheduled until they act)
 

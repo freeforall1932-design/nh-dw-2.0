@@ -1865,3 +1865,44 @@ bundles rebuilt and synced to `NHDW_Release_v3.0.0`.
     `NHDW_Extension_v3.0.0/` (upstream heritage, untouched through 3.x),
     and the Firefox tree's README/PORTING_AUDIT (they describe that tree's
     own lagging state, which the other docs already record).
+
+
+---
+
+## 2026-09-15 — multi-site v4 groundwork (session `arena/01a0a3d5-nh-dw-2-0`, PR #42)
+
+### 53. Hentaiera adapter core + capture audits + wiring plan
+
+**Landed:** `src/sources/hentaieraSource.ts` (`GallerySource` impl: host consts,
+URL/id matchers, `getImageUrls` → `hentaiera.site/galleries/<media>/<file>`) and
+`src/parsing/hentaieraHtml.ts` (`extractHentaieraGallery` from the `ld+json`
+ImageGallery block + per-gallery extension read off the thumbnail strip;
+`extractHentaieraReaderImage` from `<img id="reader_img">`). Tests:
+`test/hentaiera.test.js` (9 new; 389→**398** passing), fixtures mirroring the
+captures incl. a `.jpg` gallery pinning "extension is read, not assumed".
+`tsc` build + smoke green. **Registration into `sources/index.ts` deferred** to
+item 48: wiring it now would let `popup.ts` resolve a hentaiera id and feed it
+to the nhentai API (id collision → wrong-site metadata); a test pins the
+registry nhentai-only.
+
+**Captures resolved (HARs on `origin/main`):** hentaiera (`era to.zip`: reader
+`/gallery/<id>/<n>/`, `#reader_img`, webp, Referer sent), imhentai
+(`imhen xxx.zip`: reader `/view/<id>/<n>/`, `#gimg`, thumbs jpg but pages webp,
+**no** Referer), hentaienvy (`envy com.zip`: reader `/g/<id>/<n>/`, `#readerImg`,
+`#readerPagesJson` full per-page `{page,ext,w,h}` map, `data-reader-image-base`
+token, Referer sent). Per-site contract table + fox/hitomi lists:
+`ADAPTER_WIRING_PLAN.md` §1/§7.
+
+**Corrections to earlier statements (mechanism, not outcome):** the sandbox
+block is **egress** (TLS dies; DNS resolves — same for `example.com`), not the
+"DNS failure" recorded in the 2026-09-14 logs above; hitomi's CDN is
+`ltn.gold-usergeneratedcontent.net`, not `ltn.hitomi.la`; the mirror network is
+**two backends / four frontends**, refuting §2.2's "one adapter, host-
+parameterized" assumption (recorded as a correction there); and the hentaifox
+age modal does **not** fire for `ID` (`allowedGeos.includes(__GEO__)` gates it
+to US/FR/IT/GB) — an earlier draft inverted this.
+
+**Remaining:** implement `ADAPTER_WIRING_PLAN.md` §5 (registry → imhentai
+adapter → seams with collision guard → cdnConfig allowlists → paste box +
+manifest hosts → e2e → real-browser check); capture hentaifox + hitomi; merge
+PR #42.

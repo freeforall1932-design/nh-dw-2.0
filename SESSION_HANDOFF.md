@@ -1,5 +1,26 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-15 (session `arena/01a0a3d5-nh-dw-2-0`) — **multi-site v4
+groundwork; PR #42.** Read this block first. Hentaiera adapter core landed
+(`src/sources/hentaieraSource.ts`, `src/parsing/hentaieraHtml.ts`,
+`test/hentaiera.test.js`; `npm test` 389→**398**) but is **deliberately NOT
+registered** in `sources/index.ts` — registration must land *with* the
+site-aware wiring (item 48) to avoid the popup nhentai-API id collision; a test
+pins the registry nhentai-only until then. Captures resolved **hentaiera,
+imhentai, hentaienvy** (three HARs on `origin/main`); **hentaifox + hitomi
+remain** (`ADAPTER_WIRING_PLAN.md` §7). New docs: `SITE_CAPTURE_AUDIT.md`,
+`CAPTURE_GUIDE.md`, `NEXT_CAPTURE.md`, `ADAPTER_WIRING_PLAN.md`. Corrections
+carried forward: sandbox **egress** blocked (not DNS); hitomi CDN is
+`ltn.gold-usergeneratedcontent.net` (not `ltn.hitomi.la`); mirror network is
+**two backends / four frontends**, not one adapter; hentaifox age modal does
+**not** fire for `ID` (earlier drafts inverted it).
+
+**Remaining from this session:** (1) implement `ADAPTER_WIRING_PLAN.md` §5 —
+registry → imhentai adapter → flip seams (collision guard) → cdnConfig
+per-adapter allowlists → paste box + manifest hosts → e2e → real-browser check;
+(2) capture hentaifox (1–2 HARs) and hitomi (HAR + rendered DOM + gallery JS +
+`gg.js`); (3) merge PR #42.
+
 **Updated:** 2026-09-14 (session `arena/01a09ee5-nh-dw-2-0`) — **3.8.0:
 composite (site, id) keys, item 47.** Read this block first. What changed
 structurally, so a fresh session does not re-derive it:
