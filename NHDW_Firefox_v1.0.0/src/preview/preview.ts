@@ -79,6 +79,61 @@ function refreshCdnNotice() {
     } catch (_) { /* worker unreachable: no notice */ }
 }
 
+// Firefox MV3 does NOT grant host_permissions at install time — they behave
+// like optional permissions until the user approves them (on Firefox for
+// Android the grant prompt appears only when requested). Without the base
+// nhentai.net grant nothing works, so show a one-tap grant notice on first
+// runs. No-op on Chrome / already-granted installs (contains() is true).
+const BASE_HOST_ORIGINS: string[] = [
+    "https://nhentai.net/*",
+    "https://i.nhentai.net/*",
+    "https://i1.nhentai.net/*",
+    "https://i2.nhentai.net/*",
+    "https://i3.nhentai.net/*",
+    "https://i4.nhentai.net/*"
+];
+
+function refreshHostNotice() {
+    try {
+        const permissions: any = (chrome as any).permissions;
+        if (!permissions || typeof permissions.contains !== "function") {
+            return;
+        }
+        permissions.contains({ origins: BASE_HOST_ORIGINS }, (hasHosts: boolean) => {
+            if (chrome.runtime.lastError || hasHosts === true) {
+                return;
+            }
+            const notice = document.getElementById("hostNotice");
+            if (!notice) {
+                return;
+            }
+            notice.innerHTML = message.hostGrantNotice(BASE_HOST_ORIGINS);
+            notice.hidden = false;
+            const grantButton = document.getElementById("buttonGrantHosts");
+            if (!grantButton) {
+                return;
+            }
+            grantButton.addEventListener("click", function() {
+                const granted = (ok: boolean) => {
+                    if (ok) {
+                        // Re-run the whole popup flow with hosts now granted
+                        // (metadata fetches go through the tab + host perms).
+                        window.location.reload();
+                    }
+                };
+                try {
+                    const result: any = permissions.request({ origins: BASE_HOST_ORIGINS }, (ok: boolean) => {
+                        granted(!!ok && !chrome.runtime.lastError);
+                    });
+                    if (result && typeof result.then === "function") {
+                        result.then(granted).catch(() => { /* user dismissed the prompt */ });
+                    }
+                } catch (_) { /* permissions API unavailable: notice stays visible */ }
+            });
+        });
+    } catch (_) { /* best effort only */ }
+}
+
 chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
     chrome.storage.sync.get({
         darkMode: false,
@@ -96,6 +151,7 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
         // Independent of the download state: surface the optional host grant
         // when nhentai's CDN config reports hosts we have no permission for.
         refreshCdnNotice();
+        refreshHostNotice();
         chrome.storage.local.get({
             lastUrl: ""
         }, function(elemsLocal) {

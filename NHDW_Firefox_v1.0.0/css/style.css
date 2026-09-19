@@ -46,6 +46,18 @@ input[type="button"] {
     border-radius: 5px;
 }
 
+#apiKeyInput {
+    width: 60%;
+}
+
+/* Action bar: wraps the primary buttons of every popup state. On desktop it
+   is display:contents — the buttons lay out exactly as they did before the
+   bar existed. Inside the phone media query below it becomes the sticky
+   bottom action bar (same idiom as the in-page .nhdw-action-bar). */
+.nhdwActionBar {
+    display: contents;
+}
+
 input[type="button"]:hover {
     color: #e31b53;
     background-color: white;
@@ -224,4 +236,103 @@ input[type="button"]:hover {
     display: block;
     margin: 2px 0;
     white-space: nowrap;
+}
+
+/* ---- Phone / portrait layout (Firefox for Android) ----------------------
+   The action popup opens in a FULL TAB on Android, so this document is the
+   whole UI. The gate is width AND a coarse pointer: the desktop popup is
+   500px wide too, so width alone would restyle it — "pointer: coarse"
+   keeps desktops (and resized desktop windows) on the classic layout.
+   Tall-not-wide: single column, compact spacing, inputs sized for touch,
+   primary actions pinned to a sticky bottom bar within thumb reach. */
+@media (max-width: 640px) and (pointer: coarse) {
+    html {
+        width: 100%;
+    }
+
+    body {
+        margin: 0;
+        padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+        box-sizing: border-box;
+    }
+
+    h3 {
+        font-size: 1.05rem;
+        margin: 6px 0;
+        white-space: normal; /* let long gallery titles wrap */
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select {
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 16px; /* >=16px: Android must not zoom the page on focus */
+        padding: 9px 10px;
+        min-height: 42px;
+        margin: 4px 0;
+        border-radius: 5px;
+    }
+
+    input[type="button"] {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 44px; /* touch target */
+        font-size: 15px;
+        padding: 10px 12px;
+        margin: 3px 0;
+    }
+
+    input[type="checkbox"] {
+        width: 20px;
+        height: 20px;
+        vertical-align: middle;
+        margin: 0 10px 0 2px;
+    }
+
+    #progressBar {
+        height: 12px;
+    }
+
+    /* Two-column gallery/similar split becomes one tall column. */
+    .popupColumns {
+        flex-direction: column;
+    }
+
+    .similarList {
+        max-height: 38vh;
+    }
+
+    #apiKeyInput {
+        width: 100%;
+    }
+
+    /* Sticky bottom action bar: primary buttons stay pinned at the bottom of
+       the tab while the content above scrolls — always within thumb reach. */
+    .nhdwActionBar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        position: sticky;
+        bottom: 0;
+        z-index: 10;
+        background-color: white;
+        border-top: 2px solid #e31b53;
+        padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px));
+        margin-top: 10px;
+    }
+
+    .nhdwActionBar input[type="button"] {
+        flex: 1 1 45%;
+        width: auto;
+        margin: 0;
+    }
+
+    .nhdwActionBar br {
+        display: none;
+    }
+
+    #htmlDark .nhdwActionBar {
+        background-color: #202a34;
+    }
 }

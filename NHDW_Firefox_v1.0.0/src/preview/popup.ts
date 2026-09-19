@@ -544,14 +544,21 @@ export default class Popup
             extension = "." + useZip;
         }
 
-        // Add the HTML
+        // Add the HTML. Invert/Clear stay inline with the list; Download (and
+        // Download all, when paginated) live in the nhdwActionBar — inline on
+        // desktop, sticky bottom bar on phones.
         let nbDownload = 0;
         let currPage = currentPage;
+        let barHtml = '<input type="button" id="button" value="Download"/>';
         let html =  '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>' + finalHtml
-        + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/><br/><br/><input type="button" id="button" value="Download"/>';
+        + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/><br/><br/>';
         if (maxPage > 0 && currPage > 0) {
             nbDownload = maxPage - currPage + 1;
-            html += '<br/><input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/><br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
+            barHtml += '<input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/>';
+        }
+        html += '<div class="nhdwActionBar">' + barHtml + '</div>';
+        if (maxPage > 0 && currPage > 0) {
+            html += '<br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
         }
         html += '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;
         document.getElementById('action')!.innerHTML = html;

@@ -190,16 +190,54 @@ module background
     // it when it relays a download command and clears it on goBack, when the
     // offscreen document reports idle (job over), and on fallback completion.
 
+    // ---- event-page keep-alive (Firefox desktop / Android) -----------------
+    // Firefox MV3 runs this bundle as an event page and suspends it after a
+    // short idle window (more aggressively on Android under RAM pressure). A
+    // multi-minute ZIP build with no extension events in between could be
+    // killed mid-job. While the job marker is active we keep a periodic alarm
+    // running: each tick is an event the page is woken for, so the download
+    // survives. The alarm is cleared the moment the job ends, so idle
+    // suspension still applies when nothing is downloading. "alarms" is
+    // already declared in the manifest; period 1min is the allowed minimum.
+    const KEEPALIVE_ALARM = "nhdw-keepalive";
+
+    // Registered once at bundle load so the alarm always has a receiver.
+    try {
+        chrome.alarms.onAlarm.addListener((alarm: any) => {
+            if (alarm && alarm.name === KEEPALIVE_ALARM) {
+                // Intentional no-op: the event itself keeps the page alive.
+            }
+        });
+    } catch (_) { /* alarms API unavailable: keep-alive simply not active */ }
+
+    function startKeepAlive() {
+        try {
+            chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 1 });
+        } catch (_) { /* best effort */ }
+    }
+
+    function stopKeepAlive() {
+        try {
+            chrome.alarms.clear(KEEPALIVE_ALARM);
+        } catch (_) { /* best effort */ }
+    }
+
     export function setJobMarker(active: boolean) {
         try {
             (chrome.storage as any).session.set({ downloadJob: { active: active, startedAt: Date.now() } });
         } catch (_) { /* storage.session unavailable (older Chrome) - best effort */ }
+        if (active) {
+            startKeepAlive();
+        } else {
+            stopKeepAlive();
+        }
     }
 
     export function clearJobMarker() {
         try {
             (chrome.storage as any).session.remove("downloadJob");
         } catch (_) { /* best effort */ }
+        stopKeepAlive();
     }
 
     export function jobInterrupted(): Promise<boolean> {
