@@ -40,6 +40,101 @@ if (document.readyState === "loading") {
     initPopupTabs();
 }
 
+// ---- mobile bottom action bar (coarse-pointer devices ONLY) ---------------
+// Desktop/mobile separation rule: the desktop popup DOM must stay
+// byte-identical to the classic layout, so no markup restructuring happens
+// for fine-pointer environments. On phone-width touch devices (Firefox for
+// Android opens this document in a full tab) the primary buttons of the
+// CURRENT popup state are relocated at runtime into a fixed bottom footer —
+// the same idiom as the in-page .nhdw-action-bar — and a MutationObserver
+// reapplies the relocation after every innerHTML swap of a popup state.
+const MOBILE_BAR_MEDIA = "(max-width: 640px) and (pointer: coarse)";
+const MOBILE_BAR_BUTTON_IDS: string[] = [
+    "button", "buttonAll", "buttonBack", "buttonPause", "buttonResume",
+    "buttonClearQueue", "buttonDismiss", "apiKeySubmit", "apiKeySkip",
+    "buttonGrantCdn", "buttonGrantHosts"
+];
+
+function mobileLayoutMatches(): boolean {
+    try {
+        return typeof window.matchMedia === "function"
+            && window.matchMedia(MOBILE_BAR_MEDIA).matches;
+    } catch (_) {
+        return false;
+    }
+}
+
+let barObserver: MutationObserver | null = null;
+
+function relocateMobileActions() {
+    if (!mobileLayoutMatches()) {
+        return; // desktop / fine pointer: DOM stays exactly as rendered
+    }
+    let bar = document.getElementById("nhdwMobileBar") as HTMLElement | null;
+    const outside: HTMLElement[] = [];
+    for (const id of MOBILE_BAR_BUTTON_IDS) {
+        const el = document.getElementById(id) as HTMLElement | null;
+        if (el && (!bar || (el !== bar && !bar.contains(el)))) {
+            outside.push(el);
+        }
+    }
+    if (!bar) {
+        if (outside.length === 0) {
+            return; // nothing to dock; do not create an empty footer
+        }
+        bar = document.createElement("div");
+        bar.id = "nhdwMobileBar";
+        document.body.appendChild(bar);
+    }
+    // Suspend the observer around our own mutations so re-docking cannot
+    // retrigger it in a loop.
+    if (barObserver) {
+        barObserver.disconnect();
+    }
+    bar.textContent = "";
+    for (const el of outside) {
+        bar.appendChild(el);
+    }
+    bar.style.display = bar.children.length > 0 ? "" : "none";
+    if (barObserver) {
+        barObserver.observe(document.body, { childList: true, subtree: true });
+    }
+}
+
+let mobileBarScheduled = false;
+function scheduleMobileBarRelocation() {
+    if (mobileBarScheduled) {
+        return;
+    }
+    mobileBarScheduled = true;
+    setTimeout(() => {
+        mobileBarScheduled = false;
+        relocateMobileActions();
+    }, 0);
+}
+
+function installMobileActionBar() {
+    if (typeof MutationObserver === "undefined") {
+        return;
+    }
+    barObserver = new MutationObserver(scheduleMobileBarRelocation);
+    barObserver.observe(document.body, { childList: true, subtree: true });
+    try {
+        window.matchMedia(MOBILE_BAR_MEDIA).addEventListener("change", () => {
+            // Rebuild the whole document for the new layout class instead of
+            // trying to un-dock buttons into positions a re-render owns.
+            window.location.reload();
+        });
+    } catch (_) { /* ancient matchMedia without addEventListener: ignore */ }
+    scheduleMobileBarRelocation();
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", installMobileActionBar);
+} else {
+    installMobileActionBar();
+}
+
 // Ask the service worker (which owns the CDN config and chrome.permissions)
 // whether nhentai reported image hosts the extension has no host permission
 // for. If so, offer the optional https://*.nhentai.net grant from here —

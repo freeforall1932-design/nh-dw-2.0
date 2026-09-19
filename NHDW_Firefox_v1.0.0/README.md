@@ -53,12 +53,14 @@ and must keep its classic look. On phones:
 - single tall column (`.popupColumns` stacks), long titles wrap;
 - inputs/selects full-width, 16px font (prevents Android focus-zoom),
   ≥42–44px touch targets, larger checkboxes;
-- **sticky bottom action bar**: every primary action of every popup state
-  (`Download`, `Download all`, `Pause/Resume`, `Clear queue`, `Cancel`,
-  API-key gate buttons, host/CDN grant buttons) sits in a `.nhdwActionBar`
-  wrapper that is `display: contents` on desktop (pixel-identical to before)
-  and a pinned bottom bar on phones — the same idiom as Chrome's in-page
-  `.nhdw-action-bar`, safe-area-inset aware for gesture navigation;
+- **fixed bottom action bar**: `preview.ts` relocates the current state's
+  primary buttons (`Download`, `Download all`, `Pause/Resume`, `Clear queue`,
+  `Cancel`, API-key gate, host/CDN grant) into a `#nhdwMobileBar` footer at
+  **runtime**, and only while
+  `matchMedia("(max-width:640px) and (pointer: coarse)")` matches. The
+  desktop popup DOM is byte-identical to the classic layout (audited with
+  `git diff` against the pre-Android tree — `popup.ts` identical,
+  `message.ts` additive-only, CSS pure additions); safe-area-inset aware;
 - `index.html` / `options.html` now declare a device-width viewport meta.
 
 This mirrors the Chrome build's own UI thinking: Chrome's side panel is the
@@ -83,7 +85,7 @@ builds survive; when nothing is downloading, idle suspension still applies.
 | # | Criterion | Status |
 |---|---|---|
 | F1 | Canonical Firefox `manifest.json` (MV3, gecko.id, min 142.0, data-collection declaration, icons 48/64/96/128 with true-size PNGs) | ✅ shipped + tested |
-| F2 | Responsive portrait UI: sticky bottom action bar, stacked columns, compact touch targets; desktop popup unchanged; no horizontal scroll at 360px | ✅ shipped (CSS + `.nhdwActionBar` wrappers) |
+| F2 | Responsive portrait UI: fixed bottom action bar via runtime reflow, stacked columns, compact touch targets; desktop popup DOM byte-identical (audited); no horizontal scroll at 360px | ✅ shipped, reworked for desktop purity |
 | F3 | Keep-alive alarm active only during jobs | ✅ shipped |
 | F4 | First-run host-permission grant guard (Firefox MV3 semantics) | ✅ shipped |
 | F5 | Manifest regression tests incl. Firefox guards (gecko.id, event page, no offscreen perm, viewport metas, icon files, host scoping, min-version, data declaration) | ✅ 9 new tests, suite green |
@@ -147,11 +149,18 @@ npm run sign:firefox         # = web-ext sign --channel unlisted --artifacts-dir
   fallback is temporary unsigned install via Firefox Nightly/Beta on Android
   (`xpinstall.signatures.required=false` — not possible on release).
 
-## Roadmap (post-1.0.0)
+## Roadmap (post-1.0.0) — "elevation mode"
 
-1. **In-page card controls port** (`listControls.ts` + its utils) — the
-   ultimate mobile UX; no popup round-trips at all.
-2. Bookmark queue / history / retry-failed parity with Chrome 3.3.1+.
+The Firefox build lags Chrome substantially on desktop (see
+`FIREFOX_PARITY_PLAN.md` §1–2 for the full gap matrix). Agreed sequencing:
+Android plan first (done) → **rebase Firefox onto current Chrome src** with
+the audited delta set → re-plan Android on the synced base.
+
+1. **P1 rebase to Chrome parity**: in-page card controls (`listControls.ts`),
+   bookmark queue, download history / verify / retry-failed, batch pipeline,
+   list-mode settings, PDF-merge warning.
+2. **P3 Android re-plan** on the synced base (the in-page floating bar is
+   already the Android bottom-bar pattern).
 3. Crisp master icons at 96/128 (current files are rescales of the 64px
    source via `Icon-*.png`).
 4. Side-panel equivalent if Firefox ever ships `sidePanel` on Android.

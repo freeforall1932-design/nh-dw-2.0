@@ -46,18 +46,6 @@ input[type="button"] {
     border-radius: 5px;
 }
 
-#apiKeyInput {
-    width: 60%;
-}
-
-/* Action bar: wraps the primary buttons of every popup state. On desktop it
-   is display:contents — the buttons lay out exactly as they did before the
-   bar existed. Inside the phone media query below it becomes the sticky
-   bottom action bar (same idiom as the in-page .nhdw-action-bar). */
-.nhdwActionBar {
-    display: contents;
-}
-
 input[type="button"]:hover {
     color: #e31b53;
     background-color: white;
@@ -252,7 +240,8 @@ input[type="button"]:hover {
 
     body {
         margin: 0;
-        padding: 8px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+        /* extra bottom room so the fixed #nhdwMobileBar never covers content */
+        padding: 8px 10px calc(110px + env(safe-area-inset-bottom, 0px));
         box-sizing: border-box;
     }
 
@@ -303,36 +292,36 @@ input[type="button"]:hover {
         max-height: 38vh;
     }
 
+    /* !important: beats the inline style="width:60%" that the desktop popup
+       markup carries. */
     #apiKeyInput {
-        width: 100%;
+        width: 100% !important;
     }
 
-    /* Sticky bottom action bar: primary buttons stay pinned at the bottom of
-       the tab while the content above scrolls — always within thumb reach. */
-    .nhdwActionBar {
+    /* Bottom action bar. preview.ts relocates the current state's primary
+       buttons into this fixed footer at RUNTIME, and ONLY when this media
+       query matches — the desktop popup DOM is never restructured. */
+    #nhdwMobileBar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 20;
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        position: sticky;
-        bottom: 0;
-        z-index: 10;
         background-color: white;
         border-top: 2px solid #e31b53;
-        padding: 10px 0 calc(10px + env(safe-area-inset-bottom, 0px));
-        margin-top: 10px;
+        padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px));
     }
 
-    .nhdwActionBar input[type="button"] {
+    #nhdwMobileBar input[type="button"] {
         flex: 1 1 45%;
         width: auto;
         margin: 0;
     }
 
-    .nhdwActionBar br {
-        display: none;
-    }
-
-    #htmlDark .nhdwActionBar {
+    #htmlDark #nhdwMobileBar {
         background-color: #202a34;
     }
 }

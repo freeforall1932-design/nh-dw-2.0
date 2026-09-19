@@ -9,17 +9,13 @@ export module message
     export function apiKeyGate(): string {
         return '<h3>nhentai API access</h3>' +
             '<p>Choose how the extension resolves gallery metadata:</p>' +
-            '<input type="password" id="apiKeyInput" placeholder="Paste your nhentai API key"/>' +
-            '<small>To paste: click the box, then paste (Ctrl+V on desktop, long-press then Paste on Android).</small>' +
+            '<input type="password" id="apiKeyInput" placeholder="Paste your nhentai API key" style="width:60%"/> ' +
+            '<input type="button" id="apiKeySubmit" value="Submit key"/>' +
+            '<br/><small>To paste: click the box, then press Ctrl+V.</small>' +
             '<br/><small>With a key: the official nhentai API is used (higher rate limits; batch downloads do not depend on reading the open tab). ' +
             'Generate one in your <a href="' + API_KEY_SETTINGS_URL + '" target="_blank">nhentai account settings</a>.</small>' +
-            // nhdwActionBar: inline on the desktop popup, sticky bottom action
-            // bar on phone-width layouts (see css/style.css media query).
-            '<div class="nhdwActionBar">' +
-            '<input type="button" id="apiKeySubmit" value="Submit key"/>' +
-            '<input type="button" id="apiKeySkip" value="Continue without API key"/>' +
-            '</div>' +
-            '<small>Without a key: metadata is read from your open NHentai tab (previous behaviour).</small>' +
+            '<br/><br/><input type="button" id="apiKeySkip" value="Continue without API key"/>' +
+            '<br/><small>Without a key: metadata is read from your open NHentai tab (previous behaviour).</small>' +
             '<div id="apiKeyGateError" style="color:red"></div>';
     }
 
@@ -36,8 +32,7 @@ export module message
     }
 
     export function downloadDone(): string {
-        return 'Your file was downloaded, thanks for using NHentai Downloader.<br/><br/>' +
-            '<div class="nhdwActionBar"><input type="button" id="buttonBack" value="Go Back"/></div>';
+        return 'Your file was downloaded, thanks for using NHentai Downloader.<br/><br/><input type="button" id="buttonBack" value="Go Back"/>'
     }
 
     // Shown when the popup finds a job marker from a previous session but no
@@ -46,30 +41,18 @@ export module message
     export function downloadInterrupted(): string {
         return '<h3>Download interrupted</h3><p>A previous download was interrupted before it finished ' +
             '(the browser restarted or the download document was closed). ' +
-            'Please start the download again.</p><br/>' +
-            '<div class="nhdwActionBar"><input type="button" id="buttonDismiss" value="Got it"/></div>';
+            'Please start the download again.</p><br/><input type="button" id="buttonDismiss" value="Got it"/>';
     }
     
     export function downloadProgress(status: string, doujinshiName: string, progress: number, retry?: string, queued: number = 0, paused: boolean = false): string {
         const retryHtml = retry ? '<br/><small>Retrying (' + retry + ')...</small>' : '';
-        // Status lines stay in the scrolling body; every job-control button
-        // lives in the action bar (sticky at the bottom on phone widths, so
-        // Pause/Cancel stay within thumb reach during long downloads).
         const queueHtml = queued > 0
-            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small>'
+            ? '<br/><small>' + queued + ' download' + (queued === 1 ? '' : 's') + ' queued.</small><br/><input type="button" id="buttonClearQueue" value="Clear queue"/>'
             : '';
         const pauseHtml = paused
-            ? '<br/><b>Paused.</b> Completed pages are kept for this browser session.'
-            : '';
-        const barButtons: string[] = [];
-        if (queued > 0) {
-            barButtons.push('<input type="button" id="buttonClearQueue" value="Clear queue"/>');
-        }
-        barButtons.push(paused
-            ? '<input type="button" id="buttonResume" value="Resume current"/>'
-            : '<input type="button" id="buttonPause" value="Pause current"/>');
-        barButtons.push('<input type="button" id="buttonBack" value="Cancel current"/>');
-        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}${pauseHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><div class="nhdwActionBar">${barButtons.join('')}</div>`;
+            ? '<br/><b>Paused.</b> Completed pages are kept for this browser session.<br/><input type="button" id="buttonResume" value="Resume current"/>'
+            : '<br/><input type="button" id="buttonPause" value="Pause current"/>';
+        return `${status} ${doujinshiName}, please wait...${retryHtml}${queueHtml}${pauseHtml}<br/><progress max="100" id="progressBar" value="${progress}"></progress><br/><br/><input type="button" id="buttonBack" value="Cancel current"/>`;
     }
     
     export function invalidPage(): string {
@@ -102,15 +85,16 @@ export module message
             return host ? host[1] : origin;
         }).join(", ");
         return '<b>New nhentai image hosts</b><br/>' +
-            '<small>nhentai now serves images from ' + list + '. Downloads keep working on the current hosts.</small>' +
-            '<div class="nhdwActionBar"><input type="button" id="buttonGrantCdn" value="Grant image host access"/></div>';
+            '<small>nhentai now serves images from ' + list + '. Downloads keep working on the current hosts.</small><br/>' +
+            '<input type="button" id="buttonGrantCdn" value="Grant image host access"/>';
     }
 
     // First-run notice for Firefox MV3: host_permissions are NOT granted at
     // install time (they behave like optional permissions), so without a grant
     // nothing on nhentai.net works. Shown by preview.ts refreshHostNotice when
     // permissions.contains reports the base hosts missing; the button requests
-    // them (user gesture requirement is satisfied by the click).
+    // them (user gesture requirement is satisfied by the click). Additive-only
+    // notice: the desktop layout is unchanged whenever it is hidden.
     export function hostGrantNotice(origins: string[]): string {
         const hosts = origins.map((origin) => {
             const host = /^https:\/\/([^/]+)\//.exec(origin);
@@ -118,15 +102,12 @@ export module message
         }).join(", ");
         return '<b>Site access needed</b><br/>' +
             '<small>Firefox asks you to approve site access after install. ' +
-            'Grant access to ' + hosts + ' so downloads can start.</small>' +
-            '<div class="nhdwActionBar"><input type="button" id="buttonGrantHosts" value="Enable site access"/></div>';
+            'Grant access to ' + hosts + ' so downloads can start.</small><br/>' +
+            '<input type="button" id="buttonGrantHosts" value="Enable site access"/>';
     }
     
     export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string): string {
         const selected = (value: string) => value === selectedFormat ? ' selected' : '';
-        // The Download button sits in the nhdwActionBar AFTER the columns:
-        // on desktop the bar renders inline (display:contents), on phones it
-        // is the sticky bottom action bar below the stacked columns.
         return '<div class="popupColumns">' +
             '<div class="popupColumn">' +
             '<h3>' + title + '</h3>' +
@@ -137,14 +118,14 @@ export module message
             '<option value="pdf"' + selected('pdf') + '>PDF</option>' +
             '<option value="raw"' + selected('raw') + '>Raw images</option>' +
             '</select><br/><br/>' +
-            'Downloads/<input type="text" id="path"/>' + extension +
+            'Downloads/<input type="text" id="path"/>' + extension + '<br/><br/>' +
+            '<input type="button" id="button" value="Download" autofocus/>' +
             '</div>' +
             '<div class="popupColumn">' +
             '<b>Similar galleries</b>' +
             '<div id="similarPanel">' + similarIntro() + '</div>' +
             '</div>' +
-            '</div>' +
-            '<div class="nhdwActionBar"><input type="button" id="button" value="Download" autofocus/></div>';
+            '</div>';
     }
 
     // Right column: intro state of the similar-galleries panel. The related
