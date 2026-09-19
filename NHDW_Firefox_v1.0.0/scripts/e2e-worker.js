@@ -33,6 +33,8 @@ let syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
 let localSettings = {}; // chrome.storage.local (API key mode lives here)
 let downloadFails = false;
 let expectedWorkerRejection = false;
+// Files chrome.downloads.search sees on the fake disk: saved filename -> exists.
+const diskFiles = new Map();
 
 // Every request the worker makes to an /api/ route, with the Authorization
 // header it carried (null when none). Phases 8/9 assert the mode boundary.
@@ -43,7 +45,6 @@ const sessionStore = {};   // chrome.storage.session (survives worker restarts i
 // When set, the NEXT batchProgress broadcast throws this value (an object or
 // an Error) so the batch pipeline rejects at top level - the only way to
 // reach the batch-level .catch, whose text is what the popup renders.
-// Backported with the 3.6.4 error-parity fix from the Chrome tree.
 let sendMessageThrows = null;
 
 // GET /api/v2/cdn fixture: reports a mirror OUTSIDE the hardcoded set so the
@@ -67,7 +68,11 @@ const chromeStub = {
     },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults, syncSettings)); } },
-        local: { get(defaults, cb) { cb(Object.assign({}, defaults, localSettings)); } },
+        local: {
+            get(defaults, cb) { cb(Object.assign({}, defaults, localSettings)); },
+            set(items, cb) { Object.assign(localSettings, items); if (cb) cb(); },
+            remove(key, cb) { delete localSettings[key]; if (cb) cb(); }
+        },
         session: {
             get(key, cb) {
                 cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore));
@@ -94,9 +99,25 @@ const chromeStub = {
             if (downloadFails) {
                 chromeStub.runtime.lastError = { message: "download failed (test)" };
                 if (cb) cb(undefined);
-            } else if (cb) {
-                cb(1); // success, downloadId = 1
+            } else {
+                diskFiles.set(String(opts.filename), true);
+                if (cb) cb(1); // success, downloadId = 1
             }
+        },
+        // Verify-before-skip + merged part-numbering ask chrome.downloads
+        // whether a recorded artifact still exists.
+        search(query, cb) {
+            const queries = Array.isArray(query) ? query : [query || {}];
+            const items = [];
+            for (const filename of diskFiles.keys()) {
+                for (const q of queries) {
+                    if (q && q.filenameRegex && new RegExp(String(q.filenameRegex)).test(filename)) {
+                        items.push({ filename: filename, exists: diskFiles.get(filename) === true });
+                        break;
+                    }
+                }
+            }
+            if (cb) cb(items);
         }
     }
 };
@@ -167,6 +188,20 @@ function fetchStub(url, init) {
     if (u.includes("/api/v2/cdn")) {
         cdnConfigFetches++;
         return Promise.resolve(new Response(CDN_CONFIG_FIXTURE, { status: 200 }));
+    }
+    // Listing-page HTML for the multi-page merged-naming phase: page 1 shows
+    // gallery 123456, page 2 shows 654321, in nhentai's card markup.
+    const pageMatch = /[?&]page=([0-9]+)/.exec(u);
+    if (pageMatch && u.includes("nhentai.net/search/")) {
+        const pageNo = parseInt(pageMatch[1], 10);
+        const id = pageNo === 1 ? GALLERY_ID : pageNo === 2 ? GALLERY_ID2 : 0;
+        const title = pageNo === 1 ? "One" : pageNo === 2 ? "Two" : "Unknown";
+        if (id !== 0) {
+            return Promise.resolve(new Response(
+                '<a href="/g/' + id + '/1/"><div class="caption">' + title + '<br>language 1</div></a>',
+                { status: 200 }
+            ));
+        }
     }
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
@@ -318,6 +353,44 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     console.log("PASS phase 1: ZIP (" + buf.length + " bytes) delivered as " + download.filename +
         " with entries " + names.join(", ") + " (" + zipProgress + " progress messages)");
 
+    // 3.8.0 (item 47): history records are keyed "<site>:<id>" in
+// chrome.storage.local; every poll below reads through this helper.
+const historyKeyFor = (id) => "nhentai:" + String(id);
+
+// ---- Phase 1b: successful download is recorded into the persistent history
+    const historyKey = historyKeyFor(GALLERY_ID);
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKey],
+        "a successful download must be recorded in the downloaded-history list (composite key " + historyKey + ")"
+    );
+    const historyRecord = localSettings.downloadHistory[historyKey];
+    if (historyRecord.filename !== "Downloads/Test.zip") {
+        fail("history record filename must be the artifact name, got " + JSON.stringify(historyRecord));
+    }
+    if (typeof historyRecord.when !== "number" || historyRecord.when > Date.now()) {
+        fail("history record must carry a sane timestamp, got " + JSON.stringify(historyRecord));
+    }
+    console.log("PASS phase 1b: successful ZIP recorded as " + historyRecord.filename +
+        " in chrome.storage.local");
+
+    // ---- Phase 1c: a gallery that fails to download is NEVER recorded -------
+    // (a partial download cannot be proven byte-identical, so re-runs re-fetch it)
+    downloadFails = true;
+    expectedWorkerRejection = true;
+    const historyBefore = Object.keys(localSettings.downloadHistory || {}).length;
+    fireDownload("Downloads/FailRecord", "FailRecord");
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "downloadError"),
+        "the failing gallery must send a downloadError"
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    if (localSettings.downloadHistory && Object.keys(localSettings.downloadHistory).length !== historyBefore) {
+        fail("a failed download must never be recorded in the history");
+    }
+    downloadFails = false;
+    expectedWorkerRejection = false;
+    console.log("PASS phase 1c: failed download adds nothing to the history");
+
     // ---- Phase 2: raw mode (per-page downloads) ---------------------------
     downloads.length = 0;
     syncSettings = { useZip: "raw", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW" };
@@ -402,8 +475,24 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (!/retry 1\/5/.test(retryMsgs[0].retry)) {
         fail("first retry message should read 'retry 1/5', got " + retryMsgs[0].retry);
     }
+    // The failure must NAME the gallery and carry the settings a retry needs
+    // (the user saw "2 galleries failed" with no names and no retry button).
+    if (String(error.galleryId) !== String(GALLERY_ID) || error.galleryName !== "FailTest") {
+        fail("downloadError must name the failed gallery (id + name), got " + JSON.stringify(error));
+    }
+    if (!error.retryJob || error.retryJob.formatOverride !== "raw") {
+        fail("downloadError must carry the retry settings, got " + JSON.stringify(error.retryJob));
+    }
+    await waitFor(
+        () => Array.isArray(sessionStore.nhdwFailedGalleries) && sessionStore.nhdwFailedGalleries.some((f) => String(f.id) === String(GALLERY_ID)),
+        "the failed gallery must be remembered in chrome.storage.session"
+    );
+    if (localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+        /FailTest/.test(localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename)) {
+        fail("a raw gallery whose pages failed must never be recorded as downloaded");
+    }
     console.log("PASS phase 3: failing raw downloads were retried (" + downloads.length +
-        " attempts), retries surfaced in progress (" + retryMsgs.length + " retry messages) and the error reached the popup: " + error.error);
+        " attempts), retries surfaced in progress (" + retryMsgs.length + " retry messages) and the error reached the popup by name: " + error.error);
 
     // ---- Phase 4: batch with a failing gallery reports exactly once -------
     // Regression guard: the Downloader surfaces a gallery failure through
@@ -489,7 +578,428 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     if (progressMsgs.length < 2) {
         fail("batchProgress must be sent before each gallery, got " + progressMsgs.length);
     }
-    console.log("PASS phase 5: batch continues after a gallery failure and reports 1/1/2");
+    if (!Array.isArray(mixedSummary.failedGalleries) || mixedSummary.failedGalleries.length !== 1 ||
+        mixedSummary.failedGalleries[0].id !== "1" || mixedSummary.failedGalleries[0].name !== "Missing" ||
+        !/404/.test(mixedSummary.failedGalleries[0].error)) {
+        fail("batchSummary must list the failed gallery by id, name and reason, got " + JSON.stringify(mixedSummary.failedGalleries));
+    }
+    if (!mixedSummary.retryJob || typeof mixedSummary.retryJob !== "object") {
+        fail("batchSummary must carry the retry settings, got " + JSON.stringify(mixedSummary.retryJob));
+    }
+    await waitFor(
+        () => Array.isArray(sessionStore.nhdwFailedGalleries) && sessionStore.nhdwFailedGalleries.some((f) => f.id === "1" && f.name === "Missing"),
+        "the failed batch gallery must be remembered for the session"
+    );
+    // The popup can list and retry them later.
+    const failedList = await new Promise((resolve) => onMessageHandler({ action: "getFailedGalleries" }, {}, resolve));
+    if (!failedList || failedList.result !== "success" || !failedList.failed.some((f) => f.id === "1" && f.name === "Missing")) {
+        fail("getFailedGalleries must list the remembered failure, got " + JSON.stringify(failedList));
+    }
+    console.log("PASS phase 5: batch continues after a gallery failure, reports 1/1/2 and names the failed title");
+
+    // ---- Phase 5a: retrying the failed title re-downloads it and clears it --
+    // The popup's "Retry failed" re-sends downloadAllDoujinshis with the
+    // remembered ids (separate files, redownload override). The metadata
+    // 404 was permanent for id 1, so here the retry targets a title that
+    // failed for a transient reason: seed it as failed, retry, expect it to
+    // succeed, be recorded and leave the failed list.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    sessionStore.nhdwFailedGalleries = [{ id: String(GALLERY_ID), name: "Test", error: "transient", retryJob: { formatOverride: "zip" }, at: Date.now() }];
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "Test" }, galleryMetadata: {},
+            finalName: "Retry", separate: true, redownloadIds: [String(GALLERY_ID)], formatOverride: "zip"
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("retry batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "no batchSummary for the retry batch");
+    const retrySummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (retrySummary.succeeded !== 1 || retrySummary.failed !== 0) {
+        fail("retry batch must succeed 1/0/1, got " + JSON.stringify(retrySummary));
+    }
+    if (downloads.length !== 1 || !/\.zip$/.test(String(downloads[0].filename))) {
+        fail("the retried title must be delivered again, got " + JSON.stringify(downloads));
+    }
+    await waitFor(
+        () => !(sessionStore.nhdwFailedGalleries || []).some((f) => String(f.id) === String(GALLERY_ID)),
+        "a retried gallery that succeeded must leave the failed list"
+    );
+    console.log("PASS phase 5a: retrying a remembered failure re-downloads it and clears it from the failed list");
+
+    // ---- Phase 5b: a failed MERGED batch records nothing (all-or-nothing) --
+    // Settled decision: a merged archive records ALL of its gallery ids
+    // together ONLY if the whole job succeeded. Phase 5 ended 1/1, so even
+    // though gallery 123456's page data was fetched inside the shared
+    // archive, it must NOT be recorded as done.
+    await waitFor(() => sessionStore.downloadJob === undefined,
+        "worker marker must clear after the mixed batch");
+    await new Promise((r) => setTimeout(r, 150));
+    if (!localSettings.downloadHistory || localSettings.downloadHistory[historyKeyFor("1")] !== undefined) {
+        fail("the failed merged batch must not record the missing gallery (id '1')");
+    }
+    if (localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] === undefined) {
+        fail("gallery 123456 must still carry its phase-1 record");
+    }
+    console.log("PASS phase 5b: an unclean merged batch records NO ids (the merge can be re-run)");
+
+    // ---- Phase 5c: a fully clean merged batch records every id ONCE --------
+    // Date stamp and disk verification are exercised in phases 5f/5g; keep this
+    // phase deterministic on the plain name.
+    syncSettings.verifyDownloadedFiles = false;
+    syncSettings.batchNameDate = false;
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    failImages = false;
+    onMessageHandler(
+        { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" }, finalName: "Downloads/MergedClean" },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("clean merged batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary" && m.failed === 0),
+        "no clean batchSummary was sent"
+    );
+    await waitFor(() => sessionStore.downloadJob === undefined,
+        "worker marker must clear after the clean merged batch");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] && localSettings.downloadHistory[historyKeyFor(GALLERY_ID2)],
+        "a clean merged batch must record BOTH galleries"
+    );
+    const mergedRecord = localSettings.downloadHistory[historyKeyFor(GALLERY_ID)];
+    if (mergedRecord.filename !== "Downloads/MergedClean.zip") {
+        fail("merged records must carry the merged artifact name, got " + JSON.stringify(mergedRecord));
+    }
+    if (localSettings.downloadHistory[historyKeyFor(GALLERY_ID2)].filename !== "Downloads/MergedClean.zip") {
+        fail("both merged ids must point at the same artifact, got " + JSON.stringify(localSettings.downloadHistory));
+    }
+    console.log("PASS phase 5c: clean merged batch recorded both ids under " + mergedRecord.filename);
+
+    // ---- Phase 5d: recorded galleries are skipped unless re-downloaded -----
+    localSettings.downloadHistory = { [String(GALLERY_ID)]: { filename: "One.zip", when: 1 } };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/Skip",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("skip batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary" && m.skipped === 1),
+        "the skip batch must report skipped:1"
+    );
+    await waitFor(() => sessionStore.downloadJob === undefined, "skip batch marker must clear");
+    if (downloads.length !== 1 || !/Two\.zip/.test(downloads[0].filename)) {
+        fail("only the un-recorded gallery must download, got " + JSON.stringify(downloads.map((d) => d.filename)));
+    }
+    if (apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID + "/"))) {
+        fail("a recorded gallery must not hit the API: " + JSON.stringify(apiRequestLog));
+    }
+    console.log("PASS phase 5d: recorded gallery skipped with zero API calls (separate mode)");
+
+    // ---- Phase 5e: redownloadIds re-fetch a recorded gallery ----------------
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One" },
+            finalName: "Downloads/Override",
+            separate: true,
+            redownloadIds: [String(GALLERY_ID)]
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("override batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => downloads.length === 1, "redownloadIds must deliver the gallery again");
+    await waitFor(
+        () => sessionStore.downloadJob === undefined && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            // The gallery fixture's title is "Test", so the new artifact is Test.zip.
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === "Test.zip",
+        "the re-downloaded gallery must be recorded again"
+    );
+    console.log("PASS phase 5e: redownloadIds overrides the history guard and re-records");
+
+    // ---- Phase 5f: verify-before-skip re-downloads a DELETED file ----------
+    // The history record is not proof the file survived: with the verify
+    // setting on, the worker checks chrome.downloads.search and only skips
+    // records whose artifact is still on disk. 123456 (Test.zip) is still
+    // there from phase 1; 654321 points at NHDW/Gone.zip which is not.
+    syncSettings.verifyDownloadedFiles = true;
+    syncSettings.batchNameDate = false;
+    localSettings.downloadHistory = {
+        [String(GALLERY_ID)]: { filename: "Downloads/Test.zip", when: 1 },
+        [String(GALLERY_ID2)]: { filename: "NHDW/Gone.zip", when: 1 }
+    };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/Verify",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("verify batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary" && m.skipped === 1),
+        "verify batch must report skipped:1 (the present file), not 2"
+    );
+    await waitFor(() => sessionStore.downloadJob === undefined, "verify batch marker must clear");
+    if (downloads.length !== 1 || downloads[0].filename !== "Test_Two.zip") {
+        fail("only the deleted gallery must be re-downloaded, got " + JSON.stringify(downloads.map((d) => d.filename)));
+    }
+    if (apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID))) {
+        fail("a file still on disk must not be re-fetched: " + JSON.stringify(apiRequestLog));
+    }
+    if (!apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID2))) {
+        fail("a deleted file must be fetched again: " + JSON.stringify(apiRequestLog));
+    }
+    console.log("PASS phase 5f: verify-before-skip keeps the file that exists and re-downloads the deleted one");
+
+    // ---- Phase 5g: merged date stamp + part numbering + warn-first ---------
+    // Listing re-runs get search_31082026.zip; the same title+date again warns
+    // ("existing") and, once confirmed, saves search_31082026_part2.zip. Both
+    // ids are recorded under the EXACT dated artifact name.
+    syncSettings.batchNameDate = true;
+    syncSettings.verifyDownloadedFiles = true;
+    const now = new Date();
+    const today = String(now.getDate()).padStart(2, "0")
+        + String(now.getMonth() + 1).padStart(2, "0")
+        + String(now.getFullYear());
+    const datedName = "Downloads/DateRun_" + today + ".zip";
+    const part2Name = "Downloads/DateRun_" + today + "_part2.zip";
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    const dateRun = {
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/DateRun"
+    };
+    onMessageHandler(dateRun, {}, (result) => {
+        if (!result || result.result !== "started") {
+            fail("dated merge did not answer {result:'started'}, got " + JSON.stringify(result));
+        }
+    });
+    await waitFor(() => downloads.length === 1, "dated merge must deliver one archive");
+    if (downloads[0].filename !== datedName) {
+        fail("merged name must carry the date stamp, got " + downloads[0].filename + " (expected " + datedName + ")");
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "dated merge marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === datedName,
+        "the dated merge must record both ids under the dated name"
+    );
+    // Same batch again WITHOUT confirmation: warn-only answer, no job started.
+    const existingAnswer = await new Promise((resolve) => {
+        onMessageHandler(dateRun, {}, resolve);
+    });
+    if (!existingAnswer || existingAnswer.result !== "existing" || existingAnswer.filename !== datedName) {
+        fail("a re-run of the same merged name must answer existing, got " + JSON.stringify(existingAnswer));
+    }
+    if (sessionStore.downloadJob && sessionStore.downloadJob.active) {
+        fail("the existing answer must NOT start a job");
+    }
+    // Confirmed -> part 2, recorded under part 2.
+    downloads.length = 0;
+    const confirmedAnswer = await new Promise((resolve) => {
+        onMessageHandler(Object.assign({}, dateRun, { existingConfirmed: true }), {}, resolve);
+    });
+    if (!confirmedAnswer || confirmedAnswer.result !== "started") {
+        fail("confirmed re-run must start, got " + JSON.stringify(confirmedAnswer));
+    }
+    await waitFor(() => downloads.length === 1 && downloads[0].filename === part2Name,
+        "confirmed re-run must save the part-2 name, got " + JSON.stringify(downloads.map((d) => d.filename)));
+    await waitFor(() => sessionStore.downloadJob === undefined, "part-2 merge marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === part2Name,
+        "confirmed re-run must re-record both ids under the part-2 name"
+    );
+    console.log("PASS phase 5g: merged date stamp + part-2 numbering + warn-first, recorded under the exact name");
+
+    // ---- Phase 5h: multi-page merged naming keeps part numbers on the base --
+    // downloadAllPages appends " (lastPage)" itself, so the resolved base must
+    // be "<name>_DDMMYYYY[_partN]" and the artifact lands as
+    // "<base> (2).zip"; the disk candidates and history records must use THAT
+    // exact spelling, or a re-run would never detect the existing file.
+    syncSettings.verifyDownloadedFiles = true;
+    syncSettings.batchNameDate = true;
+    const pageRunName = "Downloads/PageRun_" + today + " (2).zip";
+    const pageRunPart2 = "Downloads/PageRun_" + today + "_part2 (2).zip";
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    const pageRun = {
+        action: "downloadAllPages",
+        allDoujinshis: {},
+        pages: [1, 2],
+        finalName: "Downloads/PageRun",
+        url: "https://nhentai.net/search/?q=test"
+    };
+    onMessageHandler(pageRun, {}, (result) => {
+        if (!result || result.result !== "started") {
+            fail("multi-page merged run did not answer {result:'started'}, got " + JSON.stringify(result));
+        }
+    });
+    await waitFor(() => downloads.length === 1 && downloads[0].filename === pageRunName,
+        "multi-page merge must save the dated name with the page marker, got " +
+        JSON.stringify(downloads.map((d) => d.filename)));
+    await waitFor(() => sessionStore.downloadJob === undefined, "multi-page merge marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === pageRunName,
+        "the multi-page merge must record both ids under the dated artifact name"
+    );
+    const pageExistingAnswer = await new Promise((resolve) => {
+        onMessageHandler(pageRun, {}, resolve);
+    });
+    if (!pageExistingAnswer || pageExistingAnswer.result !== "existing" || pageExistingAnswer.filename !== pageRunName) {
+        fail("a re-run of the same multi-page merge must answer existing, got " + JSON.stringify(pageExistingAnswer));
+    }
+    downloads.length = 0;
+    const pageConfirmedAnswer = await new Promise((resolve) => {
+        onMessageHandler(Object.assign({}, pageRun, { existingConfirmed: true }), {}, resolve);
+    });
+    if (!pageConfirmedAnswer || pageConfirmedAnswer.result !== "started") {
+        fail("confirmed multi-page re-run must start, got " + JSON.stringify(pageConfirmedAnswer));
+    }
+    await waitFor(() => downloads.length === 1 && downloads[0].filename === pageRunPart2,
+        "confirmed multi-page re-run must keep _part2 on the base, got " +
+        JSON.stringify(downloads.map((d) => d.filename)));
+    await waitFor(() => sessionStore.downloadJob === undefined, "multi-page part-2 marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === pageRunPart2,
+        "the multi-page part-2 merge must re-record both ids under the part-2 artifact name"
+    );
+    console.log("PASS phase 5h: multi-page merged naming keeps _part2 on the base (artifact + record + warn)");
+    // Keep the remaining phases deterministic.
+    syncSettings.verifyDownloadedFiles = false;
+    syncSettings.batchNameDate = false;
+
+    // ---- Phase 5i: a job with NO format override uses the STORED format for
+    // both the artifact and the history record (backlog item 33). The record
+    // and the file must carry the same extension, or "verify before skip"
+    // searches for a name that was never written and re-downloads the gallery
+    // on every listing run.
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    syncSettings = { useZip: "cbz", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW", verifyDownloadedFiles: true };
+    fireDownload("Downloads/CbzStored", "CbzStored");
+    await waitFor(() => downloads.length === 1, "a stored-cbz single title must deliver one archive");
+    if (downloads[0].filename !== "Downloads/CbzStored.cbz") {
+        fail("the stored format must name the artifact, got " + downloads[0].filename);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "stored-cbz job marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === "Downloads/CbzStored.cbz",
+        "the record must use the SAME cbz name the file was saved under"
+    );
+    // A stored setting left over from before PDF replaced the folder mode.
+    localSettings.downloadHistory = {};
+    downloads.length = 0;
+    syncSettings = { useZip: "folder", maxConcurrentDownloads: "3", rawMasterFolder: "NHDW", verifyDownloadedFiles: true };
+    fireDownload("Downloads/LegacyFolder", "LegacyFolder");
+    await waitFor(() => downloads.length === 1, "a legacy folder-format single title must deliver one artifact");
+    if (downloads[0].filename !== "Downloads/LegacyFolder.pdf") {
+        fail("the retired folder format must produce a PDF, got " + downloads[0].filename);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "legacy-folder job marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === "Downloads/LegacyFolder.pdf",
+        "the record must follow the legacy folder -> pdf mapping too"
+    );
+    console.log("PASS phase 5i: a job with no format override records the stored format (cbz + legacy folder->pdf)");
+
+    // ---- Phase 5j: merged naming follows the STORED format too (item 33).
+    // The disk candidates / part numbering used to be computed from the raw
+    // request, so a merged job with no override searched for ".zip" while the
+    // artifact on disk is ".cbz": the "you already have this file" warning
+    // could never fire and every re-run grew another _partN.
+    localSettings.downloadHistory = {};
+    sentMessages.length = 0;
+    downloads.length = 0;
+    syncSettings = {
+        useZip: "cbz",
+        maxConcurrentDownloads: "3",
+        rawMasterFolder: "NHDW",
+        verifyDownloadedFiles: true,
+        batchNameDate: false
+    };
+    const mergedStoredName = "Downloads/MergedStored.cbz";
+    const mergedRun = {
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/MergedStored"
+    };
+    onMessageHandler(mergedRun, {}, (result) => {
+        if (!result || result.result !== "started") {
+            fail("merged stored-format run did not answer {result:'started'}, got " + JSON.stringify(result));
+        }
+    });
+    await waitFor(() => downloads.length === 1, "the merged run must deliver one archive");
+    if (downloads[0].filename !== mergedStoredName) {
+        fail("merged artifact must use the stored cbz format, got " + downloads[0].filename);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "merged stored-format marker must clear");
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor(GALLERY_ID)] &&
+            localSettings.downloadHistory[historyKeyFor(GALLERY_ID)].filename === mergedStoredName,
+        "the merged record must use the same cbz name as the artifact"
+    );
+    // Re-run WITHOUT confirmation: the warn-first check must now find the real
+    // cbz artifact instead of looking for a .zip that was never written.
+    const mergedAgain = await new Promise((resolve) => {
+        onMessageHandler(mergedRun, {}, resolve);
+    });
+    if (!mergedAgain || mergedAgain.result !== "existing" || mergedAgain.filename !== mergedStoredName) {
+        fail("warn-first must match the real cbz artifact, got " + JSON.stringify(mergedAgain));
+    }
+    if (sessionStore.downloadJob && sessionStore.downloadJob.active) {
+        fail("the warn-first answer must NOT start a job");
+    }
+    console.log("PASS phase 5j: merged naming + warn-first follow the stored format (no override sent)");
+    syncSettings.verifyDownloadedFiles = false;
 
     // ---- Phase 6: interrupted-job detection --------------------------------
     // A job marker without an active downloader means a previous download died
@@ -671,15 +1181,145 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
     }
     console.log("PASS phase 10: keyless batch sends no Authorization header");
 
-    // ---- Phase 11: a batch-level failure shows its real reason -------------
-    // The batch .catch is the last user-facing error path. Before the 3.6.4
-    // backport it did String(error), so an object-shaped failure rendered
-    // "[object Object]" and an Error rendered "Error: <msg>" in the popup.
+    // ---- Phase 11: non-gallery JSON fails ONE gallery, not the whole batch --
+    // A metadata route that returns 200 with `{}` used to throw at
+    // json.title.pretty outside the per-gallery try, rejecting the entire
+    // downloadAllDoujinshisAsync: remaining titles skipped, no batchSummary,
+    // failures never remembered (item 28).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    localSettings = {};
+    syncSettings = { useZip: "zip", maxConcurrentDownloads: "3", duplicateBehaviour: "rename", verifyDownloadedFiles: false, batchNameDate: false };
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { "9": "EmptyJson", [GALLERY_ID]: "Test" },
+            galleryMetadata: { "9": {} },
+            finalName: "Downloads/EmptyJsonBatch"
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("empty-json batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "non-gallery JSON must not kill the batch: no batchSummary was sent"
+    );
+    const emptyJsonSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!emptyJsonSummary || emptyJsonSummary.succeeded !== 1 || emptyJsonSummary.failed !== 1 || emptyJsonSummary.total !== 2) {
+        fail("empty-json batch must report 1/1/2, got " + JSON.stringify(emptyJsonSummary));
+    }
+    if (!emptyJsonSummary.failedKinds || emptyJsonSummary.failedKinds.metadata !== 1) {
+        fail("non-gallery JSON is a metadata failure, got " + JSON.stringify(emptyJsonSummary.failedKinds));
+    }
+    if (!Array.isArray(emptyJsonSummary.failedGalleries) || emptyJsonSummary.failedGalleries.length !== 1
+        || emptyJsonSummary.failedGalleries[0].id !== "9" || emptyJsonSummary.failedGalleries[0].name !== "EmptyJson"
+        || !/not gallery metadata/.test(emptyJsonSummary.failedGalleries[0].error)) {
+        fail("empty-json batch must name the failed gallery, got " + JSON.stringify(emptyJsonSummary.failedGalleries));
+    }
+    if (downloads.length !== 1) {
+        fail("the remaining gallery must still deliver a ZIP, got " + downloads.length);
+    }
+    await waitFor(() => sessionStore.downloadJob === undefined, "empty-json batch marker must clear");
+    if (localSettings.downloadHistory && localSettings.downloadHistory[historyKeyFor("9")]) {
+        fail("the non-gallery title must not be recorded");
+    }
+    console.log("PASS phase 11: non-gallery JSON fails one gallery by name; the batch continues and records nothing for it");
+
+    // ---- Phase 12: merged "ignore" must not silently drop a duplicate title --
+    // Two different galleries sharing pretty title "Test", duplicateBehaviour
+    // ignore: merged mode used to `continue` uncounted and could record the
+    // archive as clean while missing a gallery (item 31). Now the second is
+    // id-suffixed and both land in the ZIP. Separate mode counts the skip.
+    const savedTitle2 = galleryJson2.title;
+    galleryJson2.title = { english: "Test", japanese: "", pretty: "Test" };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    localSettings = {};
+    syncSettings.duplicateBehaviour = "ignore";
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/DupIgnore"
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("merged ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "merged ignore-dup batch must finish");
+    const dupMergedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupMergedSummary || dupMergedSummary.succeeded !== 2 || dupMergedSummary.failed !== 0 || dupMergedSummary.skipped !== 0) {
+        fail("merged ignore-dup must keep both galleries (id-suffix the second), got " + JSON.stringify(dupMergedSummary));
+    }
+    if (downloads.length !== 1) {
+        fail("merged ignore-dup must deliver one archive, got " + downloads.length);
+    }
+    const dupZip = await JSZip.loadAsync(Buffer.from(downloads[0].url.split(",")[1], "base64"));
+    const dupEntries = Object.keys(dupZip.files).filter((n) => !dupZip.files[n].dir).sort();
+    const hasFirst = dupEntries.some((n) => n.indexOf("Test/") === 0);
+    const hasSecond = dupEntries.some((n) => n.indexOf("Test_(" + GALLERY_ID2 + ")") === 0);
+    if (!hasFirst || !hasSecond) {
+        fail("merged ignore-dup ZIP must contain both galleries (original + id-suffixed), got " + JSON.stringify(dupEntries));
+    }
+    console.log("PASS phase 12a: merged ignore-dup id-suffixes the second title instead of dropping it");
+
+    sentMessages.length = 0;
+    downloads.length = 0;
+    localSettings = {};
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/DupIgnoreSep",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("separate ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "separate ignore-dup batch must finish");
+    const dupSepSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupSepSummary || dupSepSummary.succeeded !== 1 || dupSepSummary.failed !== 0 || dupSepSummary.skipped !== 1 || dupSepSummary.total !== 2) {
+        fail("separate ignore-dup must count the drop as skipped:1, got " + JSON.stringify(dupSepSummary));
+    }
+    if (downloads.length !== 1) {
+        fail("separate ignore-dup must deliver one archive (the first title), got " + downloads.length);
+    }
+    galleryJson2.title = savedTitle2;
+    syncSettings.duplicateBehaviour = "rename";
+    console.log("PASS phase 12b: separate ignore-dup counts the dropped title in skipped");
+
+    // ---- Phase 12c: a batch-level failure shows its real reason -------------
+    // The batch .catch is the last user-facing error path; it used to do
+    // String(error), so an Error rendered as "Error: <msg>" and a plain object
+    // as "[object Object]" - the exact report shape 3.6.1 removed everywhere
+    // else. Both shapes must now arrive readable.
     for (const thrown of [{ message: "channel closed (fixture)" }, new Error("worker restarted (fixture)")]) {
+        localSettings.downloadHistory = {};
         sentMessages.length = 0;
+        downloads.length = 0;
+        syncSettings = { useZip: "zip", maxConcurrentDownloads: "3", verifyDownloadedFiles: false };
         sendMessageThrows = thrown;
         onMessageHandler(
-            { action: "downloadAllDoujinshis", allDoujinshis: { [GALLERY_ID]: "Test" }, finalName: "Downloads/BatchThrow" },
+            {
+                action: "downloadAllDoujinshis",
+                allDoujinshis: { [GALLERY_ID]: "One" },
+                finalName: "Downloads/BatchThrow",
+                separate: true
+            },
             {},
             () => {}
         );
@@ -689,14 +1329,161 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         );
         const batchError = sentMessages.find((m) => m.action === "downloadError");
         const text = String(batchError.error);
-        if (text !== thrown.message) {
+        const expectedText = thrown instanceof Error ? thrown.message : thrown.message;
+        if (text !== expectedText) {
             fail("the batch error must be the thrown message alone, got " + JSON.stringify(text));
         }
-        if (/\[object Object\]/.test(text) || /^Error:/.test(text)) {
-            fail("a batch-level failure must render its reason, got " + JSON.stringify(text));
+        if (/\[object Object\]/.test(text)) {
+            fail("a batch-level failure must never render [object Object], got " + JSON.stringify(text));
         }
+        if (/^Error:/.test(text)) {
+            fail("a batch-level failure must not carry an 'Error: ' prefix, got " + JSON.stringify(text));
+        }
+        await waitFor(() => sessionStore.downloadJob === undefined, "batch-level throw must clear the job marker");
     }
-    console.log("PASS phase 11: batch-level failures render their real reason (object + Error shapes)");
+    console.log("PASS phase 12c: batch-level failures render their real reason (object + Error shapes)");
+
+    // ---- Phase 13: the persistent bookmark queue --------------------------
+    // The worker is the single writer for this list: the content script and the
+    // panel only ask it to change. These phases drive the real message handlers
+    // in js/background.js, not a re-implementation of them.
+    {
+        localSettings.bookmarkQueue = undefined;
+        localSettings.downloadHistory = {};
+        sentMessages.length = 0;
+
+        const ask = (message) => new Promise((resolve) => {
+            onMessageHandler(message, {}, (response) => resolve(response));
+        });
+
+        // 13a. A card bookmark lands in chrome.storage.local.
+        const added = await ask({
+            action: "bookmarkAdd",
+            items: [
+                { id: "366224", title: "First", thumbnail: "https://t.nhentai.net/galleries/1/thumb.jpg", pages: 71, source: "card" },
+                { id: "177013", title: "Second", source: "paste" }
+            ]
+        });
+        if (!added || added.result !== "success") {
+            fail("bookmarkAdd must answer success, got " + JSON.stringify(added));
+        }
+        if (added.state.items.length !== 2) {
+            fail("bookmarkAdd must store both rows, got " + JSON.stringify(added.state.items));
+        }
+        if (!localSettings.bookmarkQueue || localSettings.bookmarkQueue.items.length !== 2) {
+            fail("the bookmark list must be persisted to chrome.storage.local, got " +
+                JSON.stringify(localSettings.bookmarkQueue));
+        }
+        console.log("PASS phase 13a: bookmarkAdd persists the list to chrome.storage.local");
+
+        // 13b. The same id twice must not create a second row, and must not
+        // reset a row that already finished.
+        const dup = await ask({ action: "bookmarkAdd", items: [{ id: "366224", title: "First again" }] });
+        if (dup.state.items.length !== 2) {
+            fail("re-bookmarking an id must not add a row, got " + dup.state.items.length);
+        }
+        if (dup.state.items.find((item) => item.id === "366224").title !== "First") {
+            fail("re-bookmarking must not overwrite the stored row");
+        }
+        console.log("PASS phase 13b: re-bookmarking an id is a no-op, not a duplicate");
+
+        // 13c. Selection, the dock and removal all round-trip through the worker.
+        const selected = await ask({ action: "bookmarkSelect", ids: ["177013"], selected: false });
+        if (selected.state.items.find((item) => item.id === "177013").selected !== false) {
+            fail("bookmarkSelect must untick the named row");
+        }
+        const collapsed = await ask({ action: "bookmarkCollapse", collapsed: true });
+        if (collapsed.state.collapsed !== true) {
+            fail("bookmarkCollapse must persist the minimised dock");
+        }
+        const removed = await ask({ action: "bookmarkRemove", ids: ["177013"] });
+        if (removed.state.items.length !== 1 || removed.state.collapsed !== true) {
+            fail("bookmarkRemove must drop the row and keep the dock minimised, got " + JSON.stringify(removed.state));
+        }
+        console.log("PASS phase 13c: select / minimise / remove all round-trip through the worker");
+
+        // 13d. A finished download settles the row, with the file it saved.
+        // jobFinished / batchSummary are OFFSCREEN broadcasts, so they carry
+        // from:"offscreen" exactly as the real document sends them.
+        onMessageHandler(
+            { from: "offscreen", action: "jobFinished", records: [{ id: "366224", filename: "NHDW/First.zip" }] },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => localSettings.bookmarkQueue &&
+                localSettings.bookmarkQueue.items.find((item) => item.id === "366224").status === "done",
+            "a finished download must mark its bookmark row done"
+        );
+        const doneRow = localSettings.bookmarkQueue.items.find((item) => item.id === "366224");
+        if (doneRow.filename !== "NHDW/First.zip") {
+            fail("a done row must carry the saved file name, got " + doneRow.filename);
+        }
+        console.log("PASS phase 13d: a finished download settles the bookmark row with its file name");
+
+        // 13e. A named failure lands on the row, so the Queue tab can show why.
+        await ask({ action: "bookmarkAdd", items: [{ id: "999001", title: "Broken", source: "card" }] });
+        onMessageHandler(
+            { from: "offscreen", action: "batchSummary", failedGalleries: [{ id: "999001", name: "Broken", error: "Cloudflare blocked it" }] },
+            {},
+            () => {}
+        );
+        await waitFor(
+            () => localSettings.bookmarkQueue.items.find((item) => item.id === "999001").status === "failed",
+            "a named failure must mark its bookmark row failed"
+        );
+        const failedRow = localSettings.bookmarkQueue.items.find((item) => item.id === "999001");
+        if (failedRow.error !== "Cloudflare blocked it") {
+            fail("a failed row must keep the reason, got " + JSON.stringify(failedRow.error));
+        }
+        console.log("PASS phase 13e: a named failure lands on the bookmark row with its reason");
+
+        // 13f. THE persistence requirement: a row left "downloading" when the
+        // browser closed must come back actionable, not stranded. Reloading the
+        // bundle in the same realm is a fresh service-worker instance reading
+        // the same chrome.storage.local - exactly a browser restart.
+        localSettings.bookmarkQueue.items.find((item) => item.id === "999001").status = "downloading";
+        localSettings.downloadHistory = { "366224": { filename: "NHDW/First.zip", when: 1 } };
+        vm.runInContext(code, vmCtx, { filename: bundlePath });
+        const afterRestart = await ask({ action: "bookmarkGet" });
+        const stranded = afterRestart.state.items.find((item) => item.id === "999001");
+        if (stranded.status !== "saved") {
+            fail("a row persisted as downloading must come back actionable after a restart, got " + stranded.status);
+        }
+        const stillDone = afterRestart.state.items.find((item) => item.id === "366224");
+        if (stillDone.status !== "done" || stillDone.filename !== "NHDW/First.zip") {
+            fail("a finished row the history still records must survive a restart, got " + JSON.stringify(stillDone));
+        }
+        if (afterRestart.state.collapsed !== true) {
+            fail("the dock must reopen the way the user left it after a restart");
+        }
+        console.log("PASS phase 13f: the list survives a worker restart - in-flight rows recover, finished rows stay, the dock stays");
+
+        // 13g. A done row whose history record was cleared must not keep
+        // claiming a download the extension no longer believes in.
+        localSettings.downloadHistory = {};
+        vm.runInContext(code, vmCtx, { filename: bundlePath });
+        const afterClear = await ask({ action: "bookmarkGet" });
+        const unrecorded = afterClear.state.items.find((item) => item.id === "366224");
+        if (unrecorded.status !== "done") {
+            // Reconciliation already ran for this worker instance in 13f's
+            // fresh load; only a fresh instance re-checks the history.
+            vm.runInContext(code, vmCtx, { filename: bundlePath });
+            const retry = await ask({ action: "bookmarkGet" });
+            if (retry.state.items.find((item) => item.id === "366224").status !== "saved") {
+                fail("a done row with no history record must drop back to saved, got " +
+                    retry.state.items.find((item) => item.id === "366224").status);
+            }
+        }
+        console.log("PASS phase 13g: a done row follows the download history it is based on");
+
+        // 13h. Every mutation tells any open panel to repaint.
+        const broadcasts = sentMessages.filter((message) => message.action === "bookmarkChanged");
+        if (broadcasts.length === 0) {
+            fail("bookmark mutations must broadcast bookmarkChanged so an open panel repaints");
+        }
+        console.log("PASS phase 13h: bookmark mutations broadcast bookmarkChanged (" + broadcasts.length + " seen)");
+    }
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");
     process.exit(0);

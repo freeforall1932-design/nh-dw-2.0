@@ -330,7 +330,136 @@ describe('Downloader (raw mode)', () => {
         downloader.retryBackoffMs = 0;
         await assert.rejects(downloader.startAsync());
         assert.ok(error !== null && /Failed to download original image/.test(error));
+        assert.ok(/download failed \(fixture\)/.test(error), 'the browser\'s reason must be readable, not [object Object]: ' + error);
         assert.strictEqual(chrome.downloads.calls.length, 3 * 6, '3 pages x (1 attempt + 5 retries)');
+    });
+
+    it('never renders "Error: [object Object]" for a synchronous object throw', async () => {
+        // Regression for the raw-mode report "Failed to download original
+        // image (Error: [object Object]).": the download API threw a bare
+        // object; String()-ing it wrapped Error("[object Object]") and the
+        // raw catch then stringified the Error itself. Both layers must now
+        // unwrap .message (or fall back to a readable constant).
+        chrome.downloads.download = () => { throw { message: 'download failed (sync object)' }; };
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/FailObj', (e) => { error = e; }, () => {}, 'FailObj', new JSZip(), null);
+        downloader.retryBackoffMs = 0;
+        await assert.rejects(downloader.startAsync());
+        assert.ok(/Failed to download original image/.test(error));
+        assert.ok(/download failed \(sync object\)/.test(error), 'the object\u0027s message must survive, got: ' + error);
+        assert.ok(!/\[object Object\]/.test(error), 'no [object Object] may reach the report, got: ' + error);
+        assert.ok(!/Error:/.test(error), 'no "Error:" double-wrap, got: ' + error);
+    });
+
+    // ---- completion tracking (3.6.0) -------------------------------------
+    // With chrome.downloads.onChanged available, a page only counts as saved
+    // once its download reaches state "complete". The stub below drives the
+    // terminal state per download from a script so the tests can simulate a
+    // page that is interrupted AFTER it started.
+    function makeTrackedChromeStub(outcomeFor, rawMaxConcurrent) {
+        const stub = makeChromeStub('raw', '3', { rawMaxConcurrent: rawMaxConcurrent || '3' });
+        const listeners = [];
+        let nextId = 1;
+        let inFlight = 0;
+        stub.downloads.maxInFlight = 0;
+        stub.downloads.onChanged = { addListener(fn) { listeners.push(fn); } };
+        stub.downloads.cancelled = [];
+        stub.downloads.cancel = (id, cb) => { stub.downloads.cancelled.push(id); if (cb) cb(); };
+        stub.downloads.search = (query, cb) => cb([{ id: query.id, state: 'in_progress' }]);
+        stub.downloads.download = (opts, cb) => {
+            const id = nextId++;
+            const attempt = stub.downloads.calls.filter((c) => c.filename === opts.filename).length;
+            stub.downloads.calls.push(opts);
+            inFlight++;
+            stub.downloads.maxInFlight = Math.max(stub.downloads.maxInFlight, inFlight);
+            if (cb) cb(id);
+            const outcome = outcomeFor(opts.filename, attempt);
+            setTimeout(() => {
+                inFlight--;
+                const delta = outcome === 'complete'
+                    ? { id: id, state: { current: 'complete' } }
+                    : { id: id, state: { current: 'interrupted' }, error: { current: outcome } };
+                for (const fn of listeners) fn(delta);
+            }, 2);
+        };
+        return stub;
+    }
+
+    it('counts a raw page as saved only when its download completes (not when it starts)', async () => {
+        // Page 2 is interrupted once after it started, then completes on retry.
+        const tracked = makeTrackedChromeStub((filename, attempt) =>
+            (/002\.png$/.test(filename) && attempt === 0) ? 'NETWORK_FAILED' : 'complete');
+        globalThis.chrome = tracked;
+        let error = null;
+        const retries = [];
+        const downloader = new Downloader(gallery, 'Downloads/Tracked', (e) => { error = e; }, (_p, _n, _z, retry) => { if (retry) retries.push(retry); }, 'Tracked', new JSZip(), null);
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+        assert.strictEqual(error, null, 'a page that succeeds on retry must not fail the gallery');
+        assert.strictEqual(tracked.downloads.calls.length, 4, '3 pages + 1 retry of the interrupted page');
+        assert.strictEqual(tracked.downloads.calls.filter((c) => /002\.png$/.test(c.filename)).length, 2);
+        assert.ok(retries.length >= 1 && /retry 1\/5/.test(retries[0]), 'the retry must surface in the progress UI');
+        assert.ok(downloader.isDone());
+    });
+
+    it('fails the gallery (never "complete") when a raw page keeps getting interrupted', async () => {
+        const tracked = makeTrackedChromeStub((filename) => /003\.jpg$/.test(filename) ? 'FILE_NO_SPACE' : 'complete');
+        globalThis.chrome = tracked;
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/Defective', (e) => { error = e; }, () => {}, 'Defective', new JSZip(), null);
+        downloader.retryBackoffMs = 0;
+        await assert.rejects(downloader.startAsync());
+        assert.ok(error !== null && /Failed to download original image/.test(error), 'the gallery must be reported as failed: ' + error);
+        assert.ok(/FILE_NO_SPACE/.test(error), 'the interruption reason must be visible: ' + error);
+        assert.strictEqual(tracked.downloads.calls.filter((c) => /003\.jpg$/.test(c.filename)).length, 6, '1 attempt + 5 retries for the bad page');
+        assert.strictEqual(tracked.downloads.calls.filter((c) => !/003\.jpg$/.test(c.filename)).length, 2, 'good pages are downloaded once');
+    });
+
+    it('caps how many raw pages are in flight at once (rawMaxConcurrent, independent of the archive setting)', async () => {
+        const bigGallery = Object.assign({}, gallery, { images: { pages: [1, 2, 3, 4, 5, 6, 7].map(() => ({ t: 'j' })) } });
+        const tracked = makeTrackedChromeStub(() => 'complete', '2');
+        // The archive concurrency setting is much higher; raw must ignore it.
+        tracked.storage.sync.get = (defaults, cb) => cb(Object.assign({}, defaults, { useZip: 'raw', maxConcurrentDownloads: '15', rawMaxConcurrent: '2' }));
+        globalThis.chrome = tracked;
+        const downloader = new Downloader(bigGallery, 'Downloads/Capped', () => {}, () => {}, 'Capped', new JSZip(), null);
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+        assert.strictEqual(tracked.downloads.calls.length, 7);
+        assert.strictEqual(tracked.downloads.maxInFlight, 2, 'never more than rawMaxConcurrent browser downloads at once');
+        assert.strictEqual(downloader.maxConcurrentDownloads, 2);
+    });
+
+    it('applies the relayed rawMaxConcurrent in contexts without chrome.storage (offscreen options)', async () => {
+        const tracked = makeTrackedChromeStub(() => 'complete');
+        globalThis.chrome = tracked;
+        const downloader = new Downloader(gallery, 'Downloads/Relayed', () => {}, () => {}, 'Relayed', new JSZip(), null, null, undefined,
+            { useZip: 'raw', maxConcurrentDownloads: '10', rawMaxConcurrent: '1', archiveLayout: 'flat' });
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+        assert.strictEqual(downloader.maxConcurrentDownloads, 1);
+        assert.strictEqual(tracked.downloads.maxInFlight, 1);
+    });
+
+    it('a cancelled job stops waiting and cancels the loose page downloads', async () => {
+        const stub = makeChromeStub('raw');
+        const listeners = [];
+        stub.downloads.onChanged = { addListener(fn) { listeners.push(fn); } };
+        stub.downloads.cancelled = [];
+        stub.downloads.cancel = (id, cb) => { stub.downloads.cancelled.push(id); if (cb) cb(); };
+        stub.downloads.search = (query, cb) => cb([{ id: query.id, state: 'in_progress' }]);
+        let nextId = 1;
+        stub.downloads.download = (opts, cb) => { stub.downloads.calls.push(opts); if (cb) cb(nextId++); }; // never completes
+        globalThis.chrome = stub;
+        const controller = new AbortController();
+        let error = null;
+        const downloader = new Downloader(gallery, 'Downloads/Abort', (e) => { error = e; }, () => {}, 'Abort', new JSZip(), null, controller.signal);
+        downloader.retryBackoffMs = 0;
+        const run = downloader.startAsync();
+        await new Promise((r) => setTimeout(r, 5));
+        controller.abort();
+        await assert.rejects(run);
+        assert.strictEqual(error, null, 'a user cancel is not reported as an error');
+        assert.ok(stub.downloads.cancelled.length >= 1, 'in-flight raw pages are cancelled in the browser');
     });
 });
 
@@ -486,6 +615,59 @@ describe('Downloader (archive layout)', () => {
         const zip = await decodeZip(chrome.downloads.calls[0].url);
         const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
         assert.deepStrictEqual(names, ['Downloads/Nested/001.jpg', 'Downloads/Nested/002.png', 'Downloads/Nested/003.jpg']);
+    });
+});
+
+describe('Downloader (optional archive master folder)', () => {
+    // List mode can wrap finished archives in a master folder the same way raw
+    // downloads wrap their titled folders - but the wrap is a user choice, so
+    // it must be OFF unless a caller asks for it (single-title downloads keep
+    // landing straight in the download folder).
+    let chrome;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip');
+        globalThis.chrome = chrome;
+        globalThis.fetch = makeFetchStub();
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+    });
+
+    async function runWith(settings) {
+        const downloader = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Title', () => {}, () => {}, 'Title',
+            new JSZip(), 'Title', null, undefined,
+            Object.assign({ useZip: 'zip', maxConcurrentDownloads: 3, archiveLayout: 'flat' }, settings));
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+        return chrome.downloads.calls[0].filename;
+    }
+
+    it('saves straight into the download folder when no master folder is requested', async () => {
+        assert.strictEqual(await runWith({}), 'Title.zip');
+    });
+
+    it('wraps the archive when the caller asks for a master folder', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: 'NHDW' }), 'NHDW/Title.zip');
+    });
+
+    it('treats an explicitly empty master folder as "no wrap"', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: '' }), 'Title.zip');
+    });
+
+    it('supports a nested master folder path', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: 'NHDW/lists' }), 'NHDW/lists/Title.zip');
+    });
+
+    it('sanitizes a user-typed master folder per path segment', async () => {
+        assert.strictEqual(await runWith({ archiveMasterFolder: 'My:Folder* ' }), 'MyFolder/Title.zip');
     });
 });
 

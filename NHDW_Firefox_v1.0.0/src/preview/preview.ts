@@ -1,37 +1,56 @@
-import Popup from "./popup"
+import Popup, { refreshFailedNotice } from "./popup"
 import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import { message } from "./message";
 import { renderSettings } from "./popupSettings";
+import { renderBookmarks, watchBookmarkChanges } from "./bookmarkPanel";
+import { readListSettings } from "../utils/listSettings";
 
 let popup = Popup.getInstance();
 
-// Popup tabs: "Download" (the preview/batch/progress UI rendered into #action)
-// and "Settings" (API key + file-name template, editable on the fly without
-// opening the separate options page). Switching only toggles visibility, so an
-// in-progress download keeps updating #action in the background.
+// Panel tabs: "Download" (the preview/batch/progress UI rendered into #action),
+// "Queue" (the persistent bookmark list) and "Settings" (API key + file-name
+// template, editable on the fly without opening the separate options page).
+// Switching only toggles visibility, so an in-progress download keeps updating
+// #action in the background and a half-typed paste survives a tab switch.
+type PanelTab = "download" | "queue" | "settings";
+
 function initPopupTabs() {
     const tabDownload = document.getElementById("tabDownload");
+    const tabQueue = document.getElementById("tabQueue");
     const tabSettings = document.getElementById("tabSettings");
     const actionPane = document.getElementById("action");
+    const queuePane = document.getElementById("queuePane");
     const settingsPane = document.getElementById("settingsPane");
-    if (!tabDownload || !tabSettings || !actionPane || !settingsPane) {
+    if (!tabDownload || !tabQueue || !tabSettings || !actionPane || !queuePane || !settingsPane) {
         return;
     }
-    const show = (which: "download" | "settings") => {
-        const isSettings = which === "settings";
-        actionPane.hidden = isSettings;
-        settingsPane.hidden = !isSettings;
-        tabDownload.classList.toggle("active", !isSettings);
-        tabSettings.classList.toggle("active", isSettings);
-        if (isSettings) {
+    const show = (which: PanelTab) => {
+        actionPane.hidden = which !== "download";
+        queuePane.hidden = which !== "queue";
+        settingsPane.hidden = which !== "settings";
+        tabDownload.classList.toggle("active", which === "download");
+        tabQueue.classList.toggle("active", which === "queue");
+        tabSettings.classList.toggle("active", which === "settings");
+        if (which === "settings") {
             // Re-render on every open so the saved key state and template are
             // always reflected accurately.
             renderSettings(settingsPane);
         }
+        if (which === "queue") {
+            // The bookmark list is storage-backed, so it is re-read on every
+            // open: another tab, a card click or a settled download may have
+            // changed it while this pane was hidden. The chrome is built once,
+            // so what the user typed is kept.
+            renderBookmarks(queuePane);
+        }
     };
     tabDownload.addEventListener("click", () => show("download"));
+    tabQueue.addEventListener("click", () => show("queue"));
     tabSettings.addEventListener("click", () => show("settings"));
+    // Live row updates (a card bookmarked on the page, a download settling)
+    // arrive whether or not this pane is the visible one.
+    watchBookmarkChanges();
 }
 
 if (document.readyState === "loading") {
@@ -41,13 +60,14 @@ if (document.readyState === "loading") {
 }
 
 // ---- mobile bottom action bar (coarse-pointer devices ONLY) ---------------
-// Desktop/mobile separation rule: the desktop popup DOM must stay
-// byte-identical to the classic layout, so no markup restructuring happens
-// for fine-pointer environments. On phone-width touch devices (Firefox for
-// Android opens this document in a full tab) the primary buttons of the
-// CURRENT popup state are relocated at runtime into a fixed bottom footer —
-// the same idiom as the in-page .nhdw-action-bar — and a MutationObserver
-// reapplies the relocation after every innerHTML swap of a popup state.
+// Desktop/mobile separation rule (FIREFOX_PARITY_PLAN.md R1): the desktop
+// popup DOM must stay byte-identical to the classic layout, so no markup
+// restructuring happens for fine-pointer environments. On phone-width touch
+// devices (Firefox for Android opens this document in a full tab) the primary
+// buttons of the CURRENT popup state are relocated at runtime into a fixed
+// bottom footer — the same idiom as the in-page .nhdw-action-bar — and a
+// MutationObserver reapplies the relocation after every innerHTML swap of a
+// popup state. Firefox-only delta over the Chrome tree.
 const MOBILE_BAR_MEDIA = "(max-width: 640px) and (pointer: coarse)";
 const MOBILE_BAR_BUTTON_IDS: string[] = [
     "button", "buttonAll", "buttonBack", "buttonPause", "buttonResume",
@@ -135,50 +155,46 @@ if (document.readyState === "loading") {
     installMobileActionBar();
 }
 
+// index.html is rendered BOTH as the toolbar popup and as the chrome.sidePanel
+// view (one document, no duplicated markup). A popup needs the fixed 500px
+// width from style.css; a side panel is resized by the user, so the fixed
+// width is dropped there. The active UI mode is the source of truth: when it
+// is "sidepanel" the toolbar click opens the panel, so this document is one.
+function applyUiModeClass() {
+    try {
+        // Firefox delta: chrome.sidePanel does not exist outside Chromium, so
+        // the stored "sidepanel" mode must render as the classic fixed-width
+        // popup here — otherwise the fluid nhdwPanel width would restyle the
+        // desktop Firefox popup. Only apply the panel class where the panel
+        // API can actually open one.
+        const hasSidePanel: boolean = typeof (chrome as any).sidePanel !== "undefined"
+            && typeof (chrome as any).sidePanel.setPanelBehavior === "function";
+        chrome.storage.sync.get({ uiMode: "sidepanel" }, (elems: any) => {
+            const root = document.documentElement;
+            if (!root) {
+                return;
+            }
+            if (hasSidePanel && elems && elems.uiMode === "sidepanel") {
+                root.classList.add("nhdwPanel");
+            } else {
+                root.classList.remove("nhdwPanel");
+            }
+        });
+    } catch (_) { /* cosmetic only */ }
+}
+applyUiModeClass();
+
 // Ask the service worker (which owns the CDN config and chrome.permissions)
 // whether nhentai reported image hosts the extension has no host permission
 // for. If so, offer the optional https://*.nhentai.net grant from here —
 // permissions.request requires a user gesture, which only this click gives.
 // Downloads are never blocked by this: the worker only uses permitted hosts.
-function refreshCdnNotice() {
-    try {
-        chrome.runtime.sendMessage({ action: "getCdnStatus" }, (status: any) => {
-            const notice = document.getElementById("cdnNotice");
-            if (!notice || !status || status.result !== "success"
-                || !Array.isArray(status.missingOrigins) || status.missingOrigins.length === 0) {
-                return;
-            }
-            const missingOrigins: string[] = status.missingOrigins;
-            notice.innerHTML = message.cdnNotice(missingOrigins);
-            notice.hidden = false;
-            const grantButton = document.getElementById("buttonGrantCdn");
-            if (!grantButton) {
-                return;
-            }
-            grantButton.addEventListener("click", function() {
-                const granted = (ok: boolean) => {
-                    if (ok) {
-                        notice.hidden = true;
-                    }
-                };
-                try {
-                    const result: any = (chrome as any).permissions.request({ origins: missingOrigins }, (ok: boolean) => {
-                        granted(!!ok && !chrome.runtime.lastError);
-                    });
-                    if (result && typeof result.then === "function") {
-                        result.then(granted).catch(() => { /* user dismissed the prompt */ });
-                    }
-                } catch (_) { /* permissions API unavailable: notice stays visible */ }
-            });
-        });
-    } catch (_) { /* worker unreachable: no notice */ }
-}
-
 // Firefox MV3 does NOT grant host_permissions at install time — they behave
 // like optional permissions until the user approves them (on Firefox for
 // Android the grant prompt appears only when requested). Without the base
 // nhentai.net grant nothing works, so show a one-tap grant notice on first
-// runs. No-op on Chrome / already-granted installs (contains() is true).
+// runs. No-op on already-granted installs (contains() is true).
+// Firefox-only delta over the Chrome tree; additive notice.
 const BASE_HOST_ORIGINS: string[] = [
     "https://nhentai.net/*",
     "https://i.nhentai.net/*",
@@ -229,7 +245,48 @@ function refreshHostNotice() {
     } catch (_) { /* best effort only */ }
 }
 
-chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+function refreshCdnNotice() {
+    try {
+        chrome.runtime.sendMessage({ action: "getCdnStatus" }, (status: any) => {
+            const notice = document.getElementById("cdnNotice");
+            if (!notice || !status || status.result !== "success"
+                || !Array.isArray(status.missingOrigins) || status.missingOrigins.length === 0) {
+                return;
+            }
+            const missingOrigins: string[] = status.missingOrigins;
+            notice.innerHTML = message.cdnNotice(missingOrigins);
+            notice.hidden = false;
+            const grantButton = document.getElementById("buttonGrantCdn");
+            if (!grantButton) {
+                return;
+            }
+            grantButton.addEventListener("click", function() {
+                const granted = (ok: boolean) => {
+                    if (ok) {
+                        notice.hidden = true;
+                    }
+                };
+                try {
+                    const result: any = (chrome as any).permissions.request({ origins: missingOrigins }, (ok: boolean) => {
+                        granted(!!ok && !chrome.runtime.lastError);
+                    });
+                    if (result && typeof result.then === "function") {
+                        result.then(granted).catch(() => { /* user dismissed the prompt */ });
+                    }
+                } catch (_) { /* permissions API unavailable: notice stays visible */ }
+            });
+        });
+    } catch (_) { /* worker unreachable: no notice */ }
+}
+
+// Last URL the view was rendered for (side-panel mode re-renders on change).
+let lastBootstrappedUrl: string | null = null;
+
+function bootstrapForActiveTab() {
+    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+    if (!tabs || !tabs[0]) {
+        return;
+    }
     chrome.storage.sync.get({
         darkMode: false,
         htmlParsing: false
@@ -243,10 +300,13 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
 
         let currUrl = tabs[0].url as string;
         popup.url = currUrl;
+        lastBootstrappedUrl = currUrl;
         // Independent of the download state: surface the optional host grant
         // when nhentai's CDN config reports hosts we have no permission for.
         refreshCdnNotice();
         refreshHostNotice();
+        // Galleries that failed earlier in this session (named, retryable).
+        refreshFailedNotice();
         chrome.storage.local.get({
             lastUrl: ""
         }, function(elemsLocal) {
@@ -297,23 +357,45 @@ chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
             return; // Early return as we're handling the async response above
         });
     });
-});
+    });
+}
+
+bootstrapForActiveTab();
+
+// Side-panel mode: the same document stays open while the user switches tabs
+// and navigates, so the view must follow the active tab instead of rendering
+// once at open time. In popup mode these events effectively never fire (the
+// popup is destroyed as soon as focus leaves it), so registering them is free.
+function rebootstrapIfUrlChanged() {
+    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+        const url = tabs && tabs[0] ? String(tabs[0].url || "") : "";
+        if (url === "" || url === lastBootstrappedUrl) {
+            return;
+        }
+        lastBootstrappedUrl = url;
+        bootstrapForActiveTab();
+    });
+}
+try {
+    chrome.tabs.onActivated.addListener(() => rebootstrapIfUrlChanged());
+    chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+        if (changeInfo.status === "complete" || changeInfo.url !== undefined) {
+            if (tab && tab.active) {
+                rebootstrapIfUrlChanged();
+            }
+        }
+    });
+} catch (_) { /* chrome.tabs events unavailable: single-shot popup behaviour */ }
 
 // Display popup for many doujinshis
 chrome.runtime.onMessage.addListener(function(request, _) {
     if (request.action == "getGalleries") {
-        chrome.storage.sync.get({
-            useZip: "zip",
-            downloadName: "{pretty}",
-            replaceSpaces: true
-        }, function(elems) {
+        readListSettings().then((listSettings) => {
             popup.updatePreviewAll(
                 request.galleries || [],
                 request.currentPage || 0,
                 request.maxPage || 0,
-                elems.downloadName,
-                elems.useZip,
-                elems.replaceSpaces
+                listSettings
             );
         });
     }

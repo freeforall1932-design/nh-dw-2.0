@@ -21,7 +21,7 @@ describe('MV3 manifest', () => {
     });
 
     it('keeps source and release manifests in sync for runtime-critical fields', () => {
-        for (const key of ['permissions', 'optional_host_permissions', 'host_permissions', 'background', 'action', 'content_scripts', 'options_ui']) {
+        for (const key of ['permissions', 'optional_host_permissions', 'host_permissions', 'background', 'action', 'side_panel', 'content_scripts', 'options_ui']) {
             assert.deepStrictEqual(releaseManifest[key], sourceManifest[key], `release manifest ${key} differs from source`);
         }
     });
@@ -76,6 +76,30 @@ describe('MV3 manifest', () => {
                 assert.ok(VALID.has(permission),
                     'unknown permission "' + permission + '" would make Chrome refuse to load the extension');
             }
+        }
+    });
+
+    it('ships the side panel as a first-class UI with the popup kept as fallback', () => {
+        // The panel and the popup render the SAME document: one rendered view,
+        // no duplicated markup. A settings toggle (uiMode) decides which one a
+        // toolbar click opens at runtime via chrome.sidePanel.setPanelBehavior
+        // / chrome.action.setPopup.
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            assert.ok(manifest.permissions.includes('sidePanel'),
+                'sidePanel permission is required for chrome.sidePanel');
+            assert.ok(manifest.side_panel && manifest.side_panel.default_path === 'index.html',
+                'side_panel.default_path must point at the shared popup document');
+            assert.strictEqual(manifest.action.default_popup, 'index.html',
+                'the popup fallback must stay declared so users can switch back to it');
+        }
+    });
+
+    it('injects the in-page listing card controls alongside the legacy checkbox script', () => {
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            const scripts = manifest.content_scripts[0].js;
+            assert.ok(scripts.includes('js/content.js'), 'legacy caption checkbox script must stay');
+            assert.ok(scripts.includes('js/listControls.js'),
+                'in-page Download/Select card controls must be injected on listing pages');
         }
     });
 

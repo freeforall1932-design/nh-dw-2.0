@@ -15,6 +15,10 @@ const code = fs.readFileSync(bundlePath, "utf8");
 let onMessageHandler = null;
 const relays = [];            // messages sent to the offscreen document
 const broadcasts = [];        // messages sent to the popup
+const downloadChangedListeners = [];
+const downloadItems = {};     // downloadId -> {id, state} for downloads.search
+const cancelledDownloads = [];
+function fireDownloadChanged(delta) { for (const fn of downloadChangedListeners) fn(delta); }
 const downloadCalls = [];     // chrome.downloads.download calls by the worker
 const executeScriptCalls = [];
 let createDocumentCalls = 0;
@@ -24,6 +28,8 @@ let hasDocumentResult = false;
 let offscreenFinished = false;
 // chrome.storage.session backing store (the active-job marker lives here).
 const sessionStore = {};
+// chrome.action.setPopup calls made by the UI-mode (popup vs side panel) switch.
+const actionPopupCalls = [];
 
 const chromeStub = {
     tabs: {
@@ -31,15 +37,21 @@ const chromeStub = {
         onActivated: { addListener() {} },
         query(_query, cb) { cb([{ url: "https://nhentai.net/g/1/" }]); }
     },
-    action: { setIcon() {} },
+    action: {
+        setIcon() {},
+        // The UI-mode switch clears / restores the action popup so a toolbar
+        // click can open the side panel instead.
+        setPopup(details) { actionPopupCalls.push(details); }
+    },
     storage: {
         sync: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
         local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } },
         session: {
             get(key, cb) { cb(typeof key === "string" ? { [key]: sessionStore[key] } : Object.assign({}, sessionStore)); },
-            set(items) { Object.assign(sessionStore, items); },
-            remove(key) { delete sessionStore[key]; }
-        }
+            set(items, cb) { Object.assign(sessionStore, items); if (cb) cb(); },
+            remove(key, cb) { delete sessionStore[key]; if (cb) cb(); }
+        },
+        onChanged: { addListener() {} }
     },
     scripting: {
         // The worker performs tab injections on behalf of the offscreen
@@ -85,7 +97,12 @@ const chromeStub = {
         download(opts, cb) {
             downloadCalls.push(opts);
             if (cb) cb(7);
-        }
+        },
+        // Completion tracking (downloadControl.ts): the worker follows a
+        // download to its terminal state through onChanged + search.
+        onChanged: { addListener(fn) { downloadChangedListeners.push(fn); } },
+        search(query, cb) { cb(downloadItems[query.id] ? [downloadItems[query.id]] : []); },
+        cancel(id, cb) { cancelledDownloads.push(id); if (cb) cb(); }
     },
     offscreen: {
         hasDocument(cb) { cb(hasDocumentResult); },
@@ -113,9 +130,9 @@ function fail(msg) {
     process.exit(1);
 }
 
-function sendToBackground(message) {
+function sendToBackground(message, sender) {
     return new Promise((resolve) => {
-        onMessageHandler(message, {}, (response) => resolve(response));
+        onMessageHandler(message, sender || {}, (response) => resolve(response));
     });
 }
 
@@ -170,6 +187,100 @@ function sendToBackground(message) {
             + JSON.stringify(relay.options.imageServers));
     }
     console.log("PASS: downloadDoujinshi creates the offscreen document and relays the one-job format override");
+
+    // 2b. UI mode: with no stored preference the default is the side panel, so
+    //     the action popup is cleared (an action popup always wins over
+    //     openPanelOnActionClick). The stub has no chrome.sidePanel, which is
+    //     the "old Chromium / Firefox" case: the popup must be kept.
+    if (actionPopupCalls.length === 0) {
+        fail("the UI-mode switch must call chrome.action.setPopup at worker start");
+    }
+    if (actionPopupCalls[0].popup !== "index.html") {
+        fail("without chrome.sidePanel support the popup fallback must stay declared, got "
+            + JSON.stringify(actionPopupCalls[0]));
+    }
+    console.log("PASS: UI-mode switch keeps the popup when chrome.sidePanel is unavailable");
+
+    // 2c. List-mode job options: format, output mode (INCLUDING an explicit
+    //     "batch", which must beat the stored default), the list-mode filename
+    //     template and the optional master folder all have to reach the
+    //     offscreen document. Before 3.4.0 list downloads were always ZIP,
+    //     always one merged archive, and named after the page URL.
+    relays.length = 0;
+    const listAnswer = await sendToBackground({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "111": "One", "222": "Two" },
+        galleryMetadata: {},
+        finalName: "search",
+        tabId: 42,
+        formatOverride: "pdf",
+        separate: false,
+        nameTemplate: "{artist} - {pretty}",
+        masterFolder: "NHDW"
+    });
+    if (!listAnswer || listAnswer.result !== "started") {
+        fail("list-mode batch answered " + JSON.stringify(listAnswer));
+    }
+    const listRelay = relays.find((r) => r.action === "downloadAllDoujinshis");
+    if (!listRelay || !listRelay.options) {
+        fail("list-mode batch was not relayed: " + JSON.stringify(relays));
+    }
+    if (listRelay.options.useZip !== "pdf") {
+        fail("list-mode format override must reach the pipeline, got " + listRelay.options.useZip);
+    }
+    if (listRelay.options.downloadSeparately !== false) {
+        fail("an explicit separate:false must beat the stored default, got "
+            + JSON.stringify(listRelay.options.downloadSeparately));
+    }
+    if (listRelay.options.downloadName !== "{artist} - {pretty}") {
+        fail("the list-mode filename template must reach the pipeline, got "
+            + JSON.stringify(listRelay.options.downloadName));
+    }
+    if (listRelay.options.rawMasterFolder !== "NHDW" || listRelay.options.archiveMasterFolder !== "NHDW") {
+        fail("the optional master folder must apply to both raw folders and archives, got "
+            + JSON.stringify(listRelay.options));
+    }
+
+    relays.length = 0;
+    await sendToBackground({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "111": "One" },
+        galleryMetadata: {},
+        finalName: "search",
+        tabId: 42,
+        formatOverride: "raw",
+        separate: true,
+        nameTemplate: "{pretty}",
+        masterFolder: ""
+    });
+    const separateRelay = relays.find((r) => r.action === "downloadAllDoujinshis");
+    if (!separateRelay || separateRelay.options.downloadSeparately !== true
+        || separateRelay.options.useZip !== "raw"
+        || separateRelay.options.rawMasterFolder !== ""
+        || separateRelay.options.archiveMasterFolder !== "") {
+        fail("separate + raw + no-master-folder must be relayed verbatim: "
+            + JSON.stringify(separateRelay && separateRelay.options));
+    }
+    console.log("PASS: list-mode format, output mode, name template and optional master folder are relayed");
+
+    // 2d. Content-script downloads (the in-page card buttons) carry no tabId:
+    //     the sender's own tab is the source tab, so metadata and images keep
+    //     going through the user's session.
+    relays.length = 0;
+    await sendToBackground({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "333": "Three" },
+        galleryMetadata: {},
+        finalName: "cards",
+        formatOverride: "zip",
+        separate: true
+    }, { tab: { id: 77 } });
+    const cardRelay = relays.find((r) => r.action === "downloadAllDoujinshis");
+    if (!cardRelay || cardRelay.tabId !== 77) {
+        fail("an in-page download must fall back to the sender tab id, got "
+            + JSON.stringify(cardRelay && cardRelay.tabId));
+    }
+    console.log("PASS: in-page card downloads resolve the source tab from the message sender");
 
     // 1b. getCdnStatus: the popup asks which image hosts are active and which
     //     need the optional host grant. With no CDN config fetched (the fetch
@@ -315,6 +426,101 @@ function sendToBackground(message) {
         fail("fetchUrlInTab must inject in the MAIN world: " + JSON.stringify(executeScriptCalls));
     }
     console.log("PASS: fetchUrlInTab relays page-text fetches to the tab");
+
+    // 11. awaitDownload: the offscreen document follows a raw page to its
+    //     terminal state through the worker. complete -> ok, interrupted ->
+    //     the reason, still running after the slice -> "pending" (the
+    //     document asks again), cancelDownload -> chrome.downloads.cancel.
+    downloadItems[7] = { id: 7, state: "in_progress" };
+    const awaitComplete = new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "awaitDownload", downloadId: 7 }, {}, resolve);
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    fireDownloadChanged({ id: 7, state: { current: "complete" } });
+    const completeAnswer = await awaitComplete;
+    if (!completeAnswer || completeAnswer.result !== true || completeAnswer.ok !== true || completeAnswer.state !== "complete") {
+        fail("awaitDownload must answer ok on state complete, got " + JSON.stringify(completeAnswer));
+    }
+    downloadItems[8] = { id: 8, state: "in_progress" };
+    const awaitInterrupted = new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "awaitDownload", downloadId: 8 }, {}, resolve);
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    fireDownloadChanged({ id: 8, state: { current: "interrupted" }, error: { current: "NETWORK_FAILED" } });
+    const interruptedDl = await awaitInterrupted;
+    if (!interruptedDl || interruptedDl.ok !== false || interruptedDl.state !== "interrupted" || !/NETWORK_FAILED/.test(interruptedDl.error)) {
+        fail("awaitDownload must report an interruption with its reason, got " + JSON.stringify(interruptedDl));
+    }
+    // A terminal event that fires BEFORE the document asks must not be lost.
+    downloadItems[9] = { id: 9, state: "complete" };
+    fireDownloadChanged({ id: 9, state: { current: "complete" } });
+    const earlyAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "awaitDownload", downloadId: 9 }, {}, resolve);
+    });
+    if (!earlyAnswer || earlyAnswer.ok !== true) {
+        fail("awaitDownload must see a completion that happened before the ask, got " + JSON.stringify(earlyAnswer));
+    }
+    const cancelAnswer = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "cancelDownload", downloadId: 8 }, {}, resolve);
+    });
+    if (!cancelAnswer || cancelAnswer.result !== true || cancelledDownloads.indexOf(8) === -1) {
+        fail("cancelDownload must cancel the browser download, got " + JSON.stringify(cancelAnswer) + " cancelled=" + JSON.stringify(cancelledDownloads));
+    }
+    console.log("PASS: awaitDownload follows a browser download to complete/interrupted and cancelDownload cancels it");
+
+    // 12. Failed galleries are remembered for the session (named + retryable)
+    //     from the offscreen broadcasts, dropped when the gallery later
+    //     succeeds, listed for the popup and forgettable on request.
+    const summaryKeptOpen = onMessageHandler({
+        from: "offscreen", action: "batchSummary", succeeded: 1, failed: 2, skipped: 0, total: 3,
+        failedKinds: { image: 1, metadata: 1 },
+        failedGalleries: [
+            { id: "111", name: "Broken One", error: "Failed to download original image (Download interrupted (NETWORK_FAILED))." },
+            { id: "222", name: "Broken Two", error: "Can't download 222 (Code 404: Not Found)." }
+        ],
+        retryJob: { formatOverride: "raw", masterFolder: "NHDW", nameTemplate: "{pretty}" }
+    }, {}, () => {});
+    if (summaryKeptOpen === true) {
+        fail("batchSummary broadcasts must not keep the message channel open");
+    }
+    onMessageHandler({
+        from: "offscreen", action: "downloadError", error: "Failed to download original image (x).",
+        galleryId: "333", galleryName: "Broken Three", retryJob: { formatOverride: "zip" }
+    }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    const failedList = await sendToBackground({ action: "getFailedGalleries" });
+    const listedIds = failedList && Array.isArray(failedList.failed) ? failedList.failed.map((f) => f.id).sort() : null;
+    if (!listedIds || JSON.stringify(listedIds) !== JSON.stringify(["111", "222", "333"])) {
+        fail("getFailedGalleries must list every remembered failure by id, got " + JSON.stringify(failedList));
+    }
+    const failedOne = failedList.failed.find((f) => f.id === "111");
+    if (failedOne.name !== "Broken One" || !/NETWORK_FAILED/.test(failedOne.error) || !failedOne.retryJob || failedOne.retryJob.formatOverride !== "raw") {
+        fail("remembered failures must keep name, reason and retry settings, got " + JSON.stringify(failedOne));
+    }
+    if (!sessionStore.nhdwFailedGalleries || sessionStore.nhdwFailedGalleries.length !== 3) {
+        fail("failures must live in chrome.storage.session (survive worker restarts), got " + JSON.stringify(sessionStore.nhdwFailedGalleries));
+    }
+    // A later success drops the gallery from the failed list.
+    onMessageHandler({ from: "offscreen", action: "jobFinished", records: [{ id: "111", filename: "NHDW/Broken One/001.jpg" }] }, {}, () => {});
+    await new Promise((r) => setTimeout(r, 20));
+    const failedAfterSuccess = await sendToBackground({ action: "getFailedGalleries" });
+    if (failedAfterSuccess.failed.map((f) => f.id).sort().join(",") !== "222,333") {
+        fail("a gallery that later succeeded must leave the failed list, got " + JSON.stringify(failedAfterSuccess.failed));
+    }
+    const forgetAnswer = await sendToBackground({ action: "forgetFailedGalleries", ids: ["222"] });
+    if (!forgetAnswer || forgetAnswer.result !== "success") {
+        fail("forgetFailedGalleries answered " + JSON.stringify(forgetAnswer));
+    }
+    const failedAfterForget = await sendToBackground({ action: "getFailedGalleries" });
+    if (failedAfterForget.failed.length !== 1 || failedAfterForget.failed[0].id !== "333") {
+        fail("forgetFailedGalleries(ids) must drop only those ids, got " + JSON.stringify(failedAfterForget.failed));
+    }
+    await sendToBackground({ action: "forgetFailedGalleries" });
+    const failedAfterClear = await sendToBackground({ action: "getFailedGalleries" });
+    if (failedAfterClear.failed.length !== 0) {
+        fail("forgetFailedGalleries without ids must clear the list, got " + JSON.stringify(failedAfterClear.failed));
+    }
+    console.log("PASS: failed galleries are remembered by name for the session, dropped on success, listed and forgettable");
 
     console.log("PASS: service worker relay behaves correctly.");
     process.exit(0);

@@ -39,7 +39,11 @@ chrome.storage.sync.get({
             const id = match[1];
             if (tmpIds.includes(id)) continue; // The same gallery can appear on several cards
             tmpIds.push(id);
-            captions[i].innerHTML += '<br/><br/><input id="' + id + '" type="checkbox" ' + (elemsLocal.allIds.includes(id) ? "checked" : "") + '> NHentai Downloader:<br/>Add to downloads<br/>&nbsp;';
+            // Wrapped in .nhdw-legacy-check so the newer in-page card
+            // controls (js/listControls.js) can hide this duplicate selection
+            // affordance while they are enabled, without removing it for users
+            // who turn those controls off.
+            captions[i].innerHTML += '<span class="nhdw-legacy-check"><br/><br/><input id="' + id + '" type="checkbox" ' + (elemsLocal.allIds.includes(id) ? "checked" : "") + '> NHentai Downloader:<br/>Add to downloads<br/>&nbsp;</span>';
         }
 
         // Foreach popups we listen for change

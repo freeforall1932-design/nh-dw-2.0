@@ -3,6 +3,16 @@ import InputField from "./InputField";
 import Select from "./Select";
 import { verifyAndSaveApiKey, removeApiKey } from "./apiKey";
 import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "./nameTemplate";
+import { utils } from "../utils/utils";
+import { clearHistory, countHistory, readHistory } from "../utils/downloadHistory";
+import {
+    formatExtension,
+    isInheritedListTemplate,
+    LIST_TEMPLATE_INHERIT,
+    normalizeFormat,
+    normalizeOutputMode,
+    resolveListFormat
+} from "../utils/downloadFormats";
 
 // downloadName is handled below by the template checkboxes (with a manual
 // fallback for custom templates), so it is NOT in this generic list.
@@ -14,7 +24,15 @@ let options = [
     new CheckBox("downloadSeparately"),
     new CheckBox("replaceSpaces"),
     new CheckBox("htmlParsing"),
-    new Select("maxConcurrentDownloads")
+    new Select("maxConcurrentDownloads"),
+    new Select("rawMaxConcurrent"),
+    // List mode keeps its own keys so it can never overwrite the
+    // single-title defaults above.
+    new Select("listFormat"),
+    new Select("listOutputMode"),
+    new CheckBox("listMasterFolder"),
+    new Select("uiMode"),
+    new CheckBox("inPageControls")
 ]
 
 chrome.storage.sync.get({
@@ -27,7 +45,16 @@ chrome.storage.sync.get({
     htmlParsing: false,
     downloadSeparately: false,
     maxConcurrentDownloads: "3",
-    rawMasterFolder: "NHDW"
+    rawMaxConcurrent: "3",
+    rawMasterFolder: "NHDW",
+    // listFormat has NO default here on purpose: an unset key means "follow
+    // the single-title format", and a "zip" default would hide that (the panel
+    // would then show ZIP while list downloads used e.g. CBZ).
+    listOutputMode: "separate",
+    listMasterFolder: true,
+    listDownloadName: LIST_TEMPLATE_INHERIT,
+    uiMode: "sidepanel",
+    inPageControls: true
 }, function(elems) {
     options.forEach(o => {
         o.init(elems);
@@ -40,6 +67,12 @@ chrome.storage.sync.get({
             }
         })
     })
+    // Show the inherited list format before anything reads the select.
+    const listFormatSelect = document.getElementById("listFormat") as HTMLSelectElement | null;
+    if (listFormatSelect) {
+        listFormatSelect.value = resolveListFormat((elems as any).listFormat, (elems as any).useZip);
+    }
+
     initNameTemplate(elems.downloadName);
 
     // Master folder for raw downloads. Saved verbatim — the empty string is
@@ -52,7 +85,68 @@ chrome.storage.sync.get({
             chrome.storage.sync.set({ rawMasterFolder: rawMasterInput.value.trim() });
         });
     }
+
+    initListTemplate(elems);
 })
+
+// ---- list-mode file name ------------------------------------------------
+// A separate template for list mode, defaulting to (and prefilled with) the
+// single-title template. An empty field means "follow the single-title
+// template"; the sentinel keeps that distinguishable from a deliberately empty
+// template, which falls back to the gallery id.
+function initListTemplate(elems: any) {
+    const input = document.getElementById("listDownloadName") as HTMLInputElement | null;
+    const previewBox = document.getElementById("listDownloadNamePreview");
+    if (input === null) {
+        return;
+    }
+    const singleTemplate = String(elems.downloadName || "{pretty}");
+    const inherited = isInheritedListTemplate(elems.listDownloadName);
+    input.value = inherited ? "" : String(elems.listDownloadName);
+    input.placeholder = "Same as single title (" + singleTemplate + ")";
+
+    const renderPreview = () => {
+        if (previewBox === null) {
+            return;
+        }
+        const template = input.value.trim() === "" ? singleTemplate : input.value;
+        const format = normalizeFormat(
+            (document.getElementById("listFormat") as HTMLSelectElement | null)?.value, "zip");
+        const mode = normalizeOutputMode(
+            (document.getElementById("listOutputMode") as HTMLSelectElement | null)?.value, "separate");
+        const masterOn = !!(document.getElementById("listMasterFolder") as HTMLInputElement | null)?.checked;
+        const masterName = String((document.getElementById("rawMasterFolder") as HTMLInputElement | null)?.value || "").trim();
+        const folder = masterOn && masterName !== "" ? masterName + "/" : "";
+        const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
+        const clean = utils.cleanName(rendered, !!elems.replaceSpaces, "123456");
+        let text: string;
+        if (mode === "batch" && format !== "raw") {
+            text = "Example: Downloads/" + folder + "<listing name>" + formatExtension(format)
+                + " - every selected title merged into one file";
+        } else if (format === "raw") {
+            text = "Example: Downloads/" + folder + clean + "/001.jpg";
+        } else {
+            text = "Example: Downloads/" + folder + clean + formatExtension(format);
+        }
+        previewBox.textContent = text;
+    };
+
+    const persist = () => {
+        chrome.storage.sync.set({
+            listDownloadName: input.value.trim() === "" ? LIST_TEMPLATE_INHERIT : input.value
+        });
+        renderPreview();
+    };
+    input.addEventListener("change", persist);
+    input.addEventListener("input", renderPreview);
+    for (const id of ["listFormat", "listOutputMode", "listMasterFolder", "rawMasterFolder"]) {
+        const control = document.getElementById(id);
+        if (control) {
+            control.addEventListener("change", renderPreview);
+        }
+    }
+    renderPreview();
+}
 
 // ---- name template: checkboxes instead of manual typing --------------------
 // The stored value stays a placeholder string ("{pretty} - {id}"), so the
@@ -127,7 +221,7 @@ function initNameTemplate(storedTemplate: string) {
     }
     // Preview only: opening this page must not write the template back (it
     // would fire storage.onChanged with a value nobody changed).
-    renderTemplatePreview(storedTemplate); // renders the preview line
+    renderTemplatePreview(storedTemplate);
 }
 
 // ---- API key ---------------------------------------------------------------
@@ -206,4 +300,59 @@ if (archiveToggle) {
     archiveToggle.addEventListener("change", function() {
         chrome.storage.local.set({ useServerArchive: archiveToggle.checked });
     });
+}
+
+// ---- download history ------------------------------------------------------
+// The persistent "already downloaded" list lives in chrome.storage.local (see
+// utils/downloadHistory.ts). Listing pages skip recorded galleries; this is
+// the escape hatch that forgets everything.
+const historyStatus = document.getElementById("historyStatus") as HTMLElement | null;
+const clearHistoryButton = document.getElementById("clearHistory") as HTMLButtonElement | null;
+if (clearHistoryButton) {
+    const refreshHistoryStatus = () => {
+        readHistory().then((history) => {
+            if (historyStatus) {
+                const n = countHistory(history);
+                historyStatus.textContent = n === 0
+                    ? "No downloads recorded yet."
+                    : n + " gallery" + (n === 1 ? "" : "s") + " recorded in this browser.";
+            }
+        });
+    };
+    clearHistoryButton.addEventListener("click", async () => {
+        if (!confirm("Clear the download history?\n\nEvery gallery will be downloaded again from the next listing, including ones you still have.")) {
+            return;
+        }
+        clearHistoryButton.disabled = true;
+        await clearHistory();
+        if (historyStatus) {
+            historyStatus.textContent = "Download history cleared.";
+        }
+        clearHistoryButton.disabled = false;
+    });
+    refreshHistoryStatus();
+}
+
+// Verify-before-skip + merged-name date stamp (same keys the worker reads).
+const verifyBox = document.getElementById("verifyDownloadedFiles") as HTMLInputElement | null;
+const dateBox = document.getElementById("batchNameDate") as HTMLInputElement | null;
+if (verifyBox || dateBox) {
+    chrome.storage.sync.get({ verifyDownloadedFiles: true, batchNameDate: true }, (stored: any) => {
+        if (verifyBox) {
+            verifyBox.checked = !stored || stored.verifyDownloadedFiles !== false;
+        }
+        if (dateBox) {
+            dateBox.checked = !stored || stored.batchNameDate !== false;
+        }
+    });
+    if (verifyBox) {
+        verifyBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ verifyDownloadedFiles: verifyBox.checked });
+        });
+    }
+    if (dateBox) {
+        dateBox.addEventListener("change", () => {
+            chrome.storage.sync.set({ batchNameDate: dateBox.checked });
+        });
+    }
 }

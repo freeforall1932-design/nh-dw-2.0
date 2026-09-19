@@ -1,6 +1,13 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.0.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.1.0)
 
-**Updated:** 2026-09-19 · status: **Android-ready, package pipeline live**
+**Updated:** 2026-09-19 · status: **Chrome parity (P1 rebase) + Android-ready**
+
+v1.1.0 = the parity elevation: this folder is now the current Chrome `src/`
+plus a 4-file audited delta (see `FIREFOX_PARITY_PLAN.md`). In-page card
+controls + floating action bar, bookmark queue, download history / verify /
+retry-failed, batch pipeline and list-mode settings now exist here exactly as
+on Chrome. `diff -rq` against `NHDW_Extension_v3.0.0/src` shows only the
+delta set; Chrome's full offline suite (406 tests) passes in this folder.
 
 This folder is the Firefox port of the Chrome MV3 extension
 (`NHDW_Extension_v3.0.0`). It now targets **Firefox desktop AND Firefox for
@@ -12,12 +19,10 @@ the Android migration plan and finished-product definition are below.
 ## Versioning (why 1.0.0, not 3.x)
 
 The Firefox build is a **separate product line** with its own AMO version
-sequence. `1.0.0` = the snapshot at Chrome **3.3.0** feature parity; Chrome
-features added after that (bookmark queue, download history, verify/retry
-pipeline — see Chrome's `src/utils/bookmarkQueue.ts` etc.) are **not** ported
-yet and are follow-up work (see "Roadmap"). AMO only requires the version to
-increase monotonically per add-on id, so this sequence starts at 1.0.0 and
-bumps 1.0.1 / 1.1.0 from here.
+sequence. `1.0.0` = the Android-ready snapshot of the old 3.3.0-era fork;
+`1.1.0` = the parity elevation (P1 rebase onto the current Chrome tree).
+AMO only requires the version to increase monotonically per add-on id, so
+this sequence never tracks Chrome's numbers.
 
 ## Manifest facts (audited against MDN/BCD, 2026-09)
 
@@ -156,11 +161,13 @@ The Firefox build lags Chrome substantially on desktop (see
 Android plan first (done) → **rebase Firefox onto current Chrome src** with
 the audited delta set → re-plan Android on the synced base.
 
-1. **P1 rebase to Chrome parity**: in-page card controls (`listControls.ts`),
-   bookmark queue, download history / verify / retry-failed, batch pipeline,
-   list-mode settings, PDF-merge warning.
-2. **P3 Android re-plan** on the synced base (the in-page floating bar is
-   already the Android bottom-bar pattern).
+1. **P1 rebase to Chrome parity** — ✅ done in v1.1.0: in-page card controls
+   (`listControls.ts`), bookmark queue, download history / verify /
+   retry-failed, batch pipeline, list-mode settings, PDF-merge warning.
+2. **P2 desktop verification** (manual Firefox-desktop pass) and **P3 Android
+   re-plan** on the synced base — the in-page floating `.nhdw-action-bar` is
+   already the Android bottom-bar pattern and only needs the coarse-pointer
+   compact tweaks.
 3. Crisp master icons at 96/128 (current files are rescales of the 64px
    source via `Icon-*.png`).
 4. Side-panel equivalent if Firefox ever ships `sidePanel` on Android.

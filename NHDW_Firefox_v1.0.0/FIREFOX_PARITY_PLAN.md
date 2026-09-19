@@ -47,11 +47,16 @@ Everything else must be **byte-identical to Chrome** after the rebase.
 
 - **P0 (done):** Android v1.0.0 shipped; desktop-violation rework; separation
   rules codified.
-- **P1 rebase:** copy Chrome `src/**`, `css/**`, `*.html`, webpack entries,
-  options/listControls bundles into the Firefox folder; re-apply the delta
-  set (section 2); copy Chrome `test/**` suites that cover the new utils
-  (bookmark/history/verify/formats/list-settings/failed/batch) and wire them
-  into `npm test`; rebuild; both CI jobs green.
+- **P1 rebase (done 2026-09-19, v1.1.0):** Firefox folder now equals Chrome
+  `src/**` + the 4-file delta (background/preview/message/popupSettings —
+  verified additive except the two sidePanel-gate lines), Chrome css/html +
+  media-gated mobile block, Chrome test suites wired into `npm test`
+  (406 passing), smoke/e2e incl. `e2e-list-controls` + `e2e-popup` green,
+  `web-ext lint` 0 errors/0 notices, package ships `js/listControls.js`
+  (23 entries). `diff -rq` against Chrome shows only the audited delta set.
+  New delta discovered during rebase and added to section 2:
+  `popupSettings.ts` hides the side-panel option when `chrome.sidePanel`
+  is absent.
 - **P2 Firefox-runtime verification:** desktop Firefox manual pass (side
   panel code path inert, popup/queue/history/☆ work); keep-alive + host
   notice verified; `web-ext lint` + package.

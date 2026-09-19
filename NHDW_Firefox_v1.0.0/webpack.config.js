@@ -15,6 +15,7 @@ module.exports = {
     background: './src/background/background.ts',
     content: './src/content/content.ts',
     updateContent: './src/content/updateContent.ts',
+    listControls: './src/content/listControls.ts',
     preview: './src/preview/preview.ts',
     getGalleries: './src/preview/getGalleries.ts',
     options: './src/options/options.ts',
