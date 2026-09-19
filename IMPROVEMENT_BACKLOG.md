@@ -1906,3 +1906,58 @@ to US/FR/IT/GB) — an earlier draft inverted this.
 adapter → seams with collision guard → cdnConfig allowlists → paste box +
 manifest hosts → e2e → real-browser check); capture hentaifox + hitomi; merge
 PR #42.
+
+### 54. Firefox-for-Android migration (v1.0.0) — done 2026-09-19
+
+First Android-ready Firefox build: manifest promoted (gecko id, event-page
+background, min 142.0 + `data_collection_permissions:none`, true-size icons
+48/96/128), viewport metas, compact portrait CSS gated by
+`(max-width:640px) and (pointer:coarse)`, first-run host-grant notice
+(Firefox MV3 opt-in hosts), job-scoped keep-alive alarm, `web-ext`
+lint/package/run/sign scripts + CI lint step. Version sequence is
+independent of Chrome by owner decision.
+
+### 55. P1 parity elevation rebase (v1.1.0) — done 2026-09-19
+
+Firefox folder rebased onto current Chrome `src/`: in-page card controls +
+floating action bar, bookmark queue, history/verify/retry-failed, batch
+pipeline, list-mode settings, PDF-merge warning, hentaiera adapter. Delta
+set audited to 4 files (see `FIREFOX_PARITY_PLAN.md` §2, §6). Desktop/mobile
+separation rules R1–R3 codified; the v1.0.0 DOM-wrapper violation was
+reworked into a runtime relocator before the rebase. 406 tests green.
+
+### 56. Website-embedded UI: invoker + settings drawer in nhentai header — open
+
+Primary surface per owner. Hook `.navbar` (all captured generations have
+`#nav_btn` hamburger, `#drop_btn`/`#dropdown_menu`, `.navbar_right` — see
+`5 website page source`). New content module or `listControls.ts`
+extension; drawer reuses `renderSettings(container)` + bookmarkPanel queue
+renderer; storage-persistent; worker-messaging identical to today; themed
+to the site's dark navbar; idempotent MutationObserver injection. Toolbar
+toggle via `action.setPopup("")` + `onClicked → scripting` to evaluate.
+nh-only; multi-site parked.
+
+### 57. Toolbar popup demotion to settings/API-key fallback — open
+
+Companion of 56. `index.html` stays as fallback; decide whether the
+Download tab hides in-page when the embedded UI is active.
+
+### 58. Combined P2+P3 verification + sign 1.2.0 — open
+
+Real desktop-Firefox + Android-device matrix after 56/57 (grant prompt,
+drawer at 360px, keep-alive over long ZIPs, in-page controls on listings,
+queue/history persistence), then unlisted sign as 1.2.0.
+
+## Session log — 2026-09-19 (session `arena/01a0b767-nh-dw-2-0`): Android migration, parity elevation, embedded-UI plan
+
+- Shipped 1.0.0 (Android-ready) then 1.1.0 (P1 rebase) on the Firefox track;
+  PR opened from `arena/01a0b767-nh-dw-2-0`.
+- Owner decisions recorded: independent version sequence; desktop/mobile
+  hard separation (R1–R3); in-page UI primary, popup demoted; nh-only scope
+  for the embedded work; P2 folded into 58.
+- P1 review found and fixed one defect (popupSettings select normalization);
+  `chrome.windows` call sites verified gated; dynamic-id refs verified
+  runtime-created. Note for future sessions: `node_modules` not persisted —
+  `npm install` first.
+- Feasibility of the embedded UI proven from the in-repo page capture;
+  design sketch in `FIREFOX_PARITY_PLAN.md` §8.

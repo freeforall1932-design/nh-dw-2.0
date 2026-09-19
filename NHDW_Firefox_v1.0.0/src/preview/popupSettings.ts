@@ -609,7 +609,9 @@ function renderInterfaceSection(container: HTMLElement): void {
     container.appendChild(section);
 
     chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true, bookmarkAutoCapture: false }, (elems: any) => {
-        panelSelect.value = elems.uiMode === "popup" ? "popup" : "sidepanel";
+        // Firefox delta: with no side-panel option rendered, never leave the
+        // select pointing at a value that cannot exist on this platform.
+        panelSelect.value = (elems.uiMode === "popup" || !hasSidePanel) ? "popup" : "sidepanel";
         controlsBox.checked = elems.inPageControls === undefined ? true : !!elems.inPageControls;
         autoBox.checked = !!elems.bookmarkAutoCapture;
         panelSelect.addEventListener("change", () => {

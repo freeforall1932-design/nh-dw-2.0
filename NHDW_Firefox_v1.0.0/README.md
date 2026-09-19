@@ -1,6 +1,7 @@
 # NHentai Downloader — Firefox + Firefox-for-Android build (v1.1.0)
 
-**Updated:** 2026-09-19 · status: **Chrome parity (P1 rebase) + Android-ready**
+**Updated:** 2026-09-19 · status: **Chrome parity (P1 rebase) + Android-ready;
+next: website-embedded UI (items 56–58, see `FIREFOX_PARITY_PLAN.md` §8)**
 
 v1.1.0 = the parity elevation: this folder is now the current Chrome `src/`
 plus a 4-file audited delta (see `FIREFOX_PARITY_PLAN.md`). In-page card

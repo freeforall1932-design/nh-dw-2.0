@@ -1,8 +1,9 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-14** (session
-`arena/01a09ee5-nh-dw-2-0`: **3.8.0 — item 47 landed**; items 48–52 planned,
-see `MULTISITE_V4_PLAN.md`. Previous: 3.7.0, PR #40).
+**Live, ordered. Updated 2026-09-19** (session
+`arena/01a0b767-nh-dw-2-0`: **Firefox-for-Android migration + parity
+elevation v1.1.0 landed; items 56–58 queued; PR opened**. Previous:
+2026-09-14, 3.8.0, PR #40/#42).
 
 This is the single place to look for *what to do next*. The other two documents
 carry the depth:
@@ -45,6 +46,37 @@ Two cheap checks that have caught real bugs here:
   declaration) is dead code.
 - For any guard you add, `grep` for every caller of the unguarded original and
   ask whether each one is safe by construction or by accident.
+
+---
+
+## Firefox / Android track (session `arena/01a0b767-nh-dw-2-0`, 2026-09-19)
+
+Owner direction: the in-page integrated UI is the primary surface on
+nhentai; popup/side-panel demoted to settings/API-key fallback; invoker +
+all settings baked into the website header. Depth docs:
+`NHDW_Firefox_v1.0.0/FIREFOX_PARITY_PLAN.md` (§6–8), `README.md`.
+
+### 56. Website-embedded UI — invoker + settings drawer in the nhentai header — **top of the queue**
+
+Feasibility confirmed (§8.1): `.navbar` + `#nav_btn`/`#drop_btn`/
+`#dropdown_menu`/`.navbar_right` exist in all captured layout generations.
+Inject an invoker beside the hamburger + a slide-down drawer reusing
+`renderSettings(container)` + the `bookmarkPanel` queue renderer; idempotent
+MutationObserver injection anchored only on `.navbar`; nh-only scope.
+Evaluate `action.setPopup("")` + `onClicked → executeScript` toggle so the
+toolbar button also opens the embedded drawer.
+
+### 57. Demote the toolbar popup to the settings / API-key fallback
+
+Keep `index.html` as the fallback surface; decide during 56 whether the
+Download tab hides in-page when the embedded UI is active (storage flag).
+
+### 58. Combined verification (folded P2 + P3) + sign 1.2.0
+
+One real-device session after 56/57: desktop Firefox pass (queue, history,
+☆, in-page controls) AND Android matrix (grant prompt, drawer at 360px,
+keep-alive over 60s+ ZIPs, content controls on listings); then
+`npm run sign:firefox` as 1.2.0 (bump manifest first; AMO keys via env).
 
 ---
 
