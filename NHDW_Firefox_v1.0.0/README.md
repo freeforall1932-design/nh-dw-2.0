@@ -1,50 +1,174 @@
-# NHentai Downloader — Firefox port workspace (v1.0.0 target)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.1.0)
 
-**Created:** 2026-09-03
+**Updated:** 2026-09-19 · status: **Chrome parity (P1 rebase) + Android-ready;
+next: website-embedded UI (items 56–58, see `FIREFOX_PARITY_PLAN.md` §8)**
 
-This folder is the working copy for porting the Chrome extension to
-Firefox. It was created by copying `NHDW_Extension_v3.0.0` (Chrome MV3
-source, version 3.3.0) at the state of commit
-`4f918c347fbb9c688ec8315d688f7f672dca8071` (branch
-`arena/01a064e1-nh-dw-2-0`).
+v1.1.0 = the parity elevation: this folder is now the current Chrome `src/`
+plus a 4-file audited delta (see `FIREFOX_PARITY_PLAN.md`). In-page card
+controls + floating action bar, bookmark queue, download history / verify /
+retry-failed, batch pipeline and list-mode settings now exist here exactly as
+on Chrome. `diff -rq` against `NHDW_Extension_v3.0.0/src` shows only the
+delta set; Chrome's full offline suite (406 tests) passes in this folder.
 
-## State
+This folder is the Firefox port of the Chrome MV3 extension
+(`NHDW_Extension_v3.0.0`). It now targets **Firefox desktop AND Firefox for
+Android** from one package. This README is the living document for the port:
+what shipped, how the mobile UI works, how to test / package / sign, and what
+remains. The original feasibility study is preserved in `PORTING_AUDIT.md`;
+the Android migration plan and finished-product definition are below.
 
-- **Nothing ported yet.** All files are byte-identical to the Chrome source
-  copy, including `manifest.json` (which is the Chrome manifest).
-- The proposed Firefox manifest is `manifest.firefox.json` (draft, not
-  runtime-verified).
-- Feasibility analysis and the required-change list:
-  `PORTING_AUDIT.md`.
-- Tracked as backlog item 27 (IMPROVEMENT_BACKLOG.md, session log
-  2026-09-03; SESSION_HANDOFF.md worklist).
+## Versioning (why 1.0.0, not 3.x)
 
-## Folder mapping (same layout as the Chrome source folder)
+The Firefox build is a **separate product line** with its own AMO version
+sequence. `1.0.0` = the Android-ready snapshot of the old 3.3.0-era fork;
+`1.1.0` = the parity elevation (P1 rebase onto the current Chrome tree).
+AMO only requires the version to increase monotonically per add-on id, so
+this sequence never tracks Chrome's numbers.
 
-| Path | Meaning |
-|---|---|
-| `src/**` | TypeScript source (port edits happen here) |
-| `js/**` | webpack output (`npm run build` writes here) |
-| `test/`, `scripts/` | offline suites (browser-free) and e2e harnesses |
-| `manifest.json` | Chrome manifest (pre-port; not the Firefox one) |
-| `manifest.firefox.json` | draft Firefox manifest (port step 1 applies it) |
-| `index.html`, `options.html`, `css/` | popup / options / content styles |
-| `offscreen.html`, `js/offscreen.js` | Chrome-only (unused by Firefox; see audit fact 1) |
+## Manifest facts (audited against MDN/BCD, 2026-09)
 
-## Target
+- `manifest_version: 3`, `background.scripts` (Firefox MV3 event pages —
+  Firefox has **no** `background.service_worker`).
+- `browser_specific_settings.gecko.id` = `nhentai-downloader-firefox@freeforall1932.design`
+  (required for signing + stable storage).
+- `strict_min_version: 142.0` — the floor dragged in by the
+  `data_collection_permissions` declaration (desktop 140 / Android 142);
+  today's Firefox release is ≈154, so no release-channel user is lost.
+- `data_collection_permissions: { required: ["none"] }` — required for new
+  AMO listings since Nov 2025; truthfully: nothing leaves the device.
+- `alarms` keep-alive (see "Background robustness" below).
+- No Chromium-only permission; `offscreen` is Chrome-only and only exists in
+  the Chrome manifest. The `chrome.offscreen` call sites are feature-detected
+  and unreachable on Firefox (the full fallback path runs instead, and in
+  Firefox's document-based event page `URL.createObjectURL` exists, so the
+  memory-friendly blob path is used — not the base64 one).
+- Firefox MV3 does **not** grant `host_permissions` at install; the popup
+  shows a first-run "Enable site access" grant notice (`refreshHostNotice`
+  in `src/preview/preview.ts`, one-tap `permissions.request`).
+- `offscreen.html` / `js/offscreen.js` are excluded from the packaged
+  artifact (dead code on Firefox).
 
-Firefox 128+ (Manifest V3, event-page background). Version 1.0.0 of the
-Firefox build corresponds to Chrome 3.3.0 feature parity.
+## Android UI (portrait-first, compact)
 
-## Local load (temporary, developer)
+On Firefox for Android the action popup opens **in a full tab**, so the
+document is the whole UI. The layout is responsive, gated by
+`@media (max-width: 640px) and (pointer: coarse)` — the extra
+`pointer: coarse` matters because the *desktop popup itself* is 500px wide
+and must keep its classic look. On phones:
+
+- single tall column (`.popupColumns` stacks), long titles wrap;
+- inputs/selects full-width, 16px font (prevents Android focus-zoom),
+  ≥42–44px touch targets, larger checkboxes;
+- **fixed bottom action bar**: `preview.ts` relocates the current state's
+  primary buttons (`Download`, `Download all`, `Pause/Resume`, `Clear queue`,
+  `Cancel`, API-key gate, host/CDN grant) into a `#nhdwMobileBar` footer at
+  **runtime**, and only while
+  `matchMedia("(max-width:640px) and (pointer: coarse)")` matches. The
+  desktop popup DOM is byte-identical to the classic layout (audited with
+  `git diff` against the pre-Android tree — `popup.ts` identical,
+  `message.ts` additive-only, CSS pure additions); safe-area-inset aware;
+- `index.html` / `options.html` now declare a device-width viewport meta.
+
+This mirrors the Chrome build's own UI thinking: Chrome's side panel is the
+same document with the fixed width dropped (`html.nhdwPanel`), and Chrome's
+flagship mobile pattern is the in-page bottom action bar. Android has no
+side-panel API, so the full-tab popup with the bottom bar is the native
+equivalent. The Chrome-only **in-page card controls** (`listControls.ts`,
+per-card Download/Select/☆ + floating bar) are not in this port yet — they
+depend on the not-yet-ported utils (`downloadFormats`, `downloadHistory`,
+`bookmarkQueue`, `siteKeys`) and are Roadmap item 1.
+
+## Background robustness on Android
+
+Firefox suspends idle event pages (~30 s; more aggressively on Android under
+RAM pressure). `background.setJobMarker`/`clearJobMarker` now also
+create/clear a 1-minute-period `nhdw-keepalive` alarm while a download job is
+active — each tick is an event the page is woken for, so multi-minute ZIP
+builds survive; when nothing is downloading, idle suspension still applies.
+
+## Finished-product definition (acceptance criteria)
+
+| # | Criterion | Status |
+|---|---|---|
+| F1 | Canonical Firefox `manifest.json` (MV3, gecko.id, min 142.0, data-collection declaration, icons 48/64/96/128 with true-size PNGs) | ✅ shipped + tested |
+| F2 | Responsive portrait UI: fixed bottom action bar via runtime reflow, stacked columns, compact touch targets; desktop popup DOM byte-identical (audited); no horizontal scroll at 360px | ✅ shipped, reworked for desktop purity |
+| F3 | Keep-alive alarm active only during jobs | ✅ shipped |
+| F4 | First-run host-permission grant guard (Firefox MV3 semantics) | ✅ shipped |
+| F5 | Manifest regression tests incl. Firefox guards (gecko.id, event page, no offscreen perm, viewport metas, icon files, host scoping, min-version, data declaration) | ✅ 9 new tests, suite green |
+| F6 | Packaging: `npm run package:firefox` → clean zip (no src/test/scripts/build/node_modules/.git, no .ts/.map, no offscreen files) | ✅ 21 entries, 84 KB |
+| F7 | Device-test + signing runbooks (below), incl. AMO content-policy caveat | ✅ this README |
+| F8 | Chrome folders untouched; CI stays green (new lint step added to the Firefox job) | ✅ |
+
+Out of scope by design: Chrome feature catch-up, new sites, offscreen
+re-architecture.
+
+## Local load (developer, desktop)
 
 1. `npm ci && npm run build`
-2. Copy `manifest.firefox.json` over `manifest.json` (or make the build
-   emit it) — this is port step 1; do not do it before the fallback-path
-   parity work if queue controls matter (audit fact 4).
-3. Firefox → `about:debugging#/runtime/this-firefox` → **Load Temporary
+2. Firefox → `about:debugging#/runtime/this-firefox` → **Load Temporary
    Add-on…** → select `manifest.json`.
-4. `npx web-ext lint` from this folder before packaging.
+3. `npm run lint:firefox` — Mozilla's validator over the packaged file set
+   (0 errors; remaining warnings are advisory innerHTML/webpack false
+   positives plus the guarded offscreen probe, acceptable for review).
 
-The Chrome folders (`NHDW_Extension_v3.0.0`, `NHDW_Release_v3.0.0`) are
-not modified by any work done here.
+## Test on Firefox for Android
+
+Requirements: Android platform-tools on PATH (`adb`), USB debugging enabled,
+Firefox for Android installed (release/beta/nightly), device or emulator
+visible in `adb devices`.
+
+```bash
+npm run run:android        # = web-ext run --target=firefox-android --firefox-apk org.mozilla.firefox
+# variants:
+npx web-ext run --target=firefox-android --firefox-apk org.mozilla.firefox_beta
+npx web-ext run --target=firefox-android --android-device <serial>
+```
+
+Device test matrix: (a) install → first-run "Enable site access" grant
+prompt; (b) toolbar action opens the popup as a full-width tab, single
+column, bottom bar visible; (c) single-gallery ZIP download survives app
+switching and 60s+ zip time (keep-alive); (d) progress state shows
+Pause/Cancel in the bottom bar; (e) content-script checkboxes appear on
+nhentai.net listings; (f) queue/history (storage) survive browser restart.
+
+## Package & sign (self-distribution)
+
+```bash
+npm run package:firefox      # → dist/nhentai_downloader-<version>.zip  (valid XPI format)
+```
+
+Signing for self-distribution (unlisted — never listed on AMO; users install
+the signed .xpi directly; on Android: download the file and open it in
+Firefox):
+
+```bash
+# One-time: AMO developer account → API keys. Keys live ONLY in env vars,
+# never in the repo: WEB_EXT_API_KEY (JWT issuer), WEB_EXT_API_SECRET.
+npm run sign:firefox         # = web-ext sign --channel unlisted --artifacts-dir dist
+```
+
+- Bump `version` in `manifest.json` before every sign run (AMO rejects
+  duplicates).
+- ⚠️ **Content-policy caveat:** even unlisted signing goes through AMO's
+  pipeline, and Mozilla restricts sexually explicit content. Reviewers see
+  the target sites; if a submission is rejected on those grounds, the tester
+  fallback is temporary unsigned install via Firefox Nightly/Beta on Android
+  (`xpinstall.signatures.required=false` — not possible on release).
+
+## Roadmap (post-1.0.0) — "elevation mode"
+
+The Firefox build lags Chrome substantially on desktop (see
+`FIREFOX_PARITY_PLAN.md` §1–2 for the full gap matrix). Agreed sequencing:
+Android plan first (done) → **rebase Firefox onto current Chrome src** with
+the audited delta set → re-plan Android on the synced base.
+
+1. **P1 rebase to Chrome parity** — ✅ done in v1.1.0: in-page card controls
+   (`listControls.ts`), bookmark queue, download history / verify /
+   retry-failed, batch pipeline, list-mode settings, PDF-merge warning.
+2. **P2 desktop verification** (manual Firefox-desktop pass) and **P3 Android
+   re-plan** on the synced base — the in-page floating `.nhdw-action-bar` is
+   already the Android bottom-bar pattern and only needs the coarse-pointer
+   compact tweaks.
+3. Crisp master icons at 96/128 (current files are rescales of the 64px
+   source via `Icon-*.png`).
+4. Side-panel equivalent if Firefox ever ships `sidePanel` on Android.

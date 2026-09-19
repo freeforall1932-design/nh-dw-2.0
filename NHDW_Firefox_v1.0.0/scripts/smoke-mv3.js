@@ -31,6 +31,8 @@ process.on("unhandledRejection", (reason) => {
     process.exit(1);
 });
 
+let determiningListenerCount = 0;
+
 const chromeStub = {
     tabs: {
         onUpdated: { addListener(fn) { onUpdatedListener = fn; } },
@@ -65,7 +67,22 @@ const chromeStub = {
         lastError: null,
         getURL(p) { return "chrome-extension://testid/" + String(p).replace(/^\//, ""); }
     },
-    downloads: { download() {} }
+    downloads: {
+        download() {},
+        // onDeterminingFilename is a GLOBAL naming-decision event: an
+        // extension that registers it joins the filename chain for every
+        // download in the profile and can be blamed by Chrome for files it
+        // never started ("failed to name the download ... because another
+        // extension determined a different filename"). The shipped worker
+        // must therefore NOT register it merely by loading — it is attached
+        // on demand while our own downloads are in flight. See the lifetime
+        // notes in src/background/downloadNaming.ts.
+        onDeterminingFilename: {
+            addListener() { determiningListenerCount++; },
+            removeListener() { determiningListenerCount--; }
+        },
+        onChanged: { addListener() {} }
+    }
 };
 
 const sandbox = {
@@ -98,6 +115,15 @@ if (!messageListenerRegistered) {
     console.error("FAIL: bundle loaded but chrome.runtime.onMessage.addListener was never called.");
     process.exit(1);
 }
+
+if (determiningListenerCount !== 0) {
+    console.error("FAIL: bundle registered " + determiningListenerCount + " chrome.downloads.onDeterminingFilename listener(s) at load time.");
+    console.error("  An idle worker must not participate in the browser-wide filename chain:");
+    console.error("  Chrome then blames this extension for downloads started by other extensions.");
+    console.error("  Attach the listener on demand instead (src/background/downloadNaming.ts).");
+    process.exit(1);
+}
+console.log("PASS: idle worker registers no global onDeterminingFilename listener.");
 
 function iconPath(details) {
     if (!details) return undefined;

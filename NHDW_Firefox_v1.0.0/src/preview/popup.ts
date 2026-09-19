@@ -1,11 +1,25 @@
 import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
-import { utils, classifyError, errorMessage } from "../utils/utils";
+import { utils, escapeHtml, errorMessage } from "../utils/utils";
 import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl } from "../sources"
 import { getActiveTabId, readGalleryFromTab } from "./activeTabGallery"
 import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
+import {
+    DownloadFormat,
+    effectiveOutputMode,
+    formatExtension,
+    normalizeFormat,
+    normalizeOutputMode,
+    outputModeToSeparate,
+    shouldWarnPdfMerge
+} from "../utils/downloadFormats"
+import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
+import { readHistory, partitionKnown, applyBatchDate, DownloadHistory, FailedGallery } from "../utils/downloadHistory"
+import { toGalleryKey } from "../utils/siteKeys"
+import { PendingFailure, groupRetryMessages } from "../utils/failedGalleries"
+import { confirmPdfMerge } from "./pdfMergeWarning"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
@@ -20,15 +34,6 @@ function executeActiveTabScript(file: string): void {
     });
 }
 
-// Escape text before embedding it in the popup's innerHTML so a gallery title
-// containing quotes or HTML cannot break the markup (or inject content).
-function escapeHtml(text: string): string {
-    return String(text)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;");
-}
 
 // Extract metadata from the already-open gallery page. Prefer the rendered
 // DOM (window._gallery / embedded JSON) so we never need /api/gallery, which
@@ -115,6 +120,129 @@ function wireActiveJobControls() {
     }
 }
 
+// ---- retry of failed galleries --------------------------------------------
+// The pipelines report WHICH galleries failed (id + name + reason) together
+// with the job settings they ran under (retryJob), and the worker remembers
+// them for the session. The popup re-sends exactly those galleries: same
+// format / template / master folder, one file per title, failed ids forced
+// past the history guard (see utils/failedGalleries.ts).
+
+function pendingFromMessage(failed: FailedGallery[], retryJob: any): PendingFailure[] {
+    return failed.map((entry) => ({
+        id: String(entry.id),
+        name: String(entry.name || entry.id),
+        error: String(entry.error || ""),
+        retryJob: retryJob && typeof retryJob === "object" ? retryJob : null,
+        at: Date.now()
+    }));
+}
+
+// Send the retry command(s) for these failures. Several commands (different
+// job settings) are queued by the worker one after the other.
+export async function retryFailedGalleries(entries: PendingFailure[]): Promise<void> {
+    const tabId = await getActiveTabId();
+    const messages = groupRetryMessages(entries, tabId);
+    if (messages.length === 0) {
+        return;
+    }
+    const names = entries.map((entry) => entry.name);
+    document.getElementById('action')!.innerHTML = "Retrying " + entries.length + " gallery" + (entries.length === 1 ? "" : "ies") + ": " + escapeHtml(names.join(", "));
+    let index = 0;
+    const sendNext = () => {
+        if (index >= messages.length) {
+            return;
+        }
+        const notice = document.getElementById('failedNotice');
+        if (notice) {
+            // The retry is in progress; the list comes back (minus whatever
+            // succeeded) with the summary.
+            notice.hidden = true;
+        }
+        const payload = messages[index++];
+        chrome.runtime.sendMessage(payload, (response: any) => {
+            try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+            if (response && response.result === "queued") {
+                document.getElementById('action')!.innerHTML = "Retry queued at position " + response.position + ".";
+            } else if (!response || response.result !== "error") {
+                Popup.getInstance().updateProgress(0, names.join(", "), false);
+            } else {
+                // The command never started (e.g. the offscreen document could
+                // not be created). The notice was hidden when the retry began,
+                // so bring the still-failed list back: without it the panel has
+                // no way to retry again until it is closed and reopened, and
+                // the worker still holds the failures.
+                refreshFailedNotice();
+            }
+            sendNext();
+        });
+    };
+    sendNext();
+}
+
+function wireRetryButton(entries: PendingFailure[]) {
+    const button = document.getElementById('buttonRetryFailed') as HTMLInputElement | null;
+    if (!button) return;
+    button.addEventListener('click', function() {
+        button.disabled = true;
+        retryFailedGalleries(entries);
+    });
+}
+
+function wireBackButton() {
+    const buttonBack = document.getElementById('buttonBack');
+    if (buttonBack) {
+        buttonBack.addEventListener('click', function() {
+            let popup = Popup.getInstance();
+            chrome.runtime.sendMessage({ action: "goBack" }, function() {
+                popup.updatePreviewAsync(popup.url);
+                // Leaving the summary: keep the failed titles visible above
+                // the preview until the user retries or dismisses them.
+                refreshFailedNotice();
+            });
+        });
+    }
+}
+
+// Failed galleries remembered by the worker for this session. Shown above the
+// normal preview until the user retries or dismisses them, so closing the
+// popup during a batch no longer loses track of what did not download.
+export function refreshFailedNotice(): void {
+    const notice = document.getElementById('failedNotice');
+    if (!notice) {
+        return;
+    }
+    try {
+        chrome.runtime.sendMessage({ action: "getFailedGalleries" }, (response: any) => {
+            try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+            const failed: PendingFailure[] = response && response.result === "success" && Array.isArray(response.failed) ? response.failed : [];
+            if (failed.length === 0) {
+                notice.hidden = true;
+                notice.innerHTML = "";
+                return;
+            }
+            notice.innerHTML = message.failedNotice(failed);
+            notice.hidden = false;
+            const retryButton = document.getElementById('buttonRetryPending') as HTMLInputElement | null;
+            if (retryButton) {
+                retryButton.addEventListener('click', function() {
+                    retryButton.disabled = true;
+                    notice.hidden = true;
+                    retryFailedGalleries(failed);
+                });
+            }
+            const dismissButton = document.getElementById('buttonDismissFailed');
+            if (dismissButton) {
+                dismissButton.addEventListener('click', function() {
+                    notice.hidden = true;
+                    chrome.runtime.sendMessage({ action: "forgetFailedGalleries" }, () => {
+                        try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                    });
+                });
+            }
+        });
+    } catch (_) { /* worker unreachable: no notice */ }
+}
+
 // Add message listener for progress updates and error messages
 // NOTE: This listener is fire-and-forget — it never calls sendResponse, so it
 // must return false. Returning true kept the message channel open and made
@@ -126,29 +254,53 @@ chrome.runtime.onMessage.addListener(function(request) {
         Popup.getInstance().updateProgress(request.progress, request.doujinshiName, request.isZipping, request.retry, request.queued, request.paused);
     } else if (request.action === "downloadError") {
         // Label the failure kind (metadata / Cloudflare / image / archive /
-        // cancellation) so the user understands what went wrong at a glance.
-        const { label } = classifyError(request.error);
-        document.getElementById('action')!.innerHTML = 'An error occured: <b>' + label + '.</b> ' + escapeHtml(String(request.error));
+        // cancellation), NAME the gallery when the pipeline told us which one
+        // failed, and offer a retry when it can be re-added.
+        const failed: FailedGallery[] = request.galleryId !== undefined && request.galleryId !== null && request.galleryId !== ""
+            ? [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }]
+            : [];
+        const retryable = failed.length > 0;
+        // errorMessage(), never String(): this is the LAST hop before the user
+        // sees the text, so an object-shaped error (or a structured-cloned
+        // Error) must not become "[object Object]" here even though every
+        // sender upstream already unwraps it.
+        document.getElementById('action')!.innerHTML = message.downloadError(errorMessage(request.error), request.galleryName, retryable);
+        setTimeout(() => {
+            if (retryable) {
+                wireRetryButton(pendingFromMessage(failed, request.retryJob));
+            }
+            // Go Back is always rendered (item 29); wire it even when the
+            // error is not retryable so the popup is never a dead-end.
+            wireBackButton();
+        }, 0);
+        if (retryable) {
+            // The worker is remembering this failure at the same time; refresh
+            // the session list once it has had a moment to land.
+            setTimeout(refreshFailedNotice, 500);
+        }
     } else if (request.action === "batchProgress") {
         // Per-gallery progress while a batch download is running
         document.getElementById('action')!.innerHTML = message.batchProgress(
             request.current, request.total, request.galleryName, request.stage || "Downloading", request.queued || 0);
         setTimeout(wireActiveJobControls, 0);
     } else if (request.action === "batchSummary") {
-        // End-of-batch success/failure summary
+        // End-of-batch success/failure summary (skipped = already-downloaded
+        // galleries the persistent history guard dropped). Failed galleries
+        // are listed by name with a "Retry failed" button.
+        const failed: FailedGallery[] = Array.isArray(request.failedGalleries) ? request.failedGalleries : [];
+        const retryable = failed.length > 0;
         document.getElementById('action')!.innerHTML = message.batchSummary(
-            request.succeeded, request.failed, request.total, request.failedKinds);
+            request.succeeded, request.failed, request.total, request.failedKinds, request.skipped, failed, retryable);
         setTimeout(() => {
-            const buttonBack = document.getElementById('buttonBack');
-            if (buttonBack) {
-                buttonBack.addEventListener('click', function() {
-                    let popup = Popup.getInstance();
-                    chrome.runtime.sendMessage({ action: "goBack" }, function() {
-                        popup.updatePreviewAsync(popup.url);
-                    });
-                });
+            wireBackButton();
+            if (retryable) {
+                wireRetryButton(pendingFromMessage(failed, request.retryJob));
             }
         }, 0);
+        // A retry that succeeded drops titles from the session list; a new
+        // failure adds to it. Either way the notice above the preview must
+        // follow (after the worker's bookkeeping had a moment to land).
+        setTimeout(refreshFailedNotice, 500);
     }
     return false;
 });
@@ -350,7 +502,7 @@ export default class Popup
                 useZip: "zip",
                 downloadName: "{pretty}",
                 replaceSpaces: true
-            }, function(elems) {
+            }, async function(elems) {
                 let extension = "";
                 if (elems.useZip == "zip")
                     extension = ".zip";
@@ -363,7 +515,19 @@ export default class Popup
                 let title = utils.getDownloadName(elems.downloadName, json.title.pretty === "" ?
                     json.title.english.replace(/\[[^\]]+\]/g, '').replace(/\([^\)]+\)/g, '') : json.title.pretty,
                     json.title.english, json.title.japanese, id, json.tags);
-                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip);
+                // Persistent history (chrome.storage.local): tell the user this
+                // gallery was already downloaded. A single-title click is an
+                // explicit request, so it is NOT auto-blocked — the button
+                // becomes "Download again" instead.
+                let alreadyNote: string = "";
+                try {
+                    const history: DownloadHistory = await readHistory();
+                    const rec = history[toGalleryKey(id)];
+                    if (rec) {
+                        alreadyNote = escapeHtml(rec.filename) + (rec.when ? " (" + new Date(rec.when).toLocaleDateString() + ")" : "");
+                    }
+                } catch (_) { /* history is cosmetic; never block the preview */ }
+                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip, alreadyNote);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listeners after updating the HTML content.
@@ -492,13 +656,33 @@ export default class Popup
     // caption inside the same link). No HTML serialization / regex parsing:
     // quotes, entities, markup changes, or duplicate titles cannot break the
     // id <-> title pairing.
-    updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, downloadName: string, useZip: string, replaceSpaces: boolean) {
+    //
+    // List mode is no longer a stripped-down cousin of the single-title popup:
+    // it offers the same four formats, an explicit separate-files/batch output
+    // mode (separate is the default), an optional master folder, and its own
+    // filename template. Every download from here goes through exactly the
+    // same pipeline as a single-title download, so the two cannot drift.
+    async updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, listSettings: ListModeSettings) {
         let self = Popup.getInstance();
 
         if (galleries.length === 0) {
             document.getElementById('action')!.innerHTML = message.invalidPage();
             return;
         }
+
+        // Persistent download history (chrome.storage.local): rows already
+        // downloaded get a badge and their own "Download anyway" override, and
+        // the summary line shows the real counts BEFORE any job is committed.
+        let history: DownloadHistory = {};
+        try {
+            history = await readHistory();
+        } catch (_) { /* history is cosmetic; listing still renders without it */ }
+        // Gallery ids the user explicitly asked to re-download.
+        const forceIds = new Set<string>();
+
+        // Working copy of the list-mode settings: every picker writes here and
+        // persists to storage, so the choice survives closing the panel.
+        let settings: ListModeSettings = listSettings;
 
         // Fill the mode badge once the storage read finishes (non-blocking).
         getApiModeState().then((state) => {
@@ -516,46 +700,55 @@ export default class Popup
         let finalHtml = "";
         for (const card of galleries) {
             let tmpName;
-            if (downloadName === "{pretty}") {
+            if (settings.template === "{pretty}") {
                 tmpName = card.title.replace(/\[[^\]]+\]/g, "").replace(/\([^\)]+\)/g, "").replace(/\{[^\}]+\}/g, "").trim();
             } else {
                 tmpName = card.title.trim();
             }
             titleById[card.id] = tmpName;
             finalHtml += '<input id="' + card.id + '" type="checkbox"/>' + escapeHtml(tmpName) + '<br/>';
+            const rec = history[toGalleryKey(card.id)];
+            if (rec) {
+                finalHtml += '<small class="nhdwAlready" id="done_' + card.id + '">&#10003; Already downloaded: '
+                    + escapeHtml(rec.filename)
+                    + ' <a href="#" class="nhdwRedl" id="redl_' + card.id + '">Download anyway</a></small><br/>';
+            }
             allIds.push(card.id);
         }
 
-        // Use URL for default download name
+        // Default name for the MERGED archive only. Batch is opt-in, so this
+        // page-derived name is no longer what most downloads are called: in
+        // separate mode every file is named from the list-mode template and
+        // the gallery's own metadata.
         let parts = self.url.split('/')
-        let name;
+        let name: string;
         if (parts[parts.length - 1] === "" || parts[parts.length - 1].startsWith("?page=")) name = parts[parts.length - 2];
         else name = parts[parts.length - 1];
         name = name.replace("q=", ""); // Artifact when doing a search
 
-        // Appends the extension (raw has none). "folder" is the retired
-        // image-folder format; PDF is its replacement.
-        let extension = "";
-        if (useZip == "folder") {
-            useZip = "pdf";
-        }
-        if (useZip != "raw")
-        {
-            extension = "." + useZip;
-        }
-
         // Add the HTML
         let nbDownload = 0;
         let currPage = currentPage;
-        let html =  '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>' + finalHtml
-        + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/><br/><br/><input type="button" id="button" value="Download"/>';
+        let html = '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>'
+            + '<div class="listGalleries">' + finalHtml + '</div>'
+            + '<div id="downloadedSummary" class="nhdwSummary"></div>'
+            + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/>'
+            + message.listDownloadOptions(settings)
+            + '<input type="button" id="button" value="Download selected"/>';
         if (maxPage > 0 && currPage > 0) {
             nbDownload = maxPage - currPage + 1;
             html += '<br/><input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/><br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
         }
-        html += '<br/><br/>Downloads/<input type="text" id="path"/>' + extension;
         document.getElementById('action')!.innerHTML = html;
-        (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(name, replaceSpaces);
+        // Merged re-runs of the same listing would reuse one base name; the
+        // date stamp (settings.batchNameDate, default on) tells them apart.
+        // The worker adds _part2/_part3 on same-day repeats before saving.
+        const pathInput = document.getElementById('path') as HTMLInputElement;
+        let defaultBatchName = utils.cleanName(name, settings.replaceSpaces);
+        if (effectiveOutputMode(settings.format, settings.outputMode) === "batch" && settings.batchNameDate) {
+            defaultBatchName = applyBatchDate(defaultBatchName, Date.now());
+        }
+        pathInput.value = defaultBatchName;
         if (maxPage > 0 && currPage > 0) {
             (document.getElementById('downloadInput') as HTMLInputElement).value = currPage + "-" + maxPage;
             document.getElementById('buttonHelp')!.addEventListener('click', function() {
@@ -563,6 +756,206 @@ export default class Popup
                 + "Example: 2,4,6-10 will download the pages 2, 4 and 6 to 10 (included)");
             });
         }
+
+        // ---- list-mode option pickers -------------------------------------
+        // The pickers persist immediately (separate keys from the single-title
+        // settings) and re-render the parts of the panel that depend on them:
+        // the merged-archive name row only makes sense in batch mode, and the
+        // filename preview must always show what the next download produces.
+        const sampleTitle = galleries.length > 0 ? (titleById[galleries[0].id] || galleries[0].title) : "Sample Title";
+        const sampleId = galleries.length > 0 ? galleries[0].id : "123456";
+
+        // ---- already-downloaded counts -------------------------------------
+        // Live summary: "N selected · M already downloaded · K will download",
+        // shown BEFORE the job is committed; the download button carries the
+        // real count. Batch/merged mode does NOT skip anything (the merged
+        // file must contain every selected title), so the wording explains it.
+        const refreshDownloadSummary = () => {
+            const selectedIds = allIds.filter((id) => {
+                const box = document.getElementById(id) as HTMLInputElement | null;
+                return !!(box && box.checked);
+            });
+            const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id)]);
+            const skipped = alreadySelected.filter((id) => !forceIds.has(id));
+            const summary = document.getElementById('downloadedSummary');
+            const mode = effectiveOutputMode(settings.format, settings.outputMode);
+            // Merged mode never skips: the one archive needs every selected
+            // title, so the button count must be the full selection. Separate
+            // mode drops already-downloaded rows (minus overrides).
+            const willDownload = mode === "batch" ? selectedIds.length : selectedIds.length - skipped.length;
+            if (summary) {
+                if (skipped.length > 0) {
+                    summary.textContent = mode === "batch"
+                        ? selectedIds.length + " selected · " + skipped.length + " already downloaded (merged-file mode re-downloads them into one file)"
+                        : selectedIds.length + " selected · " + skipped.length + " already downloaded · " + willDownload + " will download";
+                    summary.className = "nhdwSummary nhdwSummaryWarn";
+                } else if (selectedIds.length > 0) {
+                    summary.textContent = selectedIds.length + " selected";
+                    summary.className = "nhdwSummary";
+                } else {
+                    summary.textContent = "";
+                    summary.className = "nhdwSummary";
+                }
+            }
+            const downloadButton = document.getElementById('button') as HTMLInputElement | null;
+            if (downloadButton) {
+                downloadButton.value = "Download selected (" + willDownload + ")";
+                downloadButton.disabled = mode === "batch" ? selectedIds.length === 0 : willDownload === 0;
+            }
+        };
+
+        const refreshListOptionUi = () => {
+            const effective = effectiveOutputMode(settings.format, settings.outputMode);
+            const batchRow = document.getElementById('batchNameRow');
+            if (batchRow) {
+                batchRow.hidden = effective !== "batch";
+            }
+            const batchExt = document.getElementById('batchExtension');
+            if (batchExt) {
+                batchExt.textContent = formatExtension(settings.format);
+            }
+            const rawNote = document.getElementById('listRawNote');
+            if (rawNote) {
+                rawNote.hidden = settings.format !== "raw";
+            }
+            const preview = document.getElementById('listNamePreview');
+            if (preview) {
+                const rendered = utils.getDownloadName(settings.template, sampleTitle, sampleTitle, "", sampleId, []);
+                const clean = utils.cleanName(rendered, settings.replaceSpaces, sampleId);
+                const folder = settings.masterFolder && settings.masterFolderName !== ""
+                    ? settings.masterFolderName + "/"
+                    : "";
+                preview.textContent = effective === "batch"
+                    ? "One merged file: Downloads/" + folder
+                        + ((document.getElementById('path') as HTMLInputElement | null)?.value || utils.cleanName(name, settings.replaceSpaces))
+                        + formatExtension(settings.format)
+                    : (settings.format === "raw"
+                        ? "One folder per title: Downloads/" + folder + clean + "/001.jpg"
+                        : "One file per title: Downloads/" + folder + clean + formatExtension(settings.format));
+            }
+            refreshDownloadSummary();
+        };
+
+        setTimeout(() => {
+            const formatSelect = document.getElementById('listFormat') as HTMLSelectElement | null;
+            if (formatSelect) {
+                formatSelect.addEventListener('change', () => {
+                    settings.format = normalizeFormat(formatSelect.value, settings.format);
+                    saveListSettings({ listFormat: settings.format });
+                    refreshListOptionUi();
+                });
+            }
+            const outputSelect = document.getElementById('listOutputMode') as HTMLSelectElement | null;
+            if (outputSelect) {
+                outputSelect.addEventListener('change', () => {
+                    settings.outputMode = normalizeOutputMode(outputSelect.value, settings.outputMode);
+                    saveListSettings({ listOutputMode: settings.outputMode });
+                    refreshListOptionUi();
+                });
+            }
+            const masterBox = document.getElementById('listMasterFolder') as HTMLInputElement | null;
+            if (masterBox) {
+                masterBox.addEventListener('change', () => {
+                    settings.masterFolder = masterBox.checked;
+                    saveListSettings({ listMasterFolder: settings.masterFolder });
+                    refreshListOptionUi();
+                });
+            }
+            const pathInput = document.getElementById('path') as HTMLInputElement | null;
+            if (pathInput) {
+                pathInput.addEventListener('input', refreshListOptionUi);
+            }
+            refreshListOptionUi();
+        }, 0);
+
+        // Per-download "download anyway" override: clicking the link on a row
+        // that was already downloaded marks it for re-download, keeps its
+        // checkbox ticked and updates the counts immediately.
+        setTimeout(() => {
+            allIds.forEach((id) => {
+                const link = document.getElementById('redl_' + id) as HTMLAnchorElement | null;
+                if (!link) {
+                    return;
+                }
+                link.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    forceIds.add(id);
+                    link.textContent = "will re-download";
+                    const box = document.getElementById(id) as HTMLInputElement | null;
+                    if (box) {
+                        box.checked = true;
+                    }
+                    chrome.storage.local.get({ allIds: [] }, (elemsLocal) => {
+                        chrome.storage.local.set({ allIds: self.#saveIdInLocalStorage(id, elemsLocal.allIds, true) });
+                    });
+                    executeActiveTabScript("js/updateContent.js");
+                    refreshDownloadSummary();
+                });
+            });
+        }, 0);
+
+        // Build the job payload shared by "Download selected" and "Download
+        // all (N pages)". Applying the PDF-merge guard here means neither
+        // entry point can bypass it.
+        const buildJobOptions = async (titleCount: number): Promise<{
+            format: DownloadFormat;
+            separate: boolean;
+            masterFolder: string;
+            nameTemplate: string;
+        } | null> => {
+            let outputMode = effectiveOutputMode(settings.format, settings.outputMode);
+            if (shouldWarnPdfMerge(settings.format, outputMode, titleCount) && !settings.pdfMergeWarnDismissed) {
+                const answer = await confirmPdfMerge(titleCount);
+                if (answer.dismissed) {
+                    // Honour "don't warn me again" for the rest of this session
+                    // too, not only after the panel is reopened.
+                    settings.pdfMergeWarnDismissed = true;
+                }
+                if (answer.choice === "cancel") {
+                    return null;
+                }
+                if (answer.choice === "separate") {
+                    outputMode = "separate";
+                    settings.outputMode = "separate";
+                    saveListSettings({ listOutputMode: "separate" });
+                    const outputSelect = document.getElementById('listOutputMode') as HTMLSelectElement | null;
+                    if (outputSelect) {
+                        outputSelect.value = "separate";
+                    }
+                    refreshListOptionUi();
+                }
+            }
+            return {
+                format: settings.format,
+                separate: outputModeToSeparate(settings.format, outputMode),
+                masterFolder: resolveMasterFolder(settings),
+                nameTemplate: settings.template
+            };
+        };
+
+        // Send a list job, handling the merged "you already have this file"
+        // answer: the worker refuses to start, the UI warns, then re-sends with
+        // existingConfirmed (user chose warn-only for merged re-runs).
+        const sendListJob = (message: any) => {
+            try {
+                chrome.runtime.sendMessage(message, (response: any) => {
+                    try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                    if (response && response.result === "existing" && response.filename) {
+                        const again = window.confirm(
+                            "You already have:\n" + response.filename +
+                            "\n\nThis download creates a NEW copy (the name gets _part2, _part3 ...).\n\nContinue?");
+                        if (again) {
+                            message.existingConfirmed = true;
+                            chrome.runtime.sendMessage(message, () => {
+                                try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                            });
+                        }
+                        return;
+                    }
+                    self.updateProgress(0, message.finalName, false);
+                });
+            } catch (_) { /* worker unreachable */ }
+        };
 
         // Invert all checkbox - add event listener after updating the HTML content
         setTimeout(() => {
@@ -585,6 +978,7 @@ export default class Popup
                             allIds: storageAllIds
                         });
                         executeActiveTabScript("js/updateContent.js");
+                        refreshDownloadSummary();
                     });
                 });
             }
@@ -603,6 +997,7 @@ export default class Popup
                         allIds: []
                     });
                     executeActiveTabScript("js/updateContent.js");
+                    refreshDownloadSummary();
                 });
             }
         }, 0);
@@ -619,9 +1014,44 @@ export default class Popup
                             allDoujinshis[id] = titleById[id];
                         }
                     });
+                    // Hop off the already-downloaded galleries (separate mode),
+                    // keeping the per-row "Download anyway" picks — so the
+                    // skipped ones cost ZERO metadata/API calls. Merged mode
+                    // keeps every title (one file needs them all).
+                    const batchBeforeWarning = effectiveOutputMode(settings.format, settings.outputMode) === "batch";
+                    if (!batchBeforeWarning) {
+                        const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                        const filtered: Record<string, string> = {};
+                        for (const id of toDownload) {
+                            filtered[id] = allDoujinshis[id];
+                        }
+                        allDoujinshis = filtered;
+                    }
                     if (Object.keys(allDoujinshis).length > 0) { // There is at least one element selected, we launch download
                         const pathElement = document.getElementById('path') as HTMLInputElement;
                         if (pathElement) {
+                            const job = await buildJobOptions(Object.keys(allDoujinshis).length);
+                            if (job === null) {
+                                return; // user cancelled the PDF-merge warning
+                            }
+                            if (batchBeforeWarning && job.separate) {
+                                // "Switch to separate files" in the merge warning
+                                // turns this into a separate-mode job, so the
+                                // history skip applies now: drop the recorded
+                                // galleries BEFORE their metadata is resolved
+                                // (skipped ids must cost zero API calls) and
+                                // before any count is reported to the user.
+                                const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                                const refiltered: Record<string, string> = {};
+                                for (const id of keep) {
+                                    refiltered[id] = allDoujinshis[id];
+                                }
+                                allDoujinshis = refiltered;
+                                if (Object.keys(allDoujinshis).length === 0) {
+                                    document.getElementById('action')!.innerHTML = "Every selected gallery is already downloaded. Click <i>Download anyway</i> on a row to re-download it (or Clear history in Settings).";
+                                    return;
+                                }
+                            }
                             let finalName = pathElement.value;
                             document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                             const tabId = await getActiveTabId();
@@ -633,17 +1063,21 @@ export default class Popup
                                 return;
                             }
                             // Use message passing instead of direct background page access for Firefox private mode compatibility
-                            chrome.runtime.sendMessage({
+                            sendListJob({
                                 action: "downloadAllDoujinshis",
                                 allDoujinshis: allDoujinshis,
                                 galleryMetadata: galleryMetadata,
                                 finalName: finalName,
-                                tabId: tabId
+                                tabId: tabId,
+                                formatOverride: job.format,
+                                separate: job.separate,
+                                masterFolder: job.masterFolder,
+                                nameTemplate: job.nameTemplate,
+                                redownloadIds: Array.from(forceIds)
                             });
-                            self.updateProgress(0, finalName, false);
                         }
                     } else {
-                        document.getElementById('action')!.innerHTML = "You must select at least one element to download.";
+                        document.getElementById('action')!.innerHTML = "Every selected gallery is already downloaded. Click <i>Download anyway</i> on a row to re-download it (or Clear history in Settings).";
                     }
                 });
             }
@@ -678,6 +1112,19 @@ export default class Popup
                                 allDoujinshis[id] = titleById[id];
                             }
                         });
+                        // Separate mode: don't resolve already-downloaded ids on
+                        // THIS page (zero API calls; later pages are guarded by
+                        // the pipeline using the same recorded set). Merged mode
+                        // keeps every title.
+                        const batchBeforeWarning = effectiveOutputMode(settings.format, settings.outputMode) === "batch";
+                        if (!batchBeforeWarning) {
+                            const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                            const filtered: Record<string, string> = {};
+                            for (const id of toDownload) {
+                                filtered[id] = allDoujinshis[id];
+                            }
+                            allDoujinshis = filtered;
+                        }
                         let pages = self.#parseDownloadAll(maxPage);
                         if (typeof pages === "string") {
                             alert(pages);
@@ -686,31 +1133,67 @@ export default class Popup
                                 downloadInput.value = currPage + "-" + nbDownload;
                             }
                         } else {
+                            // The large-batch count warning stays exactly as it
+                            // was; the PDF-merge warning is independent and is
+                            // shown after it (they can stack).
                             let choice = confirm("You are going to download " + pages.length + " pages of doujinshi. Are you sure you want to continue?");
                             if (choice) {
                                 const pathElement = document.getElementById('path') as HTMLInputElement;
                                 if (pathElement) {
+                                    // A whole-listing walk always covers more
+                                    // than one title, so the merge guard uses
+                                    // the page count as the lower bound.
+                                    const job = await buildJobOptions(Math.max(2, Object.keys(allDoujinshis).length));
+                                    if (job === null) {
+                                        return; // user cancelled the PDF-merge warning
+                                    }
+                                    if (batchBeforeWarning && job.separate) {
+                                        // Downgraded to separate files by the merge
+                                        // warning: apply the history skip now, before
+                                        // this page's metadata is resolved. An empty
+                                        // set is fine here - other pages may still
+                                        // have work, and the pipeline re-parses each
+                                        // page itself.
+                                        const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                                        const refiltered: Record<string, string> = {};
+                                        for (const id of keep) {
+                                            refiltered[id] = allDoujinshis[id];
+                                        }
+                                        allDoujinshis = refiltered;
+                                    }
                                     let finalName = pathElement.value;
                                     document.getElementById('action')!.innerHTML = "Resolving selected galleries...";
                                     const tabId = await getActiveTabId();
                                     const selectedIds = Object.keys(allDoujinshis);
-                                    const galleryMetadata = await resolveSelectedGalleries(selectedIds, tabId);
-                                    if (Object.keys(galleryMetadata).length === 0) {
-                                        document.getElementById('action')!.innerHTML =
-                                            "Could not read gallery metadata from this tab. Keep the NHentai page open after completing any browser verification, then try again.";
-                                        return;
+                                    // Every card on THIS page may already be
+                                    // downloaded and skipped, yet other pages
+                                    // still have work: the page walk re-parses
+                                    // each page itself, so empty metadata here
+                                    // is fine (nothing to resolve).
+                                    let galleryMetadata: Record<string, any> = {};
+                                    if (selectedIds.length > 0) {
+                                        galleryMetadata = await resolveSelectedGalleries(selectedIds, tabId);
+                                        if (Object.keys(galleryMetadata).length === 0) {
+                                            document.getElementById('action')!.innerHTML =
+                                                "Could not read gallery metadata from this tab. Keep the NHentai page open after completing any browser verification, then try again.";
+                                            return;
+                                        }
                                     }
                                     // Use message passing instead of direct background page access for Firefox private mode compatibility
-                                    chrome.runtime.sendMessage({
+                                    sendListJob({
                                         action: "downloadAllPages",
                                         allDoujinshis: allDoujinshis,
                                         galleryMetadata: galleryMetadata,
                                         pages: pages,
                                         finalName: finalName,
                                         url: self.url,
-                                        tabId: tabId
+                                        tabId: tabId,
+                                        formatOverride: job.format,
+                                        separate: job.separate,
+                                        masterFolder: job.masterFolder,
+                                        nameTemplate: job.nameTemplate,
+                                        redownloadIds: Array.from(forceIds)
                                     });
-                                    self.updateProgress(0, finalName, false);
                                 }
                             }
                         }
@@ -734,6 +1217,7 @@ export default class Popup
                             });
                         });
                         executeActiveTabScript("js/updateContent.js");
+                        refreshDownloadSummary();
                     });
 
                     chrome.storage.local.get({

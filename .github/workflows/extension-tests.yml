@@ -20,6 +20,9 @@ on:
       - 'NHDW_Firefox_v1.0.0/src/**'
       - 'NHDW_Firefox_v1.0.0/scripts/**'
       - 'NHDW_Firefox_v1.0.0/test/**'
+      - 'NHDW_Firefox_v1.0.0/css/**'
+      - 'NHDW_Firefox_v1.0.0/index.html'
+      - 'NHDW_Firefox_v1.0.0/options.html'
       - 'NHDW_Firefox_v1.0.0/manifest.json'
       - 'NHDW_Firefox_v1.0.0/package.json'
       - 'NHDW_Firefox_v1.0.0/package-lock.json'
@@ -74,4 +77,7 @@ jobs:
         working-directory: NHDW_Firefox_v1.0.0
       - name: Window-less VM e2e pipelines
         run: npm run test:e2e
+        working-directory: NHDW_Firefox_v1.0.0
+      - name: Mozilla validator (packaged file set)
+        run: npm run lint:firefox
         working-directory: NHDW_Firefox_v1.0.0

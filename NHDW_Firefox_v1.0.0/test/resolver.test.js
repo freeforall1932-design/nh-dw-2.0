@@ -1,6 +1,6 @@
 const assert = require('assert');
 const { resolveSelectedGalleries } = require('../build/test/preview/selectedGalleryResolver.js');
-const { readGalleryFromTab } = require('../build/test/preview/activeTabGallery.js');
+const { readGalleryFromTab, getActiveNhentaiTabId } = require('../build/test/preview/activeTabGallery.js');
 
 describe('selected gallery resolver', () => {
     let executeCalls;
@@ -107,5 +107,59 @@ describe('selected gallery resolver', () => {
         const gallery = await readGalleryFromTab(7, '1');
         assert.strictEqual(gallery.media_id, '9');
         assert.strictEqual(executeCount, 1);
+    });
+});
+
+
+// The bookmark Queue tab can be opened while the active tab is any website, and
+// neither the worker's resolveTabId() nor the batch pipeline validates the tab
+// they are handed. This guard is what keeps enrichment and Queue downloads from
+// pointing at a foreign tab.
+describe('nhentai-only active tab guard', () => {
+    function stubActiveTab(tab) {
+        global.chrome = {
+            runtime: { lastError: null },
+            tabs: { query(_query, cb) { cb(tab === undefined ? [] : [tab]); } }
+        };
+    }
+
+    afterEach(() => { delete global.chrome; });
+
+    it('returns the id when the active tab is on nhentai', async () => {
+        stubActiveTab({ id: 7, url: 'https://nhentai.net/g/366224/' });
+        assert.strictEqual(await getActiveNhentaiTabId(), 7);
+    });
+
+    it('accepts the bare origin and listing pages too', async () => {
+        stubActiveTab({ id: 8, url: 'https://nhentai.net/' });
+        assert.strictEqual(await getActiveNhentaiTabId(), 8);
+        stubActiveTab({ id: 9, url: 'https://nhentai.net/search/?q=test' });
+        assert.strictEqual(await getActiveNhentaiTabId(), 9);
+    });
+
+    it('refuses any other site, however similar the host looks', async () => {
+        for (const url of [
+            'https://example.com/',
+            'https://nhentai.net.evil.com/g/1/',
+            'https://evil-nhentai.net/g/1/',
+            'http://nhentai.net/g/1/',
+            'chrome://extensions/'
+        ]) {
+            stubActiveTab({ id: 3, url: url });
+            assert.strictEqual(await getActiveNhentaiTabId(), undefined,
+                'must refuse ' + url);
+        }
+    });
+
+    it('refuses a tab with no url (chrome hides it without the tabs permission)', async () => {
+        stubActiveTab({ id: 4 });
+        assert.strictEqual(await getActiveNhentaiTabId(), undefined);
+    });
+
+    it('survives no tab at all and no chrome object', async () => {
+        stubActiveTab(undefined);
+        assert.strictEqual(await getActiveNhentaiTabId(), undefined);
+        delete global.chrome;
+        assert.strictEqual(await getActiveNhentaiTabId(), undefined);
     });
 });

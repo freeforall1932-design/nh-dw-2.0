@@ -30,6 +30,19 @@ let onMessageHandler = null;
 const sentMessages = [];
 const downloads = [];                 // what the (simulated) worker downloaded
 const tabFetches = [];                 // fetchInTab / fetchUrlInTab relays
+// Raw-mode completion tracking (3.6.0): when a script is installed, every
+// saveDownload gets its own downloadId and awaitDownload answers per the
+// script; without one the legacy {result:7} / "unknown" answers apply.
+let rawDownloadScript = null;
+let nextRawDownloadId = 100;
+const rawDownloadIds = {};
+const awaitDownloadCalls = [];
+const cancelledDownloads = [];
+// Regression (raw-mode "[object Object]" report): when set, saveDownload
+// answers {result:false, error: <Error instance>} exactly like a worker that
+// did not stringify its rejection. The offscreen document must unwrap the
+// Error's message instead of String()-ing it into "Error: [object Object]".
+let saveDownloadErrorScript = null;
 
 // Options exactly as the service worker relays them (it reads
 // chrome.storage.sync on the document's behalf).
@@ -52,9 +65,39 @@ const chromeCore = {
             sentMessages.push(msg);
             if (!msg || msg.from !== "offscreen") return;
             if (msg.action === "saveDownload") {
-                // The service worker calls chrome.downloads.download here.
+                // The service worker calls chrome.downloads.download here and
+                // answers with the downloadId as soon as the item exists.
                 downloads.push({ url: msg.url, filename: msg.filename });
-                if (cb) setTimeout(() => cb({ result: 7 }), 0);
+                if (saveDownloadErrorScript !== null) {
+                    if (cb) setTimeout(() => cb({ result: false, error: new Error(saveDownloadErrorScript) }), 0);
+                    return;
+                }
+                const id = rawDownloadScript === null ? 7 : nextRawDownloadId++;
+                if (rawDownloadScript !== null) {
+                    rawDownloadIds[id] = { filename: msg.filename, attempt: downloads.filter((d) => d.filename === msg.filename).length - 1 };
+                }
+                if (cb) setTimeout(() => cb({ result: id }), 0);
+            } else if (msg.action === "awaitDownload") {
+                // The worker follows the download to its terminal state
+                // (downloadControl.ts). This harness scripts the outcome per
+                // filename/attempt: "complete", an interrupt reason, or
+                // "pending" (still running; the document must ask again).
+                awaitDownloadCalls.push(msg.downloadId);
+                const entry = rawDownloadIds[msg.downloadId];
+                let answer;
+                if (rawDownloadScript === null || !entry) {
+                    answer = { result: true, ok: true, state: "unknown", error: null };
+                } else {
+                    const outcome = rawDownloadScript(entry.filename, entry.attempt, entry.asked || 0);
+                    entry.asked = (entry.asked || 0) + 1;
+                    if (outcome === "complete") answer = { result: true, ok: true, state: "complete", error: null };
+                    else if (outcome === "pending") answer = { result: true, ok: false, state: "pending", error: null };
+                    else answer = { result: true, ok: false, state: "interrupted", error: "Download interrupted (" + outcome + ")" };
+                }
+                if (cb) setTimeout(() => cb(answer), 0);
+            } else if (msg.action === "cancelDownload") {
+                cancelledDownloads.push(msg.downloadId);
+                if (cb) setTimeout(() => cb({ result: true }), 0);
             } else if (msg.action === "fetchInTab") {
                 // The service worker injects fetchImageInPage into the tab.
                 tabFetches.push({ kind: "image", url: msg.url, world: msg.world });
@@ -185,6 +228,20 @@ function fetchStub(url) {
             return Promise.resolve(new Response("nope", { status: 404 }));
         }
         return Promise.resolve(new Response(pageBytes[(parseInt(imgMatch[2], 10) - 1) % pageBytes.length], { status: 200 }));
+    }
+    // Listing-page HTML for the multi-page merged-history phase: page 1 shows
+    // gallery 123456, page 2 shows gallery 654321, in nhentai's card markup.
+    const pageMatch = /[?&]page=([0-9]+)/.exec(u);
+    if (pageMatch && u.includes("nhentai.net/search/")) {
+        const pageNo = parseInt(pageMatch[1], 10);
+        const id = pageNo === 1 ? GALLERY_ID : pageNo === 2 ? GALLERY_ID2 : 0;
+        const title = pageNo === 1 ? "One" : pageNo === 2 ? "Two" : "Unknown";
+        if (id !== 0) {
+            return Promise.resolve(new Response(
+                '<a href="/g/' + id + '/1/"><div class="caption">' + title + '<br>language 1</div></a>',
+                { status: 200 }
+            ));
+        }
     }
     return Promise.resolve(new Response("not found", { status: 404 }));
 }
@@ -478,8 +535,8 @@ function askOffscreen(message) {
         fail("no ZIP must be delivered when the batch gallery fails, got " + anchorDownloads.length);
     }
     const failSummary = sentMessages.find((m) => m.action === "batchSummary");
-    if (!failSummary || failSummary.succeeded !== 0 || failSummary.failed !== 1 || failSummary.total !== 1) {
-        fail("batchSummary must report 0/1/1 for a single failing gallery, got " + JSON.stringify(failSummary));
+    if (!failSummary || failSummary.succeeded !== 0 || failSummary.failed !== 1 || failSummary.total !== 1 || failSummary.skipped !== 0) {
+        fail("batchSummary must report 0/1/1 skipped:0 for a single failing gallery, got " + JSON.stringify(failSummary));
     }
     if (!failSummary.failedKinds || failSummary.failedKinds.image !== 1) {
         fail("the failing gallery is an image failure; failedKinds must be {image:1}, got " + JSON.stringify(failSummary.failedKinds));
@@ -511,8 +568,8 @@ function askOffscreen(message) {
         "no batchSummary was sent for the mixed batch"
     );
     const mixedSummary = sentMessages.find((m) => m.action === "batchSummary");
-    if (!mixedSummary || mixedSummary.succeeded !== 1 || mixedSummary.failed !== 1 || mixedSummary.total !== 2) {
-        fail("mixed batch summary must report 1/1/2, got " + JSON.stringify(mixedSummary));
+    if (!mixedSummary || mixedSummary.succeeded !== 1 || mixedSummary.failed !== 1 || mixedSummary.total !== 2 || mixedSummary.skipped !== 0) {
+        fail("mixed batch summary must report 1/1/2 skipped:0, got " + JSON.stringify(mixedSummary));
     }
     if (!mixedSummary.failedKinds || mixedSummary.failedKinds.metadata !== 1) {
         fail("the missing gallery is a metadata failure; failedKinds must be {metadata:1}, got " + JSON.stringify(mixedSummary.failedKinds));
@@ -524,6 +581,142 @@ function askOffscreen(message) {
         fail("batchProgress must be sent before each gallery");
     }
     console.log("PASS: batch continues after a gallery failure and reports 1/1/2");
+
+    // ---- Persistent history: already-downloaded ids are skipped, zero API ---
+    // The worker relays the recorded ID list with the job (the offscreen
+    // document has no chrome.storage). A recorded gallery in SEPARATE mode is
+    // not fetched at all (no API call, no progress broadcast) unless it is in
+    // the user's redownloadIds. A merged batch keeps every title.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const skipStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/Skip",
+        options: Object.assign({}, relayedOptions, { downloadSeparately: true, alreadyDownloadedIds: [GALLERY_ID2], redownloadIds: [] })
+    });
+    if (!skipStart || skipStart.result !== "started") {
+        fail("history-skip batch did not answer {result:'started'}, got " + JSON.stringify(skipStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "history-skip batch must finish");
+    const skipSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!skipSummary || skipSummary.succeeded !== 1 || skipSummary.failed !== 0 || skipSummary.total !== 2 || skipSummary.skipped !== 1) {
+        fail("history-skip batchSummary must report 1/0/2 skipped:1, got " + JSON.stringify(skipSummary));
+    }
+    if (anchorDownloads.length !== 1 || anchorDownloads[0].download !== "Test.zip") {
+        fail("only the un-recorded gallery must download, got " + JSON.stringify(anchorDownloads));
+    }
+    if (fetchedUrls.some(
+        (u) => u.includes("/api/v2/galleries/" + GALLERY_ID2) || u.includes("/galleries/" + MEDIA_ID2 + "/")
+    )) {
+        fail("a recorded gallery must not be fetched at all (zero API calls): " + JSON.stringify(fetchedUrls));
+    }
+    const skipProgress = sentMessages.filter((m) => m.action === "batchProgress");
+    if (skipProgress.length !== 1 || skipProgress[0].galleryName !== "One") {
+        fail("no batchProgress may be sent for a skipped gallery, got " + JSON.stringify(skipProgress));
+    }
+    const skipRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!skipRecords || skipRecords.length !== 1 || String(skipRecords[0].id) !== String(GALLERY_ID)) {
+        fail("jobFinished must carry exactly the newly-downloaded record, got " + JSON.stringify(skipRecords));
+    }
+    console.log("PASS: recorded gallery skipped without API calls; redownload override still works");
+
+    // ---- Download anyway: redownloadIds re-fetch recorded galleries ---------
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const overrideStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/Override",
+        options: Object.assign({}, relayedOptions, { downloadSeparately: true, alreadyDownloadedIds: [GALLERY_ID2], redownloadIds: [GALLERY_ID2] })
+    });
+    if (!overrideStart || overrideStart.result !== "started") {
+        fail("override batch did not answer {result:'started'}, got " + JSON.stringify(overrideStart));
+    }
+    await waitFor(() => anchorDownloads.length === 1, "override must re-download the recorded gallery");
+    const overrideFetches = fetchedUrls.filter(
+        (u) => u.includes("/api/v2/galleries/" + GALLERY_ID2) || u.includes("/galleries/" + MEDIA_ID2 + "/")
+    );
+    if (overrideFetches.length === 0) {
+        fail("redownloadIds must make the recorded gallery fetch metadata+images, got " + JSON.stringify(fetchedUrls));
+    }
+    console.log("PASS: redownloadIds overrides the history guard");
+
+    // ---- Merged batch never skips: every title is needed in one archive -----
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const mergedStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/MergedHistory",
+        options: Object.assign({}, relayedOptions, { alreadyDownloadedIds: [GALLERY_ID2], redownloadIds: [] })
+    });
+    if (!mergedStart || mergedStart.result !== "started") {
+        fail("merged history batch did not answer {result:'started'}, got " + JSON.stringify(mergedStart));
+    }
+    await waitFor(() => anchorDownloads.length === 1, "merged batch must still deliver the one archive");
+    const mergedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!mergedSummary || mergedSummary.skipped !== 0 || mergedSummary.succeeded !== 2) {
+        fail("merged batch must not skip recorded titles, got " + JSON.stringify(mergedSummary));
+    }
+    console.log("PASS: merged batch keeps every title (one archive needs them all)");
+
+    // ---- Multi-page merged "Download all": clean pages record every id -----
+    // downloadAllPages runs the batch per listing page with downloadAtEnd true
+    // ONLY on the final page. Every earlier page must still count as clean (no
+    // failures) even though the merged save belongs to the last page, or a
+    // fully successful multi-page merge would never be recorded. One merged
+    // artifact is delivered ("path (lastPage)") and BOTH pages' ids are
+    // recorded under its name.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    const pagesStart = await askOffscreen({
+        action: "downloadAllPages",
+        allDoujinshis: {},
+        pages: [1, 2],
+        finalName: "Downloads/PagesAll",
+        url: "https://nhentai.net/search/?q=test",
+        options: relayedOptions
+    });
+    if (!pagesStart || pagesStart.result !== "started") {
+        fail("downloadAllPages did not answer {result:'started'}, got " + JSON.stringify(pagesStart));
+    }
+    await waitFor(() => anchorDownloads.length === 1, "multi-page merged job must deliver one archive");
+    const pagesAnchor = anchorDownloads[0];
+    if (pagesAnchor.download !== "Downloads/PagesAll (2).zip") {
+        fail("multi-page merged artifact must be named 'path (lastPage)', got " + pagesAnchor.download);
+    }
+    const pageSummaries = sentMessages.filter((m) => m.action === "batchSummary");
+    if (pageSummaries.length !== 2) {
+        fail("downloadAllPages must emit one batchSummary per page, got " + pageSummaries.length);
+    }
+    for (const summary of pageSummaries) {
+        if (summary.succeeded !== 1 || summary.failed !== 0 || summary.skipped !== 0) {
+            fail("each clean page must report 1/0/0, got " + JSON.stringify(summary));
+        }
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "multi-page merged job must send exactly one jobFinished"
+    );
+    const pageRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!pageRecords || pageRecords.length !== 2) {
+        fail("both pages' ids must be recorded, got " + JSON.stringify(pageRecords));
+    }
+    for (const rec of pageRecords) {
+        if (rec.filename !== "Downloads/PagesAll (2).zip") {
+            fail("every merged multi-page record must point at the one artifact, got " + JSON.stringify(pageRecords));
+        }
+    }
+    console.log("PASS: clean multi-page merged job records both pages under the final artifact name");
 
     // ---- Batch metadata for unresolved ids reuses the user tab's session ---
     // Without galleryMetadata and WITH a sourceTabId, the document must fetch
@@ -636,7 +829,12 @@ function askOffscreen(message) {
         "separate-files batch followed by a queued gallery must emit three archives"
     );
     const separateFilenames = anchorDownloads.map((d) => d.download).sort();
-    const expectedSeparate = ["Test.zip", "Test Two.zip", "Downloads/Queued.zip"].sort();
+    // Separate-file names now go through utils.cleanName exactly like a
+    // single-title download (relayedOptions has replaceSpaces: true), so
+    // "Test Two" becomes "Test_Two" instead of keeping the raw title. Before
+    // 3.4.0 the batch used the raw title here while single titles were
+    // cleaned - the two paths disagreed.
+    const expectedSeparate = ["Test.zip", "Test_Two.zip", "Downloads/Queued.zip"].sort();
     if (JSON.stringify(separateFilenames) !== JSON.stringify(expectedSeparate)) {
         fail("separate-files filenames mismatch. Expected " + JSON.stringify(expectedSeparate) +
             " got " + JSON.stringify(separateFilenames));
@@ -730,6 +928,269 @@ function askOffscreen(message) {
         fail("PDF page 1 must use the image dimensions");
     }
     console.log("PASS: PDF mode delivered " + pdfBytes.length + " bytes as " + pdfDownload.download);
+
+    // ---- Raw mode: a page counts as saved only when its download completes --
+    // The worker answers saveDownload with the downloadId at creation time and
+    // awaitDownload with the terminal state. Page 2 is interrupted once after
+    // it started and must be retried; the gallery then succeeds and is
+    // recorded. A "pending" answer (download still running) must make the
+    // document ask again rather than give up.
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    sentMessages.length = 0;
+    awaitDownloadCalls.length = 0;
+    cancelledDownloads.length = 0;
+    rawDownloadScript = (filename, attempt, asked) => {
+        if (/002\.png$/.test(filename) && attempt === 0) return "NETWORK_FAILED";
+        if (/001\.jpg$/.test(filename) && asked === 0) return "pending";
+        return "complete";
+    };
+    const rawOptions = Object.assign({}, relayedOptions, { useZip: "raw", rawMasterFolder: "NHDW", rawMaxConcurrent: "2" });
+    const rawStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/RawTracked",
+        name: "RawTracked",
+        options: rawOptions
+    });
+    if (!rawStart || rawStart.result !== "started") {
+        fail("raw downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(rawStart));
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "tracked raw job must finish"
+    );
+    if (downloads.length !== 4) {
+        fail("tracked raw job must issue 3 page downloads + 1 retry of the interrupted page, got " + JSON.stringify(downloads));
+    }
+    if (downloads.filter((d) => d.filename === "NHDW/Downloads/RawTracked/002.png").length !== 2) {
+        fail("the interrupted page must be downloaded again, got " + JSON.stringify(downloads));
+    }
+    if (awaitDownloadCalls.length < 5) {
+        fail("every raw page must be awaited (and a pending answer re-asked), got " + awaitDownloadCalls.length + " awaitDownload calls");
+    }
+    const rawRetry = sentMessages.find((m) => m.action === "updateProgress" && m.retry);
+    if (!rawRetry || !/retry 1\/5/.test(rawRetry.retry)) {
+        fail("the raw retry must surface in the progress UI, got " + JSON.stringify(rawRetry));
+    }
+    if (sentMessages.some((m) => m.action === "downloadError")) {
+        fail("a page that succeeds on retry must not fail the gallery: " + JSON.stringify(sentMessages.filter((m) => m.action === "downloadError")));
+    }
+    const rawRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!rawRecords || rawRecords.length !== 1 || rawRecords[0].filename !== "NHDW/Downloads/RawTracked/001.jpg") {
+        fail("a fully completed raw gallery is recorded under its first page, got " + JSON.stringify(rawRecords));
+    }
+    console.log("PASS: raw page interrupted after start is retried; the gallery completes and is recorded");
+
+    // ---- Raw mode: a page that keeps failing makes the gallery FAIL ----------
+    // Not "complete with a page missing": no history record, one named
+    // downloadError (gallery id + name + the interruption reason) so the
+    // popup can list it and offer a retry.
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    sentMessages.length = 0;
+    rawDownloadScript = (filename) => (/003\.jpg$/.test(filename) ? "FILE_NO_SPACE" : "complete");
+    const rawFailStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/RawDefective",
+        name: "RawDefective",
+        options: rawOptions
+    });
+    if (!rawFailStart || rawFailStart.result !== "started") {
+        fail("defective raw job did not answer {result:'started'}, got " + JSON.stringify(rawFailStart));
+    }
+    await waitFor(
+        () => sentMessages.filter((m) => m.action === "jobFinished").length === 1,
+        "defective raw job must finish"
+    );
+    const defectiveErrors = sentMessages.filter((m) => m.action === "downloadError");
+    if (defectiveErrors.length !== 1) {
+        fail("a defective raw gallery must produce exactly one downloadError, got " + JSON.stringify(defectiveErrors));
+    }
+    if (!/Failed to download original image/.test(defectiveErrors[0].error) || !/FILE_NO_SPACE/.test(defectiveErrors[0].error)) {
+        fail("the error must name the interruption reason, got " + defectiveErrors[0].error);
+    }
+    if (String(defectiveErrors[0].galleryId) !== String(GALLERY_ID) || defectiveErrors[0].galleryName !== "RawDefective") {
+        fail("the error must NAME the failed gallery (id + name), got " + JSON.stringify(defectiveErrors[0]));
+    }
+    if (!defectiveErrors[0].retryJob || defectiveErrors[0].retryJob.formatOverride !== "raw" || defectiveErrors[0].retryJob.masterFolder !== "NHDW") {
+        fail("the error must carry the job settings a retry needs, got " + JSON.stringify(defectiveErrors[0].retryJob));
+    }
+    if (downloads.filter((d) => d.filename === "NHDW/Downloads/RawDefective/003.jpg").length !== 6) {
+        fail("the failing page must be tried 1 + 5 times, got " + JSON.stringify(downloads));
+    }
+    const defectiveRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!defectiveRecords || defectiveRecords.length !== 0) {
+        fail("a raw gallery with a missing page must NOT be recorded as downloaded, got " + JSON.stringify(defectiveRecords));
+    }
+    console.log("PASS: raw gallery with a page that keeps failing is reported by name and never recorded");
+
+    // ---- Raw batch: failures are listed by name with the retry settings -----
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    sentMessages.length = 0;
+    const rawBatchStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "1": "Missing", [GALLERY_ID]: "Test" },
+        finalName: "Downloads/RawBatch",
+        options: Object.assign({}, rawOptions, { downloadName: "{pretty}", rawMasterFolder: "Stash" })
+    });
+    if (!rawBatchStart || rawBatchStart.result !== "started") {
+        fail("raw batch did not answer {result:'started'}, got " + JSON.stringify(rawBatchStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "raw batch must emit a batchSummary");
+    const rawSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (rawSummary.succeeded !== 0 || rawSummary.failed !== 2 || rawSummary.total !== 2) {
+        fail("raw batch summary must report 0/2/2 (metadata failure + defective gallery), got " + JSON.stringify(rawSummary));
+    }
+    const namedFailures = (rawSummary.failedGalleries || []).map((f) => f.id + ":" + f.name).sort();
+    if (JSON.stringify(namedFailures) !== JSON.stringify(["1:Missing", GALLERY_ID + ":Test"].sort())) {
+        fail("batchSummary must list every failed gallery by id and name, got " + JSON.stringify(rawSummary.failedGalleries));
+    }
+    const defectiveEntry = rawSummary.failedGalleries.find((f) => String(f.id) === String(GALLERY_ID));
+    if (!/FILE_NO_SPACE/.test(defectiveEntry.error)) {
+        fail("each failed gallery must carry its reason, got " + JSON.stringify(defectiveEntry));
+    }
+    if (!rawSummary.retryJob || rawSummary.retryJob.formatOverride !== "raw" || rawSummary.retryJob.masterFolder !== "Stash" || rawSummary.retryJob.nameTemplate !== "{pretty}") {
+        fail("batchSummary must carry the job settings a retry needs, got " + JSON.stringify(rawSummary.retryJob));
+    }
+    await waitFor(() => sentMessages.filter((m) => m.action === "jobFinished").length === 1, "raw batch must finish");
+    const rawBatchRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!rawBatchRecords || rawBatchRecords.length !== 0) {
+        fail("no failed raw gallery may be recorded, got " + JSON.stringify(rawBatchRecords));
+    }
+    console.log("PASS: raw batch summary names every failed gallery with its reason and the retry settings");
+    rawDownloadScript = null;
+
+    // ---- Raw mode: an Error object crossing saveDownload must stay readable --
+    // The 3.5.0-era report was "Failed to download original image (Error:
+    // [object Object]).": the worker String()-ed the browser's object
+    // lastError and the Downloader wrapped the resulting Error, so the real
+    // reason vanished. The offscreen boundary must unwrap .message before it
+    // wraps the value in a new Error, even when a worker answers with an
+    // Error instance instead of a string.
+    downloads.length = 0;
+    sentMessages.length = 0;
+    saveDownloadErrorScript = "Invalid filename (fixture)";
+    const errorObjectStart = await askOffscreen({
+        action: "downloadDoujinshi",
+        json: galleryJson,
+        path: "Downloads/RawErrorObject",
+        name: "RawErrorObject",
+        options: Object.assign({}, relayedOptions, { useZip: "raw", rawMasterFolder: "NHDW" })
+    });
+    if (!errorObjectStart || errorObjectStart.result !== "started") {
+        fail("raw error-object downloadDoujinshi did not answer {result:'started'}, got " + JSON.stringify(errorObjectStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "downloadError"), "raw error-object job must report a failure");
+    const errorObjectReport = sentMessages.find((m) => m.action === "downloadError");
+    if (!/Failed to download original image \(Invalid filename \(fixture\)\)\./.test(errorObjectReport.error)) {
+        fail("an Error object from the worker must surface its message, got: " + errorObjectReport.error);
+    }
+    if (/\[object Object\]/.test(errorObjectReport.error)) {
+        fail("the raw-mode error must never render [object Object], got: " + errorObjectReport.error);
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "jobFinished"), "raw error-object job must finish");
+    saveDownloadErrorScript = null;
+    console.log("PASS: raw page failure reason survives the offscreen/worker boundary as readable text");
+
+    // ---- Non-gallery JSON fails ONE gallery, not the whole batch (item 28) --
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    rawDownloadScript = null;
+    const emptyJsonStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { "9": "EmptyJson", [GALLERY_ID]: "Test" },
+        galleryMetadata: { "9": {} },
+        finalName: "Downloads/EmptyJsonBatch",
+        options: relayedOptions
+    });
+    if (!emptyJsonStart || emptyJsonStart.result !== "started") {
+        fail("empty-json batch did not answer {result:'started'}, got " + JSON.stringify(emptyJsonStart));
+    }
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "non-gallery JSON must not kill the batch: no batchSummary was sent"
+    );
+    const emptyJsonSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!emptyJsonSummary || emptyJsonSummary.succeeded !== 1 || emptyJsonSummary.failed !== 1 || emptyJsonSummary.total !== 2) {
+        fail("empty-json batch must report 1/1/2, got " + JSON.stringify(emptyJsonSummary));
+    }
+    if (!emptyJsonSummary.failedKinds || emptyJsonSummary.failedKinds.metadata !== 1) {
+        fail("non-gallery JSON is a metadata failure, got " + JSON.stringify(emptyJsonSummary.failedKinds));
+    }
+    if (!Array.isArray(emptyJsonSummary.failedGalleries) || emptyJsonSummary.failedGalleries.length !== 1
+        || emptyJsonSummary.failedGalleries[0].id !== "9" || emptyJsonSummary.failedGalleries[0].name !== "EmptyJson"
+        || !/not gallery metadata/.test(emptyJsonSummary.failedGalleries[0].error)) {
+        fail("empty-json batch must name the failed gallery, got " + JSON.stringify(emptyJsonSummary.failedGalleries));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("the remaining gallery must still deliver a ZIP, got " + anchorDownloads.length);
+    }
+    const emptyJsonRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (emptyJsonRecords && emptyJsonRecords.some((r) => String(r.id) === "9")) {
+        fail("the non-gallery title must not be recorded, got " + JSON.stringify(emptyJsonRecords));
+    }
+    console.log("PASS: non-gallery JSON fails one gallery by name; the batch continues and records nothing for it");
+
+    // ---- Merged "ignore" must not silently drop a duplicate title (item 31) --
+    const savedTitle2 = galleryJson2.title;
+    galleryJson2.title = { english: "Test", japanese: "", pretty: "Test" };
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    const dupMergedStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/DupIgnore",
+        options: Object.assign({}, relayedOptions, { duplicateBehaviour: "ignore" })
+    });
+    if (!dupMergedStart || dupMergedStart.result !== "started") {
+        fail("merged ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(dupMergedStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "merged ignore-dup batch must finish");
+    const dupMergedSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupMergedSummary || dupMergedSummary.succeeded !== 2 || dupMergedSummary.failed !== 0 || dupMergedSummary.skipped !== 0) {
+        fail("merged ignore-dup must keep both galleries, got " + JSON.stringify(dupMergedSummary));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("merged ignore-dup must deliver one archive, got " + anchorDownloads.length);
+    }
+    const dupZip = await JSZip.loadAsync(Buffer.from(await objectBlobs[anchorDownloads[0].href].arrayBuffer()));
+    const dupEntries = Object.keys(dupZip.files).filter((n) => !dupZip.files[n].dir).sort();
+    const hasFirst = dupEntries.some((n) => n.indexOf("Test/") === 0);
+    const hasSecond = dupEntries.some((n) => n.indexOf("Test_(" + GALLERY_ID2 + ")") === 0);
+    if (!hasFirst || !hasSecond) {
+        fail("merged ignore-dup ZIP must contain both galleries, got " + JSON.stringify(dupEntries));
+    }
+    console.log("PASS: merged ignore-dup id-suffixes the second title instead of dropping it");
+
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    const dupSepStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/DupIgnoreSep",
+        options: Object.assign({}, relayedOptions, { duplicateBehaviour: "ignore", downloadSeparately: true })
+    });
+    if (!dupSepStart || dupSepStart.result !== "started") {
+        fail("separate ignore-dup batch did not answer {result:'started'}, got " + JSON.stringify(dupSepStart));
+    }
+    await waitFor(() => sentMessages.some((m) => m.action === "batchSummary"), "separate ignore-dup batch must finish");
+    const dupSepSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!dupSepSummary || dupSepSummary.succeeded !== 1 || dupSepSummary.failed !== 0 || dupSepSummary.skipped !== 1 || dupSepSummary.total !== 2) {
+        fail("separate ignore-dup must count the drop as skipped:1, got " + JSON.stringify(dupSepSummary));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("separate ignore-dup must deliver one archive, got " + anchorDownloads.length);
+    }
+    galleryJson2.title = savedTitle2;
+    console.log("PASS: separate ignore-dup counts the dropped title in skipped");
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {

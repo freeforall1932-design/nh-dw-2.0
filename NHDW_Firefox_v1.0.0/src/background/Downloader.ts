@@ -3,10 +3,16 @@ import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
+import { startTrackedDownload, normalizeRawConcurrency } from "./downloadControl";
+import { errorMessage } from "../utils/utils";
+import { sanitizeArtifactFilename } from "../utils/artifactName";
+// Re-export so existing tests (`require('../build/test/background/Downloader.js')`)
+// keep importing the sanitizer from here.
+export { sanitizeArtifactFilename };
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -21,6 +27,11 @@ export default class Downloader
         // Relayed/absent settings both end up normalized: undefined means the
         // default master folder, an explicit empty string disables it.
         this.#rawMasterFolder = normalizeRawMasterFolder(settings ? settings.rawMasterFolder : undefined);
+        // Optional master folder for finished ARCHIVES (zip/cbz/pdf). Unlike
+        // the raw folder this defaults to "" (off): a single file per gallery
+        // has never piled up in the download folder the way loose pages do,
+        // so it is only used when a caller (list mode) asks for it.
+        this.#archiveMasterFolder = normalizeArchiveMasterFolder(settings ? settings.archiveMasterFolder : undefined);
 
         // @ts-ignore
         if (typeof browser !== "undefined") { // Firefox
@@ -34,6 +45,8 @@ export default class Downloader
 
     // Top-level folder that collects raw (loose image) downloads; "" = off.
     #rawMasterFolder: string = DEFAULT_RAW_MASTER_FOLDER;
+    // Top-level folder that collects finished archives (zip/cbz/pdf); "" = off.
+    #archiveMasterFolder: string = "";
 
     isPaused: boolean = false;
     #resumePaused: (() => void) | null = null;
@@ -66,7 +79,7 @@ export default class Downloader
 
     async startAsync() {
         let self = this;
-        const applySettings = (useZipRaw: string, maxConcurrentDownloads: number | string) => {
+        const applySettings = (useZipRaw: string, maxConcurrentDownloads: number | string, rawMaxConcurrent?: number | string) => {
             // Whitelist: a corrupt or legacy value (or undefined from a broken
             // storage read) must fall back to "zip" — an unknown value would
             // otherwise be fetched into the ZIP but never saved (the final
@@ -82,6 +95,14 @@ export default class Downloader
             self.maxConcurrentDownloads = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
                 ? configuredConcurrency
                 : 3;
+            if (self.useZip === "raw") {
+                // Raw mode hands every page to the browser's download manager
+                // and (since 3.6.0) waits for each file to finish, so this
+                // batch size is the number of browser downloads running at
+                // once. It has its own, smaller cap: the archive-mode fetch
+                // concurrency (up to 15) would flood the download shelf.
+                self.maxConcurrentDownloads = normalizeRawConcurrency(rawMaxConcurrent);
+            }
             // "flat": this Downloader owns the whole archive, so pages sit at
             // the archive ROOT and the archive is named after the gallery —
             // no Title/Title/… double folder. "nested" (the default) is for
@@ -104,7 +125,7 @@ export default class Downloader
         // expose chrome.runtime) pass the options relayed by the service
         // worker; otherwise fall back to reading chrome.storage.sync.
         if (this.#settings && (this.#settings.useZip !== undefined || this.#settings.maxConcurrentDownloads !== undefined)) {
-            applySettings(this.#settings.useZip || "zip", this.#settings.maxConcurrentDownloads || "3");
+            applySettings(this.#settings.useZip || "zip", this.#settings.maxConcurrentDownloads || "3", this.#settings.rawMaxConcurrent);
         } else {
             try {
                 await new Promise((resolve, _reject) => {
@@ -112,12 +133,15 @@ export default class Downloader
                         chrome.storage.sync.get({
                             useZip: "zip",
                             maxConcurrentDownloads: "3",
+                            rawMaxConcurrent: "3",
                             rawMasterFolder: DEFAULT_RAW_MASTER_FOLDER
                         }, function (elems) {
-                            applySettings(elems.useZip, elems.maxConcurrentDownloads);
+                            applySettings(elems.useZip, elems.maxConcurrentDownloads, elems.rawMaxConcurrent);
                             // The empty string is meaningful: it disables the
                             // master folder for raw downloads.
                             self.#rawMasterFolder = normalizeRawMasterFolder(elems.rawMasterFolder);
+                            // No stored counterpart: the archive master folder
+                            // is a per-job choice relayed by the caller.
                         })
                     );
                 });
@@ -220,7 +244,7 @@ export default class Downloader
             if (this.#isAborted() || error === "Download was aborted" || (error && (error as any).name === "AbortError")) {
                 throw error;
             }
-            console.warn("Server archive unavailable for gallery " + galleryId + " (" + error + "); falling back to page-by-page download.");
+            console.warn("Server archive unavailable for gallery " + galleryId + " (" + errorMessage(error) + "); falling back to page-by-page download.");
             return false;
         }
     }
@@ -256,7 +280,7 @@ export default class Downloader
                             // deterministic failure fixtures opt out to keep
                             // test output focused on assertion failures.
                             if (!(globalThis as any).__NHDW_SILENT_RETRY_LOGS__) {
-                                console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + error + ", tries remaining: " + nbTries);
+                                console.warn("Error while downloading " + this.#doujinshiName + "/" + (i + 1) + ": " + errorMessage(error) + ", tries remaining: " + nbTries);
                             }
                             nbTries--;
                             // Surface the retry in the progress UI so the user can
@@ -419,28 +443,36 @@ export default class Downloader
             await this.saveUrl(url, safeName);
             return;
         }
-        await new Promise<void>((resolve, reject) => {
-            chrome.downloads.download({ url: url, filename: safeName }, function(downloadId) {
-                if (downloadId === undefined) {
-                    // Message-first, never String(plainObject): the browser's
-                    // lastError is an object ({message}) — String() renders it
-                    // "[object Object]" and, once the raw-mode catch below
-                    // stringifies the resulting Error, the report becomes the
-                    // unreadable "Error: [object Object]".
-                    const lastError: any = chrome.runtime.lastError;
-                    const reason = (lastError && typeof lastError.message === "string" && lastError.message !== "")
-                        ? lastError.message
-                        : (typeof lastError === "string" && lastError !== "" ? lastError : "Unable to start download");
-                    reject(new Error(reason));
-                } else {
-                    resolve();
-                }
-            });
+        // startTrackedDownload records the requested name for the
+        // onDeterminingFilename guard before starting (see downloadNaming.ts —
+        // another extension's listener makes Chrome ignore `filename`
+        // entirely), binds the downloadId once known, and then WAITS for the
+        // download to reach a terminal state (downloadControl.ts). A page
+        // interrupted after it started therefore rejects here and feeds the
+        // retry loop instead of counting as saved. uniquify keeps
+        // re-downloads of the same gallery from silently overwriting the
+        // first one. Because this now waits for completion, the page batch
+        // loop above caps how many browser downloads are in flight at once
+        // (raw mode: the "raw concurrency" setting). A user cancel stops the
+        // wait — and cancels loose raw pages, which are worthless half-done.
+        await startTrackedDownload(url, safeName, {
+            signal: this.#abortSignal,
+            cancelOnAbort: this.useZip === "raw"
         });
+    }
+
+    // Finished archives (zip/cbz/pdf) optionally live inside a master folder,
+    // mirroring what raw downloads do with their titled folders. One switch in
+    // the UI drives both; "" keeps the historical "straight into Downloads".
+    #archiveArtifactName(filename: string): string {
+        return this.#archiveMasterFolder !== ""
+            ? this.#archiveMasterFolder + "/" + filename
+            : filename;
     }
 
     async #downloadBlob(content: Blob, filename: string): Promise<void> {
         const { url, revoke } = await this.#urlForBlob(content);
+        filename = this.#archiveArtifactName(filename);
         try {
             await this.#saveArtifact(url, filename);
         } catch (error) {
@@ -510,9 +542,10 @@ export default class Downloader
                 const masterPrefix = this.#rawMasterFolder !== "" ? this.#rawMasterFolder + "/" : "";
                 await this.#saveArtifact(imageUrl, masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
             } catch (error: any) {
-                // Use the Error's message, not the Error itself: stringifying
-                // an Error([object Object]) is what produced
-                // "Failed to download original image (Error: [object Object])."
+                // Startup failures AND downloads interrupted after they
+                // started (network drop, disk full, cancelled in the shelf)
+                // land here and go through the retry loop; only after the
+                // retries are exhausted does the gallery fail.
                 const reason = error && error.message !== undefined ? error.message : error;
                 throw "Failed to download original image (" + reason + ").";
             }
@@ -710,7 +743,7 @@ export default class Downloader
     // a relay, because chrome.downloads is not exposed in offscreen documents
     // (only chrome.runtime is).
     saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean };
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string };
     // "flat" = this gallery owns the whole archive (pages at the root);
     // "nested" = shared batch archive (one folder per gallery inside).
     #archiveLayout: string = "nested";
@@ -723,34 +756,6 @@ export default class Downloader
     #progressZipping: boolean;
     #progressRetry: string | null = null;
 }
-// Make a downloads-API filename safe enough that Chrome never discards it:
-// keep the subfolder structure (a/b/c.jpg), strip control and reserved
-// characters per segment, drop leading dots and trailing dots/spaces (Windows
-// rejects those), bound segment length, and fall back to the gallery name when
-// nothing usable is left. This runs right before chrome.downloads.download for
-// every artifact (archives, PDFs, raw pages).
-export function sanitizeArtifactFilename(filename: string, fallbackStem: string): string {
-    const segments = String(filename).split("/");
-    const cleanedSegments: string[] = [];
-    for (const segment of segments) {
-        let cleaned = segment
-            .replace(/[\x00-\x1f\x7f]/g, "")
-            .replace(/[\\:*?"<>|]/g, "")
-            .replace(/^\.+/, "")
-            .replace(/[. ]+$/g, "");
-        if (cleaned.length > 120) {
-            cleaned = cleaned.slice(0, 120).replace(/[. ]+$/g, "");
-        }
-        if (cleaned !== "") {
-            cleanedSegments.push(cleaned);
-        }
-    }
-    let joined = cleanedSegments.join("/");
-    if (joined === "" || joined === "/") {
-        joined = sanitizeArtifactFilename(String(fallbackStem || "download"), "download");
-    }
-    return joined;
-}
 
 // Master folder for raw (loose image) downloads: every gallery's titled
 // folder of pages lands inside it (NHDW/<Title>/001.jpg…), keeping the
@@ -759,6 +764,15 @@ export function sanitizeArtifactFilename(filename: string, fallbackStem: string)
 // undefined means "use the default". Relayed through the settings bag so the
 // offscreen document never needs chrome.storage.
 export const DEFAULT_RAW_MASTER_FOLDER = "NHDW";
+
+// Master folder for finished archives. Unlike the raw folder this is OFF by
+// default: it only applies when a caller explicitly asks for the wrap.
+export function normalizeArchiveMasterFolder(value: any): string {
+    if (value === undefined || value === null) {
+        return "";
+    }
+    return String(value).trim();
+}
 
 export function normalizeRawMasterFolder(value: any): string {
     if (value === undefined || value === null) {

@@ -1,5 +1,45 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-19 (session `arena/01a0b767-nh-dw-2-0`) — **Firefox-for-
+Android migration + parity elevation; PR opened.** Read this block first.
+The Firefox folder `NHDW_Firefox_v1.0.0/` is now **v1.1.0 = current Chrome
+`src/` + a 4-file audited delta** (`background.ts` keep-alive alarm;
+`preview.ts` sidePanel-gates + host-grant notice + runtime mobile bottom
+bar; `message.ts` hostGrantNotice; `popupSettings.ts` sidePanel option
+filter + select normalization) — re-derive nothing, re-sync by copying the
+Chrome tree and re-applying those deltas; `diff -rq` must show only them
+(rules R1–R3 in `NHDW_Firefox_v1.0.0/FIREFOX_PARITY_PLAN.md`). Firefox
+verification: 406 offline tests, smoke/e2e incl. `e2e-list-controls` +
+`e2e-popup`, `web-ext lint` 0 errors, clean 23-entry package shipping
+`js/listControls.js`.
+
+**Owner direction for the NEXT session (the queued work):** the in-page
+integrated UI becomes the PRIMARY surface on nhentai (nh-only scope;
+multi-site stays parked); the toolbar popup/side-panel is demoted to a
+settings/API-key fallback; bake the invoker AND all settings into the
+website so it feels native. Feasibility is **confirmed** from the in-repo
+capture `5 website page source`: the `.navbar` (with `#nav_btn` hamburger,
+`#drop_btn`/`#dropdown_menu`, `.navbar_right`) exists in all three captured
+layout generations — anchor only there, idempotent + MutationObserver
+injection like `listControls.ts`; drawer reuses `renderSettings(container)`
+and the `bookmarkPanel` queue renderer (no duplicated settings logic).
+Backlog items **56 (embedded UI), 57 (popup demotion), 58 (combined P2+P3
+verification + sign 1.2.0)**; P2 desktop/Android real-device pass is
+deliberately folded into 58, not skipped.
+
+**Session-start gotchas:** `node_modules` is NOT persisted between
+sessions — run `npm install` before `npm run build/test` in the Firefox
+folder (else `webpack: not found`). Version sequence is independent of
+Chrome (1.0.0 android snapshot → 1.1.0 parity → 1.2.0 embedded-UI release);
+never sync it to Chrome's numbers. Desktop/mobile separation is a hard
+rule: mobile behaviour only behind
+`(max-width:640px) and (pointer:coarse)` (CSS media or runtime matchMedia);
+never restructure shared DOM for mobile (the v1.0.0 `.nhdwActionBar`
+wrapper experiment violated this and was reworked into the runtime
+relocator — do not reintroduce wrappers). Do not modify
+`NHDW_Extension_v3.0.0/` (the Chrome source of truth) except deliberate
+Chrome releases.
+
 **Updated:** 2026-09-15 (session `arena/01a0a3d5-nh-dw-2-0`) — **multi-site v4
 groundwork; PR #42.** Read this block first. Hentaiera adapter core landed
 (`src/sources/hentaieraSource.ts`, `src/parsing/hentaieraHtml.ts`,

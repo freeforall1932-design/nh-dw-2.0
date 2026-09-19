@@ -1,16 +1,20 @@
 {
   "name": "NHentai Downloader",
-  "version": "3.3.1",
-  "description": "A chrome extension to download doujinshi from NHentai - Updated for Manifest V3",
+  "version": "1.1.0",
+  "description": "A Firefox extension to download doujinshi from NHentai - Firefox port of the Chrome Manifest V3 extension (feature parity target: Chrome 3.3.0), with a portrait/mobile-ready UI for Firefox for Android",
   "icons": {
+    "48": "Icon-48.png",
     "64": "Icon.png",
-    "128": "Icon.png"
+    "96": "Icon-96.png",
+    "128": "Icon-128.png"
   },
   "action": {
     "default_popup": "index.html",
     "default_icon": {
+      "48": "Icon-48.png",
       "64": "Icon.png",
-      "128": "Icon.png"
+      "96": "Icon-96.png",
+      "128": "Icon-128.png"
     }
   },
   "permissions": [
@@ -18,8 +22,7 @@
     "tabs",
     "storage",
     "alarms",
-    "scripting",
-    "offscreen"
+    "scripting"
   ],
   "optional_host_permissions": [
     "https://*.nhentai.net/*"
@@ -33,7 +36,7 @@
     "https://i4.nhentai.net/*"
   ],
   "background": {
-    "service_worker": "js/background.js"
+    "scripts": ["js/background.js"]
   },
   "options_ui": {
     "page": "options.html",
@@ -48,7 +51,8 @@
         "css/content.css"
       ],
       "js": [
-        "js/content.js"
+        "js/content.js",
+        "js/listControls.js"
       ]
     }
   ],
@@ -63,5 +67,14 @@
       ]
     }
   ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "nhentai-downloader-firefox@freeforall1932.design",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
   "manifest_version": 3
 }

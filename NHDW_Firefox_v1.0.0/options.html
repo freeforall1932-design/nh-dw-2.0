@@ -2,6 +2,9 @@
 <html>
     <head>
         <meta charset="utf-8"/>
+        <!-- Mobile viewport: Firefox for Android always opens the options page
+             in a tab; this keeps it at device width instead of zoomed-out. -->
+        <meta name="viewport" content="width=device-width, initial-scale=1"/>
     </head>
     <body>
         <h3>Global behaviour</h3>
@@ -47,7 +50,70 @@
         Download each file separately:
         <input id="downloadSeparately" type="checkbox"/>
         <br/><small>Off = all selected galleries go into one shared archive.
-        On = each gallery gets its own archive file named after its title.</small>
+        On = each gallery gets its own archive file named after its title.
+        This is the legacy global switch; list mode below has its own, more
+        explicit output-mode setting that overrides it.</small>
+        <br/><hr/>
+        <h3>List mode (homepage, search, artist, tag, genre)</h3>
+        <p><small>Used by the listing panel, the in-page card buttons and
+        <b>Download all</b>. These are stored separately from the single-title
+        settings above, so changing one never changes the other.</small></p>
+        Format:
+        <select id="listFormat">
+            <option value="zip">ZIP</option>
+            <option value="cbz">CBZ</option>
+            <option value="pdf">PDF</option>
+            <option value="raw">Raw images (testing)</option>
+        </select>
+        <br/><small>The same four formats a single title offers. Raw writes
+        loose images into one folder per title.</small>
+        <br/>
+        Output:
+        <select id="listOutputMode">
+            <option value="separate">Separate files (one per title)</option>
+            <option value="batch">Single merged file (all titles)</option>
+        </select>
+        <br/><small><b>Separate files</b> is the default: one archive (or one
+        folder, for raw) per title, named from the list-mode template below.
+        <b>Single merged file</b> is the old behaviour - every selected gallery
+        goes into one archive. Merging several different titles into one
+        <b>PDF</b> produces a tankoubon-style document that cannot be split
+        afterwards, so that combination always asks for confirmation first.</small>
+        <br/>
+        Put list downloads in the master folder:
+        <input id="listMasterFolder" type="checkbox"/>
+        <br/><small>Optional, not forced. When ticked, list downloads land in
+        the folder named above ("Folder for raw downloads") - archives as
+        <i>Downloads\NHDW\&lt;name&gt;.zip</i> and raw pages as
+        <i>Downloads\NHDW\&lt;title&gt;\001.jpg</i>. Untick it to save straight
+        into the download folder.</small>
+        <br/>
+        List-mode file name:
+        <input id="listDownloadName" type="text" size="30" placeholder="Same as single title"/>
+        <br/><small>Same tokens as the single-title template
+        (<code>{pretty}</code>, <code>{english}</code>, <code>{japanese}</code>,
+        <code>{id}</code>, <code>{artist}</code>, <code>{group}</code>,
+        <code>{character}</code>, <code>{language}</code>). Leave it empty to
+        follow the single-title template. Resolved per gallery from that
+        gallery's own metadata - never from the page URL.</small>
+        <div id="listDownloadNamePreview"><small></small></div>
+        <br/><hr/>
+        <h3>Interface</h3>
+        Toolbar click opens:
+        <select id="uiMode">
+            <option value="sidepanel">Side panel (dockable)</option>
+            <option value="popup">Popup (hovering)</option>
+        </select>
+        <br/><small>The side panel docks next to the page, can be resized and
+        stays open while you browse; the popup closes as soon as it loses
+        focus. Both show exactly the same view.</small>
+        <br/>
+        Download / Select buttons on listing cards:
+        <input id="inPageControls" type="checkbox"/>
+        <br/><small>Adds a Download button and a Select box to every gallery
+        card, plus a floating bar showing the selection count, format and output
+        mode - so listing pages can be downloaded without opening the extension
+        at all. Reload the nhentai page after changing this.</small>
         <br/><hr/>
         <h3>Advanced behaviour</h3>
         Use HTML to get API info:
@@ -63,6 +129,18 @@
             <option value="15">15 (Fastest, may cause errors)</option>
         </select>
         <br/><small>Higher values download faster but may cause server errors or rate limiting</small>
+        <br/>
+        Raw images: files saved at the same time (per gallery):
+        <select id="rawMaxConcurrent">
+            <option value="1">1 (One file at a time)</option>
+            <option value="2">2</option>
+            <option value="3">3 (Default)</option>
+            <option value="5">5</option>
+            <option value="10">10 (May flood the download manager)</option>
+        </select>
+        <br/><small>Raw images go through the browser's download manager one file per page. Each file is now
+        followed until it is written, so a page that is interrupted is retried and a gallery with a missing page
+        is reported as failed instead of being marked downloaded.</small>
         <br/><hr/>
         <h3>Optional nhentai API key</h3>
         <p><small>Optional. Downloads work without a key. Paste a key you generated in your nhentai account settings; this extension never asks for your password or creates keys. The key is kept in this browser profile only and is not synced. It stays saved across browser restarts and disabling/re-enabling the extension; only Remove key (or uninstalling the extension) removes it.</small></p>
@@ -93,6 +171,20 @@
         <br/>
         Replace spaces by underscores:
         <input id="replaceSpaces" type="checkbox"/>
+        <br/><hr/>
+        <h3>Download history</h3>
+        <p><small>Galleries downloaded successfully are remembered in this
+        browser (never synced) and skipped on listing pages, so re-running a
+        search, tag, artist or homepage does not download everything a second
+        time. Each already-downloaded row in the panel has its own
+        <i>Download anyway</i> link; this button forgets the whole list (the
+        per-row override stops working, and everything downloads again).</small></p>
+        <div id="historyStatus" role="status" aria-live="polite"></div>
+        <label><input id="verifyDownloadedFiles" type="checkbox"/>
+        Check the file still exists before skipping (re-download if deleted)</label><br/>
+        <label><input id="batchNameDate" type="checkbox"/>
+        Add the download date to merged file names (search_31082026.zip, _part2, _part3...)</label><br/>
+        <button id="clearHistory" type="button">Clear history</button>
     </body>
     <script src="js/options.js"></script>
 </html>

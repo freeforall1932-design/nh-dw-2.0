@@ -21,7 +21,7 @@ describe('MV3 manifest', () => {
     });
 
     it('keeps source and release manifests in sync for runtime-critical fields', () => {
-        for (const key of ['permissions', 'optional_host_permissions', 'host_permissions', 'background', 'action', 'content_scripts', 'options_ui']) {
+        for (const key of ['permissions', 'optional_host_permissions', 'host_permissions', 'background', 'action', 'side_panel', 'content_scripts', 'options_ui']) {
             assert.deepStrictEqual(releaseManifest[key], sourceManifest[key], `release manifest ${key} differs from source`);
         }
     });
@@ -79,6 +79,30 @@ describe('MV3 manifest', () => {
         }
     });
 
+    it('ships the side panel as a first-class UI with the popup kept as fallback', () => {
+        // The panel and the popup render the SAME document: one rendered view,
+        // no duplicated markup. A settings toggle (uiMode) decides which one a
+        // toolbar click opens at runtime via chrome.sidePanel.setPanelBehavior
+        // / chrome.action.setPopup.
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            assert.ok(manifest.permissions.includes('sidePanel'),
+                'sidePanel permission is required for chrome.sidePanel');
+            assert.ok(manifest.side_panel && manifest.side_panel.default_path === 'index.html',
+                'side_panel.default_path must point at the shared popup document');
+            assert.strictEqual(manifest.action.default_popup, 'index.html',
+                'the popup fallback must stay declared so users can switch back to it');
+        }
+    });
+
+    it('injects the in-page listing card controls alongside the legacy checkbox script', () => {
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            const scripts = manifest.content_scripts[0].js;
+            assert.ok(scripts.includes('js/content.js'), 'legacy caption checkbox script must stay');
+            assert.ok(scripts.includes('js/listControls.js'),
+                'in-page Download/Select card controls must be injected on listing pages');
+        }
+    });
+
     it('declares default_icon so the toolbar has an icon before setIcon runs', () => {
         assert.strictEqual(sourceManifest.action.default_icon['64'], 'Icon.png');
         assert.strictEqual(sourceManifest.action.default_icon['128'], 'Icon.png');
@@ -114,5 +138,73 @@ describe('MV3 manifest', () => {
         assert.ok(bundle.includes('/Icon-grey.png'), 'built worker must fetch /Icon-grey.png from the extension root');
         assert.ok(!/setIcon\(\{path:"Icon(?:-grey)?\.png"\}/.test(bundle),
             'relative Icon.png paths resolve to js/Icon.png and fail to fetch in MV3');
+    });
+});
+
+// Firefox manifest: Firefox-for-Android compatibility guards. These are the
+// fields whose absence breaks loading on Firefox/Firefox-for-Android rather
+// than Chrome, mirroring the MV3 guards above.
+describe('Firefox manifest (Android-ready)', () => {
+    const firefoxManifest = readJson('NHDW_Firefox_v1.0.0/manifest.json');
+    const firefoxRoot = path.join(__dirname, '..');
+
+    it('defines browser_specific_settings.gecko.id (required for signing + stable storage)', () => {
+        const gecko = firefoxManifest.browser_specific_settings && firefoxManifest.browser_specific_settings.gecko;
+        assert.ok(gecko, 'browser_specific_settings.gecko missing');
+        assert.ok(typeof gecko.id === 'string' && gecko.id.includes('@'),
+            'gecko.id must be an add-on id (email or GUID): ' + gecko.id);
+    });
+
+    it('pins strict_min_version >= 142.0 (data-collection declaration floor on desktop AND Android)', () => {
+        const gecko = firefoxManifest.browser_specific_settings.gecko;
+        const major = parseInt(String(gecko.strict_min_version).split('.')[0], 10);
+        assert.ok(Number.isFinite(major) && major >= 142,
+            'strict_min_version must be >= 142.0 (data_collection_permissions floor), got ' + gecko.strict_min_version);
+    });
+
+    it('declares data_collection_permissions (required for new AMO listings since Nov 2025)', () => {
+        const gecko = firefoxManifest.browser_specific_settings.gecko;
+        assert.deepStrictEqual(gecko.data_collection_permissions, { required: ['none'] },
+            'extension collects no personal data; the declaration must say so');
+    });
+
+    it('runs the background as an event page (Firefox has no MV3 service workers)', () => {
+        assert.strictEqual(firefoxManifest.manifest_version, 3);
+        assert.ok(Array.isArray(firefoxManifest.background.scripts) && firefoxManifest.background.scripts.length > 0,
+            'background.scripts must list the event page bundle');
+        assert.ok(firefoxManifest.background.service_worker === undefined,
+            'background.service_worker must not be set for Firefox');
+    });
+
+    it('does not request the Chromium-only offscreen permission', () => {
+        assert.ok(!firefoxManifest.permissions.includes('offscreen'),
+            'offscreen permission is Chromium-only and must not ship to Firefox');
+    });
+
+    it('declares mobile icon sizes next to desktop ones', () => {
+        for (const size of ['48', '64', '96', '128']) {
+            assert.ok(firefoxManifest.icons[size], 'icons.' + size + ' missing');
+            assert.ok(fs.existsSync(path.join(firefoxRoot, firefoxManifest.icons[size])),
+                'declared icon missing on disk: ' + firefoxManifest.icons[size]);
+        }
+    });
+
+    it('ships a mobile viewport meta in popup and options pages', () => {
+        for (const page of ['index.html', 'options.html']) {
+            const html = fs.readFileSync(path.join(firefoxRoot, page), 'utf8');
+            assert.ok(/<meta[^>]+name="viewport"[^>]+content="width=device-width/.test(html),
+                page + ' must declare a device-width viewport meta (Firefox for Android opens these in a tab)');
+        }
+    });
+
+    it('keeps host permissions https and nhentai-scoped (same hardening as Chrome)', () => {
+        for (const pattern of firefoxManifest.host_permissions) {
+            assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?nhentai\.net\/\*$/.test(pattern),
+                'host_permissions must stay https nhentai-scoped: ' + pattern);
+        }
+        for (const pattern of firefoxManifest.optional_host_permissions || []) {
+            assert.ok(/^https:\/\/(?:\*\.)?[a-z0-9-]*\*?\.nhentai\.net\/\*$/.test(pattern),
+                'optional host patterns must be https and nhentai-scoped: ' + pattern);
+        }
     });
 });
