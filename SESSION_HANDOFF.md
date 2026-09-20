@@ -1,5 +1,49 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-20 (session `arena/01a0bf5f-nh-dw-2-0`) — **Firefox 1.2.0:
+website-embedded UI (items 56 + 57).** Read this block first. The in-page
+drawer is now the PRIMARY surface on nhentai.net; the toolbar popup is the
+settings / API-key / progress fallback. Chrome folder untouched.
+
+What landed, so a fresh session does not re-derive it:
+
+- **`src/utils/embeddedUi.ts` is the one contract.** Storage keys
+  (`embeddedUi` default ON, `toolbarOpensEmbedded` tri-state, `nhdwMobileDevice`
+  in local), `resolveInvokerAnchor` (`.navbar` only; header / left / hamburger
+  parent — never the collapsible right-hand list), `popupForTab`,
+  `handleToolbarClick` (toggle → inject → open `index.html`). Capability is
+  `shipsSiteUi()` reading the manifest for `js/siteUi.js`, so the same source
+  is inert in Chrome.
+- **`src/content/siteUi.ts` + `js/siteUi.js`** injects a Downloader invoker
+  next to the hamburger and a slide-down drawer with This page / Queue /
+  Settings. Settings and Queue **reuse** `renderSettings` / `renderBookmarks`
+  — no duplicated logic. Listing pages delegate Download selected to the
+  existing in-page bar. Gallery pages send `downloadAllDoujinshis` as one
+  file. Idempotent MutationObserver; double-load guard `__nhdwSiteUiLoaded`.
+  Turning the setting off hides the drawer (does not destroy it —
+  `bookmarkPanel`'s module-level `built` flag would otherwise skip rebuild).
+- **Item 57 decision: do NOT hide the Download tab** in the popup. Progress,
+  similar galleries and retry-failed live there; the drawer has "Full panel ↗"
+  (`siteUiOpenPanel` → `tabs.create(index.html)`). Toolbar on nhentai: phones
+  (content script published `nhdwMobileDevice`) open the drawer via
+  `action.setPopup("")` + `onClicked`; desktop keeps the popup unless the
+  user picks "Open the in-page panel".
+- Manifest **1.2.0**, webpack entry `siteUi`, content_scripts gains
+  `js/siteUi.js`. Firefox suite **423 passing / 4 pending** (was 406; +17 in
+  `test/embedded-ui.test.js`); `test:e2e` now includes `e2e-site-ui.js`
+  (8 PASS). Chrome folder, Chrome tests, Chrome webpack: untouched.
+- **Item 58 remains:** real desktop-Firefox + Android-device pass, then
+  `npm run sign:firefox`. Version already bumped.
+
+**Do not (additive, this session):** do not duplicate settings/queue
+renderers in `siteUi.ts`; do not anchor the invoker outside `.navbar`; do not
+put the invoker in `.navbar-right` / `.navbar-collapse` (hidden at phone
+width); do not destroy the drawer DOM on disable (bookmarkPanel `built`
+flag); do not hide the popup Download tab; do not copy this feature into
+`NHDW_Extension_v3.0.0/` without a deliberate Chrome release (`shipsSiteUi()`
+is the inert path until then). Desktop/mobile still gated only by
+`(max-width:640px) and (pointer:coarse)`.
+
 **Updated:** 2026-09-19 (session `arena/01a0b767-nh-dw-2-0`) — **Firefox-for-
 Android migration + parity elevation; PR opened.** Read this block first.
 The Firefox folder `NHDW_Firefox_v1.0.0/` is now **v1.1.0 = current Chrome

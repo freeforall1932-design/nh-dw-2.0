@@ -22,6 +22,13 @@ import {
     resolveListFormat,
     normalizeOutputMode
 } from "../utils/downloadFormats";
+import {
+    EMBEDDED_UI_DEFAULT,
+    EMBEDDED_UI_KEY,
+    TOOLBAR_EMBEDDED_KEY,
+    normalizeEmbeddedUi,
+    shipsSiteUi
+} from "../utils/embeddedUi";
 
 const TEMPLATE_LABELS: Record<string, string> = {
     pretty: "Pretty title (short)",
@@ -554,6 +561,51 @@ function renderInterfaceSection(container: HTMLElement): void {
     const controlsHint = el("small");
     controlsHint.textContent = "Adds a Download button, a Bookmark star and a Select box to every gallery card, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
     section.appendChild(controlsHint);
+
+    // ---- website-embedded UI (item 56/57) --------------------------------
+    // Hidden unless this build ships js/siteUi.js (Firefox 1.2.0+). Chrome
+    // copies of this file stay inert: shipsSiteUi() reads the manifest.
+    const showEmbedded = shipsSiteUi();
+    const embeddedBox = el("input");
+    embeddedBox.type = "checkbox";
+    embeddedBox.id = "psEmbeddedUi";
+    const toolbarSelect = el("select");
+    toolbarSelect.id = "psToolbarEmbedded";
+    if (showEmbedded) {
+        const embeddedHeading = el("h4");
+        embeddedHeading.textContent = "In-page panel";
+        section.appendChild(embeddedHeading);
+
+        const embeddedLabel = el("label");
+        embeddedLabel.className = "psInline";
+        embeddedLabel.appendChild(embeddedBox);
+        embeddedLabel.appendChild(document.createTextNode(" Show Downloader in the nhentai header"));
+        section.appendChild(embeddedLabel);
+
+        const embeddedHint = el("small");
+        embeddedHint.textContent = "The primary surface: a button next to the site's menu opens a drawer with this page, the bookmark queue and these settings. Turn it off to go back to the toolbar popup only.";
+        section.appendChild(embeddedHint);
+
+        const toolbarLabel = el("label");
+        toolbarLabel.className = "psInline";
+        toolbarLabel.appendChild(document.createTextNode("Toolbar button on nhentai "));
+        for (const mode of [
+            { value: "auto", label: "Follow this device" },
+            { value: "on", label: "Open the in-page panel" },
+            { value: "off", label: "Open this popup" }
+        ]) {
+            const option = el("option");
+            option.value = mode.value;
+            option.textContent = mode.label;
+            toolbarSelect.appendChild(option);
+        }
+        toolbarLabel.appendChild(toolbarSelect);
+        section.appendChild(toolbarLabel);
+
+        const toolbarHint = el("small");
+        toolbarHint.textContent = "Follow this device: phones open the in-page panel, desktop keeps this popup. The Download tab here stays as the fallback for progress, similar galleries and retry-failed.";
+        section.appendChild(toolbarHint);
+    }
 
     // ---- bookmark queue ------------------------------------------------
     const bookmarkHeading = el("h4");

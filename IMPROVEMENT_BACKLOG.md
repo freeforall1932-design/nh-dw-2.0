@@ -1926,21 +1926,21 @@ set audited to 4 files (see `FIREFOX_PARITY_PLAN.md` §2, §6). Desktop/mobile
 separation rules R1–R3 codified; the v1.0.0 DOM-wrapper violation was
 reworked into a runtime relocator before the rebase. 406 tests green.
 
-### 56. Website-embedded UI: invoker + settings drawer in nhentai header — open
+### 56. Website-embedded UI: invoker + settings drawer in nhentai header — done 2026-09-20
 
-Primary surface per owner. Hook `.navbar` (all captured generations have
-`#nav_btn` hamburger, `#drop_btn`/`#dropdown_menu`, `.navbar_right` — see
-`5 website page source`). New content module or `listControls.ts`
-extension; drawer reuses `renderSettings(container)` + bookmarkPanel queue
-renderer; storage-persistent; worker-messaging identical to today; themed
-to the site's dark navbar; idempotent MutationObserver injection. Toolbar
-toggle via `action.setPopup("")` + `onClicked → scripting` to evaluate.
-nh-only; multi-site parked.
+Landed Firefox 1.2.0 (session `arena/01a0bf5f-nh-dw-2-0`). Contract:
+`src/utils/embeddedUi.ts`. Injector: `src/content/siteUi.ts` / `js/siteUi.js`.
+Drawer reuses `renderSettings` + `renderBookmarks`. Anchored only on
+`.navbar`. Toolbar: `handleToolbarClick` (toggle → inject → panel page).
+Tests: `test/embedded-ui.test.js`, `scripts/e2e-site-ui.js`. Chrome folder
+untouched (`shipsSiteUi()` is the inert path).
 
-### 57. Toolbar popup demotion to settings/API-key fallback — open
+### 57. Toolbar popup demotion to settings/API-key fallback — done 2026-09-20
 
-Companion of 56. `index.html` stays as fallback; decide whether the
-Download tab hides in-page when the embedded UI is active.
+`index.html` stays. Download tab is **not** hidden — progress / similar /
+retry-failed have no in-page home; drawer has "Full panel ↗". Toolbar on
+nhentai follows the device (drawer on phones, popup on desktop) unless
+overridden in Settings → In-page panel.
 
 ### 58. Combined P2+P3 verification + sign 1.2.0 — open
 
@@ -1961,3 +1961,13 @@ queue/history persistence), then unlisted sign as 1.2.0.
   `npm install` first.
 - Feasibility of the embedded UI proven from the in-repo page capture;
   design sketch in `FIREFOX_PARITY_PLAN.md` §8.
+
+## Session log — 2026-09-20 (session `arena/01a0bf5f-nh-dw-2-0`): items 56+57, Firefox 1.2.0
+
+- Website-embedded UI is the primary surface on nhentai: header invoker +
+  drawer (This page / Queue / Settings), reusing existing renderers.
+- Popup demoted, Download tab kept as fallback. Toolbar click on phones
+  opens the drawer; desktop keeps the popup unless overridden.
+- Firefox `npm test` 406 → **423** passing / 4 pending; e2e gained
+  `e2e-site-ui.js`. Manifest 1.2.0. Item 58 (device pass + sign) still open.
+  Chrome tree not modified.

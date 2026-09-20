@@ -40,6 +40,8 @@ const chromeStub = {
         query(_query, cb) { cb([{ url: "https://nhentai.net/g/1/" }]); }
     },
     action: {
+        setPopup() {},
+        onClicked: { addListener() {} },
         // Mirror Chromium MV3: relative icon paths 404 against js/background.js
         // and the returned promise rejects. The worker must use root-relative
         // paths and catch the rejection so it never surfaces as uncaught.

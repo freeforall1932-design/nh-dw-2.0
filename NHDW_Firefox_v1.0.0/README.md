@@ -1,14 +1,19 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.1.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.2.0)
 
-**Updated:** 2026-09-19 · status: **Chrome parity (P1 rebase) + Android-ready;
-next: website-embedded UI (items 56–58, see `FIREFOX_PARITY_PLAN.md` §8)**
+**Updated:** 2026-09-20 · status: **website-embedded UI shipped (items 56/57);
+next: real-device verification + sign (item 58)**
 
-v1.1.0 = the parity elevation: this folder is now the current Chrome `src/`
-plus a 4-file audited delta (see `FIREFOX_PARITY_PLAN.md`). In-page card
-controls + floating action bar, bookmark queue, download history / verify /
-retry-failed, batch pipeline and list-mode settings now exist here exactly as
-on Chrome. `diff -rq` against `NHDW_Extension_v3.0.0/src` shows only the
-delta set; Chrome's full offline suite (406 tests) passes in this folder.
+v1.2.0 = the in-page drawer is the primary surface on nhentai.net. A
+**Downloader** button sits in the site header next to the hamburger; it opens
+a slide-down panel with This page / Queue / Settings (reusing the existing
+renderers, no duplicated logic). The toolbar popup is the fallback for
+progress, similar galleries, retry-failed and the API key. Phones open the
+drawer from the toolbar button; desktop keeps the popup unless you change
+Settings → In-page panel.
+
+v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
+plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). Chrome's offline suite
+passes here (**423** passing / 4 pending after the embedded-UI tests).
 
 This folder is the Firefox port of the Chrome MV3 extension
 (`NHDW_Extension_v3.0.0`). It now targets **Firefox desktop AND Firefox for
@@ -21,9 +26,9 @@ the Android migration plan and finished-product definition are below.
 
 The Firefox build is a **separate product line** with its own AMO version
 sequence. `1.0.0` = the Android-ready snapshot of the old 3.3.0-era fork;
-`1.1.0` = the parity elevation (P1 rebase onto the current Chrome tree).
-AMO only requires the version to increase monotonically per add-on id, so
-this sequence never tracks Chrome's numbers.
+`1.1.0` = the parity elevation (P1 rebase onto the current Chrome tree);
+`1.2.0` = website-embedded UI. AMO only requires the version to increase
+monotonically per add-on id, so this sequence never tracks Chrome's numbers.
 
 ## Manifest facts (audited against MDN/BCD, 2026-09)
 
@@ -72,11 +77,9 @@ and must keep its classic look. On phones:
 This mirrors the Chrome build's own UI thinking: Chrome's side panel is the
 same document with the fixed width dropped (`html.nhdwPanel`), and Chrome's
 flagship mobile pattern is the in-page bottom action bar. Android has no
-side-panel API, so the full-tab popup with the bottom bar is the native
-equivalent. The Chrome-only **in-page card controls** (`listControls.ts`,
-per-card Download/Select/☆ + floating bar) are not in this port yet — they
-depend on the not-yet-ported utils (`downloadFormats`, `downloadHistory`,
-`bookmarkQueue`, `siteKeys`) and are Roadmap item 1.
+side-panel API, so the in-page header invoker + drawer (v1.2.0) is the
+native equivalent, with the full-tab popup as fallback. In-page card
+controls (`listControls.ts`) shipped in v1.1.0.
 
 ## Background robustness on Android
 

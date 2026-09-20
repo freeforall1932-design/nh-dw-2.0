@@ -38,6 +38,21 @@ import { rememberFailedGalleries, forgetFailedGalleries, readPendingFailuresSett
 // panel both mutate it. It OUTLIVES the offscreen job queue, which is
 // memory-only; bookmark rows feed the download pipeline, they never replace it.
 import { handleBookmarkMessage, markBookmarksDownloaded, markBookmarksFailed, markBookmarksDownloading } from "./bookmarkService";
+import {
+    EMBEDDED_UI_DEFAULT,
+    EMBEDDED_UI_KEY,
+    MOBILE_DEVICE_KEY,
+    PANEL_PAGE,
+    SITE_UI_BUNDLE,
+    SITE_UI_OPEN_PANEL_ACTION,
+    SITE_UI_TOGGLE_ACTION,
+    TOOLBAR_EMBEDDED_KEY,
+    handleToolbarClick,
+    normalizeEmbeddedUi,
+    popupForTab,
+    resolveToolbarEmbedded,
+    shipsSiteUi
+} from "../utils/embeddedUi";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
@@ -109,11 +124,182 @@ try {
     });
 } catch (_) { /* storage unavailable in some test harnesses */ }
 
+// ---- website-embedded UI (item 56/57) ------------------------------------
+// On nhentai, the in-page drawer is the primary surface. The toolbar popup is
+// demoted to a fallback (progress / similar / retry-failed / API-key). The
+// click behaviour is per-tab: `action.setPopup("")` so `onClicked` fires and
+// the content script toggles the drawer; everywhere else the popup document
+// still opens. Gated on `shipsSiteUi()` so the same worker is inert in a
+// Chrome build that does not ship js/siteUi.js.
+function isNhentaiUrl(url: string): boolean {
+    return getSourceForUrl(url) !== null;
+}
+
+function readToolbarMode(callback: (embeddedToolbar: boolean) => void): void {
+    if (!shipsSiteUi()) {
+        callback(false);
+        return;
+    }
+    try {
+        const syncDefaults: any = {};
+        syncDefaults[EMBEDDED_UI_KEY] = EMBEDDED_UI_DEFAULT;
+        chrome.storage.sync.get(syncDefaults, (syncElems: any) => {
+            const enabled = normalizeEmbeddedUi(syncElems && syncElems[EMBEDDED_UI_KEY]);
+            const storedToolbar = syncElems ? syncElems[TOOLBAR_EMBEDDED_KEY] : undefined;
+            const finish = (mobile: boolean) => {
+                callback(enabled && resolveToolbarEmbedded(storedToolbar, mobile));
+            };
+            try {
+                const localDefaults: any = {};
+                localDefaults[MOBILE_DEVICE_KEY] = false;
+                chrome.storage.local.get(localDefaults, (localElems: any) => {
+                    finish(!!(localElems && localElems[MOBILE_DEVICE_KEY]));
+                });
+            } catch (_) {
+                finish(false);
+            }
+        });
+    } catch (_) {
+        callback(false);
+    }
+}
+
+function applyEmbeddedPopup(tab: { id?: number; url?: string } | undefined | null): void {
+    if (!shipsSiteUi() || !tab || typeof tab.id !== "number") {
+        return;
+    }
+    readToolbarMode((embeddedToolbar) => {
+        try {
+            chrome.action.setPopup({
+                tabId: tab.id as number,
+                popup: popupForTab(embeddedToolbar, tab.url, isNhentaiUrl)
+            });
+        } catch (_) { /* chrome.action may be missing in tests */ }
+    });
+}
+
+function refreshEmbeddedPopups(): void {
+    if (!shipsSiteUi()) {
+        return;
+    }
+    try {
+        chrome.tabs.query({}, (tabs: any[]) => {
+            if (!tabs) {
+                return;
+            }
+            for (let i = 0; i < tabs.length; i++) {
+                applyEmbeddedPopup(tabs[i]);
+            }
+        });
+    } catch (_) { /* tabs.query missing in tests */ }
+}
+
+function sendToggleToTab(tabId: number, message: any): Promise<boolean> {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value: boolean) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            resolve(value);
+        };
+        try {
+            const result: any = (chrome.tabs as any).sendMessage(tabId, message, (response: any) => {
+                const err = chrome.runtime.lastError;
+                finish(!err && !!(response && response.ok === true));
+            });
+            if (result && typeof result.then === "function") {
+                result.then((response: any) => {
+                    finish(!!(response && response.ok === true));
+                }).catch(() => finish(false));
+            }
+        } catch (_) {
+            finish(false);
+        }
+    });
+}
+
+function injectSiteUi(tabId: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (value: boolean) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            resolve(value);
+        };
+        try {
+            const scripting: any = (chrome as any).scripting;
+            if (!scripting || typeof scripting.executeScript !== "function") {
+                finish(false);
+                return;
+            }
+            const details: any = { target: { tabId: tabId }, files: [SITE_UI_BUNDLE] };
+            const result: any = scripting.executeScript(details, () => {
+                finish(!chrome.runtime.lastError);
+            });
+            if (result && typeof result.then === "function") {
+                result.then(() => finish(true)).catch(() => finish(false));
+            }
+        } catch (_) {
+            finish(false);
+        }
+    });
+}
+
+function openPanelPage(): void {
+    try {
+        chrome.tabs.create({ url: chrome.runtime.getURL(PANEL_PAGE) });
+    } catch (_) { /* last-resort fallback failed: nothing else we can do */ }
+}
+
+function installEmbeddedToolbar(): void {
+    if (!shipsSiteUi()) {
+        return;
+    }
+    try {
+        const action: any = chrome.action;
+        if (action && action.onClicked && typeof action.onClicked.addListener === "function") {
+            action.onClicked.addListener((tab: any) => {
+                readToolbarMode((embeddedToolbar) => {
+                    handleToolbarClick({
+                        sendToTab: sendToggleToTab,
+                        injectSiteUi: injectSiteUi,
+                        openPanelPage: openPanelPage
+                    }, tab, {
+                        embeddedToolbar: embeddedToolbar,
+                        isSiteUrl: isNhentaiUrl,
+                        toggleAction: SITE_UI_TOGGLE_ACTION
+                    }).catch(() => {
+                        openPanelPage();
+                    });
+                });
+            });
+        }
+    } catch (_) { /* action.onClicked unavailable: the popup stays the toolbar */ }
+    try {
+        chrome.storage.onChanged.addListener((changes: any, area: string) => {
+            if (area === "sync" && changes && (changes[EMBEDDED_UI_KEY] || changes[TOOLBAR_EMBEDDED_KEY])) {
+                refreshEmbeddedPopups();
+            }
+            if (area === "local" && changes && changes[MOBILE_DEVICE_KEY]) {
+                refreshEmbeddedPopups();
+            }
+        });
+    } catch (_) { /* storage unavailable in some test harnesses */ }
+    refreshEmbeddedPopups();
+}
+
+installEmbeddedToolbar();
 
 chrome.tabs.onUpdated.addListener(function
-    (_tabId, changeInfo, _tab) {
-        if (changeInfo.url !== undefined)
+    (_tabId, changeInfo, tab) {
+        if (changeInfo.url !== undefined) {
             setIcon(changeInfo.url);
+            applyEmbeddedPopup(tab);
+        }
     }
 );
 
@@ -122,8 +308,10 @@ chrome.tabs.onActivated.addListener(function() {
         active: true,
         currentWindow: true
     }, function (tabs) {
-        if (tabs && tabs[0])
+        if (tabs && tabs[0]) {
             setIcon(tabs[0].url);
+            applyEmbeddedPopup(tabs[0]);
+        }
     });
 });
 
@@ -1118,6 +1306,17 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
 // before a response was received" once the sender goes away.
 chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (!request) {
+        return false;
+    }
+    if (request.action === SITE_UI_OPEN_PANEL_ACTION) {
+        // The in-page drawer's "Full panel ↗" control: open the demoted popup
+        // document in a tab of its own (progress, similar galleries, retry).
+        try {
+            openPanelPage();
+            sendResponse({ ok: true });
+        } catch (_) {
+            sendResponse({ ok: false });
+        }
         return false;
     }
     if (request.action === "clearJobMarker") {

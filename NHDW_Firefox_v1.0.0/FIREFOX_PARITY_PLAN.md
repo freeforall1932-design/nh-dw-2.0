@@ -25,8 +25,13 @@ two trees diff-tracked so future syncs are cheap.
 | `src/preview/message.ts` | + `hostGrantNotice` | additive |
 | `css/style.css` | + phone media block (coarse-pointer gated) incl. `#nhdwMobileBar` | Android UI |
 | `index.html` / `options.html` | + viewport metas | Android UI |
-| webpack | + `listControls` entry | parity feature |
+| webpack | + `listControls` + `siteUi` entries | parity + item 56 |
 | `test/manifest.test.js` | Firefox-manifest describe block | guards |
+| `src/utils/embeddedUi.ts` (new) | website-embedded UI contract | item 56/57, Firefox-first |
+| `src/content/siteUi.ts` (new) | header invoker + drawer | item 56 |
+| `css/content.css` | + embedded-UI / invoker / drawer block | item 56 |
+| `src/background/background.ts` | + keep-alive **and** toolbar `onClicked` / per-tab `setPopup` / `siteUiOpenPanel` | Android + item 57 |
+| `src/preview/popupSettings.ts` | + sidePanel filter **and** In-page panel settings (gated on `shipsSiteUi()`) | Firefox + item 57 |
 
 Everything else must be **byte-identical to Chrome** after the rebase.
 
@@ -68,7 +73,8 @@ Everything else must be **byte-identical to Chrome** after the rebase.
 ## 5. Versioning
 
 1.0.0 = Android-ready snapshot (shipped). 1.1.0 = parity elevation (+ its
-Android re-plan). Independent sequence, never synced to Chrome's numbers.
+Android re-plan). 1.2.0 = website-embedded UI (items 56/57). Independent
+sequence, never synced to Chrome's numbers.
 
 ## 6. P1 review (2026-09-19, same session) — results
 

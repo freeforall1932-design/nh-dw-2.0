@@ -5,6 +5,7 @@ import { message } from "./message";
 import { renderSettings } from "./popupSettings";
 import { renderBookmarks, watchBookmarkChanges } from "./bookmarkPanel";
 import { readListSettings } from "../utils/listSettings";
+import { MOBILE_LAYOUT_MEDIA } from "../utils/embeddedUi";
 
 let popup = Popup.getInstance();
 
@@ -68,7 +69,7 @@ if (document.readyState === "loading") {
 // bottom footer — the same idiom as the in-page .nhdw-action-bar — and a
 // MutationObserver reapplies the relocation after every innerHTML swap of a
 // popup state. Firefox-only delta over the Chrome tree.
-const MOBILE_BAR_MEDIA = "(max-width: 640px) and (pointer: coarse)";
+const MOBILE_BAR_MEDIA = MOBILE_LAYOUT_MEDIA;
 const MOBILE_BAR_BUTTON_IDS: string[] = [
     "button", "buttonAll", "buttonBack", "buttonPause", "buttonResume",
     "buttonClearQueue", "buttonDismiss", "apiKeySubmit", "apiKeySkip",

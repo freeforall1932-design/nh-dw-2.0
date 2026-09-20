@@ -199,7 +199,8 @@ const chromeStub = {
             cb({ result: "success" });
         },
         lastError: null,
-        getURL: (p) => p
+        getURL: (p) => p,
+        getManifest: () => ({ content_scripts: [{ js: ["js/content.js", "js/listControls.js"] }] })
     },
     storage: {
         // Stateful: the settings pane reads what it wrote moments earlier.
