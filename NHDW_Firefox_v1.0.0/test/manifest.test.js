@@ -207,4 +207,14 @@ describe('Firefox manifest (Android-ready)', () => {
                 'optional host patterns must be https and nhentai-scoped: ' + pattern);
         }
     });
+
+    it('injects the website-embedded UI (item 56) on nhentai pages', () => {
+        const scripts = firefoxManifest.content_scripts[0].js;
+        assert.ok(scripts.includes('js/content.js'), 'legacy caption checkbox script must stay');
+        assert.ok(scripts.includes('js/listControls.js'), 'in-page card controls must stay');
+        assert.ok(scripts.includes('js/siteUi.js'),
+            'the header invoker + settings drawer must be injected on nhentai pages');
+        assert.ok(fs.existsSync(path.join(firefoxRoot, 'src', 'content', 'siteUi.ts')),
+            'siteUi.ts source must ship next to listControls.ts');
+    });
 });

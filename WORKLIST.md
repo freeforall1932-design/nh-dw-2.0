@@ -1,9 +1,8 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-19** (session
-`arena/01a0b767-nh-dw-2-0`: **Firefox-for-Android migration + parity
-elevation v1.1.0 landed; items 56–58 queued; PR opened**. Previous:
-2026-09-14, 3.8.0, PR #40/#42).
+**Live, ordered. Updated 2026-09-20** (session
+`arena/01a0bf5f-nh-dw-2-0`: **Firefox 1.2.0 website-embedded UI, items 56+57
+landed; 58 still open**. Previous: 2026-09-19, v1.1.0, PR #43).
 
 This is the single place to look for *what to do next*. The other two documents
 carry the depth:
@@ -56,27 +55,30 @@ nhentai; popup/side-panel demoted to settings/API-key fallback; invoker +
 all settings baked into the website header. Depth docs:
 `NHDW_Firefox_v1.0.0/FIREFOX_PARITY_PLAN.md` (§6–8), `README.md`.
 
-### 56. Website-embedded UI — invoker + settings drawer in the nhentai header — **top of the queue**
+### 56. Website-embedded UI — invoker + settings drawer in the nhentai header — **DONE 2026-09-20**
 
-Feasibility confirmed (§8.1): `.navbar` + `#nav_btn`/`#drop_btn`/
-`#dropdown_menu`/`.navbar_right` exist in all captured layout generations.
-Inject an invoker beside the hamburger + a slide-down drawer reusing
-`renderSettings(container)` + the `bookmarkPanel` queue renderer; idempotent
-MutationObserver injection anchored only on `.navbar`; nh-only scope.
-Evaluate `action.setPopup("")` + `onClicked → executeScript` toggle so the
-toolbar button also opens the embedded drawer.
+Landed in Firefox 1.2.0. `src/utils/embeddedUi.ts` (pure contract) +
+`src/content/siteUi.ts` (invoker + drawer). Drawer reuses `renderSettings` +
+`renderBookmarks`. Anchored only on `.navbar`. Toolbar click:
+`action.setPopup("")` + `onClicked` → `handleToolbarClick` (toggle → inject
+→ `index.html`). Pinned by `test/embedded-ui.test.js` (17) and
+`scripts/e2e-site-ui.js` (8 PASS).
 
-### 57. Demote the toolbar popup to the settings / API-key fallback
+### 57. Demote the toolbar popup to the settings / API-key fallback — **DONE 2026-09-20**
 
-Keep `index.html` as the fallback surface; decide during 56 whether the
-Download tab hides in-page when the embedded UI is active (storage flag).
+`index.html` stays. **Decision: the Download tab is NOT hidden** when the
+embedded UI is active — progress / similar / retry-failed have no in-page
+home, and the drawer offers "Full panel ↗". Toolbar on nhentai follows the
+device by default (drawer on phones, popup on desktop); Settings → In-page
+panel overrides it.
 
-### 58. Combined verification (folded P2 + P3) + sign 1.2.0
+### 58. Combined verification (folded P2 + P3) + sign 1.2.0 — **top of the queue**
 
-One real-device session after 56/57: desktop Firefox pass (queue, history,
-☆, in-page controls) AND Android matrix (grant prompt, drawer at 360px,
-keep-alive over 60s+ ZIPs, content controls on listings); then
-`npm run sign:firefox` as 1.2.0 (bump manifest first; AMO keys via env).
+Manifest already **1.2.0**. One real-device session: desktop Firefox pass
+(queue, history, ☆, in-page controls, header invoker + drawer) AND Android
+matrix (grant prompt, drawer at 360px, keep-alive over 60s+ ZIPs, content
+controls on listings, toolbar opens the drawer); then
+`npm run sign:firefox` (AMO keys via env). Cannot run here.
 
 ---
 
@@ -334,6 +336,10 @@ these hosts (DNS failure)" is wrong — DNS resolves; **egress** is blocked
 
 ## Done recently
 
+- [x] **56+57. Firefox 1.2.0 website-embedded UI (2026-09-20).** Header
+      invoker + settings/queue drawer on nhentai; popup demoted but Download
+      tab kept as fallback. `embeddedUi.ts` + `siteUi.ts`; 423 passing;
+      `e2e-site-ui.js`. Item 58 (device + sign) remains.
 - [x] **Self-review pass (2026-09-14, fourth session).** Ran the mandatory
       own-output review over everything this day produced. Three defects
       found and fixed: (1) the `downloadHistory.ts` header design comment

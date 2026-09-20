@@ -59,9 +59,12 @@ const chromeStub = {
     tabs: {
         onUpdated: { addListener() {} },
         onActivated: { addListener() {} },
-        query(_query, cb) { cb([{ url: "https://nhentai.net/g/123456/" }]); }
+        query(_query, cb) { cb([{ id: 1, url: "https://nhentai.net/g/123456/" }]); },
+        sendMessage(_id, _msg, cb) { if (cb) cb(null); },
+        create() {}
     },
-    action: { setIcon() {} },
+    action: { setIcon() {}, setPopup() {}, onClicked: { addListener() {} } },
+    scripting: { executeScript(_opts, cb) { if (cb) cb([]); } },
     permissions: {
         // The manifest's optional_host_permissions grant check.
         contains(_permissions, cb) { cb(true); }
@@ -83,6 +86,8 @@ const chromeStub = {
     },
     runtime: {
         onMessage: { addListener(fn) { onMessageHandler = fn; } },
+        getURL(p) { return "chrome-extension://testid/" + String(p).replace(/^\//, ""); },
+        getManifest() { return { content_scripts: [{ js: ["js/content.js", "js/listControls.js"] }] }; },
         sendMessage(msg) {
             if (sendMessageThrows && msg && msg.action === "batchProgress") {
                 const thrown = sendMessageThrows;

@@ -196,3 +196,336 @@ input[type="checkbox"] {
 .nhdw-card:has(.nhdw-bookmark-on) .nhdw-card-controls {
     opacity: 1;
 }
+
+/* ---- Website-embedded UI (item 56): invoker in the site header + drawer --
+   Themed to nhentai's dark navbar (#e31b53 accent). Everything is namespaced
+   with nhdw- / #nhdwSiteUi so it cannot collide with the site's styles.
+   Desktop: a compact panel under the header. Phones: full-width below the
+   navbar, gated by the same (max-width:640px) and (pointer:coarse) rule as
+   the rest of the Firefox UI (parity plan R1). ----------------------------- */
+
+.nhdw-invoker,
+.nhdw-invoker:focus,
+.nhdw-invoker:hover {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #e31b53;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 4px 10px;
+    margin: 0 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: bold;
+    line-height: 1.2;
+    height: 32px;
+    vertical-align: middle;
+    box-sizing: border-box;
+    text-decoration: none;
+}
+
+.nhdw-invoker:hover {
+    background: #fff;
+    color: #e31b53;
+}
+
+.nhdw-invoker-icon {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.nhdw-invoker-label {
+    white-space: nowrap;
+}
+
+.nhdw-invoker-badge {
+    background: #fff;
+    color: #e31b53;
+    border-radius: 9px;
+    padding: 0 5px;
+    font-size: 11px;
+    font-weight: bold;
+    min-width: 16px;
+    text-align: center;
+    line-height: 16px;
+}
+
+.nhdw-invoker:hover .nhdw-invoker-badge {
+    background: #e31b53;
+    color: #fff;
+}
+
+.nhdw-invoker-item {
+    list-style: none;
+    display: inline-block;
+    margin: 0;
+    padding: 0;
+    vertical-align: middle;
+}
+
+#nhdwSiteUi {
+    position: relative;
+    z-index: 2147482900;
+}
+
+#nhdwSiteUiBackdrop.nhdw-site-ui-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 2147482900;
+}
+
+#nhdwSiteUiPanel.nhdw-site-ui-panel {
+    position: fixed;
+    left: 8px;
+    width: min(440px, calc(100vw - 16px));
+    max-height: min(72vh, 680px);
+    overflow: auto;
+    background: #1f1f1f;
+    color: #eee;
+    border: 1px solid #e31b53;
+    border-radius: 0 0 8px 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    z-index: 2147482950;
+    font-size: 13px;
+    text-align: left;
+    box-sizing: border-box;
+}
+
+.nhdw-site-ui-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid #444;
+}
+
+.nhdw-site-ui-head-icon {
+    width: 18px;
+    height: 18px;
+    display: block;
+}
+
+.nhdw-site-ui-title {
+    flex: 1 1 auto;
+    font-size: 14px;
+}
+
+.nhdw-site-ui-head-btn {
+    border: 1px solid #e31b53;
+    background: transparent;
+    color: #e31b53;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.nhdw-site-ui-head-btn:hover {
+    background: #e31b53;
+    color: #fff;
+}
+
+.nhdw-site-ui-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid #444;
+}
+
+.nhdw-site-ui-tab {
+    flex: 1 1 0;
+    background: transparent;
+    color: #ccc;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.nhdw-site-ui-tab.active {
+    color: #fff;
+    border-bottom-color: #e31b53;
+    font-weight: bold;
+}
+
+.nhdw-site-ui-tab-badge {
+    font-size: 11px;
+    opacity: 0.85;
+}
+
+.nhdw-site-ui-notice {
+    margin: 8px 10px 0;
+    padding: 6px 8px;
+    border-radius: 4px;
+    background: #1d2b3a;
+    border: 1px solid #35506b;
+    font-size: 12px;
+}
+
+.nhdw-site-ui-notice-error {
+    background: #3a1d1d;
+    border-color: #6b3535;
+}
+
+.nhdw-site-ui-pane {
+    padding: 10px;
+}
+
+.nhdw-site-ui-card {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+}
+
+.nhdw-site-ui-thumb {
+    flex: 0 0 auto;
+    width: 64px;
+    height: 90px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #333;
+    color: #888;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.nhdw-site-ui-thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.nhdw-site-ui-card-info {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.nhdw-site-ui-card-title {
+    font-weight: bold;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.nhdw-site-ui-card-meta {
+    font-size: 11px;
+    opacity: 0.8;
+    margin: 4px 0 8px;
+}
+
+.nhdw-site-ui-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+.nhdw-site-ui-btn {
+    border: 1px solid #999;
+    background: transparent;
+    color: #eee;
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.nhdw-site-ui-btn:hover {
+    border-color: #e31b53;
+    color: #e31b53;
+}
+
+.nhdw-site-ui-primary {
+    background: #e31b53;
+    border-color: #e31b53;
+    color: #fff;
+    font-weight: bold;
+}
+
+.nhdw-site-ui-primary:hover {
+    background: #fff;
+    color: #e31b53;
+}
+
+.nhdw-site-ui-note {
+    font-size: 13px;
+    margin-bottom: 8px;
+}
+
+.nhdw-site-ui-hint {
+    display: block;
+    font-size: 11px;
+    opacity: 0.75;
+    margin-top: 8px;
+}
+
+/* Settings / Queue reuse popup chrome: force readable colours on the dark
+   drawer. popupSettings / bookmarkPanel class names are unchanged. */
+#nhdwSiteUi .psSection,
+#nhdwSiteUi .nhdwBmHeader,
+#nhdwSiteUi .nhdwBmPasteBox,
+#nhdwSiteUi .nhdwBmRow {
+    border-color: #555;
+}
+
+#nhdwSiteUi .psStatusOn {
+    color: #4ec970;
+}
+
+#nhdwSiteUi .psStatusOff {
+    color: #e0a34e;
+}
+
+#nhdwSiteUi input[type="text"],
+#nhdwSiteUi input[type="password"],
+#nhdwSiteUi textarea,
+#nhdwSiteUi select {
+    background: #2c2c2c;
+    color: #eee;
+    border: 1px solid #555;
+}
+
+@media (max-width: 640px) and (pointer: coarse) {
+    .nhdw-invoker {
+        height: 36px;
+        padding: 6px 10px;
+        font-size: 14px;
+    }
+
+    .nhdw-invoker-label {
+        /* Phones: keep the word; the header has room next to the hamburger. */
+    }
+
+    #nhdwSiteUiPanel.nhdw-site-ui-panel {
+        left: 0;
+        right: 0;
+        width: 100%;
+        max-width: none;
+        max-height: calc(100vh - 48px);
+        border-radius: 0;
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    .nhdw-site-ui-btn,
+    .nhdw-site-ui-head-btn,
+    .nhdw-site-ui-tab {
+        min-height: 44px;
+        font-size: 15px;
+    }
+
+    #nhdwSiteUi input[type="text"],
+    #nhdwSiteUi input[type="password"],
+    #nhdwSiteUi textarea,
+    #nhdwSiteUi select {
+        font-size: 16px; /* Android must not zoom the page on focus */
+        min-height: 42px;
+    }
+}
