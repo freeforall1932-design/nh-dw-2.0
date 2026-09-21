@@ -218,3 +218,24 @@ describe('Firefox manifest (Android-ready)', () => {
             'siteUi.ts source must ship next to listControls.ts');
     });
 });
+
+
+describe('embedded renderer styles', () => {
+    it('ships the same bounded Queue and Settings layout CSS in the popup and the site', () => {
+        const root = path.join(__dirname, '..');
+        const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+        const files = manifest.content_scripts[0].css;
+        const pageCss = files.map((file) => fs.readFileSync(path.join(root, file), 'utf8')).join('\n');
+        assert.match(pageCss, /\.nhdwBmThumb\s*\{[^}]*width:\s*46px/,
+            'reused Queue markup needs bounded thumbnails, not full-size covers');
+        assert.match(pageCss, /\.psSection\s*\{[^}]*padding:/,
+            'reused Settings markup needs its section layout');
+        assert.ok(files.includes('css/panelRenderers.css'));
+        const popupCss = fs.readFileSync(path.join(root, 'css/style.css'), 'utf8');
+        assert.match(popupCss, /@import url\("panelRenderers\.css"\)/,
+            'share renderer CSS instead of maintaining divergent copies');
+        const sharedCss = fs.readFileSync(path.join(root, 'css/panelRenderers.css'), 'utf8');
+        assert.ok(!/^\s*(?:html|body|button|input)\s*[{,]/m.test(sharedCss),
+            'page injection must not import popup-wide element styles');
+    });
+});

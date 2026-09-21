@@ -1392,13 +1392,14 @@ audit), not from a user report.
   nodes) apply unchanged. Wire into its `npm run test:e2e`. Small job; the
   value is that the next backport can be proven, not just compiled.
 
-- **[ ] 38. Options-page harness.** `js/options.js` has no VM harness. Its
-  `Select`/`CheckBox`/`InputField` init loop, the pass-4 `listFormat`
-  inheritance line, the `rawMasterFolder` verbatim-save special case and the
-  API-key panel are typechecked but never executed offline. A stub needs
-  `<select>.options` + `selectedIndex` (both `Select.init` and `Select.update`
-  read them) and the option lists from `options.html` - all four formats are
-  present there, which is what makes `listFormatSelect.value = "cbz"` safe.
+- **[x] 38. Options-page harness — approved Firefox scope completed 2026-09-21.**
+  `scripts/e2e-options.js` executes the built options bundle against real
+  `options.html`, including actual select lists/index/value, key-scoped async
+  storage, read-only initialization, explicit edits, naming previews, local
+  credentials and history. 33 tests; 8 fail against the pre-fix bundle. Added
+  to `test:e2e` and focused `test:options`. Only Firefox options production
+  code changed by this task; Chrome coverage/fixes were not approved. See the
+  session log below and item 59 for the adjacent shared-reader issue.
 
 - **[ ] 39. Empty-token separators (needs a decision, not code).**
   `getDownloadName("{id} - {pretty} - {language}", ..., [])` yields
@@ -1415,8 +1416,9 @@ audit), not from a user report.
   panel's message -> UI and storage contracts; it does not build a listing
   page, so the panel's list-job, PDF-merge-warning and similar-galleries paths
   remain covered only by the content-script phases. Extending it means
-  stubbing `getGalleries` and `activeTabGallery` - a real piece of work, worth
-  doing only if those paths change again.
+  stubbing listing injection and `activeTabGallery` - a real piece of work,
+  worth doing only if those paths change again. Item 59 directly delivers
+  `getGalleries` for format rendering; that partial check does not close 40.
 
 - **[ ] 41. Non-canonical separators are canonicalised on the first tick (UX
   decision).** `isTokenOnlyTemplate("{pretty}_{id}")` is `true`, so the panel
@@ -1433,10 +1435,11 @@ audit), not from a user report.
 - **The popup harness is a hand-rolled DOM.** It proves contracts, not
   rendering: layout, focus, `hidden` CSS and Chrome's real listener ordering
   are still real-browser-only.
-- **Panel settings are write-only.** Nothing asserts that the readers
-  (`background.ts` for `uiMode`, `listControls.ts` for `inPageControls` and the
-  list keys) pick a change up; the UI hints tell the user to reload or reopen,
-  and that instruction has never been verified in a browser.
+- **Historical panel-read coverage gap, partly closed offline.** Item 59
+  now asserts that saved list formats are read and survive reopen/reload in
+  the Firefox panels and card/bar controls. The broader real-browser reload
+  instruction and unrelated preference readers still need device coverage;
+  the VM tests are not that evidence.
 - **`chrome.downloads` assumptions are unobserved.** That `filenameRegex`
   matches Windows backslash paths, and that a deleted file reports
   `exists === false` rather than an absent field. Both failure modes are safe
@@ -1971,3 +1974,155 @@ queue/history persistence), then unlisted sign as 1.2.0.
 - Firefox `npm test` 406 → **423** passing / 4 pending; e2e gained
   `e2e-site-ui.js`. Manifest 1.2.0. Item 58 (device pass + sign) still open.
   Chrome tree not modified.
+
+
+## Session log — 2026-09-20 (session `arena/01a0bfa1-nh-dw-2-0`): review of PR #44
+
+Owner scope: read handoff/latest PR, fix verified defects, then propose one
+achievable task WITHOUT starting it. Latest PR: #44, Firefox embedded UI.
+
+Verified fixes (regression tests fail against the pre-fix code/bundles):
+
+- Wire the previously inert embedded settings: read defaults/stored values,
+  save only on explicit change, remove the toolbar override for Auto. Request
+  that key in the worker's storage read; listen to the correctly shaped global
+  storage-change event. Preserve clicks racing a toolbar-mode change.
+- Ship the reused Settings/Queue CSS as `css/panelRenderers.css`, shared with
+  the popup rather than duplicated; inject both CSS files before on-demand JS.
+  No global popup element styles leak into the website.
+- Stop the badge/MutationObserver feedback loop, retain Queue DOM after drawer
+  detachment, refuse unanchored toolbar opening, update listing counts while
+  open, and keep the navbar invoker outside the backdrop's hit area.
+- Bind Full panel to its originating nhentai tab via `sourceTabId`. Validate
+  the source before preview/injection/download/retry and worker-side bookmark
+  enrichment. A closed/off-site source does not fall through to the active
+  extension tab, including the worker's sender-tab fallback. Report actual
+  `tabs.create` failure instead of unconditional success.
+
+Firefox build, 431 unit tests (4 pending), smoke and all offline e2e scripts
+pass; lint 0 errors / 0 notices / 30 advisory warnings; clean 25-entry unsigned
+1.2.0 package. Chrome tests 398 passing / 4 pending, tracked Chrome trees
+unchanged. No real browser/device test and no signing performed. Source delta
+allowlist updated in `FIREFOX_PARITY_PLAN.md`; 58 remains the release gate.
+
+**Proposed only, not started:** item 38, a Firefox-only offline options-page
+harness. Requires owner approval before implementation. Node/VM + existing
+bundles are available; no device, signing access or live-site fetch is needed.
+
+
+## Session log — 2026-09-21 (session `arena/01a0bfa1-nh-dw-2-0`): approved item 38
+
+Owner said “proceed” to the Firefox-only options harness proposal. Implemented
+`scripts/e2e-options.js` + dependency-free `scripts/test-support/options-page.js`;
+loads the actual HTML and built bundle, with no live fetches or credentials.
+Select/index/value semantics and async, cloned, key-scoped storage have their
+own contract checks. Tests cover defaults/stored values, read-only rendering,
+all real control choices, folder/template/list previews, local API-key and
+server-archive state, mocked verification, and confirmed/cancelled history
+clearing. Both complete e2e and focused `test:options` run the new harness.
+
+Regression-first fixes limited to Firefox `src/options/options.ts`:
+
+- Request saved `listFormat` explicitly, with no concrete default that masks
+  inheritance; show legacy `folder` as PDF without migrating stored data.
+- Hide the unavailable side-panel choice using the existing capability guard;
+  rendering does not rewrite old synced `uiMode` values.
+- Keep inherited list format live until an explicit list choice; refresh list
+  name previews/placeholder for single-title template and replace-spaces edits.
+- Honor deliberately empty single/list templates as gallery-ID fallback;
+  distinguish a stored empty list template from an explicit blank edit which
+  saves `@inherit`. No options redesign or new controls.
+
+Saved pre-fix bundle: **25 pass / 8 fail**. Fixed bundle: **33/33**. Firefox
+build, **431 unit tests / 4 pending**, smoke7 and full e2e pass; lint **0 errors /
+0 notices / 30 advisory warnings**; rebuilt unsigned **1.2.0**, **25 ZIP entries**.
+Chrome, CI, permissions, HTML and generic option classes unchanged by item 38.
+No real Firefox/Android run or signing; item 58 stays open. Preserve the prior
+PR #44 review fixes in this working tree. Firefox source allowlist gains only
+`options/options.ts` (eight changed existing files + two new in total).
+
+### 59. Saved list-format reads in shared Firefox consumers — DONE 2026-09-21
+
+Separately approved by the owner (“ok do 59”), Firefox-only and offline.
+The options review found the omitted-key bug in `utils/listSettings.ts` and
+`preview/popupSettings.ts`; implementation review found a third independent
+reader in `content/listControls.ts`. Object-form `storage.sync.get` only
+returns requested keys, so none could see saved `listFormat`. Existing
+whole-store/default-merge mocks hid this (even an existing real-reader test
+was falsely green).
+
+All three now request an array including the optional key and merge defaults
+for other fields afterward. No concrete list-format default, migration or
+new normalization policy. Saved ZIP/CBZ/PDF/raw beats `useZip`; unset/null/
+blank/invalid inherits it; neither usable means ZIP; legacy `folder` maps to
+PDF for use/display only. Reads/rendering are read-only. Explicit changes
+write just their own key, preserve sibling/single-title preferences and
+survive reopen/reload.
+
+Regression coverage uses shared key-scoped/cloned storage results and async
+get callbacks, plus a 36-case independent matrix. It runs against the real
+shared reader, popup and Full panel Settings/Queue, delivered `getGalleries`
+format markup/preview, in-page card/bar jobs, and embedded Settings/gallery/
+Queue jobs. It does not claim full listing bootstrap/pagination (40) or real
+browser layout/APIs. Focused units **59 pass / 20 fail → 79/79**; embedded
+suite **11 pass / 4 fail → 15/15**; old popup variants and list-controls
+bundles also fail. Existing invalid/inherited behavior remains pinned.
+
+Only three production source files and their preview/siteUi/listControls
+bundles changed, plus tests/docs; source allowlist now ten existing + two new
+files versus Chrome. No Chrome backport, dependency/manifest/permission/UI
+redesign or signing change. See the latest session log below for full checks.
+
+
+## Session log — 2026-09-21 (same session): owner-requested npm maintenance
+
+Owner saw npm's deprecated-package / npm-version / funding messages and asked
+where they came from, their project impact, and for necessary upgrades. They
+come from the lockfile's development tooling running in the sandbox; the npm
+upgrade notice is environment-specific, and sponsorship is optional. No
+payment was made and paid support is not necessary to use updated packages.
+
+Upgraded both maintained projects to Mocha 12.0.2, Firefox to web-ext 10.6.0,
+and refreshed fast-uri to 3.1.8 within its allowed range. One Firefox override
+selects addons-linter 10.13.0 instead of web-ext's affected 10.10.0 pin. Added
+the Node engine requirement; lockfile v3 still works with npm 10.9.8 and 12.0.2.
+Sandbox npm itself upgraded to 12.0.2 (environment-only, not a repo dependency).
+
+Full audit findings: **Firefox 16→0, Chrome 5→0**; runtime-only audits **0**.
+Fresh Chrome install: no deprecations. Fresh Firefox install: **two remaining
+upstream deprecations** (ESLint 9; whatwg-encoding through Cheerio). ESLint 10
+removes APIs Mozilla's validator still calls, and the replacement codec parent
+is an ESM-only major outside Cheerio's declared range. These are explicitly
+left visible instead of forcing breaking upgrades, suppressing logs or
+maintaining a validator fork. See `DEPENDENCY_MAINTENANCE.md` for follow-up.
+
+Both builds, **Firefox 431/4 and Chrome 398/4** unit suites, smoke7 each and
+all offline e2e pass; options33. Firefox lint 0 errors / 0 notices / 30 existing
+advisories; safe/unsafe fixture scans confirm validator security rules still
+run. Unsigned Firefox 1.2.0 package rechecked (25 entries). Runtime dependency
+versions/integrities, bundles, source, manifests, release snapshots and CI are
+unchanged. Preserve prior review/options work. Historical source snapshot
+was not updated and is excluded from audit claims. At this checkpoint 58/59
+remained pending; this maintenance request did not approve the shared-reader
+work. The owner separately approved 59 afterward (below).
+
+
+## Session log — 2026-09-21 (same session): approved Firefox item 59
+
+Owner chose the saved list-format fix instead of the four optional live API
+tests. Completed the three-reader regression/fix scope described in item 59,
+including the previously missed in-page reader; preserved all prior work.
+
+Firefox webpack, **474 passing / 4 pending** units (43 added), smoke7 and all
+offline e2e pass. Built site UI **15**, toolbar **11**, options **33**; popup
+and Full panel format/restoration/Queue checks pass. Lint **0 errors / 0
+notices / 30 existing advisory warnings**; unsigned **1.2.0**, **25 entries**
+with current bundles and no development/offscreen files. The four pending
+units are still deliberately opt-in live API tests, not four failed checks.
+
+Task-start SHA comparison confirms Chrome (including earlier authorized
+dependency edits), all package/lockfiles, CI, manifest/permissions, HTML/CSS
+and unrelated bundles unchanged. No live requests/device/signing, new PR,
+commit or push. Item 58 remains the release gate; broader item 40 is not
+closed by the limited delivered-message listing-format check. Local ignored
+evidence: `NHDW_Firefox_v1.0.0/build/list-format-review/`.

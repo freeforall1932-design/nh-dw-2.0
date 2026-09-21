@@ -1,4 +1,5 @@
 import { extractGalleryFromHtml, looksLikeGallery, coerceGallery } from "../parsing/GalleryEmbed";
+import { PANEL_PAGE, PANEL_SOURCE_TAB_KEY } from "../utils/embeddedUi";
 
 // Run a function in the tab's MAIN world and return its result. Supports both
 // the Promise and callback forms of chrome.scripting.executeScript.
@@ -45,16 +46,64 @@ export function executeInTab<T>(tabId: number, func: (...args: any[]) => T, args
     });
 }
 
-export async function getActiveTabId(): Promise<number | undefined> {
+// Firefox's embedded drawer can open index.html as a full browser tab. That
+// document must stay bound to its originating nhentai page, not the extension
+// tab that is now active. Only our own panel URL may supply this parameter.
+export function panelSourceTabId(url?: string): number | undefined {
+    try {
+        const href = url === undefined
+            ? (typeof location === "undefined" ? "" : location.href) : url;
+        const current = new URL(href);
+        const panel = chrome.runtime.getURL(PANEL_PAGE);
+        if (current.href.split(/[?#]/)[0] !== panel) {
+            return undefined;
+        }
+        const value = current.searchParams.get(PANEL_SOURCE_TAB_KEY);
+        if (value === null || !/^[0-9]+$/.test(value)) {
+            return undefined;
+        }
+        const id = Number(value);
+        return Number.isSafeInteger(id) ? id : undefined;
+    } catch (_) {
+        return undefined;
+    }
+}
+
+function isNhentaiTab(tab: chrome.tabs.Tab | undefined): boolean {
+    return !!tab && typeof tab.url === "string" && /^https:\/\/nhentai\.net(?:\/|$)/i.test(tab.url);
+}
+
+export function getPreviewTab(sourceTabId: number | undefined = panelSourceTabId()): Promise<chrome.tabs.Tab | undefined> {
     return new Promise((resolve) => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            resolve(tabs && tabs[0] ? tabs[0].id : undefined);
-        });
+        try {
+            if (sourceTabId !== undefined) {
+                chrome.tabs.get(sourceTabId, (tab) => {
+                    // A closed or navigated source is not permission to inject
+                    // into some other active tab. Revalidate it on EVERY read.
+                    resolve(!chrome.runtime.lastError && isNhentaiTab(tab) ? tab : undefined);
+                });
+            } else {
+                chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+                    resolve(!chrome.runtime.lastError && tabs ? tabs[0] : undefined);
+                });
+            }
+        } catch (_) {
+            // Content-script reuse (Queue) has no tabs API. Its worker message
+            // deliberately omits tabId and resolveTabId uses sender.tab.id.
+            resolve(undefined);
+        }
     });
 }
 
+export async function getActiveTabId(): Promise<number | undefined> {
+    const tab = await getPreviewTab();
+    return tab ? tab.id : undefined;
+}
+
 /**
- * The active tab id ONLY when that tab is actually on nhentai, else undefined.
+ * The active (or explicitly pinned) tab id ONLY when it is on nhentai.
+ * A worker may pass the source id parsed from a full-panel message sender;
+ * that id is revalidated with tabs.get, never blindly trusted.
  *
  * Why this exists separately from getActiveTabId: every pre-existing caller of
  * getActiveTabId lives inside the preview flow, and the preview only ever
@@ -62,9 +111,9 @@ export async function getActiveTabId(): Promise<number | undefined> {
  * same thing by construction. The bookmark Queue tab breaks that assumption:
  * it can be opened while the user is on any website at all.
  *
- * That matters because neither the worker's resolveTabId() nor the batch
- * pipeline's getGalleryViaTab() validates the tab: both inject into / fetch
- * through whatever id they are handed. Chrome's host_permissions would reject
+ * That matters because an explicit request.tabId is passed through to the
+ * batch pipeline, which injects into / fetches through the id it is handed.
+ * (The worker separately guards the sender.tab fallback.) Host permissions would reject
  * an injection into a foreign tab, but leaning on a permission error as the
  * only guard is not a design. Callers outside the preview must use this.
  *
@@ -72,19 +121,9 @@ export async function getActiveTabId(): Promise<number | undefined> {
  * missing tab as "resolve metadata from the extension origin instead", which
  * is exactly the fallback it already has.
  */
-export async function getActiveNhentaiTabId(): Promise<number | undefined> {
-    return new Promise((resolve) => {
-        try {
-            chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-                const tab = tabs && tabs[0];
-                const url = tab && typeof tab.url === "string" ? tab.url : "";
-                const onNhentai = /^https:\/\/nhentai\.net(?:\/|$)/i.test(url);
-                resolve(onNhentai && tab && typeof tab.id === "number" ? tab.id : undefined);
-            });
-        } catch (_) {
-            resolve(undefined);
-        }
-    });
+export async function getActiveNhentaiTabId(sourceTabId?: number): Promise<number | undefined> {
+    const tab = await getPreviewTab(sourceTabId);
+    return isNhentaiTab(tab) && tab && typeof tab.id === "number" ? tab.id : undefined;
 }
 
 function sleep(ms: number): Promise<void> {

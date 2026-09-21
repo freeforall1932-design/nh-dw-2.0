@@ -10,6 +10,7 @@ import {
     isInheritedListTemplate,
     LIST_TEMPLATE_INHERIT,
     normalizeFormat,
+    normalizeFormatOverride,
     normalizeOutputMode,
     resolveListFormat
 } from "../utils/downloadFormats";
@@ -35,7 +36,7 @@ let options = [
     new CheckBox("inPageControls")
 ]
 
-chrome.storage.sync.get({
+const OPTIONS_DEFAULTS = {
     useZip: "zip",
     downloadName: "{pretty}",
     displayCheckbox: true,
@@ -47,15 +48,37 @@ chrome.storage.sync.get({
     maxConcurrentDownloads: "3",
     rawMaxConcurrent: "3",
     rawMasterFolder: "NHDW",
-    // listFormat has NO default here on purpose: an unset key means "follow
-    // the single-title format", and a "zip" default would hide that (the panel
-    // would then show ZIP while list downloads used e.g. CBZ).
+    // No listFormat default: absence means "follow single-title format".
+    // It MUST still be requested below; storage.get returns only named keys.
     listOutputMode: "separate",
     listMasterFolder: true,
     listDownloadName: LIST_TEMPLATE_INHERIT,
     uiMode: "sidepanel",
     inPageControls: true
-}, function(elems) {
+};
+chrome.storage.sync.get(Object.keys(OPTIONS_DEFAULTS).concat("listFormat"), function(stored) {
+    const elems = Object.assign({}, OPTIONS_DEFAULTS, stored);
+    const storedListFormat = elems.listFormat;
+    let inheritListFormat = normalizeFormatOverride(storedListFormat) === undefined;
+    // Normalize only the displayed values; opening Options must not rewrite
+    // legacy preferences or materialize an inherited format in sync storage.
+    elems.useZip = normalizeFormat(elems.useZip);
+    elems.listFormat = resolveListFormat(storedListFormat, elems.useZip);
+
+    // Match the Firefox popup's capability gate: never offer a side-panel
+    // choice the platform cannot open, even if an old synced value says so.
+    const sidePanelApi: any = (chrome as any).sidePanel;
+    const uiModeSelect = document.getElementById("uiMode") as HTMLSelectElement | null;
+    if (!sidePanelApi || typeof sidePanelApi.setPanelBehavior !== "function") {
+        if (uiModeSelect) {
+            for (const option of Array.from(uiModeSelect.options)) {
+                if (option.value === "sidepanel") {
+                    option.remove();
+                }
+            }
+        }
+        elems.uiMode = "popup";
+    }
     options.forEach(o => {
         o.init(elems);
         document.getElementById(o.getId())!.addEventListener("change", function() {
@@ -67,14 +90,6 @@ chrome.storage.sync.get({
             }
         })
     })
-    // Show the inherited list format before anything reads the select.
-    const listFormatSelect = document.getElementById("listFormat") as HTMLSelectElement | null;
-    if (listFormatSelect) {
-        listFormatSelect.value = resolveListFormat((elems as any).listFormat, (elems as any).useZip);
-    }
-
-    initNameTemplate(elems.downloadName);
-
     // Master folder for raw downloads. Saved verbatim — the empty string is
     // meaningful ("no master folder"), so this cannot ride the generic
     // InputField wiring (which treats an empty field as "no change").
@@ -86,7 +101,27 @@ chrome.storage.sync.get({
         });
     }
 
-    initListTemplate(elems);
+    const refreshListPreview = initListTemplate(elems);
+    initNameTemplate(elems.downloadName, (template) => {
+        // This is page-local state, updated only by the explicit name change.
+        // The list preview/placeholder must not retain the initial template.
+        elems.downloadName = template;
+        refreshListPreview();
+    });
+
+    const singleFormatSelect = document.getElementById("useZip") as HTMLSelectElement | null;
+    const listFormatSelect = document.getElementById("listFormat") as HTMLSelectElement | null;
+    if (singleFormatSelect && listFormatSelect) {
+        singleFormatSelect.addEventListener("change", () => {
+            if (inheritListFormat) {
+                listFormatSelect.value = resolveListFormat(undefined, singleFormatSelect.value);
+                refreshListPreview(); // display only; leave the list key absent
+            }
+        });
+        listFormatSelect.addEventListener("change", () => {
+            inheritListFormat = false; // the generic handler persisted this choice
+        });
+    }
 })
 
 // ---- list-mode file name ------------------------------------------------
@@ -94,22 +129,27 @@ chrome.storage.sync.get({
 // single-title template. An empty field means "follow the single-title
 // template"; the sentinel keeps that distinguishable from a deliberately empty
 // template, which falls back to the gallery id.
-function initListTemplate(elems: any) {
+function initListTemplate(elems: any): () => void {
     const input = document.getElementById("listDownloadName") as HTMLInputElement | null;
     const previewBox = document.getElementById("listDownloadNamePreview");
     if (input === null) {
-        return;
+        return () => {};
     }
-    const singleTemplate = String(elems.downloadName || "{pretty}");
-    const inherited = isInheritedListTemplate(elems.listDownloadName);
+    // Keep a saved empty template (gallery ID) distinct from @inherit until
+    // the user edits the field. An explicit blank edit still means inherit,
+    // as documented in options.html; merely opening the page changes nothing.
+    let inherited = isInheritedListTemplate(elems.listDownloadName);
     input.value = inherited ? "" : String(elems.listDownloadName);
-    input.placeholder = "Same as single title (" + singleTemplate + ")";
 
     const renderPreview = () => {
+        const singleTemplate = typeof elems.downloadName === "string" ? elems.downloadName : "{pretty}";
+        input.placeholder = !inherited && input.value === ""
+            ? "Gallery ID (empty saved template)"
+            : "Same as single title (" + singleTemplate + ")";
         if (previewBox === null) {
             return;
         }
-        const template = input.value.trim() === "" ? singleTemplate : input.value;
+        const template = inherited ? singleTemplate : input.value;
         const format = normalizeFormat(
             (document.getElementById("listFormat") as HTMLSelectElement | null)?.value, "zip");
         const mode = normalizeOutputMode(
@@ -118,7 +158,9 @@ function initListTemplate(elems: any) {
         const masterName = String((document.getElementById("rawMasterFolder") as HTMLInputElement | null)?.value || "").trim();
         const folder = masterOn && masterName !== "" ? masterName + "/" : "";
         const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
-        const clean = utils.cleanName(rendered, !!elems.replaceSpaces, "123456");
+        const replaceSpaces = (document.getElementById("replaceSpaces") as HTMLInputElement | null)?.checked
+            ?? !!elems.replaceSpaces;
+        const clean = utils.cleanName(rendered, replaceSpaces, "123456");
         let text: string;
         if (mode === "batch" && format !== "raw") {
             text = "Example: Downloads/" + folder + "<listing name>" + formatExtension(format)
@@ -131,21 +173,27 @@ function initListTemplate(elems: any) {
         previewBox.textContent = text;
     };
 
+    const renderEditedPreview = () => {
+        inherited = input.value.trim() === "";
+        renderPreview();
+    };
     const persist = () => {
+        inherited = input.value.trim() === "";
         chrome.storage.sync.set({
-            listDownloadName: input.value.trim() === "" ? LIST_TEMPLATE_INHERIT : input.value
+            listDownloadName: inherited ? LIST_TEMPLATE_INHERIT : input.value
         });
         renderPreview();
     };
     input.addEventListener("change", persist);
-    input.addEventListener("input", renderPreview);
-    for (const id of ["listFormat", "listOutputMode", "listMasterFolder", "rawMasterFolder"]) {
+    input.addEventListener("input", renderEditedPreview);
+    for (const id of ["listFormat", "listOutputMode", "listMasterFolder", "rawMasterFolder", "replaceSpaces"]) {
         const control = document.getElementById(id);
         if (control) {
             control.addEventListener("change", renderPreview);
         }
     }
     renderPreview();
+    return renderPreview;
 }
 
 // ---- name template: checkboxes instead of manual typing --------------------
@@ -162,7 +210,7 @@ const TEMPLATE_LABELS: Record<string, string> = {
     language: "Language"
 };
 
-function initNameTemplate(storedTemplate: string) {
+function initNameTemplate(storedTemplate: string, onChanged: (template: string) => void) {
     const checksBox = document.getElementById("downloadNameChecks");
     const preview = document.getElementById("downloadNamePreview");
     const advancedBox = document.getElementById("downloadNameAdvanced");
@@ -179,6 +227,7 @@ function initNameTemplate(storedTemplate: string) {
     const saveTemplate = (template: string) => {
         chrome.storage.sync.set({ downloadName: template });
         renderTemplatePreview(template);
+        onChanged(template);
     };
 
     if (!isTokenOnlyTemplate(storedTemplate)) {

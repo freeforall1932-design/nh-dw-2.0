@@ -295,16 +295,25 @@ function pageContext(): PageContext {
 
 // ---- invoker -------------------------------------------------------------
 
+// Reassigning even identical nonempty textContent emits a childList mutation.
+// The document-wide observer calls ensureInvoker -> paintBadges, so writes here
+// must be idempotent or a nonempty queue causes a permanent 200ms timer loop.
+function setTextIfChanged(node: HTMLElement, value: string): void {
+    if (node.textContent !== value) {
+        node.textContent = value;
+    }
+}
+
 function paintBadges(): void {
     const count = bookmarkState.items.length;
     const invokerBadge = byId(INVOKER_BADGE_ID);
     if (invokerBadge !== null) {
-        invokerBadge.textContent = count > 0 ? String(count) : "";
+        setTextIfChanged(invokerBadge, count > 0 ? String(count) : "");
         invokerBadge.hidden = count === 0;
     }
     const tabBadge = byId(QUEUE_BADGE_ID);
     if (tabBadge !== null) {
-        tabBadge.textContent = count > 0 ? "(" + count + ")" : "";
+        setTextIfChanged(tabBadge, count > 0 ? "(" + count + ")" : "");
     }
     const invoker = byId(INVOKER_ID);
     if (invoker !== null) {
@@ -436,6 +445,12 @@ function positionDrawer(): void {
         top = 0;
     }
     panel.style.top = top + "px";
+    const backdrop = byId(BACKDROP_ID);
+    if (backdrop !== null) {
+        // The backdrop's z-index is above the site's navbar. Leaving inset:0
+        // would intercept a second click on the still-visible header invoker.
+        backdrop.style.top = top + "px";
+    }
 }
 
 function buildDrawer(): HTMLElement {
@@ -550,15 +565,18 @@ function buildDrawer(): HTMLElement {
 }
 
 function ensureDrawer(): HTMLElement {
-    if (drawer !== null && byId(ROOT_ID) !== null) {
-        return drawer;
+    if (drawer === null) {
+        drawer = buildDrawer();
     }
-    drawer = buildDrawer();
-    const host: any = document.body || document.documentElement;
-    if (host && typeof host.appendChild === "function") {
-        host.appendChild(drawer);
+    // A site re-render can detach the root just as it can replace the navbar.
+    // Reattach the original node: bookmarkPanel's module-level built flag and
+    // the user's half-typed paste belong to this DOM, not a fresh empty pane.
+    if (byId(ROOT_ID) !== drawer) {
+        const host: any = document.body || document.documentElement;
+        if (host && typeof host.appendChild === "function") {
+            host.appendChild(drawer);
+        }
     }
-    queueBuilt = false; // a rebuilt drawer has empty panes
     return drawer;
 }
 
@@ -602,7 +620,7 @@ function showTab(which: DrawerTab): void {
 }
 
 function openDrawer(which?: DrawerTab): void {
-    if (!enabled) {
+    if (!enabled || resolveInvokerAnchor(document) === null) {
         return;
     }
     ensureDrawer();
@@ -747,8 +765,22 @@ function renderGalleryPane(pane: HTMLElement, context: PageContext): void {
     pane.appendChild(card);
 }
 
+function selectionText(): string {
+    const count = byId(BAR_COUNT_ID);
+    return count && count.textContent ? count.textContent : "Nothing selected yet - tick the cards you want.";
+}
+
+function refreshSelectionLine(): void {
+    if (!drawerOpen || activeTab !== "page") {
+        return;
+    }
+    const line = byId("nhdwSiteUiSelectionLine");
+    if (line !== null) {
+        setTextIfChanged(line, selectionText());
+    }
+}
+
 function renderListingPane(pane: HTMLElement): void {
-    const barCount = byId(BAR_COUNT_ID);
     const barDownload = byId(BAR_DOWNLOAD_ID);
     const barClear = byId(BAR_CLEAR_ID);
 
@@ -788,9 +820,7 @@ function renderListingPane(pane: HTMLElement): void {
     const line = el("div");
     line.className = "nhdw-site-ui-note";
     line.id = "nhdwSiteUiSelectionLine";
-    line.textContent = barCount !== null && String(barCount.textContent || "") !== ""
-        ? String(barCount.textContent)
-        : "Nothing selected yet - tick the cards you want.";
+    line.textContent = selectionText();
     pane.appendChild(line);
 
     const actions = buildActionRow();
@@ -954,10 +984,11 @@ function installObservers(): void {
     if (typeof MutationObserver === "undefined") {
         return;
     }
-    // One debounced pass that only re-checks the invoker. Anchoring stays on
-    // `.navbar` (resolveInvokerAnchor); the observation is document-wide
-    // because a site that replaces its header detaches an observer that was
-    // targeting the old node, and the check itself is a single getElementById.
+    // One debounced, idempotent pass for the invoker and the open listing
+    // count. Anchoring stays on `.navbar`; the observation is document-wide
+    // because a site that replaces its header detaches a header-only observer.
+    // listControls owns the count; copying its text avoids a second selection
+    // model and also reflects Clear selection without closing/reopening.
     const observer = new MutationObserver(() => {
         if (invokerObserverPending !== null || !enabled) {
             return;
@@ -965,6 +996,7 @@ function installObservers(): void {
         invokerObserverPending = setTimeout(() => {
             invokerObserverPending = null;
             ensureInvoker();
+            refreshSelectionLine();
         }, 200);
     });
     const target: any = document.documentElement || document.body;
@@ -984,6 +1016,10 @@ function installRuntimeMessages(): void {
                     sendResponse({ ok: false, reason: "disabled" });
                     return;
                 }
+                if (resolveInvokerAnchor(document) === null) {
+                    sendResponse({ ok: false, reason: "no-navbar" });
+                    return;
+                }
                 toggleDrawer(typeof request.open === "boolean" ? request.open : undefined);
                 sendResponse({ ok: true, open: drawerOpen });
                 return;
@@ -994,16 +1030,13 @@ function installRuntimeMessages(): void {
 
 function installStorageWatchers(): void {
     try {
-        (chrome.storage.sync as any).onChanged.addListener((changes: any, area: string) => {
-            if (area !== "sync" || !changes || !changes[EMBEDDED_UI_KEY]) {
-                return;
+        // storage.onChanged supplies (changes, area). StorageArea.onChanged
+        // supplies only changes; filtering its nonexistent area silently drops
+        // every live enable/disable event in Firefox.
+        chrome.storage.onChanged.addListener((changes: any, area: string) => {
+            if (area === "sync" && changes && changes[EMBEDDED_UI_KEY]) {
+                applyEnabled(normalizeEmbeddedUi(changes[EMBEDDED_UI_KEY].newValue));
             }
-            applyEnabled(normalizeEmbeddedUi(changes[EMBEDDED_UI_KEY].newValue));
-        });
-    } catch (_) { /* not fatal */ }
-
-    try {
-        (chrome.storage as any).onChanged.addListener((changes: any, area: string) => {
             if (area !== "local" || !changes) {
                 return;
             }

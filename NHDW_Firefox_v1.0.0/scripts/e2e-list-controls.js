@@ -11,6 +11,8 @@
 //   - a multi-title batch PDF asks for confirmation and falls back to separate
 //     files when the user declines (never a silent tankoubon merge)
 //   - the whole script is a no-op when the user turns the controls off
+//   - saved/inherited/legacy list formats reach card AND bar jobs, read-only;
+//     explicit format edits persist and restore on a fresh page
 //
 // Usage:  node scripts/e2e-list-controls.js [path/to/js/listControls.js]
 // Exit code 0 = all checks passed.
@@ -18,6 +20,9 @@
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
+const assert = require("node:assert/strict");
+const { readStorage } = require("./test-support/storage");
+const { formats, formatCases } = require("./test-support/list-format-cases");
 
 const bundlePath = process.argv[2] || path.join(__dirname, "..", "js", "listControls.js");
 const code = fs.readFileSync(bundlePath, "utf8");
@@ -208,7 +213,7 @@ function makeDocument(ids) {
 }
 
 function run(options) {
-    const settings = options.settings || {};
+    const settings = structuredClone(options.settings || {});
     // Persistent download-history fixture (chrome.storage.local "downloadHistory").
     const localStore = Object.assign({ allIds: [] }, options.history || {});
     const syncWrites = [];
@@ -231,12 +236,12 @@ function run(options) {
     const chromeStub = {
         storage: {
             sync: {
-                get(defaults, cb) { cb(Object.assign({}, defaults, settings)); },
-                set(items) { syncWrites.push(items); },
+                get(keys, cb) { queueMicrotask(() => cb(readStorage(settings, keys))); },
+                set(items) { const copy = structuredClone(items); syncWrites.push(copy); Object.assign(settings, copy); },
                 onChanged: { addListener(fn) { syncChangeCallbacks.push(fn); } }
             },
             local: {
-                get(defaults, cb) { cb(Object.assign({}, defaults, localStore)); },
+                get(keys, cb) { queueMicrotask(() => cb(readStorage(localStore, keys))); },
                 set(items) { localWrites.push(items); Object.assign(localStore, items); }
             },
             onChanged: { addListener() {} }
@@ -270,6 +275,7 @@ function run(options) {
 
     return {
         dom: dom,
+        settings: settings,
         localStore: localStore,
         syncWrites: syncWrites,
         syncChangeCallbacks: syncChangeCallbacks,
@@ -748,6 +754,57 @@ function wait(ms) {
         }
         console.log("PASS: bookmarked cards come back with a filled star after a reload");
     }
+
+    // --- Item 59: real key-scoped reads, every stored/inherited format -----
+    const selectedFormat = (ctx) => {
+        const select = ctx.dom.document.getElementById("nhdw-format");
+        assert.ok(select);
+        assert.deepEqual(select.children.map((option) => option.value), formats);
+        return select.children.filter((option) => option.selected).map((option) => option.value);
+    };
+    for (const { label, stored, expected } of formatCases) {
+        const ctx = run({ settings: stored });
+        await wait(0);
+        assert.deepEqual(selectedFormat(ctx), [expected], label + ": selected bar option");
+        assert.deepEqual(ctx.syncWrites, [], label + ": opening the page is read-only");
+        assert.deepEqual(ctx.settings, stored, label + ": no normalization written back");
+        cardControls(ctx.dom)[0].querySelector(".nhdw-download").dispatch("click");
+        const job = ctx.sentMessages.find((message) => message.action === "downloadAllDoujinshis");
+        assert.ok(job, label + ": card dispatch");
+        assert.equal(job.formatOverride, expected, label);
+        assert.equal(job.separate, true);
+        const sent = ctx.sentMessages.length;
+        for (const control of cardControls(ctx.dom).slice(0, 2)) {
+            const box = control.querySelector(".nhdw-select-box");
+            box.checked = true;
+            box.dispatch("change");
+        }
+        ctx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+        const barJob = ctx.sentMessages.slice(sent).find((message) => message.action === "downloadAllDoujinshis");
+        assert.ok(barJob, label + ": bar dispatch");
+        assert.equal(barJob.formatOverride, expected, label + ": bar format");
+        assert.equal(barJob.separate, true);
+        assert.deepEqual(Object.keys(barJob.allDoujinshis), ["111111", "222222"]);
+        assert.deepEqual(ctx.syncWrites, [], label + ": downloads do not materialize defaults");
+    }
+    console.log(`PASS: card/bar controls display and dispatch all ${formatCases.length} explicit/inherited/legacy list formats without writes`);
+
+    const edited = run({ settings: { useZip: "cbz", listFormat: "pdf", unrelated: "keep" } });
+    await wait(0);
+    for (const format of formats) {
+        edited.syncWrites.length = 0;
+        const control = edited.dom.document.getElementById("nhdw-format");
+        control.value = format;
+        control.dispatch("change");
+        assert.deepEqual(edited.syncWrites, [{ listFormat: format }]);
+        assert.equal(edited.settings.useZip, "cbz");
+        assert.equal(edited.settings.unrelated, "keep");
+        const reopened = run({ settings: edited.settings });
+        await wait(0);
+        assert.deepEqual(selectedFormat(reopened), [format]);
+        assert.deepEqual(reopened.syncWrites, []);
+    }
+    console.log("PASS: list bar format edits persist independently and survive a page reload");
 
     console.log("PASS: in-page listing card controls behave correctly.");
 })();

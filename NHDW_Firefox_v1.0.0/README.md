@@ -1,7 +1,8 @@
 # NHentai Downloader — Firefox + Firefox-for-Android build (v1.2.0)
 
-**Updated:** 2026-09-20 · status: **website-embedded UI shipped (items 56/57);
-next: real-device verification + sign (item 58)**
+**Updated:** 2026-09-21 · status: **website-embedded UI + PR #44 review fixes
+(items 56/57), options harness/fixes (38), and shared list-format fix (59)
+complete; real-device verification + signing remain pending (58)**
 
 v1.2.0 = the in-page drawer is the primary surface on nhentai.net. A
 **Downloader** button sits in the site header next to the hamburger; it opens
@@ -12,8 +13,28 @@ drawer from the toolbar button; desktop keeps the popup unless you change
 Settings → In-page panel.
 
 v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
-plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). Chrome's offline suite
-passes here (**423** passing / 4 pending after the embedded-UI tests).
+plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). The Firefox offline
+suite now has **474** passing / 4 deliberately opt-in live tests pending.
+
+Review fixes include working embedded settings, shared Settings/Queue layout
+CSS, safe reattachment/live updates, and a Full panel tab bound to the nhentai
+page that opened it (including retries and pasted-bookmark metadata). Offline
+tests cover these paths; this is **not** a claim of Firefox/Android device
+verification. Manifest remains 1.2.0; no signing run has been performed.
+
+Item 38 adds **33 offline options-page tests**, using the actual HTML and built
+bundle. Options now restore saved list formats, display legacy PDF values,
+hide an unavailable side-panel choice, and keep inherited/empty-template
+previews accurate without writing on load.
+
+**Item 59 is now complete:** shared settings and download readers explicitly
+request the saved list-format key. Saved ZIP/CBZ/PDF/raw overrides single-title
+format in the popup/Full panel, embedded Settings/Queue/gallery and in-page
+card/bar controls. Unset/null/blank/invalid values inherit; neither usable
+means ZIP; legacy `folder` still means PDF. Reads do not write defaults or
+migrate preferences; explicit changes persist and survive reopening. A
+36-case matrix tests the real reader and affected built bundles, offline.
+Chrome was not changed or backported by this Firefox-only task.
 
 This folder is the Firefox port of the Chrome MV3 extension
 (`NHDW_Extension_v3.0.0`). It now targets **Firefox desktop AND Firefox for
@@ -69,9 +90,9 @@ and must keep its classic look. On phones:
   `Cancel`, API-key gate, host/CDN grant) into a `#nhdwMobileBar` footer at
   **runtime**, and only while
   `matchMedia("(max-width:640px) and (pointer: coarse)")` matches. The
-  desktop popup DOM is byte-identical to the classic layout (audited with
-  `git diff` against the pre-Android tree — `popup.ts` identical,
-  `message.ts` additive-only, CSS pure additions); safe-area-inset aware;
+  desktop popup markup keeps the classic layout (`message.ts` additive-only;
+  the later PR #44 review changes `popup.ts` source-tab routing, not its
+  renderer markup); safe-area-inset aware;
 - `index.html` / `options.html` now declare a device-width viewport meta.
 
 This mirrors the Chrome build's own UI thinking: Chrome's side panel is the
@@ -94,16 +115,53 @@ builds survive; when nothing is downloading, idle suspension still applies.
 | # | Criterion | Status |
 |---|---|---|
 | F1 | Canonical Firefox `manifest.json` (MV3, gecko.id, min 142.0, data-collection declaration, icons 48/64/96/128 with true-size PNGs) | ✅ shipped + tested |
-| F2 | Responsive portrait UI: fixed bottom action bar via runtime reflow, stacked columns, compact touch targets; desktop popup DOM byte-identical (audited); no horizontal scroll at 360px | ✅ shipped, reworked for desktop purity |
+| F2 | Responsive portrait UI: fixed bottom action bar via runtime reflow, stacked columns, compact touch targets; desktop popup markup unchanged; no horizontal scroll at 360px | Implemented; real-device/360px verification pending under 58 |
 | F3 | Keep-alive alarm active only during jobs | ✅ shipped |
 | F4 | First-run host-permission grant guard (Firefox MV3 semantics) | ✅ shipped |
 | F5 | Manifest regression tests incl. Firefox guards (gecko.id, event page, no offscreen perm, viewport metas, icon files, host scoping, min-version, data declaration) | ✅ 9 new tests, suite green |
-| F6 | Packaging: `npm run package:firefox` → clean zip (no src/test/scripts/build/node_modules/.git, no .ts/.map, no offscreen files) | ✅ 21 entries, 84 KB |
+| F6 | Packaging: `npm run package:firefox` → clean zip (no src/test/scripts/build/node_modules/.git, no .ts/.map/logs, no offscreen files) | ✅ 25 entries in reviewed 1.2.0, including shared renderer CSS |
 | F7 | Device-test + signing runbooks (below), incl. AMO content-policy caveat | ✅ this README |
 | F8 | Chrome folders untouched; CI stays green (new lint step added to the Firefox job) | ✅ |
 
-Out of scope by design: Chrome feature catch-up, new sites, offscreen
-re-architecture.
+Out of scope for this review: new sites, Chrome changes and offscreen
+re-architecture. Chrome feature catch-up already landed in v1.1.0.
+
+## Offline verification
+
+Use a maintained Node 22/24 LTS installation (tooling requirement:
+`^20.19.0 || ^22.13.0 || >=24.0.0`). Tested on Node 22.22.3 with clean installs
+under npm 10.9.8 and 12.0.2. From this folder:
+
+```sh
+npm ci --no-fund
+npm audit
+npm run build
+npm test
+npm run test:smoke
+npm run test:e2e
+npm run lint:firefox
+# Focused options-only rerun (uses the bundle from the build above):
+npm run test:options
+```
+
+Current evidence: **474 unit tests / 4 pending**, smoke7, all offline e2e
+(including 15 site-UI, 11 toolbar and 33 options tests, plus normal/Full panel
+format/Queue checks), lint **0 errors / 0 notices / 30 existing warnings**.
+The four pending tests are intentionally opt-in live API checks, not failures.
+Item 59's focused reader tests are **79/79** (the baseline fails 20); the
+format matrix also checks read-only rendering and independent saved edits.
+Storage reads are asynchronous, cloned and key-scoped; fetches are mocked,
+no real key or website is needed. These tests do not verify browser layout,
+Firefox APIs on-device, Android behavior or signing. The directly delivered
+listing-format message is not the full listing-bootstrap harness (item 40).
+
+Dependency maintenance (2026-09-21) updates Mocha to 12.0.2 and web-ext to
+10.6.0; a scoped override selects patched addons-linter 10.13.0. Full and
+runtime-only audits report **0 vulnerabilities**. The current Mozilla tooling
+still emits **two install deprecations** (ESLint 9 and whatwg-encoding); forcing
+incompatible transitive upgrades just to silence them is intentionally avoided.
+These are development dependencies, not shipped extension code. Details and
+recheck commands: [`DEPENDENCY_MAINTENANCE.md`](../DEPENDENCY_MAINTENANCE.md).
 
 ## Local load (developer, desktop)
 
@@ -160,8 +218,9 @@ npm run sign:firefox         # = web-ext sign --channel unlisted --artifacts-dir
 
 ## Roadmap (post-1.0.0) — "elevation mode"
 
-The Firefox build lags Chrome substantially on desktop (see
-`FIREFOX_PARITY_PLAN.md` §1–2 for the full gap matrix). Agreed sequencing:
+The Firefox build originally lagged Chrome substantially (historical rationale
+in `FIREFOX_PARITY_PLAN.md` §1–2). The parity elevation is now complete; the
+agreed sequencing was:
 Android plan first (done) → **rebase Firefox onto current Chrome src** with
 the audited delta set → re-plan Android on the synced base.
 

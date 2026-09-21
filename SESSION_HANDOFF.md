@@ -1,5 +1,240 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-21 (same session `arena/01a0bfa1-nh-dw-2-0`) — **approved
+item 59 COMPLETE: saved list-format reads across Firefox consumers.** The
+owner explicitly chose “ok do 59”, not the four opt-in live API checks.
+Preserve the prior PR #44 review, item 38 and dependency-maintenance changes.
+
+- **Three omitted-key readers fixed:** `utils/listSettings.ts`,
+  `preview/popupSettings.ts`, and the independently reading
+  `content/listControls.ts`. Object-form `storage.sync.get(defaults)` could
+  never return `listFormat`, because that key intentionally has no default.
+  Each reader now explicitly requests the optional key in a key array, then
+  merges defaults for the OTHER fields. Existing normalization is unchanged.
+- **Contract:** saved ZIP/CBZ/PDF/raw wins over single-title `useZip`; unset,
+  null, blank and invalid values inherit it; neither usable means ZIP. Legacy
+  `folder` still means PDF. Rendering/reading never saves defaults, freezes
+  inheritance, migrates aliases or overwrites sibling preferences. Explicit
+  edits still save only the format key and survive reopen/reload.
+- **Regression fixtures:** `test/list-mode.test.js` now exercises the real
+  reader with asynchronous, cloned, key-scoped storage and restores the prior
+  global Chrome stub. New dependency-free helpers in `scripts/test-support/`
+  (`storage.js`, `list-format-cases.js`) are shared with the three affected
+  e2e harnesses. The old whole-store merge mock had made an existing saved-ZIP
+  regression falsely pass. A **36-case** matrix covers all 4×4 explicit
+  combinations, inheritance, invalid profiles and legacy aliases.
+- **Built consumers covered:** popup AND Full panel Settings/Queue, delivered
+  `getGalleries` listing options/format preview, in-page card AND bar jobs,
+  embedded Settings/Queue/gallery jobs, no writes on render/read, and explicit
+  edits surviving reopening. The delivered-message check is NOT full listing
+  bootstrap/injection/pagination coverage; item 40 remains open.
+- **Red → green:** exact turn-start reader **59 pass / 20 fail → 79/79** focused
+  tests; old site-UI bundle **11 pass / 4 fail → 15/15**. Both popup variants
+  fail saved-CBZ restoration on the old bundle; realistic card storage exposes
+  the old raw/merge failure. All pass after the three-reader fix. The original
+  reader used for the final red run is SHA-checked against the turn-start
+  snapshot and loaded only in that test process, not restored over source.
+- **Full verification:** Firefox webpack; **474 unit pass / 4 pending** (43
+  added; the same four deliberately opt-in live API tests); smoke **7 PASS**;
+  all offline e2e, including site UI **15**, toolbar **11**, options **33** and
+  both popup variants. Lint **0 errors / 0 notices / 30 unchanged advisories**.
+  Rebuilt unsigned **1.2.0**, **25 ZIP entries**, current bundles and shared
+  CSS present, no development/offscreen files. No live/device/signing run.
+- **Scope:** only three production TS files and their `preview`, `siteUi`,
+  `listControls` bundles changed by 59, plus tests/docs. Options/background/
+  offscreen bundles, Chrome, archived source/release trees, all dependency
+  manifests/locks, CI, HTML/CSS, extension manifest and permissions are
+  unchanged from this task's baseline. Earlier authorized Chrome dependency
+  edits remain in the working tree; do not erase them to match Git HEAD.
+- **Parity:** **ten changed existing source files + two Firefox-only files**
+  versus Chrome; `listSettings` and `listControls` are the two additions to the
+  previous allowlist (`popupSettings` already differed). See parity plan §12.
+  No Chrome backport, new feature, redesign, commit, push or PR by this task.
+
+Evidence is local/ignored under `NHDW_Firefox_v1.0.0/build/list-format-review/`
+(turn-start hashes, baseline bundles/reader, red/green and full-suite logs).
+**58 remains the real Firefox/Android + signing release gate.** Another task
+or live check needs separate approval; 59 does not authorize either.
+
+---
+
+## Previous work in this working tree — owner-requested dependency maintenance
+
+**Updated:** 2026-09-21 (same session `arena/01a0bfa1-nh-dw-2-0`) — **owner-
+requested dependency maintenance after seeing npm install warnings.** This is
+a separate request from item 38; it did not itself approve item 59, which
+was subsequently approved and completed above.
+
+- **Affected files:** package manifests/lockfiles in BOTH maintained build
+  folders, plus documentation. Mocha 11.8.0→12.0.2 in both; Firefox web-ext
+  8.10.0→10.6.0; fast-uri refreshed to 3.1.8. Declare the supported Node range
+  `^20.19.0 || ^22.13.0 || >=24.0.0` (prefer maintained Node 22/24 LTS).
+- **Scoped Firefox override:** `web-ext > addons-linter` = **10.13.0**. web-ext
+  currently pins 10.10.0 with an affected image-size version. Same-major
+  validator update clears this; review/remove the override when the parent
+  catches up. No ESLint major override, forced audit fix, warning suppression,
+  third-party fork or funding/payment.
+- **Audit before→after:** Firefox **16→0**, Chrome **5→0**, all in development
+  tooling; runtime-only audits **0**. Audits are point-in-time registry results,
+  not a blanket security guarantee. Clean installs under BOTH npm 10.9.8 and
+  12.0.2 succeed; `npm ls --all` valid. Chrome: **0** install deprecations;
+  Firefox: **2 upstream warnings remain**, not falsely marked fixed.
+- **Why two remain:** current addons-linter still uses ESLint 9's legacy
+  `configType: 'eslintrc'` / defineRule / defineParser APIs, removed in ESLint
+  10. Its Cheerio dependency still declares encoding-sniffer 0.2.1 which
+  depends on deprecated whatwg-encoding; the replacement is an out-of-range,
+  ESM-only major. Do not break/fork Mozilla's validator merely to hide these.
+- **Verification:** both builds, unit suites (**Firefox 431/4, Chrome 398/4**),
+  smoke7 each and complete offline e2e pass; options **33/33**. Mozilla lint
+  **0 errors / 0 notices / 30 existing advisory warnings**. Safe/unsafe fixture
+  checks prove the updated validator still reports unsafe innerHTML and eval.
+  Unsigned Firefox 1.2.0 packaging rechecked, 25 entries. No device/signing run.
+- **Preservation:** rebuilt bundles and all runtime dependency versions /
+  integrity hashes are byte-identical to turn start. No extension source,
+  manifest, release snapshot or CI changes. Chrome's package/lockfiles ARE
+  intentionally updated by this new request; earlier “Chrome untouched”
+  statements below describe the prior review/options phases. Preserve all
+  previous uncommitted work. No commits, pushes or new PRs in this session.
+- **npm itself:** updated sandbox npm 10.9.8→12.0.2 on Node 22.22.3. This is an
+  environment change, not installed by the repo, and may reset in a fresh
+  sandbox. Existing CI's npm 10 still works; other users' npm is not changed.
+  Funding is optional and does not fix deprecations. Inactive historical
+  `NHDW_Source_v3.0.0/` was NOT updated or included in audit claims.
+
+Full explanation and maintenance instructions: **`DEPENDENCY_MAINTENANCE.md`**.
+At that checkpoint, **58** and **59** remained open; 59 was later separately
+approved/completed above. Source parity then remained eight existing files +
+two new, all from the prior review/options work.
+
+---
+
+## Previous work in this working tree — approved item 38
+
+**Updated:** 2026-09-21 (session `arena/01a0bfa1-nh-dw-2-0`) — **approved
+item 38 complete: Firefox options-page offline harness + regression fixes.**
+The owner approved the prior proposal with “proceed”. The working tree still
+contains the PR #44 review fixes documented below; preserve those alongside
+this task. No commits/pushes, Chrome changes, CI changes, version bump or
+signing in this session.
+
+- **New `scripts/e2e-options.js`** runs built `js/options.js` in a Node VM
+  against the actual `options.html`. `scripts/test-support/options-page.js`
+  supplies the limited DOM, coupled select `options` / `selectedIndex` /
+  `value`, connected ID lookup and queued/key-scoped/cloned storage. Initial
+  storage callbacks are asynchronous (the bundle declares template labels
+  after registering its first read). No invented controls, live fetches or
+  new dependencies. This is wiring coverage, NOT browser/layout evidence.
+- **33 tests**, including stub-contract checks, defaults/stored selections,
+  no writes on load, all real select lists, checkbox changes, raw folder and
+  name/list preview behavior, local-only credentials and archive preference,
+  mocked API-key verification failures/success, and confirmed/cancelled
+  history clearing. Added to `npm run test:e2e`; focused command after build:
+  **`npm run test:options`**. An alternate bundle can be supplied with
+  `node scripts/e2e-options.js <path>` for red/green verification.
+- **Options-only production fixes** (`src/options/options.ts` and its bundle):
+  explicitly request `listFormat` without assigning it a default; normalize
+  legacy `folder` to PDF for display only; capability-gate the unsupported
+  side-panel choice; keep an unset/invalid list format following single-title
+  edits until explicitly overridden. Refresh inherited list previews when the
+  single-title template or replace-spaces choice changes; preserve deliberate
+  empty single/list templates as gallery-ID fallback. Blank list edits still
+  save `@inherit`. Rendering/migration never writes preferences. The HTML and
+  generic Select/CheckBox/InputField classes are unchanged; no redesign.
+- **Red/green:** the saved pre-fix bundle gives **25 pass / 8 fail**; rebuilt
+  bundle **33/33**. Firefox build + **431 unit tests / 4 pending**, smoke
+  **7 PASS**, and complete offline e2e all pass (including 11 site-UI, 11
+  toolbar-worker and 33 options Node tests; normal/full-panel popup variants).
+  Lint **0 errors / 0 notices / 30 warnings**. Unsigned 1.2.0 package rebuilt,
+  **25 entries**; harness/source/build artifacts excluded.
+- **At the item-38 checkpoint: eight changed existing files + two new**
+  relative to Chrome: background, bookmarkService, options, activeTabGallery,
+  message, popup, popupSettings, preview; plus siteUi and embeddedUi. Only
+  `options/options.ts` was newly changed by item 38. Chrome/CI remain untouched;
+  the earlier Chrome 398/4 run below was not repeated for this Firefox-only task.
+
+**Historical item-38 follow-up (59), subsequently completed above:** the shared `readListSettings`
+and popup/embedded list-settings renderer also omit `listFormat` from their
+key-scoped reads. A read-only probe with stored `{useZip:"zip",listFormat:"pdf"}`
+returned ZIP from `readListSettings`; no storage writes. The options display
+fix is NOT an end-to-end fix for those consumers. Item 59 records a separate,
+offline-feasible Firefox regression/fix task. It was not silently included in
+38; the owner later approved 59 separately. Neither authorizes a Chrome port. Item **58** is
+still the real Firefox/Android verification + signing release gate; neither
+is claimed by these offline tests.
+
+---
+
+## Previous work in this working tree — PR #44 review
+
+**Updated:** 2026-09-20 (session `arena/01a0bfa1-nh-dw-2-0`) — **review of
+merged PR #44; verified Firefox 1.2.0 defects fixed.** Historical review
+checkpoint: the owner asked for review/fixes, then ONE task proposal without
+starting it. Item 38 was subsequently approved and completed above. Chrome
+source/release and CI remained untouched.
+
+Review findings and fixes (regressions reproduced before each fix):
+
+- **Settings actually work now.** PR #44 rendered `psEmbeddedUi` and
+  `psToolbarEmbedded` but neither loaded nor saved them. Shared renderer now
+  reads defaults/stored values and writes ONLY on change; "Follow this device"
+  removes the override. The worker explicitly requests `toolbarOpensEmbedded`
+  from storage (it previously requested only `embeddedUi`). Live disable/
+  enable uses `storage.onChanged(changes, area)`, not the one-argument
+  `storage.sync.onChanged` with an impossible area filter. A toolbar click
+  racing a disable still opens the fallback rather than being dropped.
+- **The reused renderers need their CSS, too.** `css/panelRenderers.css` is
+  extracted from the popup stylesheet, not a second renderer or style fork.
+  `style.css` imports it; the manifest injects it alongside `content.css`.
+  Rules are limited to our Settings/Queue containers with zero-specificity
+  `:where` scopes; original popup declarations preserved. `SITE_UI_STYLES`
+  lists both files for on-demand `insertCSS` BEFORE `executeScript`; a CSS
+  failure falls back rather than opening an unstyled drawer.
+- **Drawer lifecycle and state.** Badge writes are idempotent (previously a
+  nonempty badge retriggered the document observer every 200ms). Reattach the
+  original drawer after site DOM replacement, preserving Queue's module-level
+  `built` flag and paste input. No-navbar toolbar messages answer `ok:false`.
+  Listing counts follow the existing bar while open; the backdrop starts below
+  the navbar instead of intercepting clicks on the header invoker.
+- **Full panel keeps its source.** Worker opens `index.html?sourceTabId=<id>`.
+  `activeTabGallery.ts` owns `panelSourceTabId` / `getPreviewTab`: accept the
+  parameter ONLY on our extension's panel URL, re-read `tabs.get`, require
+  HTTPS nhentai, and NEVER substitute an active tab when a pinned source closes
+  or navigates away. Bootstrap, script injection, downloads and retries use
+  this context; bookmark enrichment receives it from the runtime sender URL.
+  Worker `resolveTabId` uses sender-tab fallback ONLY for an nhentai sender,
+  never the full-panel tab itself. Failed `tabs.create` now replies `ok:false`.
+
+Verification:
+
+- Firefox webpack + **431 passing / 4 pending** unit tests; smoke **7 PASS**;
+  complete offline e2e suite passes. `e2e-site-ui.js`: 11 Node tests (one
+  preserves the original eight checks); new `e2e-embedded-toolbar.js`: 11.
+  `e2e-popup.js` also runs in `--full-panel` mode; relay tests cover non-site
+  senders. Stubs now model key-scoped storage reads, real storage-event arity,
+  text replacement and DOM detachment instead of masking these bugs.
+- Firefox lint: **0 errors / 0 notices / 30 advisory warnings**. Unsigned
+  package: **25 ZIP entries**, shared stylesheet + all three content scripts
+  present; no source/tests/logs/offscreen files. No signing attempted; manifest
+  stays **1.2.0** because item 58 is still pending.
+- Chrome unit suite: **398 passing / 4 pending**; no tracked Chrome changes.
+- Still **offline evidence only**. No Firefox/Android device, live download,
+  permission prompt, long-job keep-alive or signing validation was performed.
+
+**At this review checkpoint, source delta was seven existing + two new files** relative
+to Chrome: background, bookmarkService, activeTabGallery, message, popup,
+popupSettings, preview; plus siteUi and embeddedUi. See the updated parity
+plan. Do not copy over the three source-context deltas during a future sync.
+
+**Historical proposal — subsequently approved/completed above:** item **38**, an
+**offline Firefox options-page harness** loading built `js/options.js` with
+DOM/storage stubs (including real select/options/selectedIndex behavior),
+covering initial rendering without writes and explicit setting changes. Keep
+it Firefox-only; no new feature, Chrome release, device/signing claim or
+external network dependency. Item **58** remains the real-device release gate,
+not an agent-completed task.
+
+---
+
 **Updated:** 2026-09-20 (session `arena/01a0bf5f-nh-dw-2-0`) — **Firefox 1.2.0:
 website-embedded UI (items 56 + 57).** Read this block first. The in-page
 drawer is now the PRIMARY surface on nhentai.net; the toolbar popup is the
@@ -2126,9 +2361,13 @@ session.
   `options.ts` must write only from an explicit `change` handler (review pass
   4, defect 1); first paint takes `renderNamePreview(false)` /
   `renderTemplatePreview(...)`.
-- Do not give `listFormat` a `chrome.storage.get` default again. An unset key
-  means "follow the single-title format"; a `"zip"` default erases that and
-  makes both panels lie about the format in use. Use `resolveListFormat()`.
+- Do not give `listFormat` a concrete `chrome.storage.get` default again. An
+  unset key means "follow the single-title format"; a `"zip"` default erases
+  that. But DO request the key explicitly: object-form get only returns the
+  keys named in its defaults. The item-38 options and item-59 shared-reader
+  fixes request key arrays, then apply defaults for the other fields. Use
+  `resolveListFormat()`. Keep storage mocks key-scoped too: returning the whole
+  store hid this defect in the old real-reader and in-page-control tests.
 - Do not run `npm audit fix --force`.
 - Do not expand web-accessible resources.
 - Do not add `<all_urls>` (or any non-nhentai host) to host/optional-host permissions; all image hosts must validate as HTTPS `*.nhentai.net` origins.

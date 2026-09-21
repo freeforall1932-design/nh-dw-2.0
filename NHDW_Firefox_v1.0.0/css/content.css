@@ -467,21 +467,16 @@ input[type="checkbox"] {
     margin-top: 8px;
 }
 
-/* Settings / Queue reuse popup chrome: force readable colours on the dark
-   drawer. popupSettings / bookmarkPanel class names are unchanged. */
-#nhdwSiteUi .psSection,
-#nhdwSiteUi .nhdwBmHeader,
-#nhdwSiteUi .nhdwBmPasteBox,
-#nhdwSiteUi .nhdwBmRow {
-    border-color: #555;
+/* Renderer layout/colours come from panelRenderers.css, shared with the
+   popup. Only drawer-specific containment belongs here. */
+#nhdwSiteUi[hidden],
+#nhdwSiteUi [hidden] {
+    display: none !important;
 }
 
-#nhdwSiteUi .psStatusOn {
-    color: #4ec970;
-}
-
-#nhdwSiteUi .psStatusOff {
-    color: #e0a34e;
+#nhdwSiteUi .psInline {
+    white-space: normal;
+    overflow-wrap: anywhere;
 }
 
 #nhdwSiteUi input[type="text"],

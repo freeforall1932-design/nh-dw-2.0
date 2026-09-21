@@ -40,7 +40,7 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 - 🪟 **Dockable side panel** — the toolbar button opens a resizable side panel (popup still available in Settings).
 - 🛡️ **Cloudflare-aware** — metadata and pages are fetched through your open gallery tab's session first. Not a bypass: a challenge page has no images, so complete it and retry.
 - 🔁 **Retry that knows what failed** — every failure names the gallery and reason; **Retry failed** re-downloads exactly those titles with the same settings.
-- 🦊 **Firefox port** — exists but lags behind (see limitations).
+- 🦊 **Firefox desktop + Android build** — separate 1.2.0 build with an in-page drawer; tested offline, device verification/signing pending ([Firefox README](NHDW_Firefox_v1.0.0/README.md)).
 
 ## 📦 Installation
 
@@ -100,7 +100,7 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 
 - **Download history is local** — it lives in this browser profile, starts empty, and never syncs. `chrome.downloads` can only verify files this profile saved.
 - **No per-item cancel in the queue** — global pause / clear exist; cancelling one specific in-flight gallery is recorded as future work.
-- **Firefox port lags** — `NHDW_Firefox_v1.0.0` sits at 3.3.1 (no Queue tab, no ☆, no list-mode parity).
+- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.2.0 build with Queue, ☆ and list controls; offline checks do not replace the desktop/Android release gate (58).
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
@@ -119,16 +119,39 @@ One extension, several sites, one shared history. The full plan (merge-vs-fork d
 ```
 NHDW_Extension_v3.0.0/   TypeScript source, tests, e2e harnesses
 NHDW_Release_v3.0.0/     The loadable, built package (what you install)
-NHDW_Firefox_v1.0.0/     The (lagging) Firefox port
+NHDW_Firefox_v1.0.0/     Firefox desktop/Android build (see its README)
 ```
+
+Use a maintained Node 22/24 LTS installation. The tooling requires
+`^20.19.0 || ^22.13.0 || >=24.0.0`; verification used Node 22.22.3, with clean
+installs under npm 10.9.8 and 12.0.2.
 
 ```bash
 cd NHDW_Extension_v3.0.0
-npm install
-npm test          # 398 unit tests (builds first)
-npm run test:e2e  # six offline e2e suites against the built bundles
-npm run build     # webpack -> js/  (then copy into the release folder)
+npm ci
+npm run build     # webpack -> js/ (copy changed bundles to the release folder)
+npm test          # 398 unit tests (builds test modules first)
+npm run test:smoke
+npm run test:e2e   # six offline e2e suites against the built bundles
+npm audit
 ```
+
+Dependency maintenance (2026-09-21): both maintained projects audit at **0
+reported vulnerabilities**; Chrome installs without deprecation warnings.
+Firefox's latest Mozilla validator still has **two upstream deprecation
+warnings**; they are not suppressed or confused with runtime dependencies.
+See [`DEPENDENCY_MAINTENANCE.md`](DEPENDENCY_MAINTENANCE.md) for versions,
+remaining warnings, the scoped validator override, and npm/funding guidance.
+
+Firefox-only item 59 (2026-09-21) fixes saved list-format reads across shared
+Settings and download consumers. Saved ZIP/CBZ/PDF/raw wins; unset/invalid
+values inherit the single-title choice without saving defaults. A 36-case
+matrix covers the real reader and built popup/Full panel, page controls and
+embedded Settings/Queue/gallery paths. Firefox checks: **474 passing / 4
+opt-in live pending**, smoke and offline e2e green; lint **0 errors / 0
+notices / 30 unchanged warnings**. Chrome and dependencies were unchanged by
+this task; see the [Firefox README](NHDW_Firefox_v1.0.0/README.md) for scope and
+remaining device/signing limits.
 
 Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (last session's rules) · [`IMPROVEMENT_BACKLOG.md`](IMPROVEMENT_BACKLOG.md) (full specs & history).
 

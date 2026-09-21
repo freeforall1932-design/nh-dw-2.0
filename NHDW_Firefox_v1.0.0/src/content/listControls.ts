@@ -239,8 +239,10 @@ function readSettings(): Promise<boolean> {
             bookmarkAutoCapture: false
         }, LIST_MODE_DEFAULTS);
         try {
-            chrome.storage.sync.get(defaults, (elems: any) => {
-                const stored = elems || defaults;
+            // listFormat has no concrete default (unset means inherit), but
+            // storage.get must still request it to see a saved list choice.
+            chrome.storage.sync.get(Object.keys(defaults).concat("listFormat"), (elems: any) => {
+                const stored = Object.assign({}, defaults, elems);
                 settings.format = resolveListFormat(stored.listFormat, stored.useZip);
                 settings.outputMode = normalizeOutputMode(stored.listOutputMode, "separate");
                 settings.masterFolder = stored.listMasterFolder === undefined ? true : !!stored.listMasterFolder;

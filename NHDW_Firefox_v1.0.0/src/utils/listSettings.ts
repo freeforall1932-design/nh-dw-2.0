@@ -83,8 +83,11 @@ export function readListSettings(): Promise<ListModeSettings> {
         let synced: any = SYNC_DEFAULTS;
         const done = (dismissed: boolean) => resolve(buildListSettings(synced, dismissed));
         try {
-            chrome.storage.sync.get(SYNC_DEFAULTS, (elems: any) => {
-                synced = elems || SYNC_DEFAULTS;
+            // An omitted DEFAULT preserves inheritance, but an omitted READ
+            // key hides the user's saved override. Request it explicitly and
+            // apply only the other defaults after the key-scoped API returns.
+            chrome.storage.sync.get(Object.keys(SYNC_DEFAULTS).concat("listFormat"), (elems: any) => {
+                synced = Object.assign({}, SYNC_DEFAULTS, elems);
                 try {
                     // The dismissal flag is a local UI preference, not a synced
                     // download setting.

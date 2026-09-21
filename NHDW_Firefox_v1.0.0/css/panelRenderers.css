@@ -1,0 +1,459 @@
+/* Shared presentation for renderSettings / renderBookmarks. Imported by the
+   popup stylesheet and injected alongside content.css for the embedded UI.
+   Only renderer containers match: never inject popup-wide html/body/button
+   rules into the website. :where keeps the popup's original specificity. */
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psSection {
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 8px;
+    margin-bottom: 10px;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#settingsPane, #nhdwSiteUiSettings) .psSection {
+    border-color: #555;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psSection h4 {
+    margin: 0 0 6px 0;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psSection small {
+    display: block;
+    margin-top: 6px;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) #psApiKeyInput {
+    width: 96%;
+    padding: 6px;
+    margin: 4px 0;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psOptionRow {
+    display: block;
+    margin: 4px 0;
+    cursor: pointer;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psOptionRow input[type="checkbox"] {
+    zoom: 1.2;
+    vertical-align: middle;
+    margin-right: 2px;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psButtonRow {
+    display: flex;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psButtonRow button {
+    flex: 1;
+    padding: 7px 0;
+    border: none;
+    border-radius: 5px;
+    background-color: #e31b53;
+    color: white;
+    cursor: pointer;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psButtonRow button:hover {
+    color: #e31b53;
+    background-color: white;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psButtonRow button:disabled {
+    background-color: #999;
+    cursor: default;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psStatus {
+    min-height: 1.2em;
+    font-size: 12px;
+    margin: 4px 0;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psStatusOn {
+    color: #1a7f37;
+    font-weight: bold;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psStatusOff {
+    color: #b35900;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#settingsPane, #nhdwSiteUiSettings) .psStatusOn {
+    color: #4ec970;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#settingsPane, #nhdwSiteUiSettings) .psStatusOff {
+    color: #e0a34e;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psChecks {
+    margin: 6px 0;
+}
+
+:where(#settingsPane, #nhdwSiteUiSettings) .psInline {
+    display: block;
+    margin: 2px 0;
+    white-space: nowrap;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid #999;
+    border-radius: 5px;
+    margin-bottom: 8px;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmHeader {
+    border-color: #555;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmHeader strong {
+    display: block;
+    font-size: 14px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmCounts {
+    display: block;
+    font-size: 11px;
+    opacity: 0.8;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmToggle {
+    border: 1px solid #e31b53;
+    background: transparent;
+    color: #e31b53;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmToggle:hover {
+    background: #e31b53;
+    color: #fff;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmNotice {
+    font-size: 12px;
+    padding: 6px 8px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    background: #eef6ff;
+    border: 1px solid #b8d8f5;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmNoticeError {
+    background: #fff0f0;
+    border-color: #f0b8b8;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmNotice {
+    background: #1d2b3a;
+    border-color: #35506b;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmNoticeError {
+    background: #3a1d1d;
+    border-color: #6b3535;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPasteBox {
+    border: 1px solid #999;
+    border-radius: 5px;
+    padding: 8px;
+    margin-bottom: 8px;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPasteBox {
+    border-color: #555;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPasteBox label {
+    display: block;
+    font-size: 12px;
+    font-weight: bold;
+    margin-bottom: 4px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPasteBox textarea {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: inherit;
+    font-size: 12px;
+    resize: vertical;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPasteBox small {
+    display: block;
+    font-size: 10px;
+    opacity: 0.75;
+    margin: 4px 0;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmActions {
+    display: flex;
+    gap: 6px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmActions button,
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmToolbar button {
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmActions button:hover,
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmToolbar button:hover {
+    border-color: #e31b53;
+    color: #e31b53;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmToolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmCheck {
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmDanger:hover {
+    border-color: #c0392b;
+    color: #c0392b;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmList {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 46vh;
+    overflow-y: auto;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmEmpty {
+    font-size: 12px;
+    opacity: 0.75;
+    padding: 12px 4px;
+    text-align: center;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    padding: 6px;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow {
+    border-color: #4a4a4a;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow.nhdwBmStatus-done {
+    border-color: #4caf50;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow.nhdwBmStatus-failed {
+    border-color: #c0392b;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow.nhdwBmStatus-downloading {
+    border-color: #e31b53;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmThumb {
+    flex: 0 0 auto;
+    width: 46px;
+    height: 66px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: #ddd;
+    color: #666;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmThumb {
+    background: #333;
+    color: #888;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmThumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmInfo {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmTitle {
+    font-size: 12px;
+    font-weight: bold;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmMeta,
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmSaved {
+    font-size: 10px;
+    opacity: 0.75;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmSaved {
+    color: #2e7d32;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmSaved {
+    color: #7bc47f;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmError {
+    font-size: 10px;
+    color: #c0392b;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRight {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmStatus {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 8px;
+    background: #eee;
+    color: #333;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmStatus {
+    background: #3a3a3a;
+    color: #ddd;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmStatusBadge-downloading {
+    background: #e31b53;
+    color: #fff;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmStatusBadge-done {
+    background: #4caf50;
+    color: #fff;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmStatusBadge-failed {
+    background: #c0392b;
+    color: #fff;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmDownload {
+    border: 1px solid #e31b53;
+    background: #e31b53;
+    color: #fff;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmDownload:hover {
+    background: transparent;
+    color: #e31b53;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmDownload:disabled {
+    border-color: #999;
+    background: #999;
+    color: #eee;
+    cursor: default;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRemove {
+    border: none;
+    background: transparent;
+    color: inherit;
+    opacity: 0.6;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRemove:hover {
+    opacity: 1;
+    color: #c0392b;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmFooter {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid #ccc;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmFooter {
+    border-color: #4a4a4a;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmFooter small {
+    font-size: 10px;
+    opacity: 0.7;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPrimary {
+    border: none;
+    background: #e31b53;
+    color: #fff;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 13px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPrimary:hover {
+    background: #c2174a;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmPrimary:disabled {
+    background: #999;
+    color: #eee;
+    cursor: default;
+}

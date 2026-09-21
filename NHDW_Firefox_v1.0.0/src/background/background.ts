@@ -4,7 +4,7 @@ import HtmlParsing from "../parsing/HtmlParsing";
 import Downloader from "./Downloader";
 import { errorMessage } from "../utils/utils";
 import { getSourceForUrl } from "../sources";
-import { executeInTab } from "../preview/activeTabGallery";
+import { executeInTab, panelSourceTabId } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
 import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions } from "../utils/batchPipeline";
@@ -43,7 +43,9 @@ import {
     EMBEDDED_UI_KEY,
     MOBILE_DEVICE_KEY,
     PANEL_PAGE,
+    PANEL_SOURCE_TAB_KEY,
     SITE_UI_BUNDLE,
+    SITE_UI_STYLES,
     SITE_UI_OPEN_PANEL_ACTION,
     SITE_UI_TOGGLE_ACTION,
     TOOLBAR_EMBEDDED_KEY,
@@ -143,6 +145,7 @@ function readToolbarMode(callback: (embeddedToolbar: boolean) => void): void {
     try {
         const syncDefaults: any = {};
         syncDefaults[EMBEDDED_UI_KEY] = EMBEDDED_UI_DEFAULT;
+        syncDefaults[TOOLBAR_EMBEDDED_KEY] = null; // get() returns only requested keys
         chrome.storage.sync.get(syncDefaults, (syncElems: any) => {
             const enabled = normalizeEmbeddedUi(syncElems && syncElems[EMBEDDED_UI_KEY]);
             const storedToolbar = syncElems ? syncElems[TOOLBAR_EMBEDDED_KEY] : undefined;
@@ -220,7 +223,7 @@ function sendToggleToTab(tabId: number, message: any): Promise<boolean> {
     });
 }
 
-function injectSiteUi(tabId: number): Promise<boolean> {
+function injectSiteUiFile(kind: "insertCSS" | "executeScript", tabId: number, files: string[]): Promise<boolean> {
     return new Promise((resolve) => {
         let settled = false;
         const finish = (value: boolean) => {
@@ -232,12 +235,12 @@ function injectSiteUi(tabId: number): Promise<boolean> {
         };
         try {
             const scripting: any = (chrome as any).scripting;
-            if (!scripting || typeof scripting.executeScript !== "function") {
+            if (!scripting || typeof scripting[kind] !== "function") {
                 finish(false);
                 return;
             }
-            const details: any = { target: { tabId: tabId }, files: [SITE_UI_BUNDLE] };
-            const result: any = scripting.executeScript(details, () => {
+            const details: any = { target: { tabId: tabId }, files: files };
+            const result: any = scripting[kind](details, () => {
                 finish(!chrome.runtime.lastError);
             });
             if (result && typeof result.then === "function") {
@@ -249,10 +252,38 @@ function injectSiteUi(tabId: number): Promise<boolean> {
     });
 }
 
-function openPanelPage(): void {
-    try {
-        chrome.tabs.create({ url: chrome.runtime.getURL(PANEL_PAGE) });
-    } catch (_) { /* last-resort fallback failed: nothing else we can do */ }
+async function injectSiteUi(tabId: number): Promise<boolean> {
+    // Programmatic JS injection does not load manifest content-script CSS.
+    // A page open before installation needs both, or the drawer (especially
+    // the reused Queue renderer) opens as unstyled page content.
+    if (!await injectSiteUiFile("insertCSS", tabId, SITE_UI_STYLES)) {
+        return false;
+    }
+    return injectSiteUiFile("executeScript", tabId, [SITE_UI_BUNDLE]);
+}
+
+function openPanelPage(sourceTabId?: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (ok: boolean) => {
+            if (!settled) {
+                settled = true;
+                resolve(ok);
+            }
+        };
+        try {
+            const suffix = Number.isSafeInteger(sourceTabId) && (sourceTabId as number) >= 0
+                ? "?" + PANEL_SOURCE_TAB_KEY + "=" + sourceTabId : "";
+            const result: any = chrome.tabs.create({ url: chrome.runtime.getURL(PANEL_PAGE) + suffix }, (tab) => {
+                finish(!chrome.runtime.lastError && !!tab);
+            });
+            if (result && typeof result.then === "function") {
+                result.then((tab: any) => finish(!!tab)).catch(() => finish(false));
+            }
+        } catch (_) {
+            finish(false);
+        }
+    });
 }
 
 function installEmbeddedToolbar(): void {
@@ -272,8 +303,15 @@ function installEmbeddedToolbar(): void {
                         embeddedToolbar: embeddedToolbar,
                         isSiteUrl: isNhentaiUrl,
                         toggleAction: SITE_UI_TOGGLE_ACTION
+                    }).then((outcome) => {
+                        // onClicked only fires when the popup was empty. A
+                        // settings change can race this read; still honor the
+                        // click instead of assuming a popup already opened.
+                        if (outcome === "ignored") {
+                            void openPanelPage(tab && isNhentaiUrl(tab.url || "") ? tab.id : undefined);
+                        }
                     }).catch(() => {
-                        openPanelPage();
+                        void openPanelPage(tab && isNhentaiUrl(tab.url || "") ? tab.id : undefined);
                     });
                 });
             });
@@ -903,7 +941,11 @@ function resolveTabId(request: any, sender: any): number | undefined {
     if (typeof request.tabId === "number") {
         return request.tabId;
     }
-    if (sender && sender.tab && typeof sender.tab.id === "number") {
+    // Content-script jobs intentionally omit tabId and use their own page.
+    // Full-panel extension tabs also have sender.tab, but are never a valid
+    // fallback when their pinned nhentai page has closed or navigated away.
+    if (sender && sender.tab && typeof sender.tab.id === "number"
+        && isNhentaiUrl(sender.tab.url || "")) {
         return sender.tab.id;
     }
     return undefined;
@@ -1309,15 +1351,12 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         return false;
     }
     if (request.action === SITE_UI_OPEN_PANEL_ACTION) {
-        // The in-page drawer's "Full panel ↗" control: open the demoted popup
-        // document in a tab of its own (progress, similar galleries, retry).
-        try {
-            openPanelPage();
-            sendResponse({ ok: true });
-        } catch (_) {
-            sendResponse({ ok: false });
-        }
-        return false;
+        // The newly opened extension tab becomes active. Preserve the source
+        // page explicitly, otherwise preview/retry would inject into itself.
+        const tab = _sender && _sender.tab;
+        const sourceTabId = tab && isNhentaiUrl(tab.url || "") ? tab.id : undefined;
+        openPanelPage(sourceTabId).then((ok) => sendResponse({ ok: ok }));
+        return true; // tabs.create must settle before reporting success
     }
     if (request.action === "clearJobMarker") {
         // Popup dismisses the "previous download was interrupted" notice.
@@ -1353,7 +1392,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         });
         return true;
     }
-    if (handleBookmarkMessage(request, sendResponse)) {
+    // Runtime messages from an extension tab do not make its originating
+    // website active. Reuse the same validated panel context for enrichment.
+    const bookmarkSourceTabId = panelSourceTabId(_sender && (_sender.url || (_sender.tab && _sender.tab.url)));
+    if (handleBookmarkMessage(request, sendResponse, bookmarkSourceTabId)) {
         // Bookmark queue mutations (bookmarkAdd / bookmarkGet / ...). The
         // worker owns the stored list; the content script and the panel only
         // ask it to change. Every branch above answered asynchronously, so the

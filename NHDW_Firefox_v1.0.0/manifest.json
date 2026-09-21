@@ -48,7 +48,8 @@
         "https://nhentai.net/*"
       ],
       "css": [
-        "css/content.css"
+        "css/content.css",
+        "css/panelRenderers.css"
       ],
       "js": [
         "js/content.js",
