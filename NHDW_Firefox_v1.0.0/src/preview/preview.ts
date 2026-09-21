@@ -6,6 +6,7 @@ import { renderSettings } from "./popupSettings";
 import { renderBookmarks, watchBookmarkChanges } from "./bookmarkPanel";
 import { readListSettings } from "../utils/listSettings";
 import { MOBILE_LAYOUT_MEDIA } from "../utils/embeddedUi";
+import { getPreviewTab } from "./activeTabGallery";
 
 let popup = Popup.getInstance();
 
@@ -284,10 +285,7 @@ function refreshCdnNotice() {
 let lastBootstrappedUrl: string | null = null;
 
 function bootstrapForActiveTab() {
-    chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
-    if (!tabs || !tabs[0]) {
-        return;
-    }
+    getPreviewTab().then((tab) => {
     chrome.storage.sync.get({
         darkMode: false,
         htmlParsing: false
@@ -299,7 +297,9 @@ function bootstrapForActiveTab() {
             document.getElementById('htmlLight')!.id = 'htmlDark';
         }
 
-        let currUrl = tabs[0].url as string;
+        // Empty/closed source still renders progress, failures and settings;
+        // the ordinary unsupported-page notice replaces a stuck "Loading...".
+        let currUrl = tab && tab.url ? tab.url : "";
         popup.url = currUrl;
         lastBootstrappedUrl = currUrl;
         // Independent of the download state: surface the optional host grant
@@ -368,9 +368,9 @@ bootstrapForActiveTab();
 // once at open time. In popup mode these events effectively never fire (the
 // popup is destroyed as soon as focus leaves it), so registering them is free.
 function rebootstrapIfUrlChanged() {
-    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-        const url = tabs && tabs[0] ? String(tabs[0].url || "") : "";
-        if (url === "" || url === lastBootstrappedUrl) {
+    getPreviewTab().then((tab) => {
+        const url = tab && tab.url ? tab.url : "";
+        if (url === lastBootstrappedUrl) {
             return;
         }
         lastBootstrappedUrl = url;
@@ -381,9 +381,9 @@ try {
     chrome.tabs.onActivated.addListener(() => rebootstrapIfUrlChanged());
     chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
         if (changeInfo.status === "complete" || changeInfo.url !== undefined) {
-            if (tab && tab.active) {
-                rebootstrapIfUrlChanged();
-            }
+            // In a full-panel tab the pinned source is intentionally inactive.
+            // The helper filters unrelated tabs by the resolved source URL.
+            rebootstrapIfUrlChanged();
         }
     });
 } catch (_) { /* chrome.tabs events unavailable: single-shot popup behaviour */ }

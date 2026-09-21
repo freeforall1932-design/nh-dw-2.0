@@ -1,8 +1,25 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-20** (session
-`arena/01a0bf5f-nh-dw-2-0`: **Firefox 1.2.0 website-embedded UI, items 56+57
-landed; 58 still open**. Previous: 2026-09-19, v1.1.0, PR #43).
+**Live, ordered. Updated 2026-09-21** (session
+`arena/01a0bfa1-nh-dw-2-0`: **PR #44 review + approved item 38 preserved;
+dependency maintenance preserved; approved 59 complete; 58 still open**).
+
+**38 is done in the approved Firefox-only scope:** 33 options-page tests and
+narrow regression fixes, integrated with offline e2e. That task had no
+redesign, Chrome/CI changes, device testing or signing.
+**59 is now done in its separately approved Firefox-only scope:** three
+readers fixed; 36-case format matrix; **474 unit pass / 4 opt-in live pending**,
+smoke/e2e green. See Done recently and the current handoff. No live checks,
+Chrome backport, dependency change, device verification or signing in 59.
+
+**Previous owner request — dependency warnings:** updated test/Firefox tooling
+and lockfiles in BOTH maintained builds; full audits Firefox 16→0 / Chrome
+5→0. Application source, runtime dependencies/bundles and CI unchanged by
+that maintenance task.
+Chrome installs warning-free; Firefox still has two upstream validator
+deprecations (not hidden or forced away). Details and remaining constraints:
+[`DEPENDENCY_MAINTENANCE.md`](DEPENDENCY_MAINTENANCE.md); evidence at the top of
+`SESSION_HANDOFF.md`. No payments made.
 
 This is the single place to look for *what to do next*. The other two documents
 carry the depth:
@@ -61,8 +78,12 @@ Landed in Firefox 1.2.0. `src/utils/embeddedUi.ts` (pure contract) +
 `src/content/siteUi.ts` (invoker + drawer). Drawer reuses `renderSettings` +
 `renderBookmarks`. Anchored only on `.navbar`. Toolbar click:
 `action.setPopup("")` + `onClicked` → `handleToolbarClick` (toggle → inject
-→ `index.html`). Pinned by `test/embedded-ui.test.js` (17) and
-`scripts/e2e-site-ui.js` (8 PASS).
+→ `index.html`). Review fixes: live settings persistence, shared renderer
+CSS, CSS-aware fallback injection, idempotent badge updates, safe drawer
+reattachment, live listing counts and header access. Pinned by
+`test/embedded-ui.test.js`, `scripts/e2e-site-ui.js` and
+`scripts/e2e-embedded-toolbar.js`. Review checkpoint: **431 passing / 4 pending**;
+see item 59 for current verification.
 
 ### 57. Demote the toolbar popup to the settings / API-key fallback — **DONE 2026-09-20**
 
@@ -70,7 +91,10 @@ Landed in Firefox 1.2.0. `src/utils/embeddedUi.ts` (pure contract) +
 embedded UI is active — progress / similar / retry-failed have no in-page
 home, and the drawer offers "Full panel ↗". Toolbar on nhentai follows the
 device by default (drawer on phones, popup on desktop); Settings → In-page
-panel overrides it.
+panel overrides it. Review fix: Full panel carries a validated source-tab
+context through preview, retries and bookmark enrichment; an extension tab is
+never used as a fallback source. Covered by `e2e-popup.js --full-panel` and
+worker/relay regressions.
 
 ### 58. Combined verification (folded P2 + P3) + sign 1.2.0 — **top of the queue**
 
@@ -143,36 +167,34 @@ it between pages.
 "Do not" rules in `SESSION_HANDOFF.md`. Until it lands, the existing global
 pause / resume / `clearQueue` are the only stop controls.
 
-### 46. Firefox port of the bookmark queue
+### 46. Firefox port of the bookmark queue — **DONE in PR #43 / v1.1.0**
 
-**Blocked behind 37.** `NHDW_Firefox_v1.0.0` is untouched by 3.7.0 and still
-lags at 3.3.1. `chrome.sidePanel` has no Firefox equivalent — the analogue is
-`sidebar_action`, and "Open docked ↗" must degrade to a message rather than a
-failed call. Everything else ports directly: `bookmarkQueue.ts` is
-storage-agnostic, and the worker messages and content-script star are ordinary
-WebExtension APIs.
-
-Without item 37 there is no way to verify the port, which is why 37 comes first.
+Superseded the old 3.3.1 lag below: parity elevation included the Queue tab,
+card stars, history, list controls and the popup harness (item 37).
+Chromium-only side-panel calls remain feature-gated. Device verification is
+still owed under 58; offline parity is not a device-test result.
 
 ---
 
-## Carried over from the 2026-09-05 review (unchanged)
+## Carried over from the 2026-09-05 review
 
-- [ ] **37. Firefox panel harness.** That tree has no offline coverage of its
-      popup/Settings pane at all. Port `scripts/e2e-popup.js` (its DOM stub is
-      reusable verbatim) and wire it into its `npm run test:e2e`. **Blocks 46.**
-- [ ] **38. Options-page harness.** `js/options.js` has no VM harness, so
-      `options.ts`'s DOM wiring is only typechecked. Needs a stub modelling
-      `<select>.options` / `selectedIndex` plus the real `options.html` lists.
+- [x] **37. Firefox panel harness.** Ported and wired into `test:e2e` in
+      PR #43. PR #44 review adds the Full panel source-context variant.
+- [x] **38. Options-page harness — approved Firefox scope DONE 2026-09-21.**
+      `e2e-options.js` runs the built bundle against real `options.html`, with
+      select/index/value and async key-scoped storage semantics. **33 tests**;
+      pre-fix bundle fails 8. Wired into `test:e2e` and `test:options`. Narrow
+      fixes in Firefox `options.ts`; Chrome untouched. Adjacent shared-reader
+      defect was separately approved/completed as 59, not silently included here.
 - [ ] **39. Decide the empty-token separator — needs a human call, not code.**
       `{id} - {pretty} - {language}` with no language tag produces
       `"123456_- "`. The empty-token behaviour is pinned on purpose by
       `test/parsing.test.js`, so this is a contract, not a bug. Two options,
       both with costs; deliberately undecided.
-- [ ] **40. Popup harness does not bootstrap a listing page.** So the panel's
-      list-job / PDF-merge / similar-galleries paths are covered only by the
-      equivalent content-script phases. Extending it means stubbing
-      `getGalleries` + `activeTabGallery`.
+- [ ] **40. Popup harness does not bootstrap a listing page.** Item 59 now
+      delivers `getGalleries` directly to test format rendering, but does not
+      exercise page injection/bootstrap, pagination, listing-job/PDF-merge or
+      similar-gallery workflows. Those broader paths remain open.
 - [ ] **41. Non-canonical separators are canonicalised on tick (UX decision).**
       `isTokenOnlyTemplate("{pretty}_{id}")` is `true`, so the first tick
       rewrites it to `"{pretty} - {id}"`. Suggested: an `isCanonicalTemplate()`
@@ -335,6 +357,27 @@ these hosts (DNS failure)" is wrong — DNS resolves; **egress** is blocked
 ---
 
 ## Done recently
+
+### 59. Saved list-format reads across shared Firefox consumers — **DONE 2026-09-21**
+
+Owner approved “ok do 59”. Fixed `utils/listSettings.ts`,
+`preview/popupSettings.ts` and the third reader in `content/listControls.ts`:
+request optional `listFormat` explicitly, without giving inheritance a ZIP
+default. Saved ZIP/CBZ/PDF/raw wins; unset/null/blank/invalid inherits; neither
+usable falls back to ZIP; legacy `folder` remains PDF. Reads/rendering never
+write preferences; explicit edits persist independently and survive reopening.
+
+Key-scoped async storage mocks expose the previously hidden omission. Shared
+**36-case** matrix runs through the real reader and built popup/Full panel,
+in-page card/bar, embedded Settings/gallery/Queue consumers. Focused units:
+**59 pass / 20 fail before → 79/79**; site UI **11/15 before → 15/15**. Full
+Firefox **474 pass / 4 pending**, smoke7/e2e green, options33/toolbar11;
+lint **0 errors / 0 notices / 30 unchanged warnings**; unsigned 1.2.0 ZIP25.
+
+Only the three readers/their bundles, tests and docs changed in this task.
+Chrome, dependencies, manifest/permissions and CI preserved. No live API,
+Firefox/Android device or signing claims; 58 and the broader listing harness
+item 40 remain open. Production source delta: ten existing + two new files.
 
 - [x] **56+57. Firefox 1.2.0 website-embedded UI (2026-09-20).** Header
       invoker + settings/queue drawer on nhentai; popup demoted but Download

@@ -322,3 +322,93 @@ describe('resolveInvokerAnchor', () => {
         assert.strictEqual(anchor.reference, null);
     });
 });
+
+// A full panel opened as an extension tab must not resolve metadata/retries
+// through itself (the active tab). Pin and validate the originating page.
+describe('full-panel source tab context', () => {
+    const { getActiveTabId, getActiveNhentaiTabId } = require('../build/test/preview/activeTabGallery');
+    let savedChrome;
+    let savedLocation;
+    let savedUrl;
+    let active;
+    let source;
+    let queries;
+    let gets;
+
+    beforeEach(() => {
+        savedChrome = global.chrome;
+        savedLocation = global.location;
+        savedUrl = global.URL;
+        // Downloader tests temporarily remove URL to exercise the data-URL
+        // fallback. This fixture needs the browser URL constructor explicitly.
+        global.URL = require('node:url').URL;
+        active = { id: 99, url: 'moz-extension://review/index.html?sourceTabId=7' };
+        source = { id: 7, url: 'https://nhentai.net/g/111111/' };
+        queries = 0;
+        gets = [];
+        global.location = { href: active.url };
+        global.chrome = {
+            runtime: { getURL: (file) => 'moz-extension://review/' + file, lastError: null },
+            tabs: {
+                query(_query, callback) { queries++; callback([active]); },
+                get(id, callback) { gets.push(id); callback(source); }
+            }
+        };
+    });
+    afterEach(() => {
+        global.chrome = savedChrome;
+        global.location = savedLocation;
+        global.URL = savedUrl;
+    });
+
+    it('metadata and Queue/retry callers resolve the originating tab, not the panel itself', async () => {
+        assert.strictEqual(await getActiveTabId(), 7);
+        assert.strictEqual(await getActiveNhentaiTabId(), 7);
+        assert.strictEqual(queries, 0);
+        assert.deepStrictEqual(gets, [7, 7]);
+    });
+
+    it('does not switch to another active tab when the pinned source is closed', async () => {
+        source = undefined;
+        active = { id: 8, url: 'https://nhentai.net/g/222222/' };
+        assert.strictEqual(await getActiveNhentaiTabId(), undefined);
+        assert.strictEqual(queries, 0);
+    });
+
+    it('refuses a source tab that has navigated off nhentai', async () => {
+        source.url = 'https://example.com/';
+        assert.strictEqual(await getActiveTabId(), undefined);
+        assert.strictEqual(await getActiveNhentaiTabId(), undefined);
+    });
+
+    it('handles tabs.get lastError without attempting active-tab injection', async () => {
+        global.chrome.tabs.get = (_id, callback) => {
+            global.chrome.runtime.lastError = { message: 'No tab with that ID' };
+            callback(undefined);
+            global.chrome.runtime.lastError = null;
+        };
+        assert.strictEqual(await getActiveTabId(), undefined);
+        assert.strictEqual(queries, 0);
+    });
+
+    it('ordinary toolbar popups still use the active tab', async () => {
+        global.location.href = 'moz-extension://review/index.html';
+        active = { id: 8, url: 'https://nhentai.net/g/222222/' };
+        assert.strictEqual(await getActiveTabId(), 8);
+        assert.strictEqual(await getActiveNhentaiTabId(), 8);
+        assert.strictEqual(gets.length, 0);
+    });
+
+    it('does not accept a source-tab parameter from a website URL', async () => {
+        global.location.href = 'https://nhentai.net/?sourceTabId=7';
+        active = { id: 8, url: 'https://nhentai.net/g/222222/' };
+        assert.strictEqual(await getActiveNhentaiTabId(), 8);
+        assert.strictEqual(gets.length, 0);
+    });
+
+    it('content-script callers keep using sender.tab fallback without the tabs API', async () => {
+        global.chrome.tabs = undefined;
+        global.location.href = 'https://nhentai.net/';
+        assert.strictEqual(await getActiveNhentaiTabId(), undefined);
+    });
+});

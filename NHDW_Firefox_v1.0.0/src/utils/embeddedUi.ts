@@ -49,8 +49,12 @@ export const MOBILE_LAYOUT_MEDIA = "(max-width: 640px) and (pointer: coarse)";
 
 /** Content-script bundle the invoker lives in (manifest content_scripts). */
 export const SITE_UI_BUNDLE = "js/siteUi.js";
+/** The same styles are required for both manifest and on-demand injection. */
+export const SITE_UI_STYLES = ["css/content.css", "css/panelRenderers.css"];
 /** The demoted fallback surface: the toolbar popup document. */
 export const PANEL_PAGE = "index.html";
+/** A full-panel tab stays bound to the page that opened it. */
+export const PANEL_SOURCE_TAB_KEY = "sourceTabId";
 
 /** worker -> content script: open/close the drawer (toolbar click). */
 export const SITE_UI_TOGGLE_ACTION = "siteUiToggle";
@@ -226,11 +230,10 @@ export function normalizeEmbeddedUi(value: any): boolean {
 }
 
 /**
- * Toolbar-click behaviour: an explicit boolean always wins; "never set" follows
- * the device the content script measured (phones open the in-page drawer, the
- * desktop keeps the popup it has always had).
+ * Preserve the saved tri-state for both Settings and the worker: undefined
+ * means "follow device", not an explicit request for either surface.
  */
-export function resolveToolbarEmbedded(storedValue: any, mobileDevice: boolean): boolean {
+export function normalizeToolbarEmbedded(storedValue: any): boolean | undefined {
     if (typeof storedValue === "boolean") {
         return storedValue;
     }
@@ -243,7 +246,13 @@ export function resolveToolbarEmbedded(storedValue: any, mobileDevice: boolean):
             return false;
         }
     }
-    return !!mobileDevice;
+    return undefined;
+}
+
+/** An explicit preference wins; unset follows the content script's device gate. */
+export function resolveToolbarEmbedded(storedValue: any, mobileDevice: boolean): boolean {
+    const preference = normalizeToolbarEmbedded(storedValue);
+    return preference === undefined ? !!mobileDevice : preference;
 }
 
 /**
@@ -319,7 +328,7 @@ export interface ToolbarHost {
     /** Inject the site-UI bundle into the tab (page loaded before install). */
     injectSiteUi(tabId: number): Promise<boolean>;
     /** Last resort: open the demoted popup document in a tab of its own. */
-    openPanelPage(): void;
+    openPanelPage(sourceTabId?: number): void | Promise<boolean>;
 }
 
 export type ToolbarClickOutcome = "toggled" | "injected" | "panel" | "ignored";
@@ -361,7 +370,7 @@ export async function handleToolbarClick(
     if (tabId === undefined || url === "" || !opts.isSiteUrl(url)) {
         // Not a page the drawer can live in (about:blank, a foreign site, a
         // privileged page): fall back to the demoted panel document.
-        host.openPanelPage();
+        await host.openPanelPage();
         return "panel";
     }
 
@@ -382,6 +391,6 @@ export async function handleToolbarClick(
         }
     }
 
-    host.openPanelPage();
+    await host.openPanelPage(tabId);
     return "panel";
 }

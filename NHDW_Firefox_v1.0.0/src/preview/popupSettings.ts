@@ -27,6 +27,7 @@ import {
     EMBEDDED_UI_KEY,
     TOOLBAR_EMBEDDED_KEY,
     normalizeEmbeddedUi,
+    normalizeToolbarEmbedded,
     shipsSiteUi
 } from "../utils/embeddedUi";
 
@@ -411,17 +412,19 @@ function renderListModeSection(container: HTMLElement): void {
 
     container.appendChild(section);
 
-    chrome.storage.sync.get({
+    const defaults = {
         useZip: "zip",
         downloadName: "{pretty}",
         replaceSpaces: true,
         rawMasterFolder: "NHDW",
-        // listFormat has NO default here on purpose: an unset key means
-        // "follow the single-title format", and a "zip" default would hide that.
+        // No listFormat default: unset means "follow single-title format".
+        // Still request the key below; get() returns only the named keys.
         listOutputMode: "separate",
         listMasterFolder: true,
         listDownloadName: LIST_TEMPLATE_INHERIT
-    }, (elems: any) => {
+    };
+    chrome.storage.sync.get(Object.keys(defaults).concat("listFormat"), (stored: any) => {
+        const elems = Object.assign({}, defaults, stored);
         const singleTemplate = String(elems.downloadName || "{pretty}");
         formatSelect.value = resolveListFormat(elems.listFormat, elems.useZip);
         modeSelect.value = normalizeOutputMode(elems.listOutputMode, "separate");
@@ -660,12 +663,34 @@ function renderInterfaceSection(container: HTMLElement): void {
 
     container.appendChild(section);
 
-    chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true, bookmarkAutoCapture: false }, (elems: any) => {
+    const defaults: any = { uiMode: "sidepanel", inPageControls: true, bookmarkAutoCapture: false };
+    if (showEmbedded) {
+        defaults[EMBEDDED_UI_KEY] = EMBEDDED_UI_DEFAULT;
+        defaults[TOOLBAR_EMBEDDED_KEY] = null; // unset = follow device, NOT false
+    }
+    chrome.storage.sync.get(defaults, (elems: any) => {
         // Firefox delta: with no side-panel option rendered, never leave the
         // select pointing at a value that cannot exist on this platform.
         panelSelect.value = (elems.uiMode === "popup" || !hasSidePanel) ? "popup" : "sidepanel";
         controlsBox.checked = elems.inPageControls === undefined ? true : !!elems.inPageControls;
         autoBox.checked = !!elems.bookmarkAutoCapture;
+        if (showEmbedded) {
+            embeddedBox.checked = normalizeEmbeddedUi(elems[EMBEDDED_UI_KEY]);
+            const toolbar = normalizeToolbarEmbedded(elems[TOOLBAR_EMBEDDED_KEY]);
+            toolbarSelect.value = toolbar === undefined ? "auto" : toolbar ? "on" : "off";
+            // Rendering is read-only. Only an explicit user change persists;
+            // "auto" removes the override so another device can follow itself.
+            embeddedBox.addEventListener("change", () => {
+                chrome.storage.sync.set({ [EMBEDDED_UI_KEY]: embeddedBox.checked });
+            });
+            toolbarSelect.addEventListener("change", () => {
+                if (toolbarSelect.value === "auto") {
+                    chrome.storage.sync.remove(TOOLBAR_EMBEDDED_KEY);
+                } else {
+                    chrome.storage.sync.set({ [TOOLBAR_EMBEDDED_KEY]: toolbarSelect.value === "on" });
+                }
+            });
+        }
         panelSelect.addEventListener("change", () => {
             chrome.storage.sync.set({ uiMode: panelSelect.value === "popup" ? "popup" : "sidepanel" });
         });

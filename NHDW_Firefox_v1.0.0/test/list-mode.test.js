@@ -28,7 +28,9 @@ const {
     shouldWarnPdfMerge,
     supportsBatchMerge
 } = require('../build/test/utils/downloadFormats.js');
-const { buildListSettings, readListSettings, resolveMasterFolder } = require('../build/test/utils/listSettings.js');
+const { buildListSettings, readListSettings, resolveMasterFolder, saveListSettings } = require('../build/test/utils/listSettings.js');
+const { readStorage } = require('../scripts/test-support/storage');
+const { formatCases, formats } = require('../scripts/test-support/list-format-cases');
 
 describe('shared download format registry', () => {
     it('exposes exactly the four formats offered on a title page', () => {
@@ -198,22 +200,55 @@ describe('list format inheritance', () => {
     });
 });
 
-// readListSettings goes through chrome.storage.sync.get(defaults, cb), so this
-// stub reproduces what Chrome actually does: merge the stored values OVER the
-// caller's defaults. That merge is the whole point - a "zip" default for
-// listFormat used to make an unset key indistinguishable from a chosen one,
-// which is what killed the documented single-title inheritance.
-function withSyncStore(store, fn) {
-    global.chrome = {
-        storage: {
-            sync: { get(defaults, cb) { cb(Object.assign({}, defaults, store)); } },
-            local: { get(defaults, cb) { cb(Object.assign({}, defaults)); } }
-        }
-    };
+// Storage returns only the requested keys, never the whole store merged over
+// defaults. Callbacks are async and data is cloned, as in the browser API.
+function withSyncStore(store, fn, local = {}) {
+    const previous = Object.getOwnPropertyDescriptor(global, 'chrome');
+    const ctx = { sync: structuredClone(store), local: structuredClone(local), reads: [], writes: [] };
+    function area(name) {
+        return {
+            get(keys, cb) {
+                const request = structuredClone(keys);
+                ctx.reads.push({ area: name, keys: request });
+                queueMicrotask(() => cb(readStorage(ctx[name], request)));
+            },
+            set(items, cb) {
+                const copy = structuredClone(items);
+                ctx.writes.push({ area: name, items: copy });
+                Object.assign(ctx[name], copy);
+                if (cb) queueMicrotask(cb);
+            }
+        };
+    }
+    global.chrome = { storage: { sync: area('sync'), local: area('local') } };
     return Promise.resolve()
-        .then(fn)
-        .finally(() => { delete global.chrome; });
+        .then(() => fn(ctx))
+        .finally(() => {
+            if (previous) Object.defineProperty(global, 'chrome', previous);
+            else delete global.chrome;
+        });
 }
+
+describe('key-scoped storage fixture contract', () => {
+    it('object defaults do not return unrequested stored keys or mutable aliases', () => {
+        const stored = { useZip: 'cbz', listFormat: 'pdf', nested: { enabled: true } };
+        const result = readStorage(stored, { useZip: 'zip', absent: 3, nested: null });
+        assert.deepStrictEqual(result, { useZip: 'cbz', absent: 3, nested: { enabled: true } });
+        result.nested.enabled = false;
+        assert.strictEqual(stored.nested.enabled, true);
+        assert.deepStrictEqual(readStorage(stored, ['listFormat', 'missing']), { listFormat: 'pdf' });
+        assert.deepStrictEqual(readStorage(stored, 'listFormat'), { listFormat: 'pdf' });
+        assert.deepStrictEqual(readStorage(stored, null), stored);
+    });
+
+    it('does not invoke storage callbacks synchronously', () => withSyncStore({}, async () => {
+        let called = false;
+        chrome.storage.sync.get({ useZip: 'zip' }, () => { called = true; });
+        assert.strictEqual(called, false);
+        await Promise.resolve();
+        assert.strictEqual(called, true);
+    }));
+});
 
 describe('list format inheritance through the real reader', () => {
     it('LIST_MODE_DEFAULTS must not define listFormat', () => {
@@ -236,6 +271,70 @@ describe('list format inheritance through the real reader', () => {
         withSyncStore({}, async () => {
             assert.strictEqual((await readListSettings()).format, 'zip');
         }));
+});
+
+describe('saved list formats through the real reader (item 59)', () => {
+    for (const { label, stored, expected } of formatCases) {
+        it(label + ' without writing or migrating storage', () => withSyncStore(stored, async (ctx) => {
+            assert.strictEqual((await readListSettings()).format, expected);
+            assert.deepStrictEqual(ctx.sync, stored);
+            assert.deepStrictEqual(ctx.writes, []);
+        }));
+    }
+
+    it('restores all other settings and keeps the PDF warning flag local', () => {
+        const stored = {
+            useZip: 'cbz', listFormat: 'pdf', listOutputMode: 'batch',
+            rawMasterFolder: '', listMasterFolder: false, downloadName: '',
+            listDownloadName: '@inherit', replaceSpaces: false,
+            verifyDownloadedFiles: false, batchNameDate: false, unrelated: 'keep'
+        };
+        return withSyncStore(stored, async (ctx) => {
+            assert.deepStrictEqual(await readListSettings(), {
+                format: 'pdf', outputMode: 'batch', masterFolder: false, masterFolderName: '',
+                storedTemplate: '@inherit', template: '', singleTemplate: '', replaceSpaces: false,
+                pdfMergeWarnDismissed: true, verifyDownloadedFiles: false, batchNameDate: false
+            });
+            assert.deepStrictEqual(ctx.sync, stored);
+            assert.deepStrictEqual(ctx.local, { pdfMergeWarnDismissed: true, listFormat: 'raw' });
+            assert.deepStrictEqual(ctx.writes, []);
+        }, { pdfMergeWarnDismissed: true, listFormat: 'raw' });
+    });
+
+    it('round-trips explicit saves without changing single-title or sibling preferences', () =>
+        withSyncStore({ useZip: 'pdf', downloadName: '{id}', unrelated: 'keep' }, async (ctx) => {
+            for (const format of formats) {
+                ctx.writes.length = 0;
+                saveListSettings({ listFormat: format });
+                assert.strictEqual((await readListSettings()).format, format);
+                assert.deepStrictEqual(ctx.writes, [{ area: 'sync', items: { listFormat: format } }]);
+                assert.deepStrictEqual(ctx.sync, { useZip: 'pdf', downloadName: '{id}', unrelated: 'keep', listFormat: format });
+            }
+        }));
+
+    it('continues inheriting after the single-title default changes, without creating an override', () =>
+        withSyncStore({ useZip: 'cbz' }, async (ctx) => {
+            assert.strictEqual((await readListSettings()).format, 'cbz');
+            ctx.sync.useZip = 'raw';
+            assert.strictEqual((await readListSettings()).format, 'raw');
+            assert.strictEqual(Object.hasOwn(ctx.sync, 'listFormat'), false);
+            assert.deepStrictEqual(ctx.writes, []);
+        }));
+
+    it('keeps the saved format even when the local warning preference cannot be read', () =>
+        withSyncStore({ useZip: 'cbz', listFormat: 'raw' }, async (ctx) => {
+            chrome.storage.local.get = () => { throw new Error('local unavailable'); };
+            const result = await readListSettings();
+            assert.strictEqual(result.format, 'raw');
+            assert.strictEqual(result.pdfMergeWarnDismissed, false);
+            assert.deepStrictEqual(ctx.writes, []);
+        }));
+
+    it('falls back read-only if sync storage throws', () => withSyncStore({}, async (ctx) => {
+        chrome.storage.sync.get = () => { throw new Error('sync unavailable'); };
+        assert.deepStrictEqual(await readListSettings(), buildListSettings({}));
+        assert.deepStrictEqual(ctx.writes, []);
+    }));
 });
 
 describe('list-mode settings resolution', () => {

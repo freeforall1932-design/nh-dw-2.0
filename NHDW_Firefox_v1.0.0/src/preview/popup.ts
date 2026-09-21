@@ -4,7 +4,7 @@ import { utils, escapeHtml, errorMessage } from "../utils/utils";
 import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl } from "../sources"
-import { getActiveTabId, readGalleryFromTab } from "./activeTabGallery"
+import { getActiveTabId, getActiveNhentaiTabId, readGalleryFromTab } from "./activeTabGallery"
 import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
 import {
     DownloadFormat,
@@ -24,8 +24,7 @@ import { confirmPdfMerge } from "./pdfMergeWarning"
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
 function executeActiveTabScript(file: string): void {
-    chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-        const tabId = tabs[0] && tabs[0].id;
+    getActiveNhentaiTabId().then((tabId) => {
         if (tabId === undefined) {
             return;
         }
@@ -140,7 +139,7 @@ function pendingFromMessage(failed: FailedGallery[], retryJob: any): PendingFail
 // Send the retry command(s) for these failures. Several commands (different
 // job settings) are queued by the worker one after the other.
 export async function retryFailedGalleries(entries: PendingFailure[]): Promise<void> {
-    const tabId = await getActiveTabId();
+    const tabId = await getActiveNhentaiTabId();
     const messages = groupRetryMessages(entries, tabId);
     if (messages.length === 0) {
         return;

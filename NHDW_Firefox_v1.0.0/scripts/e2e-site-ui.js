@@ -11,6 +11,8 @@
 //   - embeddedUi:false injects nothing
 //   - a siteUiToggle message opens the drawer
 //   - a second execution of the bundle (on-demand inject) does not duplicate
+//   - key-scoped saved/inherited list formats restore without writes, explicit
+//     edits survive reopening, and gallery/Queue jobs receive the same format
 //
 // Usage:  node scripts/e2e-site-ui.js [path/to/js/siteUi.js]
 // Exit code 0 = all checks passed.
@@ -18,13 +20,16 @@
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
+const { readStorage } = require("./test-support/storage");
+const { formats, formatCases, previewSuffix } = require("./test-support/list-format-cases");
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
 
 const bundlePath = process.argv[2] || path.join(__dirname, "..", "js", "siteUi.js");
 const code = fs.readFileSync(bundlePath, "utf8");
 
 function fail(message) {
-    console.error("FAIL: " + message);
-    process.exit(1);
+    throw new Error(message);
 }
 
 function makeClassList(node) {
@@ -55,7 +60,23 @@ function makeEl(tag, attrs) {
         type: "",
         title: "",
         value: "",
-        textContent: "",
+        _text: "",
+        _textWrites: 0,
+        get textContent() {
+            return node.tag === "#text" ? node._text : node.children.map((child) => child.textContent).join("");
+        },
+        set textContent(value) {
+            node._textWrites++;
+            node._text = String(value);
+            for (const child of node.children) child.parentElement = null;
+            node.children = [];
+            if (node.tag !== "#text" && node._text !== "") {
+                const text = makeEl("#text");
+                text._text = node._text;
+                text.parentElement = node;
+                node.children.push(text);
+            }
+        },
         innerHTML: "",
         checked: false,
         disabled: false,
@@ -80,6 +101,7 @@ function makeEl(tag, attrs) {
                 : null;
         },
         appendChild(child) {
+            if (child.parentElement) child.parentElement.removeChild(child);
             child.parentElement = node;
             node.children.push(child);
             if (node._document && child.id) node._document._ids.set(child.id, child);
@@ -227,7 +249,7 @@ function makeNhentaiDocument(options) {
     const right = makeEl("ul", { class: "nav navbar-nav navbar-right" });
     collapse.appendChild(right);
     navbar.appendChild(collapse);
-    body.appendChild(navbar);
+    if (!opts.noNavbar) body.appendChild(navbar);
 
     if (opts.gallery) {
         const info = makeEl("div", { id: "info" });
@@ -290,7 +312,6 @@ function makeNhentaiDocument(options) {
             return n;
         },
         getElementById(id) {
-            if (ids.has(id)) return ids.get(id);
             const all = descendants(html, []);
             return all.find((node) => node.id === id) || null;
         },
@@ -322,6 +343,10 @@ function run(options) {
     const sentMessages = [];
     const messageListeners = [];
     const mutationCallbacks = [];
+    const storageListeners = [];
+    const areaListeners = { sync: [], local: [] };
+    const syncWrites = [];
+    const localWrites = [];
     const href = opts.href || "https://nhentai.net/";
     const location = { href: href };
     const dom = makeNhentaiDocument(opts);
@@ -335,19 +360,48 @@ function run(options) {
         disconnect() {}
     }
 
+    // Model the API, not Object.assign(defaults, entireStore): get() only
+    // returns REQUESTED keys. Area onChanged has one arg; storage.onChanged
+    // has two. These distinctions hid PR #44's settings/toolbar bugs.
+    function storageArea(store, area) {
+        function publish(changes) {
+            if (Object.keys(changes).length === 0) return;
+            for (const fn of areaListeners[area]) fn(changes);
+            for (const fn of storageListeners) fn(changes, area);
+        }
+        return {
+            get(keys, cb) {
+                queueMicrotask(() => cb(readStorage(store, keys)));
+            },
+            set(items, cb) {
+                (area === "sync" ? syncWrites : localWrites).push(structuredClone(items));
+                const changes = {};
+                for (const [key, value] of Object.entries(items)) {
+                    if (store[key] !== value) changes[key] = { oldValue: store[key], newValue: value };
+                    store[key] = value;
+                }
+                publish(changes);
+                if (cb) cb();
+            },
+            remove(keys, cb) {
+                (area === "sync" ? syncWrites : localWrites).push({ remove: keys });
+                const changes = {};
+                for (const key of Array.isArray(keys) ? keys : [keys]) {
+                    if (Object.hasOwn(store, key)) changes[key] = { oldValue: store[key] };
+                    delete store[key];
+                }
+                publish(changes);
+                if (cb) cb();
+            },
+            onChanged: { addListener(fn) { areaListeners[area].push(fn); } }
+        };
+    }
+
     const chromeStub = {
         storage: {
-            sync: {
-                get(defaults, cb) { cb(Object.assign({}, defaults, settings)); },
-                set(items) { Object.assign(settings, items); },
-                remove(key) { delete settings[key]; },
-                onChanged: { addListener() {} }
-            },
-            local: {
-                get(defaults, cb) { cb(Object.assign({}, defaults, localStore)); },
-                set(items) { Object.assign(localStore, items); }
-            },
-            onChanged: { addListener() {} }
+            sync: storageArea(settings, "sync"),
+            local: storageArea(localStore, "local"),
+            onChanged: { addListener(fn) { storageListeners.push(fn); } }
         },
         runtime: {
             lastError: null,
@@ -355,7 +409,7 @@ function run(options) {
             sendMessage(message, cb) {
                 sentMessages.push(message);
                 if (message && message.action === "bookmarkGet") {
-                    if (cb) cb({ state: { version: 1, collapsed: false, items: [] } });
+                    if (cb) cb({ state: localStore.bookmarkQueue || { version: 1, collapsed: false, items: [] } });
                     return;
                 }
                 if (cb) cb({ result: "started", ok: true });
@@ -408,7 +462,11 @@ function run(options) {
         messageListeners: messageListeners,
         mutationCallbacks: mutationCallbacks,
         location: location,
-        localStore: localStore
+        localStore: localStore,
+        settings: settings,
+        syncWrites: syncWrites,
+        localWrites: localWrites,
+        chrome: chromeStub
     };
 }
 
@@ -416,7 +474,7 @@ function wait(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-(async () => {
+test("existing embedded UI flows", async () => {
     // --- 1. invoker injection ---------------------------------------------
     {
         const ctx = run({});
@@ -498,7 +556,6 @@ function wait(ms) {
             fail("gallery pane must show the pretty title, got " + (title && title.textContent));
         }
         const buttons = pane.querySelectorAll(".nhdw-site-ui-btn");
-        const download = Array.from ? null : null;
         let found = null;
         for (let i = 0; i < buttons.length; i++) {
             if (/Download/.test(buttons[i].textContent)) found = buttons[i];
@@ -584,7 +641,224 @@ function wait(ms) {
     }
 
     console.log("PASS: website-embedded UI behaves correctly.");
-})().catch((error) => {
-    console.error("FAIL: " + (error && error.stack ? error.stack : error));
-    process.exit(1);
+});
+
+
+async function openTab(ctx, name) {
+    await wait(20);
+    ctx.dom.document.getElementById("nhdwSiteUiInvoker").click();
+    ctx.dom.document.getElementById("nhdwSiteUiTab-" + name).click();
+    await wait(20);
+}
+
+function bookmarkedState() {
+    return { version: 1, collapsed: false, items: [{
+        id: "111111", site: "nhentai", title: "Queue fixture", pages: 20,
+        thumbnail: "https://t.nhentai.net/galleries/1/thumb.jpg",
+        source: "page", selected: true, status: "bookmarked", addedAt: 1
+    }] };
+}
+
+test("embedded settings read defaults and saved values without writes", async () => {
+    for (const settings of [{}, { embeddedUi: true, toolbarOpensEmbedded: true },
+        { embeddedUi: true, toolbarOpensEmbedded: false }]) {
+        const ctx = run({ settings });
+        await openTab(ctx, "settings");
+        const doc = ctx.dom.document;
+        assert.equal(doc.getElementById("psEmbeddedUi").checked, true, "enabled by default, not an unchecked dead control");
+        assert.equal(doc.getElementById("psToolbarEmbedded").value,
+            settings.toolbarOpensEmbedded === undefined ? "auto" : settings.toolbarOpensEmbedded ? "on" : "off");
+        assert.equal(ctx.syncWrites.length, 0, "opening Settings must not write defaults");
+    }
+});
+
+test("embedded settings persist explicit choices and remove the auto override", async () => {
+    const ctx = run({});
+    await openTab(ctx, "settings");
+    const choice = ctx.dom.document.getElementById("psToolbarEmbedded");
+    for (const [value, stored] of [["on", true], ["off", false], ["auto", undefined]]) {
+        choice.value = value;
+        choice.dispatch("change");
+        assert.equal(ctx.settings.toolbarOpensEmbedded, stored);
+    }
+    assert.equal(Object.hasOwn(ctx.settings, "toolbarOpensEmbedded"), false);
+    const toggle = ctx.dom.document.getElementById("psEmbeddedUi");
+    toggle.checked = false;
+    toggle.dispatch("change");
+    assert.equal(ctx.settings.embeddedUi, false);
+});
+
+test("live sync changes disable/re-enable the drawer without destroying the Queue", async () => {
+    const ctx = run({});
+    await openTab(ctx, "queue");
+    const doc = ctx.dom.document;
+    const root = doc.getElementById("nhdwSiteUi");
+    const paste = doc.getElementById("nhdwBmPaste");
+    paste.value = "111111, 222222";
+    ctx.chrome.storage.local.set({ embeddedUi: false });
+    assert.equal(root.hidden, false, "local settings must not control the sync flag");
+    ctx.chrome.storage.sync.set({ embeddedUi: false });
+    assert.equal(root.hidden, true, "sync change must close the drawer immediately");
+    assert.equal(doc.getElementById("nhdwSiteUiInvoker"), null);
+    ctx.chrome.storage.sync.set({ embeddedUi: true });
+    await wait(20);
+    doc.getElementById("nhdwSiteUiInvoker").click();
+    await wait(20);
+    assert.ok(doc.getElementById("nhdwSiteUi") === root, "the original drawer must be reused");
+    assert.ok(doc.getElementById("nhdwBmPaste") === paste, "the original paste box must remain attached");
+    assert.equal(paste.value, "111111, 222222");
+    assert.equal(doc.querySelectorAll(".nhdw-invoker").length, 1);
+});
+
+test("a disabled-on-load page can be enabled live", async () => {
+    const ctx = run({ settings: { embeddedUi: false } });
+    await wait(20);
+    ctx.chrome.storage.sync.set({ embeddedUi: true });
+    await wait(20);
+    assert.ok(ctx.dom.document.getElementById("nhdwSiteUiInvoker"));
+});
+
+test("toolbar toggle refuses pages without a navbar instead of floating an unanchored drawer", async () => {
+    const ctx = run({ noNavbar: true });
+    await wait(20);
+    let answer;
+    ctx.messageListeners[0]({ action: "siteUiToggle", open: true }, {}, (value) => { answer = value; });
+    assert.equal(answer.ok, false);
+    assert.equal(ctx.dom.document.getElementById("nhdwSiteUi"), null);
+});
+
+test("observer checks do not keep rewriting nonempty badges (no self-triggered loop)", async () => {
+    const ctx = run({ local: { bookmarkQueue: bookmarkedState() } });
+    await openTab(ctx, "queue");
+    const badge = ctx.dom.document.getElementById("nhdwSiteUiInvokerBadge");
+    assert.equal(badge.textContent, "1");
+    const writes = badge._textWrites;
+    for (const callback of ctx.mutationCallbacks) callback([]);
+    await wait(250);
+    assert.equal(badge._textWrites, writes, "an unchanged textContent assignment produces another childList mutation in a browser");
+});
+
+test("a detached drawer reuses its Queue DOM instead of the stale module built flag", async () => {
+    const ctx = run({});
+    await openTab(ctx, "queue");
+    const doc = ctx.dom.document;
+    const root = doc.getElementById("nhdwSiteUi");
+    const paste = doc.getElementById("nhdwBmPaste");
+    paste.value = "111111";
+    root.remove();
+    ctx.messageListeners[0]({ action: "siteUiToggle", open: true }, {}, () => {});
+    await wait(20);
+    assert.ok(doc.getElementById("nhdwBmPaste") === paste, "the original paste box must remain attached");
+    assert.equal(paste.value, "111111");
+});
+
+test("Queue Download now works with only content-script APIs (no tabs API)", async () => {
+    const ctx = run({});
+    await openTab(ctx, "queue");
+    assert.equal(ctx.chrome.tabs, undefined);
+    ctx.dom.document.getElementById("nhdwBmPaste").value = "111111,222222";
+    const button = ctx.dom.document.querySelectorAll("button").find((node) => node.textContent === "Download now");
+    assert.ok(button);
+    button.click();
+    await wait(20);
+    const job = ctx.sentMessages.find((message) => message.action === "downloadAllDoujinshis");
+    assert.ok(job, "must reach the existing worker pipeline without querying tabs in the page");
+    assert.equal(job.tabId, undefined, "the worker uses sender.tab.id for content-script jobs");
+    assert.equal(job.separate, true);
+    assert.deepEqual(Object.keys(job.allDoujinshis), ["111111", "222222"]);
+});
+
+test("listing counts stay current while the drawer is open", async () => {
+    const ctx = run({ listing: true });
+    await openTab(ctx, "page");
+    const doc = ctx.dom.document;
+    doc.getElementById("nhdw-count").textContent = "0 selected";
+    for (const callback of ctx.mutationCallbacks) callback([]);
+    await wait(250);
+    assert.equal(doc.getElementById("nhdwSiteUiSelectionLine").textContent, "0 selected");
+});
+
+test("the backdrop starts below the navbar so the invoker remains clickable", async () => {
+    const ctx = run({});
+    await openTab(ctx, "page");
+    const doc = ctx.dom.document;
+    assert.equal(doc.getElementById("nhdwSiteUiPanel").style.top, "48px");
+    assert.equal(doc.getElementById("nhdwSiteUiBackdrop").style.top, "48px");
+});
+
+
+test(`embedded list settings restore all ${formatCases.length} format cases without writing preferences`, async () => {
+    for (const { label, stored, expected } of formatCases) {
+        const ctx = run({ settings: stored });
+        await wait(20); // device publication is startup work, not Settings rendering
+        const localCount = ctx.localWrites.length;
+        await openTab(ctx, "settings");
+        const doc = ctx.dom.document;
+        const select = doc.getElementById("psListFormat");
+        assert.ok(select, label);
+        assert.deepEqual(select.children.map((option) => option.value), formats);
+        assert.equal(select.value, expected, label);
+        assert.ok(doc.getElementById("psListTemplatePreview").textContent.endsWith(previewSuffix(expected)), label);
+        assert.deepEqual(ctx.syncWrites, [], label + ": no sync writes on render");
+        assert.equal(ctx.localWrites.length, localCount, label + ": no local writes on render");
+        assert.deepEqual(ctx.settings, stored);
+    }
+});
+
+test("embedded list-format edits save only that key and restore after switching tabs", async () => {
+    const ctx = run({ settings: { useZip: "cbz", listFormat: "pdf", unrelated: "keep" } });
+    await openTab(ctx, "settings");
+    const doc = ctx.dom.document;
+    for (const format of formats) {
+        ctx.syncWrites.length = 0;
+        const select = doc.getElementById("psListFormat");
+        select.value = format;
+        select.dispatch("change");
+        assert.deepEqual(ctx.syncWrites, [{ listFormat: format }]);
+        assert.deepEqual(ctx.settings, { useZip: "cbz", listFormat: format, unrelated: "keep" });
+        ctx.syncWrites.length = 0;
+        doc.getElementById("nhdwSiteUiTab-page").click();
+        doc.getElementById("nhdwSiteUiTab-settings").click();
+        await wait(20);
+        assert.equal(doc.getElementById("psListFormat").value, format);
+        assert.deepEqual(ctx.syncWrites, []);
+    }
+});
+
+test("embedded gallery downloads dispatch every resolved stored/inherited list format", async () => {
+    for (const { label, stored, expected } of formatCases) {
+        const ctx = run({ settings: stored, href: "https://nhentai.net/g/111111/",
+            gallery: { title: "Format fixture", pages: 20 } });
+        await openTab(ctx, "page");
+        const pane = ctx.dom.document.getElementById("nhdwSiteUiPage");
+        const button = pane.querySelectorAll("button").find((node) => /Download/.test(node.textContent));
+        assert.ok(button, label);
+        button.click();
+        await wait(20);
+        const job = ctx.sentMessages.find((message) => message.action === "downloadAllDoujinshis");
+        assert.ok(job, label + ": gallery dispatch");
+        assert.equal(job.formatOverride, expected, label);
+        assert.equal(job.separate, true);
+        assert.deepEqual(Object.keys(job.allDoujinshis), ["111111"]);
+        assert.deepEqual(ctx.syncWrites, [], label + ": no write-on-download");
+    }
+});
+
+test("embedded Queue dispatches every resolved format without changing single-title preferences", async () => {
+    for (const { label, stored, expected } of formatCases) {
+        const ctx = run({ settings: stored });
+        await openTab(ctx, "queue");
+        ctx.dom.document.getElementById("nhdwBmPaste").value = "111111,222222";
+        const button = ctx.dom.document.querySelectorAll("button").find((node) => node.textContent === "Download now");
+        assert.ok(button, label);
+        button.click();
+        await wait(20);
+        const job = ctx.sentMessages.find((message) => message.action === "downloadAllDoujinshis");
+        assert.ok(job, label + ": Queue dispatch");
+        assert.equal(job.formatOverride, expected, label);
+        assert.equal(job.separate, true, "Queue always produces one file per title");
+        assert.deepEqual(Object.keys(job.allDoujinshis), ["111111", "222222"]);
+        assert.deepEqual(ctx.syncWrites, [], label + ": no write-on-download");
+        assert.deepEqual(ctx.settings, stored);
+    }
 });

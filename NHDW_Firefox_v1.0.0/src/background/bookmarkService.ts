@@ -119,7 +119,7 @@ export function markBookmarksDownloading(ids: Array<string | number>): Promise<v
 // resolver uses (src/preview/selectedGalleryResolver.ts). A failure leaves the
 // row alone: an unresolved row is still downloadable, it just shows its id.
 
-export async function enrichBookmarks(ids: Array<string | number>): Promise<{ state: BookmarkState; resolved: number; skipped: boolean }> {
+export async function enrichBookmarks(ids: Array<string | number>, sourceTabId?: number): Promise<{ state: BookmarkState; resolved: number; skipped: boolean }> {
     const wanted = (ids || []).map((id) => String(id)).filter((id) => /^[0-9]+$/.test(id));
     if (wanted.length === 0) {
         return { state: await getBookmarkState(), resolved: 0, skipped: false };
@@ -128,7 +128,9 @@ export async function enrichBookmarks(ids: Array<string | number>): Promise<{ st
     // fetchGalleryViaTab injects into whatever tab it is given. With no
     // nhentai tab open there is nothing to resolve through, and saying so is
     // better than injecting into the user's banking tab and failing there.
-    const tabId = await getActiveNhentaiTabId();
+    // Full-panel tabs carry their source through the runtime sender URL;
+    // the helper revalidates that tab rather than querying the active panel.
+    const tabId = await getActiveNhentaiTabId(sourceTabId);
     if (typeof tabId !== "number") {
         return { state: await getBookmarkState(), resolved: 0, skipped: true };
     }
@@ -163,7 +165,7 @@ export async function enrichBookmarks(ids: Array<string | number>): Promise<{ st
  * listener must then return true to keep the channel open for the async
  * response), false when it is not a bookmark message at all.
  */
-export function handleBookmarkMessage(request: any, sendResponse: (response: any) => void): boolean {
+export function handleBookmarkMessage(request: any, sendResponse: (response: any) => void, sourceTabId?: number): boolean {
     const action = request && typeof request.action === "string" ? request.action : "";
     if (action.indexOf("bookmark") !== 0) {
         return false;
@@ -236,7 +238,7 @@ export function handleBookmarkMessage(request: any, sendResponse: (response: any
     }
 
     if (action === "bookmarkEnrich") {
-        enrichBookmarks(Array.isArray(request.ids) ? request.ids : [])
+        enrichBookmarks(Array.isArray(request.ids) ? request.ids : [], sourceTabId)
             .then((outcome) => sendResponse({
                 result: "success",
                 state: outcome.state,

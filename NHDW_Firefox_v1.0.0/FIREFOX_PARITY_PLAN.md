@@ -5,6 +5,10 @@
 first (done) → **elevate Firefox to Chrome feature parity** → re-plan the
 Android part on top of the synced codebase.
 
+**Latest checkpoint, 2026-09-21:** approved item 59 is complete (§12). Current
+source allowlist: ten changed existing files + two Firefox-only files.
+Device verification/signing (58) remains pending; no automatic Chrome backport.
+
 ## 1. Why elevation, not patching
 
 The Firefox folder was forked from Chrome at 3.3.0 and then diverged.
@@ -23,15 +27,23 @@ two trees diff-tracked so future syncs are cheap.
 | `src/background/background.ts` | + job keep-alive alarm (Android event-page suspension); sidePanel/offscreen code stays (feature-detected, unreachable/optional on Firefox) | Android robustness |
 | `src/preview/preview.ts` | + `refreshHostNotice` (MV3 opt-in host grants), + runtime mobile action bar relocator | Firefox MV3 + Android UI |
 | `src/preview/message.ts` | + `hostGrantNotice` | additive |
-| `css/style.css` | + phone media block (coarse-pointer gated) incl. `#nhdwMobileBar` | Android UI |
+| `css/style.css` | + phone media block (coarse-pointer gated) incl. `#nhdwMobileBar`; shared renderer rules extracted to `panelRenderers.css` | Android UI + PR #44 review |
+| `css/panelRenderers.css` (new) | same Settings/Queue declarations, scoped to their popup/drawer containers; imported by style.css and injected by manifest | PR #44 review |
 | `index.html` / `options.html` | + viewport metas | Android UI |
 | webpack | + `listControls` + `siteUi` entries | parity + item 56 |
 | `test/manifest.test.js` | Firefox-manifest describe block | guards |
+| `package.json` / lockfile | Firefox-only web-ext 10.6.0 and scoped addons-linter 10.13.0 override; Mocha 12.0.2 / Node range shared with Chrome | owner-requested tooling maintenance |
 | `src/utils/embeddedUi.ts` (new) | website-embedded UI contract | item 56/57, Firefox-first |
 | `src/content/siteUi.ts` (new) | header invoker + drawer | item 56 |
 | `css/content.css` | + embedded-UI / invoker / drawer block | item 56 |
 | `src/background/background.ts` | + keep-alive **and** toolbar `onClicked` / per-tab `setPopup` / `siteUiOpenPanel` | Android + item 57 |
-| `src/preview/popupSettings.ts` | + sidePanel filter **and** In-page panel settings (gated on `shipsSiteUi()`) | Firefox + item 57 |
+| `src/preview/popupSettings.ts` | sidePanel filter, In-page panel preferences (gated on `shipsSiteUi()`), explicit optional list-format read | Firefox + items 57/59 |
+| `src/utils/listSettings.ts` | explicitly request optional `listFormat`, then merge only other defaults; no migration/write on read | approved item 59, Firefox-only |
+| `src/content/listControls.ts` | same explicit optional-key read for card/bar settings | approved item 59, Firefox-only |
+| `src/options/options.ts` | explicit optional list-format read, display-only normalization/capability gate, live and empty-template previews | item 38 offline regressions; Firefox-only |
+| `src/preview/activeTabGallery.ts` | validated Full panel source-tab context; ordinary popup keeps active-tab behavior | PR #44 review |
+| `src/preview/popup.ts` | script injection uses source context; retries use nhentai-guarded source | PR #44 review |
+| `src/background/bookmarkService.ts` | optional source context for Full panel bookmark enrichment, validated before injection | PR #44 review |
 
 Everything else must be **byte-identical to Chrome** after the rebase.
 
@@ -150,3 +162,108 @@ body), and themed to match the site (dark navbar).
 - Toolbar button on Android: with the invoker in-page, evaluate
   `action.setPopup("")` + `onClicked → scripting.executeScript` toggling the
   drawer, so the toolbar also feels baked-in (desktop keeps the popup).
+
+
+## 9. PR #44 review (2026-09-20, `arena/01a0bfa1-nh-dw-2-0`)
+
+Fixed missing settings storage wiring/key reads, wrong storage-event arity,
+missing shared renderer CSS and on-demand CSS injection, badge observer loop,
+detached-drawer Queue loss, unanchored toolbar toggles, stale listing counts
+and navbar-blocking backdrop. Full-panel tabs now carry a validated
+`sourceTabId` through bootstrap/preview/retries/enrichment; failed tab creation
+is reported, and sender-tab fallback excludes extension/foreign pages.
+
+At this review checkpoint the `src/` diff was **seven changed existing + two new**:
+background, bookmarkService, activeTabGallery, message, popup, popupSettings,
+preview; plus siteUi and embeddedUi. This is additive to the historical
+four-file P1 delta, not an invitation to overwrite Chrome. Other source files
+remain byte-identical. No permissions or web-accessible resources added.
+
+Firefox 431 unit tests / 4 pending; smoke + all offline e2e pass, including
+11 site-UI Node tests, 11 toolbar-worker Node tests, the Full panel popup
+variant and relay sender guards. Chrome 398 unit tests / 4 pending, no tracked
+changes. Lint 0 errors / 0 notices (30 advisory warnings); clean 25-entry
+unsigned package. Real Firefox/Android verification and signing still require
+item 58. The then-proposed item 38 was subsequently approved and completed (§10).
+
+
+## 10. Approved Firefox options harness (2026-09-21, same branch)
+
+Item 38 adds `e2e-options.js` and a dependency-free DOM/storage helper reading
+real `options.html`; runs the built options bundle, not duplicated application
+logic. 33 tests cover storage/defaults, real select choices, explicit edits,
+preview inheritance/empty templates, local credentials and history. It is in
+`test:e2e` and also available as `test:options` after a build. The saved old
+bundle fails 8 cases; the rebuilt bundle passes all 33.
+
+Only newly changed production source: **`src/options/options.ts`**. Request
+`listFormat` explicitly without defaulting an unset key; normalize legacy PDF
+values for display only; remove unsupported side-panel choice without saving;
+refresh inherited previews and honor empty templates. Generic option classes,
+HTML, permissions and Chrome are unchanged. This is a regression-driven
+Firefox delta, not a UI redesign or automatic Chrome backport.
+
+**At the item-38 checkpoint: eight existing files + two new** (add options
+to §9's list). Firefox build, 431/4 unit tests, smoke7, all offline e2e and
+lint pass (0 errors / 0 notices / 30 warnings); clean 25-entry unsigned 1.2.0
+package. Real-device/signing gate 58 remains open. Then-proposed item 59
+recorded the same omitted-key defect in shared readers; those paths were NOT
+fixed by this options-only task. They were later approved/fixed separately (§12).
+
+
+## 11. Dependency maintenance (2026-09-21, same branch)
+
+Owner asked about npm deprecations and authorized necessary upgrades. Both
+maintained folders now use Mocha 12.0.2; Firefox uses web-ext 10.6.0 with
+addons-linter 10.13.0 selected via a scoped security override. fast-uri updated
+within its existing range. Full audits: Firefox 16→0 / Chrome 5→0; production
+only: 0. Two upstream Firefox install deprecations remain (ESLint 9 legacy API
+and Cheerio's older codec), honestly documented rather than suppressed.
+
+Both builds/unit/smoke/offline e2e and Firefox lint/package pass. Source delta
+remains **eight existing + two new**; all extension source, runtime dependency
+versions/integrities and bundles unchanged by this task. Only tooling, Node
+requirements and docs changed, not Chrome product features or the CI workflow.
+See root `DEPENDENCY_MAINTENANCE.md` for the override's removal condition,
+verified npm versions, remaining warnings and historical-snapshot exclusion.
+
+
+## 12. Approved shared list-format readers (2026-09-21, same branch)
+
+Item 59 fixes omitted-key reads in `utils/listSettings.ts`,
+`preview/popupSettings.ts`, and the independently reading
+`content/listControls.ts`. Request optional `listFormat` explicitly, then
+merge other defaults. Do not add it to `LIST_MODE_DEFAULTS`: absence must
+still inherit single-title format. Existing normalization handles all four
+formats and legacy folder→PDF; reads/rendering remain write-free and explicit
+edits persist without clobbering siblings. No UI redesign or new feature.
+
+Updated unit/list-controls mocks no longer return the entire stored profile
+for a key-scoped query; shared fixtures also cover async callbacks and cloned
+values. The real reader and built consumers run the same **36-case** matrix.
+Popup/Full panel Settings and Queue, in-page card/bar, and embedded Settings/
+gallery/Queue are covered, plus listing-format rendering from a delivered
+`getGalleries` message. Full listing bootstrap/pagination (40) is still open.
+
+**Current source delta: ten changed existing files + two new**, verified
+against Chrome (all other TS source byte-identical):
+
+- background/background, background/bookmarkService;
+- content/listControls;
+- options/options;
+- preview/activeTabGallery, preview/message, preview/popup,
+  preview/popupSettings, preview/preview;
+- utils/listSettings;
+- new Firefox-only content/siteUi and utils/embeddedUi.
+
+Only `listSettings` and `listControls` are newly added to the existing source
+allowlist; `popupSettings` already differed. Rebuilt preview/siteUi/listControls
+bundles only. Chrome, dependencies, manifest/permissions, HTML/CSS and CI
+unchanged by 59; preserve the earlier separately approved tooling updates.
+
+Focused units **59 pass / 20 fail → 79/79**, site UI **11/15 → 15/15**, old
+popup and in-page bundles red. Firefox **474 unit pass / 4 pending**, smoke7,
+all offline e2e (options33, toolbar11, both popup variants) green; lint **0
+errors / 0 notices / 30 unchanged advisories**; unsigned **1.2.0 ZIP25**.
+The four pending tests remain intentionally opt-in live checks. No live-site,
+real-device or signing evidence; 58 remains the release gate.

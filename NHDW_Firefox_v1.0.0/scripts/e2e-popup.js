@@ -22,7 +22,10 @@
 //   7. an explicit token tick still saves - the fix must not make the section
 //      read-only;
 //   8. with no listFormat key set, the list-mode format shown is the inherited
-//      single-title one, i.e. the format that will actually be used.
+//      single-title one, i.e. the format that will actually be used;
+//   9-12. explicit/inherited/legacy formats restore read-only in Settings,
+//      edits survive reopening, delivered getGalleries messages render the
+//      resolved format, and Queue dispatches it in normal/Full panel mode.
 //
 // THREE STUB TRAPS, each of which silently tests the wrong thing (all cost a
 // debugging round; keep them if you port this harness to the Firefox folder):
@@ -35,16 +38,21 @@
 //     checkboxes that way and then looks them up by id - without it the panel
 //     reads back fresh unchecked boxes instead of the ones it just built.
 // chrome.storage.sync is stateful here and logs every write to syncWrites, so
-// "must not write" is assertable.
+// "must not write" is assertable. get() is asynchronous and key-scoped: NEVER
+// merge the whole store over defaults (that masked the item-59 missing key).
 //
-// Usage:  node scripts/e2e-popup.js [path/to/js/preview.js]
+// Usage:  node scripts/e2e-popup.js [path/to/js/preview.js] [--full-panel]
 // Exit code 0 = all phases passed.
 
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
+const assert = require("node:assert/strict");
+const { readStorage } = require("./test-support/storage");
+const { formats, formatCases, previewSuffix } = require("./test-support/list-format-cases");
 
-const bundlePath = process.argv[2] || path.join(__dirname, "..", "js", "preview.js");
+const fullPanel = process.argv.includes("--full-panel");
+const bundlePath = process.argv.slice(2).find((arg) => !arg.startsWith("--")) || path.join(__dirname, "..", "js", "preview.js");
 const code = fs.readFileSync(bundlePath, "utf8");
 
 function fail(msg) {
@@ -176,6 +184,12 @@ let retryAnswer = { result: "started" };
 // chrome.storage.sync as the panel sees it, plus every write it makes.
 const syncStore = {};
 const syncWrites = [];
+const localWrites = [];
+const localStore = { apiKeyGate: "skipped" };
+const sourceTab = { id: 7, url: "https://nhentai.net/g/123456/", active: !fullPanel };
+const panelUrl = "moz-extension://testid/index.html" + (fullPanel ? "?sourceTabId=7" : "");
+const updatedListeners = [];
+
 
 const chromeStub = {
     runtime: {
@@ -183,6 +197,12 @@ const chromeStub = {
         sendMessage(msg, cb) {
             sentMessages.push(msg);
             if (!cb) return;
+            if (msg && msg.action === "isDownloadFinished") {
+                // The message-layer phases simulate a job in progress. Do not
+                // race an unrelated live metadata fetch against their UI.
+                cb({ result: false });
+                return;
+            }
             if (msg && msg.action === "getFailedGalleries") {
                 cb({ result: "success", failed: failedStore });
                 return;
@@ -199,13 +219,14 @@ const chromeStub = {
             cb({ result: "success" });
         },
         lastError: null,
-        getURL: (p) => p,
-        getManifest: () => ({ content_scripts: [{ js: ["js/content.js", "js/listControls.js"] }] })
+        getURL: (p) => "moz-extension://testid/" + p,
+        getManifest: () => fullPanel ? require("../manifest.json")
+            : ({ content_scripts: [{ js: ["js/content.js", "js/listControls.js"] }] })
     },
     storage: {
         // Stateful: the settings pane reads what it wrote moments earlier.
         sync: {
-            get(defaults, cb) { cb(Object.assign({}, defaults, syncStore)); },
+            get(keys, cb) { queueMicrotask(() => cb(readStorage(syncStore, keys))); },
             set(items, cb) {
                 syncWrites.push(Object.assign({}, items));
                 Object.assign(syncStore, items);
@@ -217,16 +238,17 @@ const chromeStub = {
             // apiKeyGate: "skipped" = the first-run gate was already answered,
             // so the panel renders its normal preview instead of the key box
             // (which would overwrite #action under the phases below).
-            get(defaults, cb) { cb(Object.assign({}, defaults, { apiKeyGate: "skipped" })); },
-            set(_items, cb) { if (cb) cb(); },
-            remove(_key, cb) { if (cb) cb(); },
-            clear(cb) { if (cb) cb(); }
+            get(keys, cb) { queueMicrotask(() => cb(readStorage(localStore, keys))); },
+            set(items, cb) { localWrites.push(structuredClone(items)); Object.assign(localStore, items); if (cb) cb(); },
+            remove(key, cb) { localWrites.push({ remove: key }); delete localStore[key]; if (cb) cb(); },
+            clear() { fail("popup bootstrap must never clear local storage"); }
         },
         session: { get(_key, cb) { cb({}); }, set(_items, cb) { if (cb) cb(); }, remove(_key, cb) { if (cb) cb(); } }
     },
     tabs: {
-        query(_q, cb) { cb([{ id: 7, url: "https://nhentai.net/g/123456/" }]); },
-        onUpdated: { addListener() {} },
+        query(_q, cb) { cb(fullPanel ? [{ id: 99, url: panelUrl, active: true }] : [sourceTab]); },
+        get(id, cb) { cb(id === sourceTab.id ? sourceTab : undefined); },
+        onUpdated: { addListener(fn) { updatedListeners.push(fn); } },
         onActivated: { addListener() {} }
     },
     action: { setIcon() {}, setPopup() {} },
@@ -250,7 +272,7 @@ const sandbox = {
     confirm: () => false,
     alert: () => {},
     navigator: { userAgent: "popup-harness" },
-    location: { href: "https://nhentai.net/g/123456/" }
+    location: { href: panelUrl }
 };
 sandbox.window = sandbox;
 sandbox.self = sandbox;
@@ -265,6 +287,11 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     } catch (err) {
         fail("bundle threw while loading: " + err.name + ": " + err.message);
     }
+    await wait(20);
+    if (localStore.lastUrl !== sourceTab.url) {
+        fail("bootstrap must use the source page URL, not the full-panel extension tab: " + localStore.lastUrl);
+    }
+    console.log("PASS: " + (fullPanel ? "Full panel preserves its originating tab" : "popup follows the active tab"));
     if (messageListeners.length === 0) fail("the popup never registered an onMessage listener");
     if (messageListeners.length < 2) {
         fail("expected both popup and preview listeners, got " + messageListeners.length);
@@ -356,6 +383,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const retryMessage = sentMessages.find((m) => m.action === "downloadAllDoujinshis");
     if (!retryMessage) {
         fail("clicking Retry must re-send a downloadAllDoujinshis job, sent " + JSON.stringify(sentMessages));
+    }
+    if (retryMessage.tabId !== 7) {
+        fail("retry must use the validated source tab, never the extension tab: " + retryMessage.tabId);
     }
     if (!retryMessage.allDoujinshis["654321"]) {
         fail("the retry must carry exactly the failed gallery, got " + JSON.stringify(retryMessage.allDoujinshis));
@@ -464,6 +494,123 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     console.log("PASS phase 8: the list-mode format shown is the one that will be used");
 
+    // ---- Item 59: saved list settings + real reader consumers ------------
+    // The legacy DOM auto-creates ids for message-only phases. These checks
+    // must instead find real renderer-created controls and their real choices.
+    const installFormats = (stored) => {
+        delete syncStore.useZip;
+        delete syncStore.listFormat;
+        Object.assign(syncStore, stored);
+    };
+    const checkFormatControl = (expected, label) => {
+        const control = nodes.get("psListFormat");
+        assert.ok(control, label + ": real list format control");
+        assert.equal(control.tagName, "SELECT");
+        assert.deepEqual(control.children.map((option) => option.value), formats);
+        assert.equal(control.value, expected, label);
+        assert.ok(nodes.get("psListTemplatePreview").textContent.endsWith(previewSuffix(expected)), label + ": preview");
+        return control;
+    };
+    for (const { label, stored, expected } of formatCases) {
+        installFormats(stored);
+        const before = structuredClone(syncStore);
+        const writes = syncWrites.length;
+        const localCount = localWrites.length;
+        byId("tabSettings").dispatchLast("click");
+        await wait(20);
+        checkFormatControl(expected, label);
+        assert.deepEqual(syncStore, before, label + ": rendering preserves the stored values");
+        assert.equal(syncWrites.length, writes, label + ": no sync writes on render");
+        assert.equal(localWrites.length, localCount, label + ": no local writes on render");
+    }
+    console.log(`PASS phase 9: all ${formatCases.length} saved/inherited/legacy list-format cases restore read-only in Settings`);
+
+    installFormats({ useZip: "cbz", listFormat: "pdf" });
+    for (const value of formats) {
+        byId("tabSettings").dispatchLast("click");
+        await wait(20);
+        const control = nodes.get("psListFormat");
+        const writes = syncWrites.length;
+        const before = structuredClone(syncStore);
+        control.value = value;
+        control.dispatchLast("change");
+        await wait(0);
+        assert.deepEqual(syncWrites.slice(writes), [{ listFormat: value }]);
+        assert.deepEqual(syncStore, { ...before, listFormat: value });
+        const afterChange = syncWrites.length;
+        byId("tabSettings").dispatchLast("click");
+        await wait(20);
+        checkFormatControl(value, "reopened " + value);
+        assert.equal(syncWrites.length, afterChange, "reopening must not write");
+    }
+    console.log("PASS phase 10: explicit list-format changes persist only their own key and survive reopening");
+
+    // Deliver the actual getGalleries message: this tests the listing renderer
+    // and shared-reader boundary, NOT live page injection/pagination (item 40).
+    syncStore.listOutputMode = "separate";
+    for (const { label, stored, expected } of formatCases) {
+        installFormats(stored);
+        const writes = syncWrites.length;
+        const localCount = localWrites.length;
+        deliver({ action: "getGalleries", galleries: [{ id: "111111", title: "Format fixture" }], currentPage: 0, maxPage: 0 });
+        await wait(20);
+        const html = byId("action").innerHTML;
+        const select = /<select id="listFormat">([\s\S]*?)<\/select>/.exec(html);
+        assert.ok(select, label + ": real listing options markup");
+        assert.ok(html.includes('id="listNamePreview"'), label + ": preview is actually in the markup");
+        assert.deepEqual(Array.from(select[1].matchAll(/<option value="([^"]+)"/g), (match) => match[1]), formats);
+        assert.ok(select[1].includes('<option value="' + expected + '" selected>'), label + ": correct selected option");
+        assert.ok(byId("listNamePreview").textContent.endsWith(previewSuffix(expected)), label + ": listing preview");
+        assert.equal(syncWrites.length, writes, label + ": listing render is read-only");
+        assert.equal(localWrites.length, localCount, label + ": listing render leaves local storage alone");
+    }
+    console.log(`PASS phase 11: getGalleries renders all ${formatCases.length} resolved list-format cases without saving defaults`);
+
+    // Queue's paste workflow reaches the same reader in the built preview.js.
+    byId("tabQueue").dispatchLast("click");
+    await wait(20);
+    const paste = nodes.get("nhdwBmPaste");
+    assert.ok(paste);
+    const descendants = (root) => [root, ...(root.children || []).flatMap(descendants)];
+    const queueButton = descendants(byId("queuePane")).find((node) => node.tagName === "BUTTON" && node.textContent === "Download now");
+    assert.ok(queueButton, "the real Queue Download now button exists");
+    retryAnswer = { result: "started" };
+    for (const { label, stored, expected } of formatCases) {
+        installFormats(stored);
+        const writes = syncWrites.length;
+        const sent = sentMessages.length;
+        paste.value = "111111,222222";
+        queueButton.dispatchLast("click");
+        await wait(20);
+        const job = sentMessages.slice(sent).find((message) => message.action === "downloadAllDoujinshis");
+        assert.ok(job, label + ": Queue dispatched a job");
+        assert.equal(job.formatOverride, expected, label + ": Queue format");
+        assert.equal(job.separate, true, "Queue never merges unrelated titles");
+        assert.equal(job.tabId, 7, "normal/full panels keep the originating page");
+        assert.deepEqual(Object.keys(job.allDoujinshis), ["111111", "222222"]);
+        assert.equal(syncWrites.length, writes, label + ": starting Queue must not save format defaults");
+    }
+    console.log(`PASS phase 12: Queue dispatches all ${formatCases.length} stored/inherited/legacy formats through the shared reader`);
+
+    if (fullPanel) {
+        if (!nodes.has("psEmbeddedUi") || !byId("psEmbeddedUi").checked) {
+            fail("Firefox full-panel Settings must show the enabled embedded toggle");
+        }
+        sourceTab.url = "https://nhentai.net/g/654321/";
+        for (const listener of updatedListeners) listener(7, { url: sourceTab.url }, sourceTab);
+        await wait(20);
+        if (localStore.lastUrl !== sourceTab.url) {
+            fail("a full panel must follow navigation in its inactive originating tab");
+        }
+        console.log("PASS: Full panel follows its inactive source tab's navigation");
+    } else if (nodes.has("psEmbeddedUi")) {
+        // createElement registers ids even for detached nodes in this stub;
+        // test membership in Settings children rather than auto-vivified ids.
+        const includesNode = (parent, target) => parent === target || (parent.children || []).some((child) => includesNode(child, target));
+        if (includesNode(byId("settingsPane"), nodes.get("psEmbeddedUi"))) {
+            fail("a Chrome-shaped build must not render embedded settings");
+        }
+    }
     console.log("PASS: popup message layer behaves correctly in a window-less context.");
     process.exit(0);
 })();

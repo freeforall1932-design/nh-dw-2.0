@@ -274,13 +274,30 @@ function sendToBackground(message, sender) {
         finalName: "cards",
         formatOverride: "zip",
         separate: true
-    }, { tab: { id: 77 } });
+    }, { tab: { id: 77, url: "https://nhentai.net/g/333/" } });
     const cardRelay = relays.find((r) => r.action === "downloadAllDoujinshis");
     if (!cardRelay || cardRelay.tabId !== 77) {
         fail("an in-page download must fall back to the sender tab id, got "
             + JSON.stringify(cardRelay && cardRelay.tabId));
     }
     console.log("PASS: in-page card downloads resolve the source tab from the message sender");
+
+    // A full-panel extension tab is also a sender.tab, but is NOT a source
+    // page. In particular, a closed/navigated pinned page makes the validated
+    // UI omit tabId; the worker must not substitute the extension tab itself.
+    for (const url of ["moz-extension://testid/index.html?sourceTabId=7", "https://example.com/"]) {
+        relays.length = 0;
+        await sendToBackground({
+            action: "downloadAllDoujinshis", allDoujinshis: { "333": "Three" },
+            galleryMetadata: {}, finalName: "bookmarks", separate: true
+        }, { url, tab: { id: 99, url } });
+        const job = relays.find((r) => r.action === "downloadAllDoujinshis");
+        if (!job || job.tabId !== undefined) {
+            fail("non-site sender must never become a fallback source tab: " + JSON.stringify(job));
+        }
+    }
+    console.log("PASS: a full-panel/foreign sender is never substituted for a missing source tab");
+
 
     // 1b. getCdnStatus: the popup asks which image hosts are active and which
     //     need the optional host grant. With no CDN config fetched (the fetch
