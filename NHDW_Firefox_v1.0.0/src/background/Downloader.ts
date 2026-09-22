@@ -528,8 +528,8 @@ export default class Downloader
             default:
                 throw "Unknown page format " + page.t;
         }
-        let filenameParsing = (currPage + 1) + format; // Name for parsing
-        this.updateProgress(progress, this.#doujinshiName + "/" + filenameParsing, false);
+        let filenameParsing = (page && page.hash) ? (page.hash + format) : ((currPage + 1) + format); // Name for parsing
+        this.updateProgress(progress, this.#doujinshiName + "/" + ((currPage + 1) + format), false);
 
         let filename = this.#getNumberWithZeros(currPage + 1) + format; // Final file name
 

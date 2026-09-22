@@ -66,7 +66,7 @@ export const hentaienvySource: SiteAdapter = {
     },
 
     getAllowedPathRegex(): RegExp {
-        return /^\/033\/[a-z0-9]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
+        return /^\/[0-9]{3}\/[a-z0-9_-]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
     },
 
     needsTabFetch(): boolean {

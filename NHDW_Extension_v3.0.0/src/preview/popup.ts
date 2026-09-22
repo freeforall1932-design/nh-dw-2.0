@@ -495,6 +495,22 @@ export default class Popup
             } catch (error) {
                 statusText = errorMessage(error);
             }
+        } else if (json === null && source.site !== "nhentai") {
+            try {
+                const galleryUrl = source.getGalleryUrl(id);
+                const resp = await fetch(galleryUrl, {
+                    credentials: "include",
+                    cache: "no-store"
+                });
+                status = resp ? resp.status : 0;
+                statusText = resp ? String(resp.statusText || "") : "";
+                if (resp && resp.ok && source.extractGallery) {
+                    const html = typeof resp.text === "function" ? await resp.text() : "";
+                    json = source.extractGallery(html);
+                }
+            } catch (error) {
+                statusText = errorMessage(error);
+            }
         }
 
         if (json !== null && !json.site) {

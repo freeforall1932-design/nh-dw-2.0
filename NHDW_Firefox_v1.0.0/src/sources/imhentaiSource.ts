@@ -16,7 +16,7 @@ export const imhentaiSource: SiteAdapter = {
     defaultFormat: "zip",
 
     matchesUrl(url: string): boolean {
-        return /^https:\/\/(?:[a-z0-9-]+\.)?imhentai\.xxx(?:[/?#]|$)/i.test(url);
+        return /^https:\/\/(?:[a-z0-9-]+\.)?imhentai\.(?:xxx|org|net)(?:[/?#]|$)/i.test(url);
     },
 
     getGalleryId(url: string): string | null {
@@ -66,7 +66,7 @@ export const imhentaiSource: SiteAdapter = {
     },
 
     getAllowedPathRegex(): RegExp {
-        return /^\/033\/[a-z0-9]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
+        return /^\/[0-9]{3}\/[a-z0-9_-]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
     },
 
     needsTabFetch(): boolean {

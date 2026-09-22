@@ -30,7 +30,7 @@ export const hentaieraSource: SiteAdapter = {
     defaultFormat: "zip",
 
     matchesUrl(url: string): boolean {
-        return /^https:\/\/hentaiera\.to(?:[/?#]|$)/i.test(url);
+        return /^https:\/\/(?:[a-z0-9-]+\.)?hentaiera\.(?:to|com)(?:[/?#]|$)/i.test(url);
     },
 
     getGalleryId(url: string): string | null {
