@@ -19,6 +19,9 @@
 // DNS namespace is rejected here before it can reach URL generation or the
 // dynamic-permission flow. No <all_urls> permission is ever used.
 //
+// Multi-site v4 support: allows registered site adapters to declare additional
+// allowed image hosts and path shapes without compromising nhentai origin checks.
+//
 // This module is deliberately chrome-free and fetch-free so it can run in the
 // service worker, the offscreen document, and plain Node test builds. The
 // service worker owns refreshing the list (src/background/cdnConfigService.ts)
@@ -55,6 +58,22 @@ const ALLOWED_IMAGE_PATH = /^\/galleries\/[0-9]+\/[0-9]+\.(jpg|jpeg|png|gif|webp
 // URL are not available. Group layout: 1 = authority, 2 = path, 3 = query,
 // 4 = fragment.
 const HTTPS_URL_PARTS = /^https:\/\/([^/?#]+)(\/[^?#]*)?(\?.*)?(#.*)?$/i;
+
+export interface ImageSourceRules {
+    hosts?: string[];
+    hostRegex?: RegExp;
+    pathRegex?: RegExp;
+}
+
+const additionalImageRules: ImageSourceRules[] = [];
+
+export function registerImageSourceRules(rules: ImageSourceRules): void {
+    additionalImageRules.push(rules);
+}
+
+export function resetAdditionalImageRules(): void {
+    additionalImageRules.length = 0;
+}
 
 // Currently configured servers (already merged with the fallback list) or null
 // while only the defaults apply. Never exposed by reference.
@@ -192,6 +211,7 @@ export function setImageServers(preferred: string[] | null | undefined): void {
 
 export function resetImageServers(): void {
     applyServers(null);
+    resetAdditionalImageRules();
 }
 
 export function getImageServers(): string[] {
@@ -229,11 +249,13 @@ export function buildImageUrl(server: string, mediaId: string, filename: string)
     return server.replace(/\/+$/, "") + "/galleries/" + encodeURIComponent(mediaId) + "/" + filename;
 }
 
-// True when url is an original-image URL on one of the configured servers.
-// Same strictness as the old hardcoded regex (exact path shape, no query
-// string), generalized to whatever hosts the shared configuration currently
-// holds — this is what runs inside the user's tab, so it stays conservative.
-export function isAllowedImageUrl(url: string): boolean {
+// True when url is an original-image URL on one of the configured servers or
+// on a recognized multi-site image host. Same strictness as the old hardcoded
+// regex (exact path shape, no query string, bare HTTPS origins).
+export function isAllowedImageUrl(
+    url: string,
+    sourceRules?: ImageSourceRules | { getImageHosts?(): string[]; getAllowedPathRegex?(): RegExp }
+): boolean {
     if (typeof url !== "string") {
         return false;
     }
@@ -249,11 +271,62 @@ export function isAllowedImageUrl(url: string): boolean {
         return false;
     }
     const host = authority.toLowerCase();
-    const hosts = configuredImageServers === null ? [] : configuredImageHosts;
-    const isDefaultHost = DEFAULT_IMAGE_SERVERS.some((server) => hostOfServer(server) === host);
-    if (!isDefaultHost && !hosts.includes(host)) {
+    const path = match[2] !== undefined ? match[2] : "";
+
+    // 1. If explicit rules are passed (e.g. from an active adapter):
+    if (sourceRules) {
+        let hosts: string[] = [];
+        let hostRegex: RegExp | undefined;
+        let pathRegex: RegExp = ALLOWED_IMAGE_PATH;
+
+        if ("getImageHosts" in sourceRules && typeof sourceRules.getImageHosts === "function") {
+            hosts = (sourceRules.getImageHosts() || []).map((h) => h.toLowerCase());
+        } else if ("hosts" in sourceRules && Array.isArray(sourceRules.hosts)) {
+            hosts = sourceRules.hosts.map((h) => h.toLowerCase());
+        }
+
+        if ("hostRegex" in sourceRules && sourceRules.hostRegex instanceof RegExp) {
+            hostRegex = sourceRules.hostRegex;
+        }
+
+        if ("getAllowedPathRegex" in sourceRules && typeof sourceRules.getAllowedPathRegex === "function") {
+            const r = sourceRules.getAllowedPathRegex();
+            if (r instanceof RegExp) pathRegex = r;
+        } else if ("pathRegex" in sourceRules && sourceRules.pathRegex instanceof RegExp) {
+            pathRegex = sourceRules.pathRegex;
+        }
+
+        const hostMatches = hosts.includes(host) || (hostRegex ? hostRegex.test(host) : false);
+        if (hostMatches) {
+            return pathRegex.test(path);
+        }
         return false;
     }
-    const path = match[2] !== undefined ? match[2] : "";
-    return ALLOWED_IMAGE_PATH.test(path);
+
+    // 2. Default nhentai configuration:
+    const hosts = configuredImageServers === null ? [] : configuredImageHosts;
+    const isDefaultHost = DEFAULT_IMAGE_SERVERS.some((server) => hostOfServer(server) === host);
+    if (isDefaultHost || hosts.includes(host)) {
+        if (ALLOWED_IMAGE_PATH.test(path)) {
+            return true;
+        }
+    }
+
+    // 3. Registered multi-site additional rules:
+    for (const rule of additionalImageRules) {
+        let hostMatches = false;
+        if (rule.hosts && rule.hosts.map((h) => h.toLowerCase()).includes(host)) {
+            hostMatches = true;
+        } else if (rule.hostRegex && rule.hostRegex.test(host)) {
+            hostMatches = true;
+        }
+        if (hostMatches) {
+            const pathRegex = rule.pathRegex || ALLOWED_IMAGE_PATH;
+            if (pathRegex.test(path)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }

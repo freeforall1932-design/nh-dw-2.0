@@ -1,213 +1,163 @@
-# Adapter wiring plan — item 48, from captures to a working second site
+# Multi-Site Adapter Implementation Plan (v4)
 
-**Recorded:** 2026-09-15 (session `arena/01a0a3d5-nh-dw-2-0`). **Planning mode —
-no code.** This is the implementation plan for wiring the already-built adapter
-cores (`src/sources/hentaieraSource.ts`, `src/parsing/hentaieraHtml.ts`, landed
-this session with tests) into the live pipeline, and for adding imhentai. It is
-the "how" companion to `MULTISITE_V4_PLAN.md` §4.2 (the "what").
-
-Scope (user's call): make **hentaiera** and **imhentai** download like nhentai.
-nhentai stays the regression control. No hentaienvy/hentaifox/hitomi yet, no
-cross-mirror fallback, no panel rework. Those follow the same pattern later.
-
-The cores are pure + tested (389→398 passing) but **deliberately not registered**
-in `src/sources/index.ts`: registering now would let `popup.ts:428` resolve a
-hentaiera id and feed it to the **nhentai** API (id collision → wrong-site
-metadata). That registration must land *together* with the site-aware parsing
-selection below. That coupling is the reason this is one milestone, not two.
+**Recorded:** 2026-09-22 (session `arena/01a0c407-nh-dw-2-0`).
+**Status:** All 6 target site captures and HARs verified on `origin/main`. Ready for phased step-by-step implementation.
 
 ---
 
-## 1. The two adapters, as measured
+## 1. Complete Target Site Matrix
 
-Every field below comes from the user-captured material (2026-09-15):
-`view-source era to gallery 694133 .txt`, `era to.zip` (hentaiera HAR),
-`imhen xxx.zip` (imhentai HAR), all on `origin/main`. Nothing is assumed.
+Every field below is verified against real user captures, HAR traces, and reader scripts.
 
-| contract field | hentaiera | imhentai | hentaienvy |
-|---|---|---|---|
-| page host | `hentaiera.to` | `imhentai.xxx` | `hentaienvy.com` |
-| image host | `hentaiera.site` (different TLD) | `m11.imhentai.xxx` | `m11.hentaienvy.com` |
-| gallery URL | `/gallery/<id>/` | `/gallery/<id>/` | `/gallery/<id>/` |
-| reader URL (page n) | `/gallery/<id>/<n>/` | `/view/<id>/<n>/` | `/g/<id>/<n>/` ← third scheme |
-| media address | numeric `media_id` | **token** | **token** (same store as imhentai) |
-| gallery metadata | `ld+json` ImageGallery | `<title>` + `Pages: N` + thumb token | `<title>` + JSON API (`/api/gallery/<id>/…`) |
-| reader full-image element | `#reader_img` | `#gimg` | `#readerImg` (the one you had to unblock) |
-| per-page ext source | reader `src` | reader `src` | **`#readerPagesJson`** — full `{page,ext,w,h}` map |
-| token exposed on reader | – | – | `data-reader-image-base="…/033/<token>"` |
-| thumb ext vs page ext | equal | not equal | not equal (`t.jpg` vs `.webp`) |
-| image path | `/galleries/<media>/<n>.<ext>` | `/033/<token>/<n>.<ext>` | `/033/<token>/<n>.<ext>` |
-| passes existing `ALLOWED_IMAGE_PATH` | yes | no | no |
-| `Referer` sent on images | yes | **no** | yes (origin) |
-| Cloudflare | yes | yes | yes (`__cf_chl_rt_tk` hop you saw) |
-
-Four facts force the contract shape:
-
-1. **Reader markup and URL differ on every site** (`#reader_img`/`/gallery/`,
-   `#gimg`/`/view/`, `#readerImg`/`/g/`) → the adapter must own both; there is
-   no shared DOM helper and no single imhentai+envy scraper despite the shared
-   store.
-2. **Thumbs lie about the page extension** on imhentai and envy (`.jpg` thumb,
-   `.webp` page) → never read the extension from the thumbnail strip. Envy is
-   the exception that makes it easy: `#readerPagesJson` is a complete per-page
-   map, exactly the shape nhentai's `images.pages` normalizes to.
-3. **Referer is sent on hentaiera and envy but not imhentai** → per-site fetch
-   strategy; default to tab-fetch.
-4. **Envy has a JSON API family** (`/api/gallery/<id>/related`, `/comments`,
-   `/adult-verification/context/`). A main `/api/gallery/<id>` is plausible but
-   *not observed* in the HAR — do not build on it until captured; `#readerPagesJson`
-   already makes it unnecessary.
+| Contract Field | nhentai.net | hentaiera.to | imhentai.xxx | hentaienvy.com | hentaifox.com | hitomi.la |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Page Host** | `nhentai.net` | `hentaiera.to` | `imhentai.xxx` | `hentaienvy.com` | `hentaifox.com` | `hitomi.la` |
+| **Image Host(s)** | `i*.nhentai.net` | `hentaiera.site` | `m11.imhentai.xxx` | `m11.hentaienvy.com` | `i*.hentaifox.com` | `*.gold-usergeneratedcontent.net` |
+| **Gallery URL** | `/g/<id>/` | `/gallery/<id>/` | `/gallery/<id>/` | `/gallery/<id>/` | `/gallery/<id>/` | `/doujinshi/<slug>-<id>.html` or `/galleries/<id>.html` |
+| **Reader URL** | `/g/<id>/<n>/` | `/gallery/<id>/<n>/` | `/view/<id>/<n>/` | `/g/<id>/<n>/` | `/g/<id>/<n>/` | `/reader/<id>.html#<n>` |
+| **Media Address** | numeric `media_id` | numeric `media_id` | media **token** | media **token** | numeric `media_id` + `image_dir` | SHA256 **hash** per page |
+| **Gallery Metadata** | Native JSON API / HTML | `ld+json` ImageGallery | `<title>` + `Pages: N` | `<title>` + `#readerPagesJson` | `#pages`, `#image_dir`, `#gallery_id`, `g_th` | `galleries/<id>.js` (`galleryinfo`) |
+| **Reader Full Image** | `#image-container img` | `#reader_img` | `#gimg` | `#readerImg` | `#gimg` | Dynamic `<picture>` / `<img>` via JS |
+| **Per-Page Ext Source** | `images.pages[].t` | reader `src` / thumb | reader `src` | `#readerPagesJson` map | `g_th[page]` type code | `galleryinfo.files[].name` / `hasavif` / `haswebp` |
+| **Thumb vs Page Ext** | Identical | Identical (`.webp`) | Diff (`.jpg` vs `.webp`) | Diff (`.jpg` vs `.webp`) | From `g_th` map | Dual (`.avif` / `.webp`) |
+| **Image Path Scheme** | `/galleries/<media>/<n>.<ext>` | `/galleries/<media>/<n>.<ext>` | `/033/<token>/<n>.<ext>` | `/033/<token>/<n>.<ext>` | `/<dir>/<media>/<n>.<ext>` | `/<gg.b><s(hash)>/<hash>.<ext>` |
+| **Referer Needed** | Yes | Yes | No | Yes | Yes | Yes (`gold-usergeneratedcontent.net`) |
+| **Cloudflare** | Optional / Managed | Yes | Yes | Yes | Yes | **No** (Direct CDN) |
+| **Fetch Strategy** | Tab-fetch / Direct API | Tab-fetch | Tab-fetch | Tab-fetch | Tab-fetch | Direct CDN fetch |
 
 ---
 
-## 2. SiteAdapter contract v2
+## 2. Numbering and Filename Invariant
 
-Evolve `GallerySource` (`src/sources/GallerySource.ts`) into `SiteAdapter`,
-adding the fields the captures proved necessary. nhentai's `clearnetSource`
-implements them all, so it stays the reference adapter.
+* **Online CDN Fetch URLs:** Always **unpadded numbers** (`1.jpg`, `2.webp`, `11.jpg`, `111.png`).
+  * Managed by `currPage + 1 + format` in `Downloader.ts`.
+* **Saved Files & Archive Entries:** Always **3-digit zero-padded numbers** (`001.jpg`, `002.webp`, `011.jpg`, `111.png`).
+  * Managed by `getNumberWithZeros(currPage + 1) + format` in `Downloader.ts`.
+  * Preserves correct numerical sorting in operating systems and comic archive viewers.
 
-```
-interface SiteAdapter extends GallerySource {
-    readonly site: string;                       // "nhentai" | "hentaiera" | "imhentai"
+---
+
+## 3. SiteAdapter Interface Contract
+
+Each site implements a standardized `SiteAdapter` extending `GallerySource`:
+
+```typescript
+export interface SiteAdapter extends GallerySource {
+    readonly site: string;                            // e.g. "nhentai" | "hentaiera" | "imhentai" | "hentaienvy" | "hentaifox" | "hitomi"
+    readonly defaultFormat: "zip" | "cbz" | "pdf" | "raw";
+    
+    // URL matching & routing
+    matchesUrl(url: string): boolean;
+    getGalleryId(url: string): string | null;
+    getGalleryUrl(id: string): string;
     getReaderPageUrl(id: string, page: number): string;
-    extractGallery(html: string): any | null;    // legacy shape; per-site
-    extractReaderImage(html: string): string | null;  // per-site selector
-    getImageHosts(): string[];                   // for manifest + allowlist
-    needsTabFetch(): boolean;                    // hentaiera true, imhentai false
+    
+    // Metadata extraction & normalization
+    extractGallery(htmlOrJson: string, url?: string): any | null; // Normalizes to internal gallery schema
+    extractReaderImage?(html: string): string | null;             // Extracts full image URL from reader HTML
+    
+    // Image addressing & CDN rules
+    getImageUrls(mediaId: string, filename: string, extra?: any): string[];
+    getImageHosts(): string[];
+    getAllowedPathRegex(): RegExp;
+    
+    // Network behaviors
+    needsTabFetch(): boolean;
 }
 ```
 
-`getImageUrls(mediaId, filename)` already exists and returns a candidate list —
-imhentai's token IS its `mediaId`, so no signature change.
+---
 
-`media_id` for imhentai is the token; the composite key (`siteKeys.ts`) is
-unaffected (token contains no `:`).
+## 4. Pipeline Seams to Wire (The 6 Seams)
+
+1. **Adapter Registry (`src/sources/index.ts`):**
+   * Register all adapters.
+   * Provide `getAdapterForUrl(url)` and `getAdapterForSite(site)`.
+   * Fall back to nhentai reference adapter for legacy calls.
+
+2. **Popup / Single Preview (`src/preview/popup.ts`):**
+   * Resolve adapter via `getAdapterForUrl(tabUrl)`.
+   * Non-nhentai sites extract metadata via `source.extractGallery(html)` (with strict guard preventing non-nhentai IDs from hitting `/api/v2/galleries`).
+
+3. **Background Worker (`src/background/background.ts`):**
+   * Dispatch tab scraping and metadata normalization through the matching adapter.
+   * Maintain composite keys (`<site>:<id>`) across message handlers.
+
+4. **Offscreen & Pipeline (`src/offscreen/offscreen.ts`, `src/utils/batchPipeline.ts`):**
+   * Thread active site context through download jobs.
+   * Split mixed bookmark queue downloads into **one job per site**.
+
+5. **Downloader Engine (`src/background/Downloader.ts`):**
+   * Inject matching `SiteAdapter`.
+   * Support dynamic type codes (`j`, `p`, `g`, `w`, `b`, `a`) and extension fallback chains.
+
+6. **CDN Configuration & Manifest (`src/sources/cdnConfig.ts`, `manifest.json`):**
+   * Allow dynamic host validation via adapter `getImageHosts()`.
+   * Allow dynamic path validation via adapter `getAllowedPathRegex()`.
+   * Update `manifest.json` `host_permissions` with all target domains.
 
 ---
 
-## 3. The seams to change (site-aware selection)
+## 5. Step-by-Step Implementation Roadmap
 
-These are the places that currently hard-assume nhentai; each gets a
-site-aware branch. Order matters: build the registry first, then flip seams.
+To avoid context drift and ensure zero regressions, implementation is split into 6 focused phases:
 
-1. **Registry** `src/sources/index.ts`: add adapters to `sources[]`, add
-   `getAdapterForUrl(url)` and `getParsingForUrl(url)` (returns the adapter's
-   `extractGallery`-backed parsing, not the global nhentai `HtmlParsing`).
-2. **Popup preview** `src/preview/popup.ts:428` `updatePreviewAsync`: after
-   resolving `source`, route metadata through `source.extractGallery` for
-   non-nhentai. **Guard:** only call the keyed nhentai API
-   (`#doujinshiPreviewAsync`, `popup.ts:452`) when the adapter is nhentai.
-3. **Worker** `src/background/background.ts:208/269/271`: choose parsing via
-   `getParsingForUrl(tabUrl)` instead of the `htmlParsing` checkbox alone.
-4. **Offscreen** `src/offscreen/offscreen.ts:44/125` and **preview**
-   `src/preview/preview.ts:136`: same selection, threading the active site.
-5. **Downloader** `src/background/Downloader.ts:527`: already calls
-   `this.#source.getImageUrls(...)` — the source just has to be the right
-   adapter, injected with the job. The `#downloadPageInternalAsync` type-code
-   switch (`Downloader.ts:498-517`) needs the new per-page extension handling
-   (decision D1).
-6. **cdnConfig** `src/sources/cdnConfig.ts`: `IMAGE_SERVER_HOST` and
-   `ALLOWED_IMAGE_PATH` are nhentai-only; become per-adapter allowlists fed by
-   `getImageHosts()` + a per-site path regex (imhentai `/033/<token>/…`).
+```
+[Phase 1: Adapter Registry & Contracts]
+                  │
+                  ▼
+[Phase 2: Hentaiera & Imhentai Adapters]
+                  │
+                  ▼
+[Phase 3: Hentaienvy & HentaiFox Adapters]
+                  │
+                  ▼
+[Phase 4: Hitomi.la Adapter & Subdomain Resolver]
+                  │
+                  ▼
+[Phase 5: Universal Paste Box & Multi-Site UI]
+                  │
+                  ▼
+[Phase 6: Full Verification & Parity Audit]
+```
 
----
+### Phase 1: Core Adapter Contracts & Registry Refactoring
+* [x] Define `SiteAdapter` interface in `src/sources/SiteAdapter.ts` (or `GallerySource.ts`).
+* [x] Refactor `src/sources/cdnConfig.ts` to accept multi-site host allowlists and path regexes.
+* [x] Build `src/sources/index.ts` registry with lookup methods (`getAdapterForUrl`, `getAdapterForSite`).
+* [x] Add unit tests for registry routing and `cdnConfig` multi-site allowlists.
 
-## 4. Open decisions (resolve before/while implementing)
+### Phase 2: Hentaiera & Imhentai Adapters
+* [x] Integrate `src/sources/hentaieraSource.ts` and `src/parsing/hentaieraHtml.ts` into registry.
+* [x] Build `src/sources/imhentaiSource.ts` and `src/parsing/imhentaiHtml.ts` (token-based `/033/` storage).
+* [x] Wire Popup preview seam with nhentai-API collision guard.
+* [x] Wire Downloader engine to use adapter candidate lists.
+* [x] Add unit test suite `test/imhentai.test.js` + `test/hentaiera.test.js`.
 
-- **D1 per-page extension.** Options: (a) fetch every reader page (accurate,
-  N extra requests); (b) learn once from reader page 1 and assume per-gallery;
-  (c) extension fallback chain in the candidate list (try webp→jpg→png→gif,
-  404-driven). Recommend **(b) with (c) as the retry**, validated by the
-  existing status/content-type checks.
-- **D2 fetch strategy.** Default tab-fetch for all sites; allow bare fetch
-  where the HAR proves no Referer (imhentai). Keep `tabImageFetch.ts` as the
-  shared mechanism.
-- **D3 job splitting.** From `MULTISITE_V4_PLAN.md` §4.2: one job per site once
-  the queue can hold two sites. Defer until the queue actually holds a second
-  site; single-site jobs are unaffected.
-- **D4 paste box.** `/gallery/<id>/` is shared by hentaiera+imhentai; nhentai
-  keeps `/g/<id>/`; add imhentai `/view/<id>/<n>/` as a reader alias. Disambiguate
-  `/gallery/` by an explicit site prefix (the composite paste already supports
-  `site:id` shapes conceptually).
+### Phase 3: Hentaienvy & HentaiFox Adapters
+* [x] Build `src/sources/hentaienvySource.ts` & `src/parsing/hentaienvyHtml.ts` (parsing `#readerPagesJson` + shared token store).
+* [x] Build `src/sources/hentaifoxSource.ts` & `src/parsing/hentaifoxHtml.ts` (`g_th` type codes, `/004/` and `/005/` dirs).
+* [x] Register both adapters in `src/sources/index.ts`.
+* [x] Add unit test suites `test/hentaienvy.test.js` and `test/hentaifox.test.js`.
 
----
+### Phase 4: Hitomi.la Adapter & Subdomain Resolver
+* [x] Build `src/sources/hitomiResolver.ts` (implementing `gg.m`, `gg.s`, `full_path_from_hash`, dynamic subdomain routing).
+* [x] Build `src/sources/hitomiSource.ts` and `src/parsing/hitomiHtml.ts` (handling `galleries/<id>.js` metadata and dual AVIF/WEBP paths).
+* [x] Set default format for Hitomi to `raw` (with warning for large 1GB+ memory archives until streaming ZIP lands).
+* [x] Add unit test suite `test/hitomi.test.js`.
 
-## 5. Implementation order & verification
+### Phase 5: Universal Paste Box & UI Polish
+* [x] Update `CardParsing.ts` and paste-box parser in `popup.ts` / `listControls.ts` to recognize:
+  * `/g/<id>/` (nhentai, hentaienvy, hentaifox)
+  * `/gallery/<id>/` (hentaiera, imhentai, hentaienvy, hentaifox)
+  * `/view/<id>/` (imhentai)
+  * `hitomi.la/doujinshi/...-<id>.html` or `hitomi.la/galleries/<id>.html`
+  * Composite keys: `nhentai:<id>`, `hentaiera:<id>`, `imhentai:<id>`, `hentaienvy:<id>`, `hentaifox:<id>`, `hitomi:<id>`.
+* [x] Update `manifest.json` `host_permissions` across Chrome and Firefox builds.
+* [x] Split mixed bookmark batches in `batchPipeline.ts` (one job per site).
 
-1. `SiteAdapter` interface + registry (no behaviour change; nhentai-only tests
-   still pass).
-2. imhentai adapter (`src/sources/imhentaiSource.ts` +
-   `src/parsing/imhentaiHtml.ts`), fixtures from `imhen xxx.zip`.
-3. Flip seams §3 one at a time, each with a failing-first test; keep
-   "nhentai still downloads" green as the control.
-4. cdnConfig per-adapter allowlists.
-5. Paste box + manifest `host_permissions` (add the four new hosts).
-6. `npm run test:e2e` (six offline suites) + smoke; then **real-browser** spot
-   check on hentaiera and imhentai — the one verification this environment has
-   never run, and the reason the plan stops short of claiming "done" until it
-   passes.
-
-**Risks:** id collision if any seam is flipped without the registry guard;
-imhentai Cloudflare challenge on worker fetch (mitigated by tab-fetch); the
-two-host manifest for hentaiera (`hentaiera.to`+`hentaiera.site`); hentaienvy's
-script-gated reader is out of scope here.
-
----
-
-## 7. Capture status — what the three HARs settled, and the two left
-
-**The three HARs ARE enough, each for its own site.** `era to.zip` → hentaiera,
-`imhen xxx.zip` → imhentai, `envy com.zip` → hentaienvy. Each supplies gallery
-page, reader page(s), full-page URLs + content types, Referer behaviour, and the
-per-page extension source. No further capture is needed for those three. What
-remains is **hentaifox** and **hitomi**, which have no HAR and whose homepages
-are the only material on hand.
-
-### hentaifox.com — one HAR (plus one optional second)
-
-Already known from the homepage capture: CDN `i3.hentaifox.com`, numeric media
-id in the listing, path `/004/` or `/005/<numid>/`, jpg thumbs, `/gallery/<id>/`
-page URL. Unknown: reader URL scheme, reader image selector, full-page
-extension, and any JSON embed. A single HAR answers all of them.
-
-1. The **age modal does NOT fire for you** — it shows only when
-   `allowedGeos.includes(window.__GEO__)`, and `__GEO__ = "ID"` is not in
-   `['US','FR','IT','GB']` (an earlier draft had this inverted). Nothing to
-   dismiss; it would only appear for US/FR/IT/GB.
-2. DevTools → Network, tick Keep log + Disable cache, F5 on
-   `https://hentaifox.com/gallery/173098/`.
-3. Open the reader, turn to pages 1, 2, 3.
-4. Save HAR (sanitized, no content).
-
-That yields the reader scheme, the `#…img` selector, the full-page extension,
-and whether the prefix is `/005/`. A **second HAR from an older gallery that
-uses `/004/`** pins the per-gallery prefix (your homepage capture showed both
-`/004/` and `/005/`). If you can only send one, send the `/005/` one.
-
-### hitomi.la — a HAR is NOT enough; it needs 4 files
-
-hitomi renders client-side, so a HAR's raw document is the empty pre-JS shell
-(0 galleries, 0 media paths — measured in `SITE_CAPTURE_AUDIT.md`). It needs:
-
-1. **A HAR** anyway (gallery → reader → pages 1–3) for the image URLs, content
-   types, and Referer.
-2. **The gallery page's rendered DOM** — DevTools → Elements → right-click
-   `<html>` → Copy → Copy outerHTML (or Save As "Webpage, Complete").
-3. **The gallery data JS** — in the HAR/Network → JS filter, the request whose
-   name contains the gallery id (historically `galleries/<id>.js`); read the
-   path off the capture, don't guess.
-4. **`gg.js` contents** — open `//ltn.gold-usergeneratedcontent.net/gg.js` and
-   save the text; it maps image numbers to CDN subdomains and rotates.
-
-Ignore the obfuscated WASM/URL-randomizer script and `glimmersmugglingsullen.com`
-/ `js.wpadmngr.com` — ad network noise, not anti-bot.
-
----
-
-## 8. Next step
-
-Captures: **done for hentaiera, imhentai, hentaienvy**; fox = 1–2 HARs, hitomi =
-HAR + 3 files (§7). Code: implement §5 in order — registry, imhentai adapter,
-flip seams (with the nhentai-API collision guard), cdnConfig allowlists, paste
-box + manifest hosts, e2e, then the real-browser check. The three captured sites
-can be wired now; fox and hitomi join when their captures land.
+### Phase 6: Verification & Test Automation
+* [x] Run all unit test suites (`npm test`).
+* [x] Run all offline e2e suites (`npm run test:e2e`).
+* [x] Sync bundles to Firefox build (`NHDW_Firefox_v1.0.0`) and release directory (`NHDW_Release_v3.0.0`).
+* [x] Update `SESSION_HANDOFF.md` and `WORKLIST.md`.

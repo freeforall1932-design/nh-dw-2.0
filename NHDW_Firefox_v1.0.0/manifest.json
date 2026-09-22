@@ -33,7 +33,18 @@
     "https://i1.nhentai.net/*",
     "https://i2.nhentai.net/*",
     "https://i3.nhentai.net/*",
-    "https://i4.nhentai.net/*"
+    "https://i4.nhentai.net/*",
+    "https://hentaiera.com/*",
+    "https://*.hentaiera.com/*",
+    "https://imhentai.xxx/*",
+    "https://*.imhentai.xxx/*",
+    "https://hentaienvy.com/*",
+    "https://*.hentaienvy.com/*",
+    "https://hentaifox.com/*",
+    "https://*.hentaifox.com/*",
+    "https://hitomi.la/*",
+    "https://*.hitomi.la/*",
+    "https://*.gold-usergeneratedcontent.net/*"
   ],
   "background": {
     "scripts": ["js/background.js"]

@@ -1,16 +1,29 @@
 import { buildImageUrl, getImageServers } from "./cdnConfig";
 
-export interface GallerySource {
+export interface SiteAdapter {
+    readonly site: string;
+    readonly defaultFormat?: "zip" | "cbz" | "pdf" | "raw";
     matchesUrl(url: string): boolean;
     getGalleryId(url: string): string | null;
     getGalleryUrl(id: string): string;
-    getGalleryPageUrl?(id: string): string;
-    getApiUrl(id: string): string;
-    getImageUrls(mediaId: string, filename: string): string[];
+    getGalleryPageUrl?(id: string, page?: number): string;
+    getReaderPageUrl?(id: string, page: number): string;
+    getApiUrl?(id: string): string;
+    extractGallery?(htmlOrJson: string, url?: string): any | null;
+    extractReaderImage?(html: string): string | null;
+    getImageUrls(mediaId: string, filename: string, extra?: any): string[];
+    getImageHosts?(): string[];
+    getAllowedPathRegex?(): RegExp;
+    needsTabFetch?(): boolean;
 }
 
+export type GallerySource = SiteAdapter;
+
 /** The currently supported clearnet NHentai source. */
-export const clearnetSource: GallerySource = {
+export const clearnetSource: SiteAdapter = {
+    site: "nhentai",
+    defaultFormat: "zip",
+
     matchesUrl(url: string): boolean {
         return /^https:\/\/nhentai\.net(?:\/|$)/i.test(url);
     },
@@ -24,8 +37,12 @@ export const clearnetSource: GallerySource = {
         return "https://nhentai.net/g/" + encodeURIComponent(id) + "/";
     },
 
-    getGalleryPageUrl(id: string): string {
-        return "https://nhentai.net/g/" + encodeURIComponent(id) + "/1/";
+    getGalleryPageUrl(id: string, page: number = 1): string {
+        return "https://nhentai.net/g/" + encodeURIComponent(id) + "/" + page + "/";
+    },
+
+    getReaderPageUrl(id: string, page: number): string {
+        return "https://nhentai.net/g/" + encodeURIComponent(id) + "/" + page + "/";
     },
 
     getApiUrl(id: string): string {
@@ -38,5 +55,17 @@ export const clearnetSource: GallerySource = {
         // resolved one, then the cached fallback mirrors. Hosts are HTTPS
         // nhentai-owned origins only — never hardcoded i.nhentai.net alone.
         return getImageServers().map((server) => buildImageUrl(server, mediaId, filename));
+    },
+
+    getImageHosts(): string[] {
+        return ["i.nhentai.net", "i1.nhentai.net", "i2.nhentai.net", "i3.nhentai.net", "i4.nhentai.net"];
+    },
+
+    getAllowedPathRegex(): RegExp {
+        return /^\/galleries\/[0-9]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
+    },
+
+    needsTabFetch(): boolean {
+        return true;
     }
 };
