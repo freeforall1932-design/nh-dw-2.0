@@ -41,10 +41,10 @@ const GALLERY_PAGES = [
 const NOT_GALLERY_PAGES = [
     'https://nhentai.net/',
     'https://nhentai.net/g/683215/1/',
-    'https://nhentai.net/tag/big-breasts/',
+    'https://nhentai.net/tag/big-adventures/',
     'https://hentaiera.to/',
     'https://hentaiera.to/gallery/694133/1/',
-    'https://hentaiera.to/tag/big-breasts/',
+    'https://hentaiera.to/tag/big-adventures/',
     'https://imhentai.xxx/',
     'https://imhentai.xxx/view/1738518/1/',
     'https://hentaienvy.com/g/1606086/1/',
@@ -132,7 +132,7 @@ describe('title-page bookmark targets', () => {
         assert.strictEqual(
             cleanGalleryTitle('Watashi ga Tsukurimashita. (Touhou Project) - Page 3', '694133'),
             'Watashi ga Tsukurimashita. (Touhou Project)');
-        assert.strictEqual(cleanGalleryTitle('Futanari Waon-chan – Page 12', '1'), 'Futanari Waon-chan');
+        assert.strictEqual(cleanGalleryTitle('Moonlit Waon-chan – Page 12', '1'), 'Moonlit Waon-chan');
         assert.strictEqual(cleanGalleryTitle('Some Title | nhentai', '1'), 'Some Title');
         assert.strictEqual(cleanGalleryTitle('Some Title - HentaiEra', '1'), 'Some Title');
     });
@@ -149,7 +149,7 @@ describe('title-page bookmark page counts', () => {
 
     it('reports 0 for anything that is not a page count', () => {
         assert.strictEqual(parsePageCount(''), 0);
-        assert.strictEqual(parsePageCount('Tags: big breasts'), 0);
+        assert.strictEqual(parsePageCount('Tags: big adventures'), 0);
         assert.strictEqual(parsePageCount('999999'), 0);
         assert.strictEqual(parsePageCount('Pages: 0'), 0);
     });

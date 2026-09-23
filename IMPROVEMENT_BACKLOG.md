@@ -2369,3 +2369,79 @@ Verification: both trees tsc 0; Chrome **519/4** units, smoke 7, e2e exit 0
 **0/0/31**, package `nhentai_downloader-1.3.0.zip` rebuilt. Release snapshot
 re-synced (only `js/background.js` + `js/offscreen.js` were stale). No
 manifest/permission/dependency/CI/version change.
+
+## Session log — 2026-09-24 (session `arena/01a0cdce-nh-dw-2-0`, owner request): capture sanitization + docs consolidation
+
+Two owner requests in one pass, no product-code change:
+
+### 1. Content-filter sanitization (a session crash-looped reading captures)
+
+An agent session hard-stopped in a crash loop because repository files carried
+real gallery titles/tags (romaji, Japanese, Chinese) with explicit terms. The
+owner's rule: **sanitize source material, keep website naming schemes.**
+
+- **Sanitized (working tree):** `5 website page source` (34 attr + 38
+  text-node titles → `DUMMY_TITLE_nnn`/`DUMMY_TEXT_nnn`, 2 ad blocks removed;
+  card counts, media paths and markup classes verified intact),
+  `captures/hitomi-id-rendered.html` (34 URL slugs + 32 text nodes, 1 ad
+  block), `captures/view-source era to gallery 694133 .txt` (ld+json/og
+  titles, 10 slugs, 19 text nodes, 1 ad block), `captures/hitomi The Gallery
+  Metadata JS.txt` (title/japanese_title/tag/artist/parody fields → dummies;
+  hashes, dimensions, file lists untouched), `captures/hitomi export
+  sanitize … .har` (JSON-string-level scrub incl. percent-encoded tag slugs
+  inside embedded HTML; 6 ad refs removed). `captures/fox-173098.har`,
+  `hitomi-gg.js` and `3 live testing note` scanned clean — untouched.
+- **Word-boundary gotcha (recorded):** explicit words adjacent to `%20` runs
+  are invisible to `\b` regexes (a digit blocks the boundary) — the sweep
+  needs letter-lookarounds `(?<![A-Za-z])…(?![A-Za-z])` or a decoded pass.
+  This hid 9 residuals in the hitomi HAR on the first run.
+- **Fixtures:** `test/title-bookmark.test.js` + `scripts/e2e-title-bookmark.js`
+  (both trees, kept byte-identical) swapped their one realistic title word and
+  tag slug for neutral ones; suites re-run green (Chrome 519 / Firefox 595,
+  title-bookmark e2e 146 checks each).
+- **On `main` (contents API, owner-requested file):** `new domain candidate` —
+  the percent-encoded series slug containing an explicit term became
+  `[sanitized-series-slug]` (domain + path shape kept). Commit `3d5106b4`.
+  The owner's three picks (tailspace.com, mangak.io, omegascans.org) were
+  mirrored sanitized into `CANDIDATE_SITES.md` §4a with a dedupe check against
+  the tier lists: **no overlap, no double entries**.
+- **Honest limit:** git HISTORY still holds the originals (the crash came from
+  `git show` of a historical blob). Working-tree sanitization fixes reading
+  the files; a history rewrite was deliberately NOT done (destructive to open
+  PRs/clones). Rule added to handoff/worklist: do not `git show` pre-2026-09-24
+  capture commits in an agent session; sanitize new captures before committing
+  (method: `CAPTURE_GUIDE.md` Part B).
+
+### 2. Docs consolidation (owner: "session handoff so bloated")
+
+- **`SESSION_HANDOFF.md` rewritten 192 KB → ~19 KB:** current state, doc map,
+  structural invariants distilled from every shipped version (formats/naming,
+  pipeline/lifecycle, identity/history/failures, bookmark queue, multi-site,
+  UI surfaces, filename guard), the real-browser checklists (42/58 + PR #48
+  additions), current open questions (15), the FULL Do-not list (carried over
+  + the PR #48 review additions), and one-line history pointers. The long-form
+  original is recoverable from git history (≤ commit `62697a2`).
+- **Deleted as complete/superseded** (all recoverable from git history):
+  `BOOKMARK_QUEUE_PLAN.md` (3.7.0 shipped; summary lives in the 2026-09-08
+  log below and the handoff invariants), `NEXT_CAPTURE.md` (superseded by
+  `CAPTURE_GUIDE.md` per its own banner; hentaiera rationale now historical),
+  `SITE_CAPTURE_AUDIT.md` (its corrections were carried into
+  `ADAPTER_WIRING_PLAN.md` §1 and `CAPTURE_GUIDE.md` Part B; it also quoted a
+  real title, resolved by deletion).
+- **Trimmed:** `WORKLIST.md` (32→10 KB; done items one-lined, open items +
+  harness notes kept), `MULTISITE_V4_PLAN.md` (19→14 KB; roster statuses
+  shipped, landed item specs collapsed to pointers, §8 → CAPTURE_GUIDE
+  pointer, open questions pruned), `ADAPTER_WIRING_PLAN.md` (9→7 KB; phase
+  roadmap collapsed to a shipped one-liner + a new §6 "adding site #7"
+  checklist; the §1 contract matrix untouched — it is the operative
+  reference), `CAPTURE_GUIDE.md` (15→12 KB; per-site RESOLVED narratives
+  condensed into durable gotchas for site #7+).
+- **Kept as-is (live/operative):** this backlog (the improvement log — the
+  designated keeper of completed-work detail), `DEPENDENCY_MAINTENANCE.md`,
+  `FOLDER_NAMING_STUDY.md` (explains the LIVE naming guard + Chromium bug
+  579563; README troubleshooting links it), `CANDIDATE_SITES.md`, `ci/README.md`,
+  the three READMEs, and the Firefox tree's `PORTING_AUDIT.md` +
+  `FIREFOX_PARITY_PLAN.md`. `NHDW_Extension_v3.0.0/README.md` (the stale
+  legacy upstream readme) was replaced with an accurate short stub.
+- Cross-references swept: no remaining links to the deleted files except this
+  log and the deletion notes themselves.

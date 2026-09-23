@@ -1,64 +1,23 @@
-# NHentaiDownloader
-An extension to download doujinshi from NHentai
+# NHDW_Extension_v3.0.0 — Chrome MV3 source tree
 
-NHentai only allow to download doujinshi in .torrent format so I created this extension allowing to download them either in ZIP, CBZ or raw format.<br/>
-You can either go on a doujinshi page to download it, or go to a page containing many of them to download them all at once.
-<br/><br/>
+This folder is the **TypeScript source of truth** for the Chrome/Edge/Brave
+build of NHentai Downloader (v3.9.0). It is not the installable package —
+users load `NHDW_Release_v3.0.0/` (built output, kept byte-synced with this
+tree's `js/`, `css/`, HTML and manifest).
 
-[![CI](https://github.com/Xwilarg/NHentaiDownloader/workflows/CI/badge.svg)](https://github.com/Xwilarg/NHentaiDownloader/actions)
+- **User docs:** root [`README.md`](../README.md) (features, install, usage, FAQ).
+- **Working rules:** [`SESSION_HANDOFF.md`](../SESSION_HANDOFF.md) (invariants + Do-not list) · [`WORKLIST.md`](../WORKLIST.md) (what's next) · [`IMPROVEMENT_BACKLOG.md`](../IMPROVEMENT_BACKLOG.md) (full specs + history).
+- **Multi-site adapter reference:** [`ADAPTER_WIRING_PLAN.md`](../ADAPTER_WIRING_PLAN.md).
+- **CI rules:** [`ci/README.md`](ci/README.md) (workflow files are manual-commit only).
 
-## 403 errors
-
-403 errors are related to the fact that NHentai added Cloudflare over their API, which basically is a tool that stop traffic that seems to come from bots or scripts (which is the case for this extension) \
-There is not much I can do for that, it indeed probably mean that bulk download will fail at random moments, or that any download may fail at any time
-
-My advices on that:
- - Try to download again while being logged-in
- - Try to download again using a VPN
-
-## How to install the extension from Release page
-
-### Chrome
-- Get the latest version of the extension on the [release page](https://github.com/Xwilarg/NHentaiDownloader/releases) **You only need NHentaiDownloader.zip**, unzip it somewhere in your computer
-- Write `chrome://extensions/` in your address bar
-- Enable the developer mode (top right corner of the page)
-- Press the `Load Unpacked` button (top left corner of the page)
-- Go inside the folder of the extension and press `Select a folder`
-
-### Firefox
-- Get the latest version of the extension on the [release page](https://github.com/Xwilarg/NHentaiDownloader/releases) **You only need NHentaiDownloader.xpi**
-- Write `about:addons` in your address bar
-- Click on the small gear at the top right and select `Install Add-on From File...`
-- Select NHentaiDownloader.xpi
-
-## A quick note about the Chrome store
-
-This extension was removed the 04/12/2020 from the Chrome Store because it doesn't comply with terms of service (since it contains mature content)<br/>
-While there is nothing I can do against that, I still want to thanks you for using it, over 2 years it got a note of 4.3/5 and 12 858 users.<br/>
-![Chrome](Preview/Chrome.png)
-
-## Build locally
-```
-npm install
-npm run build
+```bash
+npm ci
+npm run build     # webpack -> js/ (then run the exhaustive release-folder sync loop)
+npm test          # unit suites (explicit mocha file list in package.json — append new test files there)
+npm run test:smoke
+npm run test:e2e  # offline window-less harnesses against the built bundles
 ```
 
-### Start unit tests
-```
-npm test
-```
-
-## Single download
-
-![Overview](Preview/Overview.png)<br/>
-![Folder](Preview/Folder.png)
-
-## Download many doujinshi at a time
-
-![Overview](Preview/Overview-many.png)<br/>
-![Folder](Preview/Folder-many.png)
-
-## Download many pages at a time
-
-![Overview](Preview/Overview-pages.png)<br/>
-![Folder](Preview/Folder-pages.png)
+The historical upstream readme (Xwilarg's NHentaiDownloader 2.2.0, MV2 era)
+is preserved in the inactive archive folder
+`NHDW_Source_v3.0.0/NHentaiDownloader-2.2.0/README.md`.

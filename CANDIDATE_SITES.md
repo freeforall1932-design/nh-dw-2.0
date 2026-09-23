@@ -87,9 +87,27 @@ These platforms organize content as tagged single images or multi-image pools ra
 
 ## 4. Tier 3: Out of Scope for this Extension
 
-Sites that are video-only or general streaming (e.g. YouTube, TikTok, Pornhub, XVideos, Bilibili) belong in dedicated tools such as `yt-dlp` or `multi-site-video-downloader`. This extension remains focused on comic, doujinshi, and image gallery archives (`ZIP`, `CBZ`, `PDF`, `raw`).
+Sites that are video-only or general streaming (e.g. YouTube, TikTok, Bilibili, and adult video-tube platforms) belong in dedicated tools such as `yt-dlp` or `multi-site-video-downloader`. This extension remains focused on comic, doujinshi, and image gallery archives (`ZIP`, `CBZ`, `PDF`, `raw`).
 
 ---
+
+## 4a. Owner picks (from `new domain candidate` on main) — added 2026-09-24
+
+The owner's own shortlist, carried over from the root file `new domain candidate`
+(its series slug is sanitized here and there; the original remains in git
+history). **Dedupe check against §2/§3: no overlap** — none of these three
+appears in the desktop-repo-derived tier lists, so there are no double entries.
+
+| Site | Sample link (sanitized) | Category / notes |
+| :--- | :--- | :--- |
+| **tailspace.com** | `https://tailspace.com/c/[sanitized-series-slug]` | Comic/series platform; `/c/<slug>` series paths. Needs the standard onboarding capture (§5). |
+| **mangak.io** | `https://mangak.io/paws-on-campus` | Manga reader; slug-based series URLs. Needs capture to determine frontend type (SPA vs server-rendered). |
+| **omegascans.org** | `https://omegascans.org/series/gear-thats-way-too-good` | Scanlation site; `/series/<slug>` shape (same family as MyReadingManga-style WordPress readers, pending capture). |
+
+All three are slug-addressed (no numeric ids), so before implementation check
+the `siteKeys` contract: ids must not contain `:` and should be stable — a slug
+works, but the composite key becomes `site:slug` and the paste box needs the
+slug shape registered.
 
 ## 5. Candidate Onboarding Checklist
 

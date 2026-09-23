@@ -411,7 +411,7 @@ const SITES = {
             const info = makeEl('div', { id: 'info' });
             const h1 = makeEl('h1');
             h1.className = 'title';
-            h1.textContent = 'Futanari Waon-chan (Suite Precure) [Digital]';
+            h1.textContent = 'Moonlit Waon-chan (Suite Precure) [Digital]';
             info.appendChild(h1);
             infoBlock.appendChild(info);
             const buttons = makeEl('div');
@@ -700,7 +700,7 @@ async function main() {
         const item = add.items[0];
         ok(item.id === '683215', 'the bookmark carries the gallery id, got ' + item.id);
         ok(item.site === 'nhentai', 'the bookmark carries the site, got ' + item.site);
-        ok(item.title === 'Futanari Waon-chan (Suite Precure) [Digital]', 'the title comes from the page, got ' + JSON.stringify(item.title));
+        ok(item.title === 'Moonlit Waon-chan (Suite Precure) [Digital]', 'the title comes from the page, got ' + JSON.stringify(item.title));
         ok(item.thumbnail === 'https://t5.nhentai.net/galleries/4199749/cover.webp', 'the cover comes from the page (data-src, not the placeholder), got ' + item.thumbnail);
         ok(item.pages === 51, 'the page count comes from the page, got ' + item.pages);
         ok(item.source === 'page', 'a gallery-page bookmark reports source=page');
@@ -751,7 +751,7 @@ async function main() {
 
     // --- 4. no button where it does not belong -----------------------------
     {
-        const listing = run({ url: 'https://nhentai.net/tag/big-breasts/', build: SITES.nhentai.build });
+        const listing = run({ url: 'https://nhentai.net/tag/big-adventures/', build: SITES.nhentai.build });
         await flush();
         ok(buttonIn(listing.document) === null, 'a listing page gets no bookmark button');
         listing.timers.tick();

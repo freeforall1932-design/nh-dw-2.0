@@ -3,20 +3,20 @@ var galleryinfo = {
     "scene_indexes": [],
     "characters": null,
     "language_url": "/index-korean.html",
-    "language_localname": "한국어",
+    "language_localname": "[CJK]",
     "type": "doujinshi",
     "video": null,
     "groups": null,
     "japanese_title": null,
     "parodys": [{
         "url": "/series/original-all.html",
-        "parody": "original"
+        "parody":"parody_001"
     }],
     "language": "korean",
     "tags": [{
         "female": "1",
-        "url": "/tag/female%3Asister-all.html",
-        "tag": "sister",
+        "url":"/tag/female%3Adummy-slug-all.html",
+        "tag":"tag_001",
         "male": ""
     }],
     "files": [{
@@ -1795,11 +1795,11 @@ var galleryinfo = {
     "date": "2026-09-21 07:13:00-05",
     "artists": [{
         "url": "/artist/hanpatsu%20zokusei-all.html",
-        "artist": "hanpatsu zokusei"
+        "artist":"artist_001"
     }],
     "datepublished": null,
-    "galleryurl": "/doujinshi/수수하고-오타쿠-같은-여동생-시리즈-한국어-4203493.html",
-    "title": "수수하고 오타쿠 같은 여동생 시리즈",
+    "galleryurl": "/doujinshi/[CJK]-[CJK]-[CJK]-[CJK]-[CJK]-[CJK]-4203493.html",
+    "title": "DUMMY_TITLE_001",
     "languages": [],
     "id": "4203493"
 }

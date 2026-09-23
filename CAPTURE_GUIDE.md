@@ -158,7 +158,8 @@ tell me which id you used.
 
 **The one thing HAR does not replace:** the *rendered* DOM of a JS-driven page.
 HAR records the raw document response — for hitomi that is the empty pre-JS
-shell (0 galleries, 0 media paths, as measured in `SITE_CAPTURE_AUDIT.md`).
+shell (0 galleries, 0 media paths, as measured in the 2026-09-15 capture
+audit — see the backlog session log).
 hitomi still needs DevTools → Elements → Copy outerHTML. The four mirror sites
 are server-rendered, so for them HAR is genuinely sufficient.
 
@@ -174,123 +175,49 @@ just keep doing it.
 
 ---
 
-## Part B — what I need, per site
+## Part B — per-site status: all six initial sites DONE
 
-**One sanitized HAR per site, captured with A4's flow.** That replaces the
-gallery HTML, the three image URLs and the content-type header in a single
-file. Per-site extras and gotchas below.
+hentaiera (resolved from the `694133` gallery page + HAR) · imhentai
+(`imhen xxx.zip`) · hentaienvy (`envy com.zip`) · hentaifox (`fox-173098.har`,
+both `/004/` and `/005/` prefixes) · hitomi (`hitomi-id-rendered.html` +
+`hitomi The Gallery Metadata JS.txt` + `hitomi-gg.js` + the network HAR).
+The measured contracts live in `ADAPTER_WIRING_PLAN.md` §1 — read that matrix
+before capturing a new site, it is the template for the row you will fill.
+Capture files were sanitized 2026-09-24 (titles/artists/tags dummied, ad
+blocks stripped, website naming kept).
 
-*Known* = already extracted from `5 website page source`, so don't re-capture it.
+**Durable gotchas learned from the first six (apply to site #7+):**
 
-### 1. hentaiera.to — **RESOLVED, no more capture needed**
+- Capture **after** the Cloudflare challenge hop (`?__cf_chl_rt_tk=…`)
+  resolves to the clean URL.
+- `view-source:` shows PRE-JavaScript HTML — fine for server-rendered sites,
+  fatal for client-rendered ones (hitomi's shell had 0 galleries). For those:
+  DevTools → Elements → Copy outerHTML, and grab the runtime config scripts
+  the page actually loaded (hitomi: `galleries/<id>.js` + `gg.js`).
+- Reader pages can be script-gated (hentaienvy's `#readerImg` is populated by
+  `image-loader.js`): capture readers with scripts ENABLED, and watch the HAR
+  for an XHR/JSON page manifest — that can replace HTML scraping entirely.
+- CDN prefixes can vary per gallery (hentaifox `/004/` vs `/005/` by age):
+  capture one old and one new gallery, and make the adapter READ the prefix.
+- Note the `Referer` the browser sends (visible only in a HAR): no code path
+  in this extension sets one — tab-fetching inherits the browser's. If a CDN
+  hotlink-gates on Referer, a bare worker fetch will 403 and the adapter must
+  use the `tabImageFetch` pattern.
+- Age/geo modals are conditional (hentaifox's fires only for specific
+  `__GEO__` values) — record whether yours fired; do not assume.
+- Ad-network noise (obfuscated inline WASM scripts, `wpadmngr`-class domains)
+  is not anti-bot; strip it when parsing — and it is stripped from the
+  sanitized captures in `captures/`.
+- Sanitize BEFORE committing (owner rule 2026-09-24): dummy titles/artists/
+  tags/CJK, strip ad blocks, keep domains/URL shapes/media paths/card markup.
+  Unsanitized captures hard-stop agent sessions on content filters.
 
-Everything was pinned by the `694133` gallery page (on `origin/main`, fetched
-via git) plus the DevTools screenshot. No HAR required. See `WORKLIST.md`
-item 53 for the resolved facts. Summary:
+## Part C — order
 
-- Gallery `https://hentaiera.to/gallery/<id>/`; reader page N `/gallery/<id>/N/`.
-- `media_id` + `num_pages` from the `ld+json` ImageGallery block.
-- Full-page N image read off reader page N's HTML; thumbs `<N>t.webp`, full
-  `<N>.webp`. Host `hentaiera.site`. Image path passes the existing `cdnConfig`
-  regex unmodified.
-
-The remaining four sites still want captures (§2–§5 below).
-
-### 2. imhentai.xxx — unlocks hentaienvy for free
-
-*Known:* CDN `m11.imhentai.xxx`, path `/033/<token>/`, jpg thumbs, token in the
-listing (**20/20** cards). Gallery `1738518` = token `w62za5o4v3`.
-
-**RESOLVED (2026-09-15, `imhen xxx.zip`):** reader `/view/<id>/<n>/`, full image
-`<img id="gimg" src="…/033/<token>/<n>.webp">`, thumbs `.jpg` but pages
-`.webp`, **no Referer** sent. Facts in `ADAPTER_WIRING_PLAN.md` §1.
-
-*Gotcha:* behind Cloudflare — carries `window.__CF$cv$params` and loads
-Turnstile. Capture after the challenge clears.
-
-### 3. hentaienvy.com — same content store as imhentai
-
-*Known:* CDN `m11.hentaienvy.com`, path `/033/<token>/`, jpg thumbs, token in
-the listing (**24/24** cards). Gallery `1606086` = token `w62za5o4v3` — the
-**same token** as imhentai 1738518, different gallery id. Different frontend
-(`hnv-gallery-card__*` BEM, Tailwind).
-
-**RESOLVED (2026-09-15, `envy com.zip`):** reader `/g/<id>/<n>/`, full image
-`<img id="readerImg" src="…/033/<token>/<n>.webp">`, plus `#readerPagesJson`
-(a complete per-page `{page,ext,w,h}` map) and `data-reader-image-base`
-(token). **Referer sent.** Confirms the shared store with imhentai (same
-token, different id). Facts in `ADAPTER_WIRING_PLAN.md` §1.
-
-*Two gotchas:*
-- The reader is script-gated. Your note says you had to block all scripts to
-  see `hentaienvy.com###readerImg`, and the page loads
-  `/assets/js/image-loader.js?v=3` — almost certainly what populates it. **Do
-  not block scripts for this capture**; the HAR needs the real request. Watch
-  for an XHR in it — that's the JSON-manifest possibility from A4.
-- This is the site that threw you the `__cf_chl_rt_tk` hop. Also loads
-  `auth-modal.js` and `adult-verification.js`.
-
-### 4. hentaifox.com
-
-*Known:* CDN `i3.hentaifox.com`, jpg thumbs, media id in the listing (**20/20**
-cards). Gallery `173098` = `media_id` 4190711 = "The Girllove Diary".
-
-*Need:* one HAR from `https://hentaifox.com/gallery/173098/` → reader → pages
-1–3, **plus one from an older gallery that uses the `/004/` prefix.**
-
-*Two gotchas specific to hentaifox:*
-- **The CDN prefix varies per gallery.** Your capture has both
-  `i3.hentaifox.com/004/…` (3 thumbs, older ids like 4164177) and
-  `i3.hentaifox.com/005/…` (39 thumbs). Must be **read, never assumed** — hence
-  the second HAR.
-- **The age modal does NOT fire for you.** It shows only when
-  `allowedGeos.includes(window.__GEO__)`, and `__GEO__ = "ID"` is not in
-  `['US','FR','IT','GB']` (an earlier draft had this inverted) — nothing to
-  dismiss. It also loads Turnstile and ships `jszip` + `FileSaver`
-  (client-side zip).
-
-### 5. hitomi.la — last, and HAR alone is NOT enough here
-
-*Known:* essentially nothing usable. The capture is a pre-JS shell:
-`<title> | Hitomi.la</title>`, **0 gallery links, 0 media paths**. Assets come
-from `ltn.gold-usergeneratedcontent.net` — **not** `ltn.hitomi.la` as
-`MULTISITE_V4_PLAN.md` §2.1 still says. Not behind Cloudflare
-(`185.165.169.231`), no login.
-
-*Need — HAR plus three extras:*
-1. **A HAR** from `https://hitomi.la/galleries/<id>.html` → reader → pages 1–3.
-   Gets the image URLs, the content types, and the Referer question.
-2. **The gallery page's rendered DOM** — HAR only records the raw document,
-   which for hitomi is the empty shell. DevTools → Elements → right-click
-   `<html>` → **Copy → Copy outerHTML**.
-3. **The gallery data JS.** In the HAR (or Network → JS filter), find the
-   request whose name contains the gallery id — historically
-   `galleries/<id>.js`. Read the path off the HAR, don't guess it.
-4. **`gg.js` contents.** Open `//ltn.gold-usergeneratedcontent.net/gg.js`
-   directly and save the text. It maps image numbers to CDN subdomains and
-   rotates — the "never hardcode subdomains" rule exists because of it.
-
-*Noise to ignore:* an obfuscated inline script with an embedded WASM blob that
-randomizes URL parameters, plus `glimmersmugglingsullen.com/on.js` and
-`js.wpadmngr.com`. Ad network, not anti-bot.
-
----
-
-## Part C — suggested order
-
-| # | Site | Files | Why here |
-|---:|---|---:|---|
-| 1 | hentaiera | done | Adapter core landed + tested; resolved by `era to.zip` |
-| 2 | imhentai | done | Resolved by `imhen xxx.zip` |
-| 3 | hentaienvy | done | Resolved by `envy com.zip` (`#readerPagesJson`) |
-| 4 | hentaifox | 2 HAR | Second one for the `/004/` prefix |
-| 5 | hitomi | 1 HAR + 3 files | Client-rendered; HAR can't capture the rendered DOM |
-
-Per your call, no cross-mirror fallback work — one site at a time.
-
-**Hentaiera, imhentai and hentaienvy are done.** Next captures: hentaifox
-(1–2 HARs) and hitomi (HAR + 3 files). Next code: the wiring in
-`ADAPTER_WIRING_PLAN.md` §5.
+The six initial sites are done. For site #7+: pick from `CANDIDATE_SITES.md`
+(owner picks in §4a), capture one site completely (HAR + any extras its
+frontend class needs), then implement per `ADAPTER_WIRING_PLAN.md` §6 — one
+site at a time, per the owner's standing scope call.
 
 ## Part D — how to hand it over
 
