@@ -18,6 +18,7 @@ import {
 import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
 import { readHistory, partitionKnown, applyBatchDate, DownloadHistory, FailedGallery } from "../utils/downloadHistory"
 import { toGalleryKey } from "../utils/siteKeys"
+import { BookmarkState, emptyBookmarkState, findBookmark, normalizeBookmarkState, readBookmarks, thumbnailUrlFromGallery, bookmarkTogglePresentation } from "../utils/bookmarkQueue"
 import { PendingFailure, groupRetryMessages } from "../utils/failedGalleries"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 
@@ -56,6 +57,30 @@ function getOptionalApiHeaders(): Promise<Record<string, string>> {
             resolve({});
         }
     });
+}
+
+// Bookmark writes always go through the worker (the single writer of the
+// persistent list) - the popup only reads the list back to paint the toggle.
+function sendBookmarkAction(message: any): Promise<any> {
+    return new Promise((resolve) => {
+        try {
+            chrome.runtime.sendMessage(message, (response: any) => {
+                // Reading lastError keeps Chrome quiet while the worker restarts.
+                try { void chrome.runtime.lastError; } catch (_) { /* no runtime */ }
+                resolve(response || null);
+            });
+        } catch (_) {
+            resolve(null);
+        }
+    });
+}
+
+/** Paint one bookmark toggle button; used by both panel-preview surfaces. */
+function paintBookmarkButton(button: HTMLInputElement, on: boolean): void {
+    const presentation = bookmarkTogglePresentation(on);
+    button.value = presentation.label;
+    button.title = presentation.title;
+    button.className = presentation.className + (button.classList.contains("similarBookmark") ? " similarBookmark" : "");
 }
 
 async function getRelatedGalleries(galleryId: string): Promise<Array<{ id: string; title: string; pages: number }>> {
@@ -557,7 +582,25 @@ export default class Popup
                         alreadyNote = escapeHtml(rec.filename) + (rec.when ? " (" + new Date(rec.when).toLocaleDateString() + ")" : "");
                     }
                 } catch (_) { /* history is cosmetic; never block the preview */ }
-                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip, alreadyNote);
+                // Persistent bookmark list (read-only here): the preview offers
+                // the same toggle as the card icon and the gallery-page button.
+                let bookmarkedState: BookmarkState = emptyBookmarkState();
+                try {
+                    bookmarkedState = await readBookmarks();
+                } catch (_) { /* a storage failure must not break the preview */ }
+                const galleryKey = toGalleryKey(id, source.site);
+                const isBookmarked = () => findBookmark(bookmarkedState, galleryKey) !== null;
+                const bookmarkCandidate = () => ({
+                    id: id,
+                    site: source.site,
+                    title: title,
+                    thumbnail: thumbnailUrlFromGallery(json),
+                    pages: json.images.pages.length,
+                    source: "page",
+                    sourceUrl: source.getGalleryUrl(id)
+                });
+
+                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip, alreadyNote, isBookmarked());
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listeners after updating the HTML content.
@@ -566,6 +609,25 @@ export default class Popup
                         const value = (document.getElementById('downloadFormat') as HTMLSelectElement | null)?.value;
                         return value === 'cbz' || value === 'pdf' || value === 'raw' ? value : 'zip';
                     };
+                    const bookmarkButton = document.getElementById('buttonBookmark') as HTMLInputElement | null;
+                    if (bookmarkButton) {
+                        bookmarkButton.addEventListener('click', async () => {
+                            const on = isBookmarked();
+                            // Optimistic paint: the storage round trip lands in a
+                            // few ms and the change broadcast then confirms it.
+                            paintBookmarkButton(bookmarkButton, !on);
+                            const response = await sendBookmarkAction(on
+                                ? { action: "bookmarkRemove", ids: [galleryKey] }
+                                : { action: "bookmarkAdd", items: [bookmarkCandidate()] });
+                            if (response && response.state) {
+                                bookmarkedState = normalizeBookmarkState(response.state);
+                            } else {
+                                bookmarkedState = await readBookmarks().catch(() => bookmarkedState);
+                            }
+                            paintBookmarkButton(bookmarkButton, isBookmarked());
+                        });
+                    }
+
                     const button = document.getElementById('button');
                     if (button) {
                         button.addEventListener('click', async function() {
@@ -650,6 +712,40 @@ export default class Popup
                             if (downloadButton) downloadButton.addEventListener('click', downloadSelected);
                             similarPanel.querySelectorAll<HTMLInputElement>('input.similarItem').forEach((box) => {
                                 box.addEventListener('change', updateSelectedCount);
+                            });
+                            // Bookmark toggles on the similar rows. The related
+                            // list carries id/title/pages only, so the cover is
+                            // left to the worker's enrichment (source "similar").
+                            similarPanel.querySelectorAll<HTMLInputElement>('input.similarBookmark').forEach((row) => {
+                                const entryId = row.getAttribute('data-id') || '';
+                                const entry = relatedEntries.filter((candidate) => candidate.id === entryId)[0];
+                                const entryKey = toGalleryKey(entryId, source.site);
+                                const rowOn = () => findBookmark(bookmarkedState, entryKey) !== null;
+                                paintBookmarkButton(row, rowOn());
+                                row.addEventListener('click', async () => {
+                                    const on = rowOn();
+                                    paintBookmarkButton(row, !on);
+                                    const response = await sendBookmarkAction(on
+                                        ? { action: "bookmarkRemove", ids: [entryKey] }
+                                        : {
+                                            action: "bookmarkAdd",
+                                            items: [{
+                                                id: entryId,
+                                                site: source.site,
+                                                title: entry ? entry.title : entryId,
+                                                thumbnail: "",
+                                                pages: entry ? entry.pages : 0,
+                                                source: "similar",
+                                                sourceUrl: source.getGalleryUrl(entryId)
+                                            }]
+                                        });
+                                    if (response && response.state) {
+                                        bookmarkedState = normalizeBookmarkState(response.state);
+                                    } else {
+                                        bookmarkedState = await readBookmarks().catch(() => bookmarkedState);
+                                    }
+                                    paintBookmarkButton(row, rowOn());
+                                });
                             });
                             updateSelectedCount();
                         };

@@ -433,6 +433,33 @@ export function removeBookmarks(state: BookmarkState, ids: Array<string | number
     return { v: state.v, items: state.items.filter((item) => !drop.has(itemKey(item))), collapsed: state.collapsed };
 }
 
+/**
+ * Move one bookmark to a new position in the list.
+ *
+ * The list order IS the download order (`planBookmarkDownload` walks
+ * `state.items`), so this is the whole storage side of drag-reorder: no new
+ * field, no separate sort key — array order was always the source of truth.
+ *
+ * `toIndex` is clamped into range; an unknown id or a move that changes
+ * nothing returns the SAME state object, so callers can skip a re-render.
+ */
+export function moveBookmark(state: BookmarkState, id: string | number, toIndex: number): BookmarkState {
+    const key = toGalleryKey(id);
+    const from = state.items.findIndex((item) => itemKey(item) === key);
+    if (from === -1) {
+        return state;
+    }
+    const parsed = Math.floor(Number(toIndex));
+    const target = Math.max(0, Math.min(state.items.length - 1, Number.isFinite(parsed) ? parsed : from));
+    if (target === from) {
+        return state;
+    }
+    const items = state.items.slice();
+    const moved = items.splice(from, 1)[0];
+    items.splice(target, 0, moved);
+    return { v: state.v, items: items, collapsed: state.collapsed };
+}
+
 export function clearBookmarks(state: BookmarkState): BookmarkState {
     return { v: state.v, items: [], collapsed: state.collapsed };
 }
@@ -573,6 +600,21 @@ export function planBookmarkDownload(state: BookmarkState, historyIds: Array<str
         }
     }
     return plan;
+}
+
+/**
+ * Label / tooltip / class for a bookmark toggle button, so every surface that
+ * offers the toggle (panel preview, similar-gallery rows, and any future
+ * consumer) shows the same words and the same on-state class.
+ */
+export function bookmarkTogglePresentation(on: boolean): { label: string; title: string; className: string } {
+    return {
+        label: on ? "Bookmarked" : "Bookmark",
+        title: on
+            ? "On the bookmark queue - click to take it off again (nothing is un-downloaded)"
+            : "Add this title to the persistent bookmark queue (Queue tab). It survives a browser restart.",
+        className: on ? "nhdwBookmarkToggle nhdwBookmarkOn" : "nhdwBookmarkToggle"
+    };
 }
 
 export function countBookmarks(state: BookmarkState): number {

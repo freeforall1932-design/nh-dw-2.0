@@ -256,7 +256,109 @@
     text-align: center;
 }
 
-:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow {
+/* ---- Drag-reorder the bookmark queue (item 44) --------------------------
+   The list order is the download order, so this is a real control, not a
+   cosmetic one. Only the handle is draggable: the row's checkbox, Download and
+   Remove keep their own hit targets. Every rule is scoped to the renderer
+   containers, because this stylesheet is also injected into website DOM. */
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmDrag {
+    cursor: grab;
+    opacity: 0.45;
+    letter-spacing: -2px;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 1px;
+    user-select: none;
+    -webkit-user-select: none;
+    flex: 0 0 auto;
+    align-self: center;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmDrag:hover {
+    opacity: 0.9;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow.nhdwBmDragging {
+    opacity: 0.4;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRow.nhdwBmDropTarget {
+    outline: 2px dashed #e31b53;
+    outline-offset: -2px;
+    border-radius: 6px;
+}
+
+/* ---- Backup: export / import the queue + history (item 52) --------------
+   The buttons reuse .nhdwBmToolbar's styling; this only adds the divider and
+   the one-line explanation under them. */
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmBackup {
+    border-top: 1px solid #999;
+    padding-top: 8px;
+    margin-top: 8px;
+}
+
+:is(#htmlDark, #nhdwSiteUi) :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmBackup {
+    border-top-color: #555;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmBackup small {
+    flex: 1 1 100%;
+    font-size: 11px;
+    opacity: 0.75;
+}
+
+/* ---- Bookmark toggle in the popup's preview and similar rows (item 43) ---
+   #action and #similarPanel exist only in the popup document, so scoping to
+   them keeps the rule out of the two places this file is injected into a
+   website. The on state is the same blue the title-page button uses. */
+:where(#action, #similarPanel, #queuePane) .nhdwBookmarkToggle {
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+:where(#action, #similarPanel, #queuePane) .nhdwBookmarkToggle:hover {
+    border-color: #1d6fd8;
+    color: #1d6fd8;
+}
+
+:where(#action, #similarPanel, #queuePane) .nhdwBookmarkToggle.nhdwBookmarkOn {
+    background: #1d6fd8;
+    border-color: #1d6fd8;
+    color: #fff;
+}
+
+:where(#action, #similarPanel, #queuePane) .nhdwBookmarkToggle.nhdwBookmarkOn:hover {
+    background: #1760bd;
+    border-color: #1760bd;
+    color: #fff;
+}
+
+:where(#action, #similarPanel, #queuePane) .nhdwBookmarkToggle.similarBookmark {
+    padding: 2px 6px;
+    font-size: 11px;
+}
+
+/* Each similar row is one line: the label takes the space and the toggle sits
+   OUTSIDE it, so clicking Bookmark cannot also tick that row's checkbox. */
+:where(#similarPanel) .similarRow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+:where(#similarPanel) .similarRow label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.nhdwBmRow {
     display: flex;
     align-items: center;
     gap: 8px;

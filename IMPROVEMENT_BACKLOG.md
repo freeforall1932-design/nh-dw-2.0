@@ -1570,31 +1570,45 @@ run in this environment.
 - Add the steps to "Required real-browser verification before PR" in
   `SESSION_HANDOFF.md` once run.
 
-### 43. ☆ on the single-title preview and on similar-gallery rows
+### 43. Bookmark control on the single-title preview and on similar-gallery rows — DONE 2026-09-23
 
-- **Status:** partly landed (2026-09-23). The **gallery page itself** now has a
-  blue "Bookmark" button on all six supported sites
-  (`src/content/titleBookmark.ts` + `css/titleBookmark.css`), so the most
-  common case — "bookmark the title I am looking at" — no longer needs the
-  panel. Still open here: the panel's own single-title preview
-  (`popup.ts #doujinshiPreviewAsync`) and the similar-gallery rows.
-- **Worker side was already ready:**
-- `bookmarkAdd` already accepts `source: "page"` and `"similar"`, and
-  `thumbnailUrlFromGallery` derives a cover from resolved `media_id`, so both
-  sites only need a button and a message. Two render sites:
-  `popup.ts #doujinshiPreviewAsync` (single title) and the similar-galleries
-  list built by `message.similarList`.
-- Decide: does bookmarking from a title page use the resolved `media_id`
-  thumbnail, or none until enrichment? Prefer the derived one — the metadata is
-  already in hand there.
+- **Landed** together with 44/52/41 in session `arena/01a0cc70-nh-dw-2-0`, both
+  trees. `bookmarkTogglePresentation(on)` in `src/utils/bookmarkQueue.ts` is the
+  single source of the words/classes, so every surface says the same thing.
+- `message.bookmarkButtonHtml(id, extraClass, on, dataId)` renders an
+  `input[type=button]` (never a submit button); `message.downloadInfo(...)`
+  embeds it beside Download as `#buttonBookmark`, and `message.similarList(...)`
+  puts one per row as `input.similarBookmark[data-id]`. The button is rendered
+  **outside** each row's `<label>` on purpose: nested inside, a click would also
+  toggle that gallery's download checkbox.
+- `popup.ts` wires both: optimistic paint, then `bookmarkAdd`/`bookmarkRemove`
+  through `sendBookmarkAction`, then a repaint from the worker's answer (or from
+  a `readBookmarks` fallback). Similar rows are wired by class + `data-id`
+  because the whole list is re-rendered as one HTML block.
+- Adds from the preview carry the gallery's real metadata; similar adds use
+  `source: "similar"` and an empty thumbnail (there is no cover in hand there).
+- **Coverage:** unit tests in `test/message.test.js` (markup contract,
+  including the outside-the-label rule) — the preview/similar **wiring** has no
+  e2e, because both paths render through `innerHTML` and the popup harness has
+  no HTML parser; the harness would end up testing its own parser. Documented in
+  `SESSION_HANDOFF.md` rather than papered over.
 
-### 44. Drag-reorder the bookmark list
+### 44. Drag-reorder the bookmark list — DONE 2026-09-23
 
-- **Status:** open, low cost.
-- `planBookmarkDownload` already emits ids **in list order**, so reordering the
-  list already reorders the batch — only the affordance is missing. Persist
-  order implicitly (it is array order in storage); add no new field.
-- Must not fight the row's checkbox / Download / Remove hit targets.
+- **Landed.** `moveBookmark(state, id, toIndex)` clamps the target, returns the
+  SAME state on a no-op or unknown id, and is keyed through `toGalleryKey`, so a
+  `site:id` row is draggable too. **No new stored field** — order is array order,
+  exactly as planned: `planBookmarkDownload` already emitted ids in list order,
+  so the affordance was the only work.
+- The row asks the worker (`bookmarkReorder {id, toIndex}`) and repaints from
+  the answer, so the single-writer rule holds. Only the `span.nhdwBmDrag` handle
+  is draggable — the row's checkbox / Download / Remove keep their own hit
+  targets — and `dragstart` also sets `text/plain` on the transfer because
+  Firefox refuses to start a drag with an empty `dataTransfer`.
+- **Coverage:** unit tests (`moveBookmark`, including a plan-order assertion
+  that reordering really changes the batch order) and
+  `scripts/e2e-bookmark-panel.js` (dragstart → dragover → drop sends the
+  reorder; dragleave/dragend send nothing).
 
 ### 45. Per-row cancel of an in-flight download
 
@@ -1725,13 +1739,30 @@ Planning only — no code exists. Depth and rationale:
   hands the disk-backed blob to `chrome.downloads`. The fix for 1 GB-class
   jobs; hitomi's default archive mode once it exists.
 
-### 52. History export / import (JSON)
+### 52. Queue + history export / import (JSON) — DONE 2026-09-23
 
-- **Status:** open (planning).
-- Cross-machine carry-over. `chrome.storage.sync` is too small (~100 KB
-  total cap vs ~60–70 KB per 10 000 history entries), so a file round-trip
-  is the honest answer. Import merges by composite key (47) and never
-  silently overwrites a differing filename.
+- **Landed** as one file for **both** stores (the queue is the thing users
+  actually carry between machines; the history travels with it).
+- New pure module `src/utils/queueTransfer.ts`: `buildTransferPayload`,
+  `serializeTransfer` (two-space JSON — a file a human may open or fix),
+  `parseTransferPayload` (rejects empty/unparseable/foreign/newer/empty files
+  **with a reason**, normalizes every row through the same readers as the live
+  path, so an unusable row is dropped rather than failing the import) and
+  `mergeImportedHistory`. Policy: **union, local wins**, imported rows are
+  appended so an import cannot reshuffle the download order, and **nothing is
+  ever deleted** — a wrong file cannot wipe the list.
+- Writes stay single-writer: the queue goes through the worker's new
+  `bookmarkImport` action, the history through `historyImport` →
+  `writeHistory()` (which keeps the file's own timestamps and reuses the
+  serialized write chain, so an import cannot race a settling download). The
+  panel never writes storage itself.
+- UI: Export backup / Import backup in the Queue tab plus a hint, with a
+  one-line notice reporting what was actually added; re-importing the same file
+  is a no-op.
+- **Coverage:** 24 unit tests in `test/queue-transfer.test.js` (format,
+  validation, merge policy, the item-41 gate, the item-43 markup is in
+  `test/message.test.js`) and `scripts/e2e-bookmark-panel.js` (export blob +
+  file contents, import messages, re-import no-op, six refusal cases).
 
 ## Session log — 2026-09-14 (second session): item 47 landed as 3.8.0
 
@@ -2174,3 +2205,53 @@ the rest of the queue.
   (`presentationalButtonClasses`, behavior hooks excluded), which makes the
   hentaifox row safe despite the missing capture. Chrome 463/4 and Firefox
   539/4 units; title-page e2e grew to **146 checks**.
+
+## Session log — 2026-09-23 (second pass, same session `arena/01a0cc70-nh-dw-2-0`): items 43, 44, 52 and 41 in both trees
+
+The owner answered "what else can be worked on" by choosing **every** option
+offered: finish the bookmark coverage (43), make non-nhentai queue rows
+downloadable (the multi-site download path), and the small-wins bundle
+(44 + 52 + 41). This pass landed the small-wins bundle plus 43's panel half, in
+Chrome and Firefox, and is **uncommitted at the time of writing** (it is being
+committed with this log).
+
+- **43 — panel toggles.** `bookmarkTogglePresentation()` (one source for
+  label/title/classes); `message.bookmarkButtonHtml()` + `similarList()` rows;
+  `popup.ts` wires the preview button (`#buttonBookmark`, optimistic paint) and
+  every similar row (`input.similarBookmark[data-id]`, wired by class because
+  the list is re-rendered as one block). Bookmarks from the preview carry real
+  metadata; similar-row adds use `source: "similar"`.
+- **44 — drag-reorder.** `moveBookmark()` (pure, clamped, same-state no-op),
+  worker action `bookmarkReorder`, panel handle + row drop targets, CSS in both
+  trees. No new stored field; array order **is** the download order.
+- **52 — backup file.** New `src/utils/queueTransfer.ts` (export/parse/merge),
+  worker actions `bookmarkImport` + `historyImport`, `writeHistory()` keeping
+  the file's own timestamps through the existing serialized write chain, and
+  Export/Import buttons in the Queue tab. Policy: union, local wins, append
+  imported rows, **never delete**.
+- **41 — the odd-separator gate.** `isCanonicalTemplate()` = token-only **and**
+  byte-identical to `buildTemplate(tokens)`, so `{pretty}_{id}` and
+  `{id} - {pretty}` keep the manual field instead of being rewritten by the
+  first tick. `options.ts` and `popupSettings.ts` both gate on it.
+- **Tests added:** `test/queue-transfer.test.js` (24: the item-41 gate, the
+  item-43 presentation, `moveBookmark`, the whole backup contract),
+  `test/message.test.js` (+5: the item-43 markup, including the
+  button-outside-the-label rule), `scripts/e2e-bookmark-panel.js` (new harness:
+  row chrome, dragstart/dragover/drop/dragleave/dragend, export blob + file
+  contents, import + re-import + six refusal cases), Firefox
+  `scripts/e2e-options.js` (+1: canonical vs non-canonical template routing).
+  `e2e-popup.js` phase 6 was re-scoped after the 41 gate changed which branch a
+  non-canonical template takes.
+- **Verified:** Chrome tsc 0, build OK, **492 unit pass / 4 opt-in pending**,
+  full e2e green (title-page suite still 146 checks, new panel suite 8 phases),
+  smoke 7 PASS. Firefox tsc 0, build OK, **568 unit pass / 4 pending**, e2e
+  green (site-ui 15, embedded-toolbar 11, options 34), smoke 7 PASS, lint **0
+  errors / 0 notices / 31 advisories**. Release snapshot re-synced by the
+  exhaustive file-by-file loop (`js/background.js`, `js/options.js`,
+  `js/preview.js`, `css/style.css` were stale; nothing missing).
+- **Honest gap:** the popup preview/similar **wiring** has no e2e — those paths
+  render through `innerHTML` and the window-less popup harness has no HTML
+  parser, so an e2e there would mostly test the parser. The markup contract is
+  unit-tested instead, and this is stated in `SESSION_HANDOFF.md`.
+- **Next:** the non-nhentai download path (item 48's per-site job split + the
+  per-site metadata resolution that makes a `site:id` queue row downloadable).

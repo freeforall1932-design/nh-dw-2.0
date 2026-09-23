@@ -1,8 +1,10 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-21** (session
-`arena/01a0bfa1-nh-dw-2-0`: **PR #44 review + approved item 38 preserved;
-dependency maintenance preserved; approved 59 complete; 58 still open**).
+**Live, ordered. Updated 2026-09-23** (session
+`arena/01a0cc70-nh-dw-2-0`: **the ☆ became a real bookmark icon, every
+single-gallery page got a blue Bookmark button, and the small-wins bundle
+landed — 43, 44, 52 and 41 are DONE in both trees** (PR #47). 42/58 remain
+user-only: real-browser and Android passes, signing.)
 
 **38 is done in the approved Firefox-only scope:** 33 options-page tests and
 narrow regression fixes, integrated with offline e2e. That task had no
@@ -108,7 +110,25 @@ controls on listings, toolbar opens the drawer); then
 
 ## Open, in the order I would take them
 
-### 42. Real-browser pass for the Queue tab — **highest priority**
+### 48. Non-nhentai queue rows must become downloadable — **highest priority**
+
+The owner chose this explicitly (the "multi-site" option). A `site:id` row can be
+bookmarked, selected, reordered and exported today, but `downloadSelection`
+still hands the worker `downloadAllDoujinshis {allDoujinshis: id -> title}` and
+the pipeline resolves each gallery through nhentai. What has to happen:
+
+1. **Split the job per site** at `src/utils/batchPipeline.ts:322` (the item-48
+   NOTE) and in `runBatchDownload` — one batch per site, never a mixed list.
+2. **Resolve metadata per site** instead of through an active nhentai tab
+   (`bookmarkEnrich` and `Downloader.ts`'s `jsonTmp.site` → `getSourceForSite`
+   path already exist; the adapter table in `src/utils/titleBookmark.ts` is the
+   same per-site knowledge and should be the single source).
+3. Then the existing hentaiera / imhentai / hentaienvy / hentaifox / hitomi
+   adapters do the fetching with no new permissions.
+
+Do **not** widen host permissions or `<all_urls>` to get there.
+
+### 42. Real-browser pass for the Queue tab — after 48, and user-only
 
 **Why first:** 3.7.0 shipped on offline evidence. `npm run test:browser` has
 **never** run in this environment, so every claim about rendering, restart and
@@ -133,31 +153,32 @@ Verify in a real Chrome 116+ profile:
 Then add the steps to "Required real-browser verification before PR" in
 `SESSION_HANDOFF.md`.
 
-### 43. ☆ on the single-title preview and on similar-gallery rows
+### 43. Bookmark control on the single-title preview and on similar-gallery rows — **DONE 2026-09-23**
 
-**Partly landed 2026-09-23:** the gallery page itself now carries the blue
-**Bookmark** button on all six supported sites (`src/content/titleBookmark.ts`,
-`css/titleBookmark.css`, `js/titleBookmark.js`) — added next to the site's own
-Favorite/Download buttons and stored in the same persistent
-`chrome.storage.local` queue. Still open: the panel's single-title preview and
-the similar-gallery rows.
+Landed in both trees: the gallery page itself carries the blue **Bookmark**
+button on all six supported sites (`src/content/titleBookmark.ts`,
+`css/titleBookmark.css`, `js/titleBookmark.js`), and the panel's own surfaces
+now have their toggle too — `#buttonBookmark` beside Download in the
+single-title preview and `input.similarBookmark[data-id]` on every
+similar-gallery row (built by `message.bookmarkButtonHtml` / `similarList`,
+**outside** the row's `<label>` so a click cannot also tick the checkbox).
+`bookmarkTogglePresentation()` is the single source of the words and classes.
 
-**Cost: low.** The worker side is already done — `bookmarkAdd` accepts
-`source: "page"` and `"similar"`, and `thumbnailUrlFromGallery` derives a cover
-from a resolved `media_id`. Only two render sites are missing:
-`popup.ts #doujinshiPreviewAsync` (single title) and the similar-galleries list
-built by `message.similarList`.
+**Coverage note:** the markup contract is unit-tested; the preview/similar
+*wiring* has no e2e because both render through `innerHTML` and the window-less
+popup harness has no HTML parser. See `SESSION_HANDOFF.md`.
 
-Decision needed: use the derived `media_id` thumbnail (the metadata is already in
-hand at both sites) rather than leaving the row coverless until enrichment.
-Recommend yes.
+**Remaining sub-issue (still open, tracked as 48):** a non-nhentai row is stored
+and reorderable but not yet downloadable, because the queue's download pipeline
+is nhentai-keyed.
 
-### 44. Drag-reorder the bookmark list
+### 44. Drag-reorder the bookmark list — **DONE 2026-09-23**
 
-**Cost: low.** `planBookmarkDownload` already emits ids **in list order**, so
-reordering the list already reorders the batch — only the affordance is missing.
-Order is already implicit in the stored array; add **no** new field. Must not
-fight the row's checkbox / Download / Remove hit targets.
+`moveBookmark()` (pure, clamped, same-state no-op), worker action
+`bookmarkReorder`, a dedicated drag handle per row plus row drop targets, CSS in
+both trees. No new stored field: array order **is** the download order, so
+reordering changes the batch. The row's checkbox / Download / Remove keep their
+own hit targets.
 
 ### 45. Per-row cancel of an in-flight download — **the surviving half of P3**
 
@@ -202,10 +223,12 @@ still owed under 58; offline parity is not a device-test result.
       delivers `getGalleries` directly to test format rendering, but does not
       exercise page injection/bootstrap, pagination, listing-job/PDF-merge or
       similar-gallery workflows. Those broader paths remain open.
-- [ ] **41. Non-canonical separators are canonicalised on tick (UX decision).**
-      `isTokenOnlyTemplate("{pretty}_{id}")` is `true`, so the first tick
-      rewrites it to `"{pretty} - {id}"`. Suggested: an `isCanonicalTemplate()`
-      gate routing odd separators to the manual input.
+- [x] **41. Non-canonical separators are canonicalised on tick — DONE
+      2026-09-23.** `isCanonicalTemplate()` (= token-only **and** byte-identical
+      to `buildTemplate(tokens)`) now gates the tick boxes in both `options.ts`
+      and the panel's `popupSettings.ts`, so `{pretty}_{id}` and
+      `{id} - {pretty}` keep the manual field. This was the suggested fix,
+      implemented as suggested.
 
 Also carried, older: raw retry-policy follow-ups, raw list-mode verification in
 a browser, and the standing fact that **no real-browser verification has ever
@@ -231,7 +254,12 @@ decision record (merge vs new repo) and per-site facts:
       No cooldown bypass — see the plan's Do-not rules.
 - [ ] **51. Streaming ZIP writer** — OPFS / File System Access, memory
       O(one page) instead of O(gallery).
-- [ ] **52. History export/import (JSON)** — cross-machine carry-over.
+- [x] **52. Queue + history export/import (JSON)** — **DONE 2026-09-23**,
+      out of planning and ahead of the rest of this list (it was the cheapest
+      item and the one users ask for first). One file, both stores; union merge,
+      local wins, nothing is ever deleted; the queue goes through the worker
+      (`bookmarkImport`) and the history through `historyImport` →
+      `writeHistory()`. Coverage: 24 unit tests + the new Queue-panel harness.
 
 Order if called: **49 → 48 → 50 → 51 → 52** (hitomi validates the
 adapter contract before the panel rework bakes it in). Rename/rebrand the

@@ -9,7 +9,7 @@
 // dynamic values) so a malicious title or username cannot inject markup.
 
 import { verifyAndSaveApiKey, removeApiKey } from "../options/apiKey";
-import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "../options/nameTemplate";
+import { TEMPLATE_TOKENS, templateTokensInUse, isCanonicalTemplate, buildTemplate } from "../options/nameTemplate";
 import { utils } from "../utils/utils";
 import { clearHistory, countHistory, readHistory } from "../utils/downloadHistory";
 import {
@@ -189,10 +189,16 @@ export function renderSettings(container: HTMLElement): void {
         });
 
         const storedTemplate: string = elems.downloadName;
-        if (!isTokenOnlyTemplate(storedTemplate)) {
-            // A custom template the checkboxes cannot represent: show it as text.
-            namePreview.textContent = "Custom template in use: " + storedTemplate +
-                " (edit it in the full options page)";
+        if (!isCanonicalTemplate(storedTemplate)) {
+            // Two cases, one outcome: a template the checkbox builder cannot
+            // reproduce EXACTLY. Either it is custom ("My gallery {id}"), or it
+            // is token-only with a separator / spacing the builder does not
+            // emit ("{pretty}_{id}", "{pretty} {id}"). Ticking a box would
+            // silently rewrite those, so the boxes are not offered here; the
+            // stored template is shown as-is and edited in the full options
+            // page (item 41).
+            namePreview.textContent = "Template in use: " + storedTemplate +
+                " - keep it, or edit it in the full options page (the tick boxes would rewrite its separator).";
             return;
         }
 

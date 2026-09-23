@@ -391,29 +391,35 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log("PASS phase 5: Dismiss forgets the failed list and hides the notice");
 
     // ---- Phase 6: opening Settings must not rewrite stored settings --------
-    // A token-only template in the user's OWN order ("{id} - {pretty}") is
-    // representable by the checkboxes, so the panel takes the checkbox branch.
-    // Merely opening the tab used to rebuild it in canonical order and save
+    // A canonical template: representable by the checkboxes, so the panel takes
+    // the checkbox branch. Merely opening the tab used to rebuild it and save
     // that, silently reordering the file names with no user action.
-    syncStore.downloadName = "{id} - {pretty}";
+    //
+    // (The item-41 gate — a NON-canonical template like "{pretty}_{id}" never
+    // offers the boxes at all — is a pure contract, asserted in
+    // test/queue-transfer.test.js and against the real options.html by
+    // test:options. This pane builds its DOM once, so it cannot be re-rendered
+    // with a second template inside one VM run.)
+    syncStore.downloadName = "{pretty} - {id}";
     const writesBefore = syncWrites.length;
     byId("tabSettings").dispatchLast("click");
     await wait(30);
     const tplPreview = byId("psTemplatePreview");
     if (!/Example file name/.test(tplPreview.textContent)) {
-        fail("the settings tab must render the template example, got \"" + tplPreview.textContent + "\"");
+        fail("a canonical template must render the tick-box example, got \"" + tplPreview.textContent + "\"");
     }
     const unsolicited = syncWrites.slice(writesBefore).filter((w) => "downloadName" in w);
     if (unsolicited.length > 0) {
         fail("opening the Settings tab must not rewrite downloadName, it wrote " + JSON.stringify(unsolicited));
     }
-    if (syncStore.downloadName !== "{id} - {pretty}") {
+    if (syncStore.downloadName !== "{pretty} - {id}") {
         fail("the stored template must survive opening Settings untouched, got " + syncStore.downloadName);
     }
     console.log("PASS phase 6: opening Settings leaves the stored name template alone");
 
     // ---- Phase 7: ticking a token still saves -----------------------------
-    // The fix must not turn the section read-only: an explicit change writes.
+    // The fix must not turn the section read-only: an explicit change writes,
+    // and it must still be reachable on a template the boxes may represent.
     const exampleBefore = tplPreview.textContent;
     const languageBox = byId("psTpl_language");
     if (!languageBox._listeners.change || languageBox._listeners.change.length === 0) {

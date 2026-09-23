@@ -15,6 +15,7 @@ import { normalizeFormat, normalizeFormatOverride, resolveJobFormat, formatExten
 // The worker OWNS the persistent download history (chrome.storage.local): it
 // reads it for the pipeline guard, writes it when jobs report success and
 // clears it on user request. The offscreen document never touches storage.
+import * as historyTransfer from "../utils/downloadHistory";
 import {
     BatchOutcome,
     DownloadHistory,
@@ -1552,6 +1553,15 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         };
         if (request.action === "downloadDoujinshi") {
             return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
+        } else if (request.action === "historyImport") {
+            // Import arrives from the panel with an ALREADY-MERGED map (local
+            // records win: only this machine knows whether the file is still on
+            // disk). Writing here keeps history single-writer like the bookmark
+            // queue, and the panel gets the resulting count back for its notice.
+            historyTransfer.writeHistory(request.history)
+                .then(() => sendResponse({ result: "success", count: Object.keys(request.history || {}).length }))
+                .catch(() => sendResponse({ result: "error", error: "Could not write the import." }));
+            return true;
         } else if (request.action === "downloadAllDoujinshis") {
             return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "downloadAllPages") {

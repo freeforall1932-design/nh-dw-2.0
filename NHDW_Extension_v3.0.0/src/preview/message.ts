@@ -1,4 +1,5 @@
 import { API_KEY_SETTINGS_URL } from "../utils/apiAuth";
+import { bookmarkTogglePresentation } from "../utils/bookmarkQueue";
 import { DOWNLOAD_FORMATS, formatExtension, formatLabel, effectiveOutputMode } from "../utils/downloadFormats";
 import { ListModeSettings } from "../utils/listSettings";
 import { FailedGallery } from "../utils/downloadHistory";
@@ -93,7 +94,7 @@ export module message
             '<input type="button" id="buttonGrantCdn" value="Grant image host access"/>';
     }
     
-    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string, alreadyNote?: string): string {
+    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string, alreadyNote?: string, bookmarked: boolean = false): string {
         const selected = (value: string) => value === selectedFormat ? ' selected' : '';
         const historyNote = alreadyNote
             ? '<small id="singleHistoryInfo" class="nhdwAlready">&#10003; Already downloaded: ' + alreadyNote + '</small><br/>'
@@ -113,7 +114,8 @@ export module message
             '</select><br/>' +
             historyNote +
             'Downloads/<input type="text" id="path"/>' + extension + '<br/><br/>' +
-            '<input type="button" id="button" value="' + buttonLabel + '" autofocus/>' +
+            '<input type="button" id="button" value="' + buttonLabel + '" autofocus/> ' +
+            bookmarkButtonHtml('buttonBookmark', '', bookmarked) +
             '</div>' +
             '<div class="popupColumn">' +
             '<b>Similar galleries</b>' +
@@ -172,15 +174,34 @@ export module message
         return '<small>' + message + '</small><br/>' + similarIntro();
     }
 
+    // Bookmark toggle button for the panel surfaces (single-title preview and
+    // each similar-gallery row). `id` is optional: the similar rows are wired by
+    // class + data-id instead, because they are re-rendered as a block.
+    // The button always sits OUTSIDE the row's <label>: nested inside it, a
+    // click would also toggle the download checkbox of that gallery.
+    export function bookmarkButtonHtml(id: string, extraClass: string, on: boolean, dataId: string = ""): string {
+        const presentation = bookmarkTogglePresentation(on);
+        return '<input type="button"' +
+            (id !== '' ? ' id="' + id + '"' : '') +
+            ' class="' + presentation.className + (extraClass !== '' ? ' ' + extraClass : '') + '"' +
+            (dataId !== '' ? ' data-id="' + dataId + '"' : '') +
+            ' value="' + presentation.label + '"' +
+            ' title="' + presentation.title + '"/>';
+    }
+
     // Checkbox list of related galleries. Entries carry pre-escaped titles;
-    // data-id links each checkbox back to its gallery id.
+    // data-id links each checkbox back to its gallery id, and each row carries
+    // its own bookmark toggle.
     export function similarList(entries: Array<{ id: string; title: string; pages: number }>): string {
         let html = '<div class="similarList">';
         for (const entry of entries) {
-            html += '<label><input type="checkbox" class="similarItem" data-id="' + entry.id + '" checked> ' +
+            html += '<div class="similarRow">' +
+                '<label><input type="checkbox" class="similarItem" data-id="' + entry.id + '" checked> ' +
                 entry.title +
                 (entry.pages > 0 ? ' <small>(' + entry.pages + 'p)</small>' : '') +
-                '</label>';
+                '</label>' +
+                bookmarkButtonHtml('', 'similarBookmark', false, entry.id) +
+                '</div>';
         }
         html += '</div>';
         html += '<input type="button" id="buttonSimilarAll" value="All"/> ';

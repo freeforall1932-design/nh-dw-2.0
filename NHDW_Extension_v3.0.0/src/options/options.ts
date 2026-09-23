@@ -2,7 +2,7 @@ import CheckBox from "./CheckBox";
 import InputField from "./InputField";
 import Select from "./Select";
 import { verifyAndSaveApiKey, removeApiKey } from "./apiKey";
-import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "./nameTemplate";
+import { TEMPLATE_TOKENS, templateTokensInUse, isCanonicalTemplate, buildTemplate } from "./nameTemplate";
 import { utils } from "../utils/utils";
 import { clearHistory, countHistory, readHistory } from "../utils/downloadHistory";
 import {
@@ -181,9 +181,11 @@ function initNameTemplate(storedTemplate: string) {
         renderTemplatePreview(template);
     };
 
-    if (!isTokenOnlyTemplate(storedTemplate)) {
-        // A custom template the checkboxes cannot represent: keep the manual
-        // input so nothing is lost.
+    if (!isCanonicalTemplate(storedTemplate)) {
+        // A template the checkbox builder cannot reproduce EXACTLY: either
+        // custom ("My gallery {id}") or token-only with a separator of the
+        // user's own ("{pretty}_{id}"). Both keep the manual input, and ticking
+        // is what would have rewritten them (item 41).
         checksBox.style.display = "none";
         advancedBox.style.display = "";
         advancedInput.value = storedTemplate;

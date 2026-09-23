@@ -1,5 +1,93 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`), **two passes in one
+day.** Chrome **3.9.0**, Firefox **1.3.0**. Read the top two sections in order —
+the second pass is the newer work; the first pass is the owner's original
+request in this session. Preserve all prior work in this tree.
+
+## Second pass — items 43, 44, 52 and 41 (small wins) — **READ THIS FIRST**
+
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`). The owner answered
+"what else can be worked on" by picking **every** option offered, so this pass
+adds the bookmark coverage the new feature was missing plus the small-wins
+bundle. All of it is in **both** trees (Chrome 3.9.0 / Firefox 1.3.0), committed
+with PR #47, and the release snapshot is re-synced.
+
+- **43 — the panel's own toggles.** `bookmarkTogglePresentation(on)` in
+  `src/utils/bookmarkQueue.ts` is now the single source of the label, tooltip
+  and classes (Bookmark/Bookmarked, blue `.nhdwBookmarkOn`). `message.ts` gained
+  `bookmarkButtonHtml(id, extraClass, on, dataId)`; `downloadInfo(…, bookmarked)`
+  embeds it beside Download as `#buttonBookmark`, and `similarList()` renders one
+  `input.similarBookmark[data-id]` per row. **The button is rendered outside each
+  row's `<label>`** — nested inside, a click would also toggle that gallery's
+  download checkbox, and that rule is asserted by a unit test. `popup.ts`
+  wires both (optimistic paint → `bookmarkAdd`/`bookmarkRemove` → repaint from
+  the worker's answer, with a `readBookmarks` fallback).
+  **Coverage limit, stated plainly:** the markup contract is unit-tested; the
+  preview/similar *wiring* has **no** e2e, because both surfaces render through
+  `innerHTML` and the window-less popup harness has no HTML parser — an e2e
+  there would mostly test the parser. Do not "fix" that by hand-rolling a parser
+  inside the harness.
+- **44 — drag-reorder.** `moveBookmark(state, id, toIndex)` (pure; clamps;
+  returns the **same** state on a no-op or unknown id so callers can skip a
+  repaint; keyed through `toGalleryKey`, so `site:id` rows drag too). Worker
+  action `bookmarkReorder`; panel `span.nhdwBmDrag` handle (the only draggable
+  element — the row's checkbox/Download/Remove keep their hit targets) plus row
+  `dragover`/`dragleave`/`drop`. `dragstart` also sets `text/plain` on the
+  transfer, because Firefox refuses to start a drag with an empty
+  `dataTransfer`. **No new stored field:** array order is the download order.
+- **52 — backup file (export/import).** New pure module
+  `src/utils/queueTransfer.ts` with `buildTransferPayload` /
+  `serializeTransfer` / `parseTransferPayload` / `mergeImportedHistory`.
+  `app: "nh-downloader-transfer"`, `version: 1`, pretty-printed JSON, both
+  stores in one file. **Policy: union, local wins, imported rows appended,
+  nothing is ever deleted** — a wrong file cannot wipe the list, and only this
+  machine knows whether a file is still on disk. Validation refuses empty,
+  unparseable, foreign, newer-version and empty-content files **with a reason**,
+  and normalizes every row through the same readers as the live path (bad rows
+  are dropped, not fatal). Writes stay single-writer: the queue goes through the
+  worker's new `bookmarkImport` action, the history through `historyImport` →
+  new `writeHistory()` (keeps the file's own timestamps, reuses the serialized
+  write chain so it cannot race a settling download). **The panel never writes
+  storage itself.** Re-importing the same file is a no-op.
+- **41 — the odd-separator gate.** `isCanonicalTemplate(tpl)` = token-only
+  **and** `buildTemplate(templateTokensInUse(tpl)) === tpl`, so
+  `{pretty}_{id}`, `{pretty} {id}` and `{id} - {pretty}` keep the manual field
+  instead of being rewritten by the first tick. Both `options.ts` and the
+  panel's `popupSettings.ts` gate on it (they are separate implementations —
+  change both).
+- **New coverage:** `test/queue-transfer.test.js` (24 tests: 41's gate, 43's
+  presentation, `moveBookmark`, the whole 52 contract), `test/message.test.js`
+  (+5 markup tests), **`scripts/e2e-bookmark-panel.js`** — a new Queue-panel
+  harness that drives the built `js/preview.js`: rows/status classes, the full
+  drag sequence (and that an abandoned drag sends nothing), the export blob and
+  its contents, import + re-import + six refusal cases. Firefox
+  `scripts/e2e-options.js` gained canonical-vs-non-canonical template routing.
+  Both `package.json` test lists and `test:e2e` chains were extended.
+- **Harness stub requirements (do not remove):** `textContent = ""` must
+  **replace** children (the panel clears the row list that way), and assigning
+  `.id` must register the node for `getElementById` (the backup buttons are built
+  with `createElement` and then found by id). `URL.createObjectURL`/`revokeObjectURL`
+  are stubbed and the blob is captured — that is what makes the export testable.
+- **Verified (this pass):** Chrome tsc 0, webpack OK, **492 unit pass / 4
+  pending**, full `test:e2e` green (title-page suite still **146 checks**, new
+  panel suite 8 phases), smoke 7 PASS. Firefox tsc 0, webpack OK, **568 unit
+  pass / 4 pending**, e2e green (site-ui 15, embedded-toolbar 11, options **34**),
+  smoke 7 PASS, web-ext lint **0 errors / 0 notices / 31 advisories**.
+- **Release:** `NHDW_Release_v3.0.0` re-synced with the **exhaustive
+  file-by-file loop** (never a fixed file list). This pass it caught
+  `js/background.js`, `js/options.js`, `js/preview.js` and `css/style.css` as
+  stale; nothing was missing. Run that loop again after any source change.
+- **Still open, and next:** **48** — a `site:id` queue row can be bookmarked,
+  selected, reordered and exported, but **cannot be downloaded yet**, because
+  `downloadSelection` still sends one nhentai-keyed batch
+  (`batchPipeline.ts:322` NOTE / `MULTISITE_V4_PLAN.md` §4.2). Then 42/58
+  (real-browser + Android passes, signing) which only the owner can run.
+
+---
+
+## First pass of this session — the bookmark icon and the gallery-page Bookmark button
+
 **Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`) — **owner request:
 the bookmark ☆ became a real bookmark icon, and every single-gallery page got a
 blue "Bookmark" button next to the site's own Favorite/Download buttons.**
@@ -2418,6 +2506,21 @@ session.
 - **Do not route a bookmark thumbnail into the download path.** `t.nhentai.net`
   is display-only and deliberately absent from `host_permissions`; an `<img>` in
   an extension page needs neither a host permission nor a CORS preflight.
+- **Do not add a destructive import.** `parseTransferPayload` +
+  `mergeImportedBookmarks` exist to *add*: union, local row wins, imported rows
+  appended, nothing removed. There is no "replace" mode on purpose — the whole
+  point is that a wrong file cannot wipe a queue built over months.
+- **Do not let the Queue tab write the queue or the history itself.** The worker
+  is the single writer for `bookmarkImport`; history goes through
+  `historyImport` → `writeHistory()` (which keeps the file's own timestamps and
+  reuses the serialized write chain). `test/e2e-bookmark-panel.js` asserts no
+  panel write touches those two keys.
+- **Do not move a similar row's bookmark button inside its `<label>`.** Nested
+  inside, a click on Bookmark would also toggle that gallery's download
+  checkbox. `test/message.test.js` asserts the button comes after `</label>`.
+- **Do not give the drag-reorder row itself `draggable`.** Only the
+  `span.nhdwBmDrag` handle is draggable, so the row's checkbox / Download /
+  Remove keep their own hit targets (item 44's explicit requirement).
 - **Do not make the Queue tab download in merged mode.** It is always
   `separate: true`; merging a bookmark list is a decision the user did not make.
 - **Do not re-add `bookmarkSetStatus`.** It was removed as a handler with no

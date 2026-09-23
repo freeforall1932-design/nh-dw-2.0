@@ -132,6 +132,56 @@ input[type="button"]:hover {
     text-overflow: ellipsis;
 }
 
+/* Item 43: each similar row is a line, the label takes the space and the
+   bookmark toggle sits OUTSIDE it (next to the row, not inside the label), so
+   clicking Bookmark cannot also tick that gallery's download checkbox. */
+.similarRow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.similarRow label {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Item 43: the shared bookmark toggle markup (preview row + every similar
+   row). Same box as the panel's other buttons; the on state is the gallery
+   pink/blue the rest of the UI already uses for "queued". */
+.nhdwBookmarkToggle {
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+
+.nhdwBookmarkToggle:hover {
+    border-color: #e31b53;
+    color: #e31b53;
+}
+
+.nhdwBookmarkToggle.nhdwBookmarkOn {
+    background: #1d6fd8;
+    border-color: #1d6fd8;
+    color: #fff;
+}
+
+.nhdwBookmarkToggle.nhdwBookmarkOn:hover {
+    background: #1760bd;
+    border-color: #1760bd;
+    color: #fff;
+}
+
+.similarBookmark {
+    padding: 2px 6px;
+    font-size: 11px;
+}
+
 #htmlDark .similarList {
     border-color: #555;
 }
@@ -595,6 +645,50 @@ html.nhdwPanel body {
     margin-bottom: 8px;
 }
 
+/* Item 52: the backup row reuses .nhdwBmToolbar's button styling and adds the
+   hint that says what an import does (merges, never replaces). */
+.nhdwBmBackup {
+    border-top: 1px solid #999;
+    padding-top: 8px;
+    margin-top: 8px;
+}
+
+.nhdwBmBackup small {
+    flex: 1 1 100%;
+    font-size: 11px;
+    opacity: 0.75;
+}
+
+#htmlDark .nhdwBmBackup {
+    border-top-color: #555;
+}
+
+/* Item 44: the drag handle. Narrow (it should never win a click race with the
+   row's own controls), braille dots so it reads as a grip, and a grab cursor. The row it belongs to gets a dashed outline while a drag is in
+   flight and the row under the pointer is highlighted. */
+.nhdwBmDrag {
+    cursor: grab;
+    opacity: 0.5;
+    letter-spacing: -1px;
+    font-size: 11px;
+    user-select: none;
+    flex: 0 0 auto;
+}
+
+.nhdwBmDrag:hover {
+    opacity: 0.9;
+}
+
+.nhdwBmRow.nhdwBmDragging {
+    opacity: 0.45;
+    border-style: dashed;
+}
+
+.nhdwBmRow.nhdwBmDropTarget {
+    border-color: #e31b53;
+    box-shadow: 0 0 0 2px rgba(227, 27, 83, 0.25);
+}
+
 .nhdwBmCheck {
     font-size: 11px;
     display: inline-flex;
@@ -620,6 +714,38 @@ html.nhdwPanel body {
     opacity: 0.75;
     padding: 12px 4px;
     text-align: center;
+}
+
+/* ---- Drag-reorder the bookmark queue (item 44) --------------------------
+   The list order is the download order, so this is a real control, not a
+   cosmetic one. Only the handle is draggable: the row's checkbox, Download and
+   Remove keep their own hit targets. -------------------------------------------------- */
+
+.nhdwBmDrag {
+    cursor: grab;
+    opacity: 0.45;
+    letter-spacing: -2px;
+    font-size: 13px;
+    line-height: 1;
+    padding: 2px 1px;
+    user-select: none;
+    -webkit-user-select: none;
+    flex: 0 0 auto;
+    align-self: center;
+}
+
+.nhdwBmDrag:hover {
+    opacity: 0.9;
+}
+
+.nhdwBmRow.nhdwBmDragging {
+    opacity: 0.4;
+}
+
+.nhdwBmRow.nhdwBmDropTarget {
+    outline: 2px dashed #e31b53;
+    outline-offset: -2px;
+    border-radius: 6px;
 }
 
 .nhdwBmRow {
