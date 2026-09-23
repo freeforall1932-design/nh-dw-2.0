@@ -8,8 +8,11 @@ gate (41) — complete; real-device verification + signing remain pending (58)**
 
 v1.3.0 = the Chrome 3.9.0 bookmark work, ported: the card control is a real
 bookmark glyph, every single-gallery page (all six sites) carries a blue
-**Bookmark** button, the Queue tab's rows drag-reorder, and the tab can export
-and import the queue + history as one JSON file.
+**Bookmark** button, the Queue tab's rows drag-reorder, a downloading row shows
+a red **Cancel** button (per-row cancel, item 45), and the tab can export and
+import the queue + history as one JSON file. The Chrome 3.9.0 filename
+template cleanup (item 39) and the constant-memory streaming ZIP writer
+(item 51) are ported too.
 
 v1.2.0 = the in-page drawer is the primary surface on nhentai.net. A
 **Downloader** button sits in the site header next to the hamburger; it opens
@@ -21,7 +24,7 @@ Settings → In-page panel.
 
 v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
 plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). The Firefox offline
-suite now has **579** passing / 4 deliberately opt-in live tests pending
+suite now has **595** passing / 4 deliberately opt-in live tests pending
 (including the Item 48 multi-site batch download suite and all 6 site adapters).
 
 Review fixes include working embedded settings, shared Settings/Queue layout

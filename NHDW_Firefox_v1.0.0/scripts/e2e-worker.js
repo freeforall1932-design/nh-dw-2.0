@@ -1564,6 +1564,37 @@ const historyKeyFor = (id) => "nhentai:" + String(id);
             fail("bookmark mutations must broadcast bookmarkChanged so an open panel repaints");
         }
         console.log("PASS phase 13h: bookmark mutations broadcast bookmarkChanged (" + broadcasts.length + " seen)");
+
+        // 13i. A cancel that races a job completion must never demote the
+        // settled row (PR #48 review): "done" means the artifact is on disk
+        // and recorded, and a late Cancel click (the panel had not repainted
+        // yet) must not turn it into a "Cancelled" failure. The worker-side
+        // guard lives in markBookmarksFailed, so it covers the relay AND the
+        // fallback path this harness drives.
+        localSettings.downloadHistory = { "366224": { filename: "NHDW/First.zip", when: 1 } };
+        const settledRow = localSettings.bookmarkQueue.items.find((item) => item.id === "366224");
+        settledRow.status = "done";
+        settledRow.filename = "NHDW/First.zip";
+        const lateCancelResp = await ask({ action: "cancelGallery", id: "366224", site: "nhentai" });
+        if (!lateCancelResp || lateCancelResp.result !== "success") {
+            fail("cancelGallery must answer success, got " + JSON.stringify(lateCancelResp));
+        }
+        // markBookmarksFailed answers BEFORE its write settles (the demote
+        // lands on the mutation chain's microtasks), so give any in-flight
+        // write time to land, then assert on what is actually STORED - that
+        // is what the next panel repaint and the next restart will read.
+        await new Promise((resolve) => setTimeout(resolve, 60));
+        const storedRacedRow = localSettings.bookmarkQueue.items.find((item) => item.id === "366224");
+        if (storedRacedRow.status !== "done") {
+            fail("a late cancel must never demote a done row, stored status is " +
+                storedRacedRow.status + " (" + (storedRacedRow.error || "") + ")");
+        }
+        const afterLateCancel = await ask({ action: "bookmarkGet" });
+        const racedRow = afterLateCancel.state.items.find((item) => item.id === "366224");
+        if (racedRow.status !== "done") {
+            fail("a late cancel must never demote a done row, got " + racedRow.status + " (" + (racedRow.error || "") + ")");
+        }
+        console.log("PASS phase 13i: a cancel racing a completion leaves the done row settled");
     }
 
     console.log("PASS: full worker pipeline works in a window-less MV3 context.");

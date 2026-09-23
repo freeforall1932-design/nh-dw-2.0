@@ -80,18 +80,33 @@ export interface BatchHost {
 
 const cancelledGalleries = new Set<string>();
 
+// Cancel marks are ALWAYS composite `<site>:<id>` keys (items 47/48): the
+// same number on two sites is two different galleries, so cancelling the
+// hitomi row must never touch an in-flight nhentai batch entry with the same
+// number. A bare id composes with the default site exactly like every other
+// store. Marks are CONSUMED - by the batch loop when it skips the gallery,
+// and by the hosts' cancel handlers when the cancel is enforced directly
+// (aborting the active Downloader, filtering queued jobs) or when nothing is
+// running at all - so one cancel can never make a gallery undownloadable
+// for the lifetime of the document/worker (PR #48 review: a stale mark made
+// the row's Retry and "Retry failed" fail instantly, forever).
 export function cancelGallery(id: string | number, site?: string): boolean {
     const rawKey = String(id === undefined || id === null ? "" : id);
     if (!rawKey) return false;
     cancelledGalleries.add(toGalleryKey(rawKey, site));
-    cancelledGalleries.add(rawKey);
     return true;
 }
 
 export function isGalleryCancelled(id: string | number, site?: string): boolean {
     const rawKey = String(id === undefined || id === null ? "" : id);
     if (!rawKey) return false;
-    return cancelledGalleries.has(toGalleryKey(rawKey, site)) || cancelledGalleries.has(rawKey);
+    return cancelledGalleries.has(toGalleryKey(rawKey, site));
+}
+
+export function consumeGalleryCancellation(id: string | number, site?: string): void {
+    const rawKey = String(id === undefined || id === null ? "" : id);
+    if (!rawKey) return;
+    cancelledGalleries.delete(toGalleryKey(rawKey, site));
 }
 
 export function resetCancelledGalleries(): void {
@@ -478,7 +493,12 @@ export async function runBatchDownload(args: {
             break;
         }
         const key = allKeys[i];
-        if (isGalleryCancelled(storeKey(key)) || isGalleryCancelled(key) || (host.isGalleryCancelled && host.isGalleryCancelled(storeKey(key)))) {
+        if (isGalleryCancelled(key, jobSite) || (host.isGalleryCancelled && host.isGalleryCancelled(storeKey(key)))) {
+            // Consume the mark with the skip: the cancel belonged to THIS job.
+            // Keeping it would make every later job containing the gallery -
+            // the row's Retry, "Retry failed", a re-pasted id - skip it again
+            // instantly for as long as this document/worker lives.
+            consumeGalleryCancellation(key, jobSite);
             countFailure(key, "Download was aborted");
             continue;
         }

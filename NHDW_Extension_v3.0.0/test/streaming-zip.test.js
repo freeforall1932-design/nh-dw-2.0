@@ -128,11 +128,75 @@ describe('StreamingZip (item 51)', () => {
                 write: async () => {},
                 close: async () => {}
             };
-            const sink = new OpfsZipSink(mockRoot, mockFileHandle, mockWritable, 'test_temp.tmp');
+            const sink = new OpfsZipSink(mockRoot, mockFileHandle, mockWritable, 'test_temp.tmp', 0);
             await sink.write(new Uint8Array([1, 2]));
             await sink.close();
             await sink.cleanup();
             assert.strictEqual(removedEntry, 'test_temp.tmp');
+        });
+    });
+
+    // PR #48 review: the offscreen document saves finished archives through an
+    // anchor click that is NOT awaited, so cleanup() must not unlink the OPFS
+    // file while Chrome's download manager may still be reading the blob - and
+    // a document killed before the delayed unlink must not leak the orphan
+    // forever (the next archive sweeps stale temp files before it starts).
+    describe('OpfsZipSink orphan sweep and delayed cleanup (PR #48 review)', () => {
+        const originalNavigator = globalThis.navigator;
+
+        afterEach(() => {
+            if (originalNavigator === undefined) delete globalThis.navigator;
+            else globalThis.navigator = originalNavigator;
+        });
+
+        function mockOpfs(existingNames) {
+            const removed = [];
+            const root = {
+                values: async function* () {
+                    for (const name of existingNames) yield { name: name, kind: 'file' };
+                },
+                removeEntry: async (name) => { removed.push(name); },
+                getFileHandle: async () => ({
+                    createWritable: async () => ({ write: async () => {}, close: async () => {} }),
+                    getFile: async () => new Blob(['mock'])
+                })
+            };
+            globalThis.navigator = { storage: { getDirectory: async () => root } };
+            return removed;
+        }
+
+        it('create() sweeps stale temp archives left behind by an earlier session', async () => {
+            const removed = mockOpfs([
+                'nhdw_archive_1_aaa.tmp',
+                'nhdw_archive_2_bbb.tmp',
+                'keepme.bin'
+            ]);
+            const sink = await OpfsZipSink.create();
+            assert.ok(sink, 'create() succeeds against a mock OPFS root');
+            assert.deepStrictEqual(removed.slice().sort(), [
+                'nhdw_archive_1_aaa.tmp',
+                'nhdw_archive_2_bbb.tmp'
+            ], 'only stale nhdw_archive_*.tmp orphans are removed, nothing else');
+        });
+
+        it('cleanup() unlinks after the grace delay, never while the download may still read', async () => {
+            const removed = mockOpfs([]);
+            const sink = await OpfsZipSink.create('nhdw_archive_', 25);
+            await sink.write(new Uint8Array([1]));
+            await sink.close();
+            await sink.cleanup();
+            assert.strictEqual(removed.length, 0,
+                'cleanup() must not unlink synchronously: the anchor save is not awaited');
+            await new Promise((resolve) => setTimeout(resolve, 90));
+            assert.strictEqual(removed.length, 1, 'the temp file is removed once the grace delay passed');
+            assert.ok(/^nhdw_archive_.*\.tmp$/.test(removed[0]), 'the removed entry is the sink temp file');
+        });
+
+        it('cleanup() with a zero delay removes immediately (harness contexts)', async () => {
+            const removed = mockOpfs([]);
+            const sink = await OpfsZipSink.create('nhdw_archive_', 0);
+            await sink.cleanup();
+            assert.strictEqual(removed.length, 1);
         });
     });
 });

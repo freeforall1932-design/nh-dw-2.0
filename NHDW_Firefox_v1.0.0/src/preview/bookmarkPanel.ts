@@ -523,18 +523,31 @@ function buildRow(item: BookmarkItem): HTMLElement {
     status.textContent = statusLabel(item);
     right.appendChild(status);
 
-    const downloadButton = el("button");
-    downloadButton.type = "button";
-    downloadButton.className = "nhdwBmDownload";
-    downloadButton.textContent = "Download";
-    downloadButton.title = "Download just this title now, using the list-mode settings";
-    downloadButton.addEventListener("click", () => {
-        downloadButton.disabled = true;
-        downloadOne(item).then(() => {
-            downloadButton.disabled = false;
+    if (item.status === "downloading") {
+        const cancelButton = el("button");
+        cancelButton.type = "button";
+        cancelButton.className = "nhdwBmCancel";
+        cancelButton.textContent = "Cancel";
+        cancelButton.title = "Cancel downloading this title";
+        cancelButton.addEventListener("click", () => {
+            cancelButton.disabled = true;
+            send({ action: "cancelGallery", id: item.id, site: item.site });
         });
-    });
-    right.appendChild(downloadButton);
+        right.appendChild(cancelButton);
+    } else {
+        const downloadButton = el("button");
+        downloadButton.type = "button";
+        downloadButton.className = "nhdwBmDownload";
+        downloadButton.textContent = "Download";
+        downloadButton.title = "Download just this title now, using the list-mode settings";
+        downloadButton.addEventListener("click", () => {
+            downloadButton.disabled = true;
+            downloadOne(item).then(() => {
+                downloadButton.disabled = false;
+            });
+        });
+        right.appendChild(downloadButton);
+    }
 
     const removeButton = el("button");
     removeButton.type = "button";

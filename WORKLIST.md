@@ -1,12 +1,17 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-23** (session
-`arena/01a0cc70-nh-dw-2-0`: **the ☆ became a real bookmark icon, every
-single-gallery page got a blue Bookmark button, the small-wins bundle landed
-(43, 44, 52, 41) and item 48 landed too — a `site:id` queue row is now
-downloadable, because the queue splits a mixed selection into one job per site
-and each job resolves through its own adapter** (PR #47). 42/58 remain
-user-only: real-browser and Android passes, signing.)
+**Live, ordered. Updated 2026-09-24** (session
+`arena/01a0cdce-nh-dw-2-0`: **items 39, 45 and 51 landed (PR #48) — empty-token
+filename cleanup, per-row Cancel of an in-flight download, and the
+constant-memory streaming ZIP writer (OPFS) — and the mandatory review pass
+then found and fixed eight defects in that PR** (item 45's UI had never reached
+Firefox, cancel marks were never consumed so retries failed forever, bare-id
+matching could cancel the wrong site's download, a late cancel could demote a
+done row, OPFS temp files were unlinked mid-download and never swept, plus
+stale READMEs). Red-first tests for every code defect; Chrome **519** /
+Firefox **595** units, e2e 143/175 PASS. See the review-pass section at the
+top of `SESSION_HANDOFF.md`. 42/58 remain user-only: real-browser and Android
+passes, signing.)
 
 **38 is done in the approved Firefox-only scope:** 33 options-page tests and
 narrow regression fixes, integrated with offline e2e. That task had no
@@ -209,6 +214,15 @@ Downloader and/or filters queued jobs, marking the row failed (`Cancelled`).
 The batch loop in `batchPipeline.ts` skips pre-cancelled items cleanly and
 continues downloading subsequent batch items. Styled with `.nhdwBmCancel` in
 `css/style.css` and tested in `test/batch-pipeline.test.js`.
+
+**PR #48 review (same day):** the first cut was Chrome-only UI (Firefox had the
+handlers but zero senders), cancel marks were never consumed (Retry failed
+instantly, forever), bare-id matching could abort another site's download, and
+a late cancel could demote a `done` row. All fixed with red-first tests — the
+FF port (`bookmarkPanel.ts` + `panelRenderers.css`), composite-only marks with
+consume-on-skip/consume-on-enforce, the `markBookmarksFailed` done-guard, and
+new phases 13i (worker) / 7d (panel) / the offscreen cancel-retry phase.
+Details: `SESSION_HANDOFF.md` review-pass section.
 
 ### 46. Firefox port of the bookmark queue — **DONE in PR #43 / v1.1.0**
 

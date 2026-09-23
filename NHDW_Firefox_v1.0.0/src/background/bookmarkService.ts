@@ -104,7 +104,17 @@ export function markBookmarksFailed(failed: Array<{ id: string | number; name?: 
             // The entry's site, when it has one (item 48): two sites can use the
             // same numeric id, and the wrong composition would mark the wrong row
             // - or no row at all. A bare entry still means the default site.
-            next = patchBookmark(next, toGalleryKey(entry.id, entry.site), {
+            const key = toGalleryKey(entry.id, entry.site);
+            // A failure that races a completion must never demote a settled
+            // row (PR #48 review): "done" means the artifact is on disk and
+            // recorded in the history, and a late Cancel click - the panel
+            // had not repainted yet - or a stale broadcast does not undo
+            // that fact. The completion side stays authoritative.
+            const settled = next.items.find((item) => toGalleryKey(item.id, item.site) === key);
+            if (settled && settled.status === "done") {
+                continue;
+            }
+            next = patchBookmark(next, key, {
                 status: "failed",
                 error: String(entry.error || "Download failed")
             });

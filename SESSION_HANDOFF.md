@@ -4,6 +4,49 @@
 Firefox **1.3.0**. Read the sections below in order — the first one is the
 newest work. Preserve all prior work in this tree.
 
+## Review pass — PR #48 (items 39/45/51): eight defects found and fixed (2026-09-24, same session)
+
+The mandatory review-before-building rule was run over PR #48's own output
+(commit `49b355f5`). Every defect below has a test that **fails on the pre-fix
+build**; all fixes are in both trees and the release snapshot is re-synced.
+
+| # | Kind | Defect | Fix | Red-first test |
+|---|---|---|---|---|
+| 1 | **missing logic (parity)** | Item 45's UI never reached Firefox: `bookmarkPanel.ts` and the queue CSS were untouched in the FF tree, so its `cancelGallery` handlers (worker, offscreen, pipeline) had **zero senders** — the handoff's "identical parity" claim was false for 45. | Ported the cancel block (FF `bookmarkPanel.ts` is byte-identical to Chrome again) and added `.nhdwBmCancel` to FF `css/panelRenderers.css` under the established `:where(#queuePane, #nhdwSiteUiQueue)` scope, declarations identical property-by-property to Chrome's `style.css`. Rebuilt `js/preview.js` + `js/siteUi.js` (the drawer renders the same rows). | `e2e-bookmark-panel.js` phase **7d** FAILS on the pre-fix FF bundle ("a downloading row renders a Cancel button"); passes in both trees after. |
+| 2 | **broken** | Cancel marks were **never consumed**: `cancelledGalleries` lived for the whole document/worker lifetime, so a cancelled gallery's row Retry, "Retry failed" and any re-pasted id failed instantly ("Download was aborted") forever. | The batch loop **consumes** the mark when it skips the gallery, and the hosts' cancel handlers consume it when the cancel was enforced directly (abort / dequeue / payload filter) or — offscreen only, where `jobRunning` + `queuedJobs` give whole-job visibility — when nothing is running at all (a stale click after completion). The worker fallback consumes only on enforcement: between two batch galleries `isDownloadFinished()` is momentarily true, so an idle check there could swallow a real mid-batch cancel; a stale fallback mark instead costs exactly one skipped attempt in the next batch containing that gallery, and that skip consumes it (documented in the code comment). | `e2e-offscreen.js` cancel phase: the retry half FAILS pre-fix (`succeeded:0 failed:1` for the very next job); unit "skipping consumes the cancel mark, so the next job re-downloads it". |
+| 3 | **broken (cross-site)** | `cancelGallery` also added the **bare id** to the mark set and `isGalleryCancelled` checked it, so cancelling `hitomi:12345` poisoned every `nhentai:12345` batch entry; the active-Downloader match had a `curId === strId` bare fallback that could abort a DIFFERENT site's in-flight download; the queued-batch filter deleted payload entries by number regardless of the job's site. | Composite identity only, everywhere: marks, checks, the `currentDownloader` match and both queued-job matches compose through `toGalleryKey` on both sides; a batch payload entry is only removed when the JOB's site matches the cancel's site. | Unit "a cancel on one site never cancels the same id on another" FAILS pre-fix. |
+| 4 | **broken (race)** | A late Cancel click (the row had just finished; the panel had not repainted) demoted a `done` row to failed "Cancelled" — `markBookmarksFailed` was applied unconditionally in both the relay and the fallback handler, and `patchBookmark` has no status guard. | `markBookmarksFailed` never demotes a `done` row: done means the artifact is on disk and recorded in the history, which outranks a stale click or broadcast. Covers both handlers at the single writer. | `e2e-worker.js` phase **13i** FAILS pre-fix ("stored status is failed (Cancelled)") — with a settle delay, because the demote write lands on the mutation chain's microtasks after the synchronous reply. |
+| 5 | **broken (race + leak)** | The OPFS temp archive was unlinked **immediately** after the anchor-based save, which nobody awaits — Chrome's download manager may still be reading the blob the file backs; and a document killed before `cleanup()` leaked the orphan forever. | `OpfsZipSink.cleanup()` unlinks after a grace delay (default 60 s, mirroring `revokeObjectUrlDelayMs`; injectable for tests, 0 = immediate) and `OpfsZipSink.create()` first sweeps orphaned `nhdw_archive_*.tmp` files **older than the grace period** — a recent or concurrent writer's file is never touched, and the sweep runs before the new file is created so it can never delete its own. | Unit "cleanup() unlinks after the grace delay" + "create() sweeps stale temp archives" FAIL pre-fix. |
+| 6 | **misaligned** | The fallback `cancelGallery` handler replied synchronously and then `return true` — holding the message channel open for a second response that never comes (the exact pattern the 3.6.x console-noise fix removed elsewhere). | Removed; the branch answers like every other synchronous branch. | code review (no dedicated test) |
+| 7 | **misaligned (docs)** | The READMEs contradicted the PR they shipped with: root README still listed item 51 as roadmap-unchecked, "No per-item cancel in the queue" as a limitation, and 503/579 test counts; Release README said 503; Firefox README said 579 and never mentioned the cancel/39/51 port; `MULTISITE_V4_PLAN.md` §6 still called M4 "future work". | All corrected (519/595, roadmap checked, limitation removed, version-history + feature bullets extended, M4 landed). | n/a |
+| 8 | **doc honesty** | The Downloader passes `generateAsync({compression:"DEFLATE", level 5})` — which `StreamingZipWriter` silently ignores (a streaming writer decides compression per entry at append time and cannot retro-compress; image entries are STORE by design). Production archives are therefore STORE-only: PNG pages come out a few percent larger than the old JSZip deflate, in exchange for O(one page) memory. Also `onProgress` now fires once at 100% (the slow "zipping" phase no longer exists — page work happened during the fetches). | Documented in a comment on `generateAsync` instead of pretending the request applies; per-entry DEFLATE remains available through the constructor/`file()` options. No behaviour change. | n/a |
+
+**Known limits stated plainly (not fixed, recorded):** the worker fallback
+(Firefox, or Chrome without offscreen) cannot cancel a QUEUED single-title job
+— it has no queue visibility there (pre-existing, unchanged by this review).
+The OPFS runtime itself (real `navigator.storage`, blob reads after
+`removeEntry`) cannot be exercised in the VM harnesses — the suites cover the
+`MemoryZipSink` fallback and mocked OPFS sinks; a real OPFS run stays on the
+item-42/58 real-browser list.
+
+**Verification (this pass):**
+
+| Command | Chrome | Firefox |
+|---|---|---|
+| `tsc --noEmit` (both configs) | 0 errors | 0 errors |
+| `npm test` | **519 passing / 4 pending** (was 514; +5 review tests) | **595 passing / 4 pending** (was 590) |
+| `npm run build` | clean; `js/background.js` + `js/offscreen.js` re-emitted | clean; `background/offscreen/preview/siteUi` re-emitted |
+| `npm run test:smoke` | 7 PASS | 7 PASS |
+| `npm run test:e2e` | exit 0, **143 PASS** (was 140) | exit 0, **175 PASS** (was 172) |
+| lint / package | — | **0 errors / 0 notices / 31 warnings**; `dist/nhentai_downloader-1.3.0.zip` rebuilt |
+
+Release snapshot re-synced with the exhaustive file-by-file loop (only
+`js/background.js` + `js/offscreen.js` were stale; nothing missing). No
+manifest, permission, dependency, CI or version change in this pass — the PR
+keeps shipping as 3.9.0 / 1.3.0.
+
+---
+
 ## Architecture & feature implementations: Items 39, 45, and 51 (session `arena/01a0cdce-nh-dw-2-0`)
 
 **Updated:** 2026-09-24. Implemented and thoroughly verified the three queued
@@ -54,6 +97,14 @@ architectural milestones in both Chrome (`NHDW_Extension_v3.0.0`) and Firefox
 - Chrome (`NHDW_Extension_v3.0.0`): **514 unit tests passing**, 4 pending opt-in live tests.
 - Firefox (`NHDW_Firefox_v1.0.0`): **590 unit tests passing**, 4 pending opt-in live tests.
 - Smoke & E2E Suites: All pass across Chrome and Firefox.
+
+**Corrections from the PR #48 review pass (2026-09-24, section above — read it
+before trusting this block):** the "identical parity" claim was false for item
+45 (its UI never reached Firefox; now ported); "Temporary OPFS files
+automatically removed via cleanup()" raced the un-awaited anchor save and
+leaked orphans (now a delayed unlink + age-gated sweep); and the cancel marks
+this block describes were never consumed (retries failed forever — now they
+are). Current suite totals: Chrome **519**, Firefox **595**.
 
 ---
 
@@ -2648,6 +2699,41 @@ session.
 - **Do not merge per-site jobs back into one mixed batch.** One
   `downloadAllDoujinshis` carries one site (`BatchJobOptions.site`); a mixed
   payload is what made `site:id` rows undownloadable (item 48).
+- **Do not re-add bare-id cancel marks or bare-id matching to `cancelGallery`.**
+  Cancel identity is the composite `toGalleryKey(id, site)` on BOTH sides —
+  marks, `isGalleryCancelled`, the `currentDownloader` match and the queued-job
+  matches. A bare `curId === strId` fallback lets cancelling `hitomi:123` abort
+  an active `nhentai:123` download (PR #48 review, defect 3).
+- **Do not let a cancel mark survive its job.** The batch loop consumes the
+  mark when it skips the gallery, and the cancel handlers consume it when the
+  cancel was enforced directly; an unconsumed mark makes the gallery's Retry
+  fail instantly for the lifetime of the document/worker (defect 2). Do not add
+  an "idle" consume to the WORKER fallback: between two batch galleries
+  `isDownloadFinished()` is momentarily true and a real mid-batch cancel would
+  be swallowed — the offscreen document is the only path with whole-job
+  visibility (`jobRunning` + `queuedJobs`).
+- **Do not demote a `done` bookmark row.** `markBookmarksFailed` skips rows
+  whose status is already `done`: the artifact is on disk and recorded, and a
+  late Cancel click (the panel had not repainted) or a stale broadcast does not
+  undo that (defect 4).
+- **Do not unlink an OPFS temp archive instantly and do not remove the orphan
+  sweep.** The anchor save is not awaited, so Chrome may still be reading the
+  blob the file backs: `cleanup()` unlinks after the grace delay (60 s, mirrors
+  `revokeObjectUrlDelayMs`), and `OpfsZipSink.create()` sweeps only
+  `nhdw_archive_*.tmp` files OLDER than the grace period, before creating its
+  own file (defect 5).
+- **Do not make `StreamingZipWriter.generateAsync` honour caller compression
+  options.** A streaming writer decides compression per entry at append time;
+  the Downloader's `DEFLATE` request is documented-ignored, production
+  archives are STORE, and per-entry DEFLATE stays available through the
+  constructor / `file()` options (defect 8). Do not "fix" the larger PNG
+  payload sizes by re-buffering pages in memory — that is the accumulation
+  item 51 exists to remove.
+- **Do not change `bookmarkPanel.ts` in one tree only.** The file is
+  byte-identical across Chrome and Firefox (it is not in the parity delta
+  allowlist); Firefox's queue-row CSS lives in `css/panelRenderers.css` under
+  `:where(#queuePane, #nhdwSiteUiQueue)` — Chrome's `style.css` is unscoped. A
+  one-sided change is exactly how item 45's UI missed Firefox (defect 1).
 - **Do not key a file name, title or the `{id}` token off the composite
   `site:id` key.** Storage/history/retry identity is composite; names and ids
   are `splitGalleryKey(storeKey).id`.

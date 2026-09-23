@@ -7,7 +7,7 @@ import { getSourceForUrl } from "../sources";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
-import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled } from "../utils/batchPipeline";
+import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
@@ -512,12 +512,24 @@ module background
         cancelPipelineGallery(strId, site);
         let cancelled = false;
         if (currentDownloader) {
-            const curId = currentDownloader.galleryId;
-            const curSite = currentDownloader.site;
-            if (curId === strId || toGalleryKey(curId, curSite) === key) {
+            // Composite identity ONLY (PR #48 review): a bare-id match would
+            // let cancelling hitomi:123 abort the ACTIVE nhentai:123 download.
+            if (toGalleryKey(currentDownloader.galleryId, currentDownloader.site) === key) {
                 currentDownloader.abort();
                 cancelled = true;
             }
+        }
+        if (cancelled) {
+            // The abort enforced the cancel, so the pipeline mark has done its
+            // work; keeping it would instantly fail this gallery in every
+            // later job (row Retry / "Retry failed"). Unlike the offscreen
+            // document this path has no whole-job running flag - between two
+            // galleries of a live batch isDownloadFinished() is momentarily
+            // true - so a NOT-enforced cancel keeps its mark for the batch
+            // loop to skip and consume. A stale mark (the job had already
+            // finished) then costs exactly one skipped attempt in the next
+            // batch containing the gallery, and that skip consumes it.
+            consumeGalleryCancellation(strId, site);
         }
         return cancelled;
     }
@@ -1504,9 +1516,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         sendResponse({ result: "success" });
     } else if (request.action === "cancelGallery") {
         const cancelled = background.cancelGallery(request.id, request.site);
+        // Synchronous reply: no "return true" here (that would hold the
+        // message channel open for a response that was already sent).
         markBookmarksFailed([{ id: request.id, site: request.site, error: "Cancelled" }]);
         sendResponse({ result: "success", cancelled: cancelled });
-        return true;
     } else if (request.action === "updateProgress") {
         // This is handled differently since we need to pass a callback
         // The actual progress updates will be sent via messages

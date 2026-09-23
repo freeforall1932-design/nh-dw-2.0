@@ -200,6 +200,10 @@ const pageBytes = [jpegPage(1280, 1808), jpegPage(1280, 1700), jpegPage(1280, 16
 
 let failImages = false;
 const failMediaIds = new Set();
+// Item 45 e2e: galleries whose page fetches are delayed, so a cancel can land
+// mid-batch while one gallery is still downloading and another has not started.
+const slowMediaIds = new Set();
+let slowFetchMs = 250;
 
 function imageBytesFor(url) {
     const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(String(url));
@@ -227,7 +231,12 @@ function fetchStub(url) {
         if (failImages || failMediaIds.has(imgMatch[1])) {
             return Promise.resolve(new Response("nope", { status: 404 }));
         }
-        return Promise.resolve(new Response(pageBytes[(parseInt(imgMatch[2], 10) - 1) % pageBytes.length], { status: 200 }));
+        const bytes = pageBytes[(parseInt(imgMatch[2], 10) - 1) % pageBytes.length];
+        if (slowMediaIds.has(imgMatch[1])) {
+            return new Promise((resolve) => setTimeout(
+                () => resolve(new Response(bytes, { status: 200 })), slowFetchMs));
+        }
+        return Promise.resolve(new Response(bytes, { status: 200 }));
     }
     // Listing-page HTML for the multi-page merged-history phase: page 1 shows
     // gallery 123456, page 2 shows gallery 654321, in nhentai's card markup.
@@ -625,6 +634,80 @@ function askOffscreen(message) {
         fail("jobFinished must carry exactly the newly-downloaded record (composite key), got " + JSON.stringify(skipRecords));
     }
     console.log("PASS: recorded gallery skipped without API calls; redownload override still works");
+
+    // ---- Item 45 end-to-end: cancel ONE gallery of a running batch ----------
+    // The batch downloads gallery One slowly; while it is mid-flight the test
+    // cancels gallery Two (queued behind it in the same job). Two must never
+    // fetch a single page, the summary must name it aborted, the rest of the
+    // batch must still complete - and, the defect the PR #48 review found, the
+    // NEXT job containing Two must download it: the cancel belonged to one job,
+    // not to the gallery forever (a stale mark made Retry fail instantly).
+    sentMessages.length = 0;
+    fetchedUrls.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    slowMediaIds.add(String(MEDIA_ID));
+    const cancelStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/CancelBatch",
+        options: Object.assign({}, relayedOptions, { downloadSeparately: true })
+    });
+    if (!cancelStart || cancelStart.result !== "started") {
+        fail("cancel batch did not answer {result:'started'}, got " + JSON.stringify(cancelStart));
+    }
+    await waitFor(
+        () => fetchedUrls.some((u) => u.includes("/galleries/" + MEDIA_ID + "/")),
+        "the slow gallery never started fetching pages"
+    );
+    const cancelResp = await askOffscreen({ action: "cancelGallery", id: String(GALLERY_ID2), site: "nhentai" });
+    if (!cancelResp || cancelResp.result !== "success") {
+        fail("cancelGallery must answer success, got " + JSON.stringify(cancelResp));
+    }
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "the batch with a cancelled gallery never finished"
+    );
+    const cancelSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!cancelSummary || cancelSummary.succeeded !== 1 || cancelSummary.failed !== 1 || cancelSummary.total !== 2) {
+        fail("cancelled-batch summary must report 1 succeeded / 1 failed / 2 total, got " + JSON.stringify(cancelSummary));
+    }
+    const abortedRow = (cancelSummary.failedGalleries || []).find((f) => String(f.id) === String(GALLERY_ID2));
+    if (!abortedRow || abortedRow.error !== "Download was aborted") {
+        fail("the cancelled gallery must be named as aborted, got " + JSON.stringify(cancelSummary.failedGalleries));
+    }
+    if (fetchedUrls.some((u) => u.includes("/galleries/" + MEDIA_ID2 + "/"))) {
+        fail("a gallery cancelled before it started must never fetch pages: " + JSON.stringify(fetchedUrls));
+    }
+    if (anchorDownloads.length !== 1 || anchorDownloads[0].download !== "Test.zip") {
+        fail("the surviving gallery must still deliver its ZIP, got " + JSON.stringify(anchorDownloads));
+    }
+    slowMediaIds.clear();
+
+    // The retry half: the SAME gallery in a NEW job must download. On the
+    // pre-fix build this fails - the cancel mark was never consumed, so the
+    // new job skipped the gallery instantly ("Download was aborted" again).
+    sentMessages.length = 0;
+    fetchedUrls.length = 0;
+    anchorDownloads.length = 0;
+    const cancelRetryStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: { [GALLERY_ID2]: "Two" },
+        finalName: "Downloads/CancelRetry",
+        options: Object.assign({}, relayedOptions, { downloadSeparately: true })
+    });
+    if (!cancelRetryStart || cancelRetryStart.result !== "started") {
+        fail("cancel-retry batch did not answer {result:'started'}, got " + JSON.stringify(cancelRetryStart));
+    }
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "the retry batch never finished"
+    );
+    const cancelRetrySummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!cancelRetrySummary || cancelRetrySummary.succeeded !== 1 || cancelRetrySummary.failed !== 0) {
+        fail("a gallery cancelled in a PREVIOUS job must download in the next one, got " + JSON.stringify(cancelRetrySummary));
+    }
+    console.log("PASS: per-gallery cancel skips mid-batch without fetching, and the next job re-downloads it (item 45)");
 
     // ---- Download anyway: redownloadIds re-fetch recorded galleries ---------
     sentMessages.length = 0;

@@ -653,6 +653,45 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
             "a row that is not recorded in the history is not force-redownloaded");
         console.log("PASS phase 7c: a row's own Download button carries its site and a bare id (item 48)");
 
+        // ---- Phase 7d: a downloading row offers Cancel, not Download (item 45) ----
+        // The row-level cancel is the panel half of item 45: while a row is
+        // "downloading" its Download button is replaced by a red Cancel that
+        // sends cancelGallery with the row's OWN site (composite identity -
+        // cancelling hitomi:800 must never touch nhentai:800), and it disables
+        // at once so a double click cannot fire two cancels.
+        history = {};
+        bookmarkState = {
+            v: 1,
+            collapsed: false,
+            items: [
+                stateItem("800", "hitomi", { status: "downloading", title: "Cancel me" }),
+                stateItem("801", "nhentai", { title: "Idle row" })
+            ]
+        };
+        byId("tabQueue").dispatchLast("click");
+        await wait(30);
+        const cancelPhaseRows = findRows(byId("nhdwBmList"));
+        assertEqual(cancelPhaseRows.length, 2, "both rows render");
+        const rowCancelButton = findDeep(cancelPhaseRows[0], "nhdwBmCancel");
+        assertOk(rowCancelButton !== null, "a downloading row renders a Cancel button (item 45)");
+        assertEqual(rowCancelButton.textContent, "Cancel", "the button says Cancel");
+        assertEqual(findDeep(cancelPhaseRows[0], "nhdwBmDownload"), null,
+            "a downloading row swaps Download for Cancel, it never shows both");
+        assertOk(findDeep(cancelPhaseRows[1], "nhdwBmDownload") !== null,
+            "a row that is not downloading keeps its Download button");
+        assertEqual(findDeep(cancelPhaseRows[1], "nhdwBmCancel"), null,
+            "a row that is not downloading has no Cancel button");
+        const beforeCancelClick = sentMessages.length;
+        rowCancelButton.dispatchLast("click");
+        assertEqual(rowCancelButton.disabled, true,
+            "Cancel disables at once so a double click cannot fire twice");
+        await wait(30);
+        const cancelMsgs = sentMessages.slice(beforeCancelClick).filter((msg) => msg.action === "cancelGallery");
+        assertEqual(cancelMsgs.length, 1, "clicking Cancel sends exactly one cancelGallery message");
+        assertEqual(cancelMsgs[0].id, "800", "the cancel names the bare row id");
+        assertEqual(cancelMsgs[0].site, "hitomi", "the cancel carries the row's own site");
+        console.log("PASS phase 7d: a downloading row cancels per row, carrying its site (item 45)");
+
         console.log("PASS: the Queue tab's rows, drag-reorder, backup and per-site downloads behave correctly in a window-less context.");
     } catch (error) {
         fail(error && error.stack ? error.stack : String(error));

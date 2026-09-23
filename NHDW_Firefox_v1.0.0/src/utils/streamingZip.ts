@@ -105,27 +105,32 @@ export class OpfsZipSink implements ZipSink {
     private fileHandle: any;
     private writable: any;
     private tempFilename: string;
+    private cleanupDelayMs: number;
 
-    constructor(rootHandle: any, fileHandle: any, writable: any, tempFilename: string) {
+    constructor(rootHandle: any, fileHandle: any, writable: any, tempFilename: string, cleanupDelayMs: number = OPFS_CLEANUP_DELAY_MS) {
         this.rootHandle = rootHandle;
         this.fileHandle = fileHandle;
         this.writable = writable;
         this.tempFilename = tempFilename;
+        this.cleanupDelayMs = cleanupDelayMs;
     }
 
-    static async create(prefix: string = "nhdw_archive_"): Promise<OpfsZipSink | null> {
+    static async create(prefix: string = OPFS_TEMP_PREFIX, cleanupDelayMs: number = OPFS_CLEANUP_DELAY_MS): Promise<OpfsZipSink | null> {
         if (typeof navigator === "undefined" || !navigator.storage || typeof (navigator.storage as any).getDirectory !== "function") {
             return null;
         }
         try {
             const root = await (navigator.storage as any).getDirectory();
+            // Sweep orphans from earlier sessions BEFORE creating this job's
+            // file, so a run can never delete its own temp file.
+            await sweepOpfsOrphans(root, prefix, cleanupDelayMs);
             const tempFilename = prefix + Date.now() + "_" + Math.random().toString(36).slice(2) + ".tmp";
             const fileHandle = await root.getFileHandle(tempFilename, { create: true });
             if (typeof fileHandle.createWritable !== "function") {
                 return null;
             }
             const writable = await fileHandle.createWritable();
-            return new OpfsZipSink(root, fileHandle, writable, tempFilename);
+            return new OpfsZipSink(root, fileHandle, writable, tempFilename, cleanupDelayMs);
         } catch (_) {
             return null;
         }
@@ -148,12 +153,65 @@ export class OpfsZipSink implements ZipSink {
     }
 
     async cleanup(): Promise<void> {
-        try {
-            if (this.rootHandle && typeof this.rootHandle.removeEntry === "function") {
-                await this.rootHandle.removeEntry(this.tempFilename);
-            }
-        } catch (_) { /* ignore already removed or locked */ }
+        const remove = async () => {
+            try {
+                if (this.rootHandle && typeof this.rootHandle.removeEntry === "function") {
+                    await this.rootHandle.removeEntry(this.tempFilename);
+                }
+            } catch (_) { /* ignore already removed or locked */ }
+        };
+        if (this.cleanupDelayMs <= 0) {
+            await remove();
+            return;
+        }
+        // The finished archive is saved through an anchor click nobody awaits
+        // (offscreen saveArtifactSmart), so Chrome's download manager may
+        // still be reading the blob - which this file backs - when cleanup
+        // runs. Unlink after a grace period instead of instantly, mirroring
+        // the object-URL revoke delay in the Downloader. If the document dies
+        // before the timer fires, the orphan is caught by the next sink's
+        // sweep (create() above).
+        setTimeout(() => { remove(); }, this.cleanupDelayMs);
     }
+}
+
+// Grace period before a finished archive's temp file may be unlinked, and the
+// minimum age before the sweep treats a leftover as an orphan. Matches the
+// Downloader's revokeObjectUrlDelayMs (60 s).
+export const OPFS_CLEANUP_DELAY_MS = 60000;
+export const OPFS_TEMP_PREFIX = "nhdw_archive_";
+
+// Best-effort orphan sweep: an offscreen document killed between writing the
+// archive and the delayed unlink leaves a temp file behind. Only files whose
+// last modification is older than minAgeMs are removed, so a concurrent or
+// just-finished writer's file (whose blob may still be downloading) is never
+// touched. Never throws: an unreadable root must not block the archive.
+export async function sweepOpfsOrphans(root: any, prefix: string = OPFS_TEMP_PREFIX, minAgeMs: number = OPFS_CLEANUP_DELAY_MS): Promise<void> {
+    try {
+        if (!root || typeof root.values !== "function" || typeof root.removeEntry !== "function") {
+            return;
+        }
+        const iter = root.values();
+        while (true) {
+            const step = await iter.next();
+            if (!step || step.done) {
+                break;
+            }
+            const entry = step.value;
+            const name = entry && typeof entry.name === "string" ? entry.name : "";
+            if (name.indexOf(prefix) !== 0 || !/\.tmp$/i.test(name)) {
+                continue;
+            }
+            try {
+                const handle = typeof root.getFileHandle === "function" ? await root.getFileHandle(name) : null;
+                const file = handle && typeof handle.getFile === "function" ? await handle.getFile() : null;
+                const modified = file && typeof file.lastModified === "number" ? file.lastModified : 0;
+                if (!file || Date.now() - modified >= minAgeMs) {
+                    await root.removeEntry(name);
+                }
+            } catch (_) { /* locked or already gone - keep sweeping */ }
+        }
+    } catch (_) { /* the sweep is best-effort; never block an archive on it */ }
 }
 
 interface ZipEntryRecord {
@@ -308,6 +366,17 @@ export class StreamingZipWriter {
         return this;
     }
 
+    // JSZip-compatible signature, deliberately partial (documented honestly):
+    // `options` is accepted but ignored - a streaming writer decides
+    // compression per entry at file() time and cannot retro-compress bytes
+    // that already went to the sink. The Downloader's generateAsync({
+    // compression: "DEFLATE", level 5 }) request therefore does NOT apply:
+    // production archives are STORE (image payloads are already compressed;
+    // PNG pages come out a few percent larger than the old JSZip deflate,
+    // in exchange for O(one page) memory). `onProgress` fires once at 100%
+    // after the central directory is written - page-level work already
+    // happened during the fetches, so there is no slow "zipping" phase to
+    // report on any more.
     async generateAsync(options?: any, onProgress?: (progress: { percent: number; currentFile: string | null }) => void): Promise<Blob> {
         await this.writeChain;
         const sink = await this.getSink();

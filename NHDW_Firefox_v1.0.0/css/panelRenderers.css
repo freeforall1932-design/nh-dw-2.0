@@ -505,6 +505,30 @@
     cursor: default;
 }
 
+/* Item 45 (PR #48 review: ported from Chrome's style.css - one definition
+   per selector per tree, declarations identical property by property). */
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmCancel {
+    border: 1px solid #c0392b;
+    background: #c0392b;
+    color: #fff;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmCancel:hover {
+    background: transparent;
+    color: #c0392b;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmCancel:disabled {
+    border-color: #999;
+    background: #999;
+    color: #eee;
+    cursor: default;
+}
+
 :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmRemove {
     border: none;
     background: transparent;

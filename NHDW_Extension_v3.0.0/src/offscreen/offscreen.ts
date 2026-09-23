@@ -6,7 +6,7 @@ import { errorMessage } from "../utils/utils";
 import { fetchUrlFromTab } from "../background/tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
 import { resolveJobFormat } from "../utils/downloadFormats";
-import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled } from "../utils/batchPipeline";
+import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
 // Pure helpers only: the offscreen document must never call the storage
 // functions of this module (it has no chrome.storage). The service worker
@@ -432,9 +432,9 @@ function cancelGallery(id: string | number, site?: string): boolean {
     cancelPipelineGallery(strId, site);
     let cancelled = false;
     if (currentDownloader) {
-        const curId = currentDownloader.galleryId;
-        const curSite = currentDownloader.site;
-        if (curId === strId || toGalleryKey(curId, curSite) === key) {
+        // Composite identity ONLY (PR #48 review): a bare-id match would let
+        // cancelling hitomi:123 abort the ACTIVE nhentai:123 download.
+        if (toGalleryKey(currentDownloader.galleryId, currentDownloader.site) === key) {
             currentDownloader.abort();
             cancelled = true;
         }
@@ -442,10 +442,14 @@ function cancelGallery(id: string | number, site?: string): boolean {
     const initialLen = queuedJobs.length;
     for (let i = queuedJobs.length - 1; i >= 0; i--) {
         const q = queuedJobs[i];
-        if (q.action === "downloadDoujinshi" && q.json && (String(q.json.id) === strId || toGalleryKey(q.json.id, q.options && q.options.site) === key)) {
+        const qSite = q.options && q.options.site;
+        if (q.action === "downloadDoujinshi" && q.json && toGalleryKey(q.json.id, qSite) === key) {
             queuedJobs.splice(i, 1);
             cancelled = true;
-        } else if (q.allDoujinshis && q.allDoujinshis[strId]) {
+        } else if (q.allDoujinshis && toGalleryKey(strId, qSite) === key && q.allDoujinshis[strId]) {
+            // Payload keys are bare ids (item 48: one job carries one site),
+            // so the entry is only removed when the JOB's site matches the
+            // cancel's site - never by number alone.
             delete q.allDoujinshis[strId];
             if (Object.keys(q.allDoujinshis).length === 0) {
                 queuedJobs.splice(i, 1);
@@ -455,6 +459,16 @@ function cancelGallery(id: string | number, site?: string): boolean {
     }
     if (queuedJobs.length !== initialLen) {
         broadcastQueueState();
+    }
+    if (cancelled || (!jobRunning && queuedJobs.length === 0)) {
+        // The cancel was either enforced directly (abort / dequeue / payload
+        // filter) or nothing is running at all - a stale click on a row whose
+        // job had already finished. In both cases the pipeline mark has done
+        // its work; keeping it would make this gallery undownloadable in the
+        // NEXT job. Only the mid-batch case (a job is running and has not
+        // reached this gallery yet) keeps the mark: the loop skips and
+        // consumes it there.
+        consumeGalleryCancellation(strId, site);
     }
     return cancelled;
 }

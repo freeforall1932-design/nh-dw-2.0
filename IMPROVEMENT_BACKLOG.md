@@ -1725,9 +1725,10 @@ Planning only — no code exists. Depth and rationale:
   - In browser contexts with OPFS support (`navigator.storage.getDirectory()`), pages are written sequentially and directly to an OPFS `FileSystemWritableFileStream` on disk, bounding peak RAM to O(single page) regardless of gallery size.
   - Generates standard PKWARE ZIP archives with 100% specification compliance: Local File Headers (UTF-8 bit 11 set), Central Directory records, and End of Central Directory (EOCD).
   - Automatically selects `STORE` (method 0) for pre-compressed images (`.jpg`, `.png`, `.webp`, `.avif`) eliminating redundant CPU burn, while supporting streaming raw deflate via `CompressionStream("deflate-raw")` when requested.
-  - Automatically cleans up temporary OPFS files via `cleanup()` upon archive delivery or abort.
+  - Automatically cleans up temporary OPFS files via `cleanup()` upon archive delivery or abort. **(PR #48 review fix:** the save is an un-awaited anchor click, so `cleanup()` now unlinks after a 60 s grace period — mirroring `revokeObjectUrlDelayMs` — and `OpfsZipSink.create()` sweeps orphaned `nhdw_archive_*.tmp` files older than that grace period before creating its own; a killed document can no longer leak, and a live download can no longer have its blob unlinked mid-read.)
   - In contexts without OPFS (e.g. Node test environment), cleanly falls back to `MemoryZipSink`.
-- Verified with dedicated unit test suite in `test/streaming-zip.test.js` and confirmed across end-to-end offscreen document test (`scripts/e2e-offscreen.js`) with zero base64 round-trip.
+  - **Compression honesty (PR #48 review):** the writer decides compression per entry at append time; the Downloader's `generateAsync({compression:"DEFLATE"})` request is documented-ignored, so production archives are STORE (image payloads are already compressed; PNG pages come out a few percent larger than the old JSZip deflate, in exchange for constant memory). Per-entry DEFLATE remains available via the constructor / `file()` options.
+- Verified with dedicated unit test suite in `test/streaming-zip.test.js` and confirmed across end-to-end offscreen document test (`scripts/e2e-offscreen.js`) with zero base64 round-trip. The OPFS runtime itself (real `navigator.storage`) cannot run in the VM harnesses — mocked sinks + the memory fallback are what the suites cover; a real OPFS pass belongs to items 42/58.
 
 ### 52. Queue + history export / import (JSON) — DONE 2026-09-23
 
@@ -2316,3 +2317,55 @@ The stale block is deleted, one definition per selector remains in each tree,
 and the two trees were checked property by property for all four selectors
 (no differences). Release snapshot re-synced; units re-run (503/4 Chrome).
 
+## Session log — 2026-09-24 (session `arena/01a0cdce-nh-dw-2-0`, review pass): PR #48 reviewed, eight defects fixed
+
+The mandatory review-before-building rule was run over this session's own PR
+#48 (items 39/45/51, commit `49b355f5`). Eight defects: one parity gap, four
+broken behaviours, two misalignments, one doc-honesty fix. Every code defect
+got a test that fails on the pre-fix build. Full table with evidence:
+`SESSION_HANDOFF.md` "Review pass — PR #48".
+
+1. **Item 45's UI never reached Firefox** — `bookmarkPanel.ts` and the queue CSS
+   were untouched there; the FF `cancelGallery` handlers had zero senders.
+   Ported (file byte-identical again) + `.nhdwBmCancel` into
+   `panelRenderers.css` under the `:where(#queuePane, #nhdwSiteUiQueue)` scope;
+   pinned by `e2e-bookmark-panel.js` phase 7d (fails on the pre-fix FF bundle).
+2. **Cancel marks were never consumed** — a cancelled gallery's Retry /
+   "Retry failed" / re-paste failed instantly for the lifetime of the
+   document/worker. Fixed with consume-on-skip in the batch loop plus
+   consume-on-enforce (and offscreen-only consume-when-idle) in the handlers;
+   pinned by the new `e2e-offscreen.js` cancel phase (retry half fails
+   pre-fix) and two unit cases.
+3. **Bare-id cancel identity poisoned across sites** — cancelling `hitomi:123`
+   also killed `nhentai:123` (mark set, active-Downloader match and queued-job
+   filter all had bare fallbacks). Composite-only everywhere; pinned by a unit
+   case that fails pre-fix.
+4. **A late cancel demoted `done` rows** — `markBookmarksFailed` ran
+   unconditionally in both handlers. Now it never demotes a settled row;
+   pinned by `e2e-worker.js` phase 13i (fails pre-fix: stored status becomes
+   failed "Cancelled").
+5. **OPFS temp archives were unlinked instantly** — while the un-awaited anchor
+   download might still be reading the blob — and orphans leaked when the
+   document died. Delayed unlink (60 s, injectable) + age-gated orphan sweep in
+   `OpfsZipSink.create()`; two new unit cases fail pre-fix.
+6. **Stray `return true` after a synchronous reply** in the fallback
+   `cancelGallery` handler — removed (channel-hygiene rule from the 3.6.x
+   console-noise fix).
+7. **Docs contradicted the PR they shipped with** — root/Release/Firefox
+   READMEs (roadmap 51 unchecked, "no per-item cancel" limitation, 503/579
+   counts), `MULTISITE_V4_PLAN.md` M4 "future work". All corrected; counts now
+   Chrome **519** / Firefox **595**.
+8. **DEFLATE request silently ignored** by the streaming writer (per-entry
+   compression at append time; production archives STORE-only). Documented in
+   the code instead of pretending; no behaviour change.
+
+Known limits recorded, not hidden: the worker fallback cannot cancel a QUEUED
+single-title job (no queue visibility — pre-existing); the OPFS runtime itself
+is unverifiable in the VM harnesses (mocked sinks + memory fallback only —
+real OPFS joins the 42/58 real-browser list).
+
+Verification: both trees tsc 0; Chrome **519/4** units, smoke 7, e2e exit 0
+**143 PASS**; Firefox **595/4** units, smoke 7, e2e exit 0 **175 PASS**, lint
+**0/0/31**, package `nhentai_downloader-1.3.0.zip` rebuilt. Release snapshot
+re-synced (only `js/background.js` + `js/offscreen.js` were stale). No
+manifest/permission/dependency/CI/version change.

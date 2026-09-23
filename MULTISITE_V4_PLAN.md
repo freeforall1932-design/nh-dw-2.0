@@ -4,8 +4,9 @@
 **Updated:** 2026-09-23 (session `arena/01a0cdce-nh-dw-2-0`).
 **Status:** **Landed in Chrome 3.9.0 / Firefox 1.3.0.** M0 (composite keys),
 M1 (hitomi adapter + resolver), M2 (per-site jobs + site-aware paste box),
-M3 (mirror network & hentaifox adapters), and M5 (Item 52 backup export/import)
-have all shipped and are verified across 503 Chrome / 579 Firefox unit tests.
+M3 (mirror network & hentaifox adapters), M4 (streaming ZIP writer, 2026-09-24)
+and M5 (Item 52 backup export/import)
+have all shipped and are verified across 519 Chrome / 595 Firefox unit tests.
 See `ADAPTER_WIRING_PLAN.md` for the wiring matrix and `WORKLIST.md` for remaining open items.
 
 This document records four things so no future session has to re-derive them:
@@ -231,7 +232,7 @@ defaults, and the site-aware paste box.
 
 ## 5. Bucket list — worth keeping, not yet scheduled
 
-- **Streaming ZIP writer (item 51).** ZIP/CBZ today still *assembles* the
+- **Streaming ZIP writer (item 51) — LANDED 2026-09-24.** ZIP/CBZ today still *assembles* the
   archive in memory in the offscreen document — the object-URL handoff fixed
   the base64 round-trip, not the assembly — so a 1 GB archive means ~GBs of
   RAM. A streaming writer (zip.js-style) targeting an OPFS file, or a File
@@ -266,7 +267,10 @@ defaults, and the site-aware paste box.
    paste box accepts bare IDs, URLs from all 6 sites, and composite `site:id` keys.
 4. **M3 — item 50/53: mirror network + hentaifox — landed in 3.9.0 / FF 1.3.0.**
    Full adapters and HTML parsers for `hentaiera`, `imhentai`, `hentaienvy`, and `hentaifox`.
-5. **M4 — item 51: streaming ZIP writer** — OPFS / File System Access. Scheduled as future work.
+5. **M4 — item 51: streaming ZIP writer — landed 2026-09-24 (PR #48 + review
+   fixes).** `src/utils/streamingZip.ts`; OPFS-backed with a memory-sink
+   fallback, delayed temp-file unlink + age-gated orphan sweep, STORE-only
+   production archives (see the review pass in `SESSION_HANDOFF.md`).
 6. **M5 — item 52: queue + history backup export/import — landed in 3.9.0 / FF 1.3.0.**
 7. Combined verification & signing (Items 42/58).
 
