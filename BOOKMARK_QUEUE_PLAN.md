@@ -201,8 +201,8 @@ On worker wake (`onStartup`, `onInstalled`, and lazily on the first `bookmarkGet
 
 | Path | Trigger | Thumbnail source |
 |---|---|---|
-| Manual, listing card | new ☆ button on each card | the card's own cover `<img>` — `data-src` (nhentai lazyloads) falling back to `src` |
-| Manual, single title | ☆ Bookmark this title in the panel preview | derived from resolved `media_id` |
+| Manual, listing card | the card's bookmark-icon button | the card's own cover `<img>` — `data-src` (nhentai lazyloads) falling back to `src` |
+| Manual, single title | **landed 3.9.0:** blue "Bookmark" button injected into the site's own Favorite/Download row (`src/content/titleBookmark.ts`, all six sites) — title/cover/pages read from that page | the page's own cover (`og:image` fallback), no `media_id` needed |
 | Paste | textarea in the Queue tab | none at add time; filled by enrichment (§4.5) |
 | Similar galleries | ☆ on a row of the existing similar list | derived from `media_id` |
 | **Auto-capture** | toggle in Settings, default **off** | same as the manual card path |
@@ -292,15 +292,16 @@ floating element over nhentai would collide with the existing action bar in
 
 **Phase 1 — landed on this branch.**
 Pure core (`src/utils/bookmarkQueue.ts`), worker message handlers
-(`src/background/bookmarkService.ts`), the ☆ capture button on listing cards with
+(`src/background/bookmarkService.ts`), the bookmark-icon capture button on listing cards with
 auto-capture behind a Settings toggle, the Queue tab with thumbnails / dock / paste box /
 per-row and batch download, title-and-cover enrichment for pasted ids, the Settings
 "Open the dockable Queue panel" button, and tests. Not landed: drag-reorder, and ☆ on the
-single-title preview and similar-gallery rows.
+panel's single-title preview and similar-gallery rows. (The gallery page's own
+button did land, in 3.9.0 — see §4.4.)
 
 **Phase 2 — next.**
-* ☆ on the single-title preview and on similar-gallery rows (the worker side is ready;
-  only the two render sites are missing).
+* The panel's single-title preview and similar-gallery rows (the worker side is ready;
+  only the two render sites are missing — the gallery page's own button landed in 3.9.0).
 * Drag-reorder + "download in this order" — the plan already follows list order, so this
   is purely a list-manipulation affordance.
 * Per-row cancel of an in-flight job.

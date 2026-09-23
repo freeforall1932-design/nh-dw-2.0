@@ -89,7 +89,12 @@ function makeEl(tag, attrs) {
             child.parentElement = null;
             return child;
         },
-        setAttribute(name, value) { node.attrs[name] = String(value); },
+        setAttribute(name, value) {
+            node.attrs[name] = String(value);
+            // Real DOM: setAttribute("class", ...) is what classList reads, and
+            // the bookmark glyph sets its class that way.
+            if (name === "class") node.className = String(value);
+        },
         getAttribute(name) {
             return Object.prototype.hasOwnProperty.call(node.attrs, name) ? node.attrs[name] : null;
         },
@@ -133,6 +138,17 @@ function matchesSimple(node, simple) {
     if (simple.startsWith(".")) {
         return node._classes.includes(simple.slice(1));
     }
+    // Compound "tag.class" (and "tag.a.b"): the glyph lookups use it.
+    const compound = /^([a-z0-9-]*)((?:\.[\w-]+)*)$/i.exec(simple);
+    if (compound !== null && (compound[1] !== "" || compound[2] !== "")) {
+        if (compound[1] !== "" && node.tag !== compound[1]) return false;
+        if (compound[2] === "") return true;
+        const classes = compound[2].slice(1).split(".");
+        for (const name of classes) {
+            if (!node._classes.includes(name)) return false;
+        }
+        return true;
+    }
     return node.tag === simple;
 }
 
@@ -175,7 +191,7 @@ function makeDocument(ids) {
         const cover = makeEl("a", { href: "/g/" + id + "/" });
         cover.className = "cover";
         // nhentai lazyloads covers: the real address is in data-src while src
-        // holds a placeholder. The bookmark star has to read data-src.
+        // holds a placeholder. The bookmark button has to read data-src.
         const img = makeEl("img");
         img.setAttribute("data-src", "https://t.nhentai.net/galleries/" + id + "0/thumb.jpg");
         img.setAttribute("src", "data:image/gif;base64,placeholder");
@@ -196,6 +212,9 @@ function makeDocument(ids) {
         title: "Search results",
         readyState: "complete",
         createElement: (tag) => makeEl(tag),
+        // The bookmark glyph is an inline SVG built with createElementNS (the
+        // extension CSP forbids innerHTML), so the stub has to offer it.
+        createElementNS: (namespace, tag) => makeEl(tag),
         createTextNode: (text) => {
             const node = makeEl("#text");
             node.textContent = text;
@@ -287,6 +306,20 @@ function run(options) {
 
 function cardControls(dom) {
     return dom.document.querySelectorAll(".nhdw-card-controls");
+}
+
+// The card bookmark button draws a real bookmark icon (inline SVG), not a
+// text star. These are the two shipped paths, pinned here so a change to the
+// icon is a deliberate test update rather than a silent visual regression.
+const BOOKMARK_GLYPH_FILLED = "M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2z";
+const BOOKMARK_GLYPH_OUTLINE = "M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2zm0 13.9-5-2.14-5 2.14V5h10v11.9z";
+
+function bookmarkGlyph(button) {
+    const svg = button.querySelector("svg.nhdw-bookmark-glyph");
+    if (svg === null) {
+        return null;
+    }
+    return svg.querySelector("path");
 }
 
 function wait(ms) {
@@ -618,7 +651,7 @@ function wait(ms) {
         console.log("PASS: in-page card downloads inherit the single-title format");
     }
 
-    // --- N+1. the bookmark star -------------------------------------------
+    // --- N+1. the bookmark button -----------------------------------------
     {
         const ctx = run({});
         await wait(0);
@@ -627,18 +660,56 @@ function wait(ms) {
             fail("expected 3 control boxes for the bookmark check, got " + controls.length);
         }
         for (const box of controls) {
-            if (!box.querySelector(".nhdw-bookmark")) {
-                fail("a card is missing its bookmark star");
+            const button = box.querySelector(".nhdw-bookmark");
+            if (!button) {
+                fail("a card is missing its bookmark button");
+            }
+            // A real bookmark glyph, not the old ☆/★ text glyph.
+            const glyph = bookmarkGlyph(button);
+            if (glyph === null) {
+                fail("the card bookmark button must draw an inline SVG bookmark icon");
+            }
+            if (glyph.getAttribute("d") !== BOOKMARK_GLYPH_OUTLINE) {
+                fail("an unbookmarked card must draw the outline bookmark glyph, got " + glyph.getAttribute("d"));
+            }
+            if (button.textContent !== "") {
+                fail("the card bookmark button must stay text-free, got " + JSON.stringify(button.textContent));
+            }
+            if (button.getAttribute("aria-pressed") !== "false") {
+                fail("an unbookmarked card must report aria-pressed=false");
             }
         }
-        console.log("PASS: every listing card gets a bookmark star");
+        console.log("PASS: every listing card gets a text-free bookmark icon button");
+
+        // Layout: Select + Bookmark sit together at the top-left of the strip
+        // and Download stays the strip's own right-hand child.
+        for (const box of controls) {
+            const left = box.querySelector(".nhdw-card-controls-left");
+            if (left === null) {
+                fail("the card controls need a left group for Select + Bookmark");
+            }
+            if (!left.querySelector(".nhdw-select-box")) {
+                fail("the Select box must sit in the left group");
+            }
+            if (!left.querySelector(".nhdw-bookmark")) {
+                fail("the Bookmark button must sit in the left group");
+            }
+            const download = box.querySelector(".nhdw-download");
+            if (download === null || download.parentElement !== box) {
+                fail("the Download button must stay a direct right-hand child of the strip");
+            }
+            if (box.children[box.children.length - 1] !== download) {
+                fail("Download must be the strip's last (right-most) child");
+            }
+        }
+        console.log("PASS: Select + Bookmark sit top-left, Download stays top-right");
 
         // A click must carry the card's OWN cover: that is the thumbnail the
         // Queue row shows, and it is only readable from the page.
         controls[0].querySelector(".nhdw-bookmark").dispatch("click");
         const add = ctx.sentMessages[ctx.sentMessages.length - 1];
         if (!add || add.action !== "bookmarkAdd") {
-            fail("clicking the star must send bookmarkAdd, got " + JSON.stringify(add));
+            fail("clicking the bookmark button must send bookmarkAdd, got " + JSON.stringify(add));
         }
         const item = add.items[0];
         if (item.id !== "111111") {
@@ -653,15 +724,15 @@ function wait(ms) {
         if (item.source !== "card" || item.sourceUrl !== "") {
             fail("a manual card bookmark must report source=card, got " + JSON.stringify(item));
         }
-        console.log("PASS: the star sends the card's id, title, page count and cover thumbnail");
+        console.log("PASS: the bookmark button sends the card's id, title, page count and cover thumbnail");
 
-        // The star is a toggle: it is the only un-bookmark affordance on the page.
+        // It is a toggle: it is the only un-bookmark affordance on the page.
         controls[0].querySelector(".nhdw-bookmark").dispatch("click");
         const remove = ctx.sentMessages[ctx.sentMessages.length - 1];
         if (!remove || remove.action !== "bookmarkRemove" || String(remove.ids[0]) !== "111111") {
-            fail("clicking a filled star must send bookmarkRemove for that id, got " + JSON.stringify(remove));
+            fail("clicking a filled bookmark button must send bookmarkRemove for that id, got " + JSON.stringify(remove));
         }
-        console.log("PASS: clicking a filled star takes the title off the list");
+        console.log("PASS: clicking a filled bookmark button takes the title off the list");
     }
 
     // --- N+2. auto-capture -------------------------------------------------
@@ -728,7 +799,7 @@ function wait(ms) {
         console.log("PASS: a repeated auto-capture sweep adds nothing");
     }
 
-    // --- N+3. an already-bookmarked card renders a filled star -------------
+    // --- N+3. an already-bookmarked card renders the filled icon -----------
     {
         const ctx = run({
             history: {
@@ -743,16 +814,21 @@ function wait(ms) {
         const controls = cardControls(ctx.dom);
         const filled = controls[1].querySelector(".nhdw-bookmark");
         if (!filled.classList.contains("nhdw-bookmark-on")) {
-            fail("a bookmarked card must render a filled star, got class=" + filled.className);
+            fail("a bookmarked card must render the filled bookmark state, got class=" + filled.className);
         }
-        if (filled.textContent !== "\u2605") {
-            fail("a bookmarked card must show the filled star glyph, got " + filled.textContent);
+        const filledGlyph = bookmarkGlyph(filled);
+        if (filledGlyph === null || filledGlyph.getAttribute("d") !== BOOKMARK_GLYPH_FILLED) {
+            fail("a bookmarked card must draw the filled bookmark glyph");
+        }
+        if (filled.getAttribute("aria-pressed") !== "true") {
+            fail("a bookmarked card must report aria-pressed=true");
         }
         const empty = controls[0].querySelector(".nhdw-bookmark");
-        if (empty.classList.contains("nhdw-bookmark-on") || empty.textContent !== "\u2606") {
-            fail("an unbookmarked card must show the empty star glyph");
+        const emptyGlyph = bookmarkGlyph(empty);
+        if (empty.classList.contains("nhdw-bookmark-on") || emptyGlyph === null || emptyGlyph.getAttribute("d") !== BOOKMARK_GLYPH_OUTLINE) {
+            fail("an unbookmarked card must draw the outline bookmark glyph");
         }
-        console.log("PASS: bookmarked cards come back with a filled star after a reload");
+        console.log("PASS: bookmarked cards come back with the filled bookmark icon after a reload");
     }
 
     // --- Item 59: real key-scoped reads, every stored/inherited format -----

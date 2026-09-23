@@ -1,4 +1,4 @@
-// Persistent bookmark queue — the "I clicked ☆ on this title" list.
+// Persistent bookmark queue — the "I bookmarked this title" list.
 //
 // Why this exists separately from the download job queue:
 //   * The job queue lives in the offscreen document (`queuedJobs`,
@@ -377,7 +377,7 @@ export interface AddResult {
  * Add bookmarks. Newest first, like the Twitter queue's unshift.
  *
  * An id that is already bookmarked is NOT re-added and NOT reset: re-clicking
- * ☆ on a card that already downloaded must not turn a finished row back into a
+ * bookmark on a card that already downloaded must not turn a finished row back into a
  * pending one. That is what `duplicates` reports.
  */
 export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate[], now: number = Date.now()): AddResult {

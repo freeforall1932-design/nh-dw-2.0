@@ -605,7 +605,7 @@ function showTab(which: DrawerTab): void {
         renderPagePane();
     }
     if (which === "queue" && queuePane !== null) {
-        // The list is storage-backed and re-read on every open: a card star,
+        // The list is storage-backed and re-read on every open: a card bookmark,
         // another tab or a settled download may have changed it meanwhile. The
         // static chrome is built once inside renderBookmarks, so what the user
         // typed in the paste box survives a refresh.
@@ -714,7 +714,7 @@ function renderGalleryPane(pane: HTMLElement, context: PageContext): void {
 
     const bookmarked = isPageBookmarked(id);
     actions.appendChild(button(
-        bookmarked ? "\u2605 Bookmarked" : "\u2606 Bookmark",
+        bookmarked ? "Bookmarked" : "Bookmark",
         bookmarked
             ? "Take this title off the bookmark queue"
             : "Add this title to the bookmark queue (it survives a browser restart)",
@@ -795,7 +795,7 @@ function renderListingPane(pane: HTMLElement): void {
         const actions = buildActionRow();
         actions.appendChild(button(
             "Turn on card controls",
-            "Enable the per-card Download / \u2606 / Select buttons and reload the page",
+            "Enable the per-card Download / bookmark / Select buttons and reload the page",
             true,
             () => {
                 try {
@@ -851,7 +851,7 @@ function renderListingPane(pane: HTMLElement): void {
 
     const hint = el("small");
     hint.className = "nhdw-site-ui-hint";
-    hint.textContent = "Per-card \u2606 adds a title to the Queue tab; the bar at the bottom of the page keeps its own format and merge controls.";
+    hint.textContent = "The per-card bookmark icon adds a title to the Queue tab; the bar at the bottom of the page keeps its own format and merge controls.";
     pane.appendChild(hint);
 }
 
@@ -1041,7 +1041,7 @@ function installStorageWatchers(): void {
                 return;
             }
             if (changes[BOOKMARK_QUEUE_KEY]) {
-                // A star on a card, a paste in the drawer, another tab or a
+                // A bookmark on a card, a paste in the drawer, another tab or a
                 // settled download: re-read, repaint the badges and refresh the
                 // queue pane if it was already built.
                 readBookmarkState().then(() => {

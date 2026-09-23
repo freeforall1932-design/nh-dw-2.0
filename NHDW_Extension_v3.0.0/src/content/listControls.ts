@@ -35,11 +35,16 @@ import {
 } from "../utils/downloadFormats";
 import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 import { toGalleryKey } from "../utils/siteKeys";
-// Bookmark queue: the persistent "titles I clicked ☆ on" list. The content
-// script only READS the stored list directly (to render ☆ vs ★) — every WRITE
-// goes through the worker, which is the single writer, so a card bookmark
-// landing while the panel mutates the list cannot clobber it.
+// Bookmark queue: the persistent "titles I clicked Bookmark on" list. The
+// content script only READS the stored list directly (to render the on/off
+// icon) — every WRITE goes through the worker, which is the single writer, so
+// a card bookmark landing while the panel mutates the list cannot clobber it.
 import { BOOKMARK_QUEUE_KEY, BookmarkState, normalizeBookmarkState } from "../utils/bookmarkQueue";
+// Shared bookmark glyph (also used by the gallery-page button in
+// js/titleBookmark.js): one icon definition, so both affordances always look
+// like the same control.
+import { BOOKMARK_ICON_OUTLINE_PATH, BOOKMARK_ICON_PATH, BOOKMARK_ICON_VIEWBOX } from "../utils/titleBookmark";
+
 
 interface CardInfo {
     id: string;
@@ -81,11 +86,12 @@ function readHistoryState(): Promise<void> {
 
 // ---- bookmark queue ------------------------------------------------------
 
-// Mirror of the stored bookmark list, read directly so rendering a ☆ does not
-// cost a worker round trip. Writes always go through the worker. The Set is the
-// id index: it is rebuilt on every storage read and updated optimistically on
-// click, so a ☆ flips the instant it is clicked instead of after the round
-// trip (the storage event then confirms it).
+// Mirror of the stored bookmark list, read directly so painting the bookmark
+// button does not cost a worker round trip. Writes always go through the
+// worker. The Set is the id index: it is rebuilt on every storage read and
+// updated optimistically on click, so the button flips the instant it is
+// clicked instead of after the round trip (the storage event then confirms
+// it).
 let bookmarkState: BookmarkState = normalizeBookmarkState(null);
 /** Ids confirmed by the last storage read. */
 const bookmarkedIds = new Set<string>();
@@ -181,17 +187,38 @@ function unbookmarkCard(id: string): void {
     sendBookmarkMessage({ action: "bookmarkRemove", ids: [id] });
 }
 
+// The glyph is an inline SVG bookmark (outline when off, filled when on) built
+// with createElementNS rather than innerHTML: the extension ships under a
+// CSP-friendly policy and Mozilla's linter flags innerHTML.
+function buildBookmarkGlyph(): SVGSVGElement {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "nhdw-bookmark-glyph");
+    svg.setAttribute("viewBox", BOOKMARK_ICON_VIEWBOX);
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", BOOKMARK_ICON_OUTLINE_PATH);
+    path.setAttribute("fill", "currentColor");
+    svg.appendChild(path);
+    return svg;
+}
+
 function applyBookmarkButton(button: HTMLElement, id: string): void {
     const on = isBookmarked(id);
-    button.textContent = on ? "\u2605" : "\u2606";
     button.className = "nhdw-bookmark" + (on ? " nhdw-bookmark-on" : "");
     button.title = on
         ? "Bookmarked - click to take it off the bookmark list"
         : "Bookmark this title: it waits in the Queue panel and survives a browser restart";
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    const glyph = button.querySelector("svg.nhdw-bookmark-glyph path");
+    if (glyph !== null) {
+        glyph.setAttribute("d", on ? BOOKMARK_ICON_PATH : BOOKMARK_ICON_OUTLINE_PATH);
+    }
 }
 
-// Repaint every ☆/★ on the page. Called after the stored list changes, so a
-// bookmark made from the panel (or removed from it) is reflected here too.
+// Repaint every bookmark button on the page. Called after the stored list
+// changes, so a bookmark made from the panel (or removed from it) is reflected
+// here too.
 function refreshBookmarkButtons(): void {
     const cards = document.querySelectorAll("[" + MARKER_ATTR + "]");
     for (let i = 0; i < cards.length; i++) {
@@ -308,6 +335,11 @@ function buildCardControls(info: CardInfo): HTMLElement {
     const box = document.createElement("div");
     box.className = CONTROL_CLASS;
 
+    // Left group (Select + Bookmark); the Download button is the box's other
+    // child, so the flex pair keeps it at the top-right corner of the card.
+    const left = document.createElement("div");
+    left.className = "nhdw-card-controls-left";
+
     const selectLabel = document.createElement("label");
     selectLabel.className = "nhdw-select";
     selectLabel.title = "Select this gallery";
@@ -328,13 +360,15 @@ function buildCardControls(info: CardInfo): HTMLElement {
         renderActionBar();
     });
     selectLabel.appendChild(selectBox);
-    box.appendChild(selectLabel);
+    left.appendChild(selectLabel);
 
-    // ☆ / ★ — bookmark this title into the persistent Queue list. Deliberately
-    // a toggle: the star is the only un-bookmark affordance on the page, and a
-    // one-way button would force the user into the panel to undo a misclick.
+    // Bookmark — adds this title to the persistent Queue list. Deliberately a
+    // toggle: it is the only un-bookmark affordance on the page, and a one-way
+    // button would force the user into the panel to undo a misclick. Small and
+    // text-free by design: the card is the site's, not ours.
     const bookmarkButton = document.createElement("button");
     bookmarkButton.type = "button";
+    bookmarkButton.appendChild(buildBookmarkGlyph());
     applyBookmarkButton(bookmarkButton, info.id);
     bookmarkButton.addEventListener("click", (event) => {
         event.preventDefault();
@@ -350,7 +384,8 @@ function buildCardControls(info: CardInfo): HTMLElement {
         // onChanged listener confirms it, but the click must feel instant.
         applyBookmarkButton(bookmarkButton, info.id);
     });
-    box.appendChild(bookmarkButton);
+    left.appendChild(bookmarkButton);
+    box.appendChild(left);
 
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";

@@ -562,7 +562,7 @@ function renderInterfaceSection(container: HTMLElement): void {
     section.appendChild(controlsLabel);
 
     const controlsHint = el("small");
-    controlsHint.textContent = "Adds a Download button, a Bookmark star and a Select box to every gallery card, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
+    controlsHint.textContent = "Adds a Download button, a bookmark icon and a Select box to every gallery card, a blue Bookmark button on every gallery page, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
     section.appendChild(controlsHint);
 
     // ---- website-embedded UI (item 56/57) --------------------------------
@@ -625,7 +625,7 @@ function renderInterfaceSection(container: HTMLElement): void {
     section.appendChild(autoLabel);
 
     const autoHint = el("small");
-    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Queue tab without a click per card. Clicking a card's filled star always removes it again.";
+    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Queue tab without a click per card. Clicking a card's filled bookmark icon always removes it again.";
     section.appendChild(autoHint);
 
     // The "advanced feature" entry point: from the hovering popup there is no

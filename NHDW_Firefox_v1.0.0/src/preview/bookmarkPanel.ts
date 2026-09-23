@@ -394,7 +394,7 @@ function renderList(): void {
     if (total === 0) {
         const empty = el("div");
         empty.className = "nhdwBmEmpty";
-        empty.textContent = "Nothing bookmarked yet. Click the \u2606 on a gallery card, paste ids below, or turn on auto-capture in Settings.";
+        empty.textContent = "Nothing bookmarked yet. Tap the bookmark icon on a card or the Bookmark button on a gallery page, paste ids below, or turn on auto-capture in Settings.";
         list.appendChild(empty);
         return;
     }

@@ -1572,7 +1572,13 @@ run in this environment.
 
 ### 43. ☆ on the single-title preview and on similar-gallery rows
 
-- **Status:** open, worker side ready.
+- **Status:** partly landed (2026-09-23). The **gallery page itself** now has a
+  blue "Bookmark" button on all six supported sites
+  (`src/content/titleBookmark.ts` + `css/titleBookmark.css`), so the most
+  common case — "bookmark the title I am looking at" — no longer needs the
+  panel. Still open here: the panel's own single-title preview
+  (`popup.ts #doujinshiPreviewAsync`) and the similar-gallery rows.
+- **Worker side was already ready:**
 - `bookmarkAdd` already accepts `source: "page"` and `"similar"`, and
   `thumbnailUrlFromGallery` derives a cover from resolved `media_id`, so both
   sites only need a button and a message. Two render sites:
@@ -2126,3 +2132,35 @@ and unrelated bundles unchanged. No live requests/device/signing, new PR,
 commit or push. Item 58 remains the release gate; broader item 40 is not
 closed by the limited delivered-message listing-format check. Local ignored
 evidence: `NHDW_Firefox_v1.0.0/build/list-format-review/`.
+
+
+## Session log — 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`): bookmark icon + gallery-page Bookmark button
+
+Owner request: "change the star into actual bookmark icon" and add the missing
+button to add a title to the queue from its page, blue bookmark icon + the word
+"Bookmark", sized like the site's own Favorite/Download buttons, persistent like
+the rest of the queue.
+
+- **Cards:** the ☆/★ glyph is replaced by an inline SVG bookmark (outline/filled),
+  text-free, still the same small box and the same click toggle; Select +
+  Bookmark sit in a left group with **Download kept right-most**.
+- **Gallery pages, all six sites:** a new content script inserts the button
+  immediately after the site's Download button (row: Favorite / Download /
+  Bookmark), copying the site's presentational classes for sizing. Anchors,
+  classes, title/cover/page-count selectors are one declarative table
+  (`src/utils/titleBookmark.ts`); the script no-ops when nothing matches and
+  never touches listing or reader pages. Manifest `content_scripts` gained the
+  five non-nhentai site patterns (host permissions already covered them).
+- **Persistence:** reuses `chrome.storage.local[BOOKMARK_QUEUE_KEY]` through the
+  worker (`bookmarkAdd`, `source: "page"`); adds carry title/cover/pages because
+  enrichment only resolves nhentai tabs. Rows store `site:id`.
+- **Known gap (unchanged):** the queue's download pipeline is nhentai-keyed
+  (item 48 / MULTISITE_V4_PLAN §4.2) — a non-nhentai row downloads correctly
+  only once the multi-site job split lands.
+- **Tests:** `test/title-bookmark.test.js` (URL/table/icon/label units) and
+  `scripts/e2e-title-bookmark.js` (107 checks: all six sites' markup, insertion
+  point, classes, click add/remove, storage-driven repaint, negative cases).
+  Chrome 459/4, Firefox 535/4, both e2e suites green; Firefox lint 0/0/31.
+- **Versions:** Chrome 3.8.0 → **3.9.0**, Firefox 1.2.0 → **1.3.0**, release
+  snapshot re-synced (manifest, listControls + preview bundles, new
+  titleBookmark bundle, both stylesheets).

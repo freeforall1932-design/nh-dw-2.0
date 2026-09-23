@@ -1,5 +1,60 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`) — **owner request:
+the bookmark ☆ became a real bookmark icon, and every single-gallery page got a
+blue "Bookmark" button next to the site's own Favorite/Download buttons.**
+Chrome **3.9.0**, Firefox **1.3.0**. Preserve all prior work in this tree.
+
+- **Card controls:** the ☆/★ text glyph is gone. Each listing card's bookmark
+  control is still the same 26x26 box in the same strip, but it now draws an
+  inline SVG bookmark (`createElementNS`, never `innerHTML`) — outline when the
+  title is not bookmarked, filled when it is — and stays text-free. Select +
+  Bookmark moved into a left-hand group; **Download stayed the strip's own
+  right-most child** (`css/content.css`, `src/content/listControls.ts`).
+- **New single-title Bookmark button (`src/content/titleBookmark.ts`,
+  `css/titleBookmark.css`, `js/titleBookmark.js`):** blue glyph + the word
+  "Bookmark" ("Bookmarked" when on), inserted immediately AFTER the site's own
+  Download button so the row reads Favorite / Download / Bookmark. Sizing comes
+  from copying the site's presentational button classes (nhentai `btn
+  btn-secondary`; hentaiera/hentaifox `btn btn_colored`; imhentai `tag btn
+  btn-primary`; hentaienvy `hnv-gallery-action`; hitomi none) — never the site's
+  behavior hooks (`js-*`, `*_btn`). Per-site anchors, title/cover/page-count
+  selectors live in one declarative table, `src/utils/titleBookmark.ts`.
+- **All six sites:** manifest `content_scripts` now also match `nhentai.net/g/*`,
+  hentaiera (.com/.to/.site), imhentai (.xxx/.org/.net), hentaienvy.com,
+  hentaifox.com and hitomi.la for the new script + stylesheet. Host permissions
+  already covered these origins (PR #46) — nothing was broadened, no new
+  permission, no `<all_urls>`, and the same edit is in the Firefox manifest.
+  Listing/reader pages are deliberately excluded (`pagePattern`), and the script
+  does nothing when no anchor is found.
+- **Persistence:** unchanged and reused — `chrome.storage.local`
+  `BOOKMARK_QUEUE_KEY` via the worker's `bookmarkAdd` with
+  `source: "page" | "auto" | "card"`, so a gallery-page bookmark survives a
+  restart exactly like a card bookmark, and the button repaints from
+  `storage.onChanged` when the panel changes the list. Adds carry title, cover
+  and page count at insertion time, because `bookmarkEnrich` can only resolve
+  metadata through an active nhentai tab. Non-nhentai rows are stored as
+  `site:id`; the queue's download pipeline is still nhentai-keyed
+  (batchPipeline item 48 / MULTISITE_V4_PLAN §4.2), so downloading those rows
+  remains part of the multi-site work.
+- **Files:** new `src/utils/titleBookmark.ts`, `src/content/titleBookmark.ts`,
+  `css/titleBookmark.css`, `js/titleBookmark.js`, `test/title-bookmark.test.js`,
+  `scripts/e2e-title-bookmark.js`; changed card controls, CSS, manifests,
+  webpack entries, package.json test lists, panellett wording (the ☆/star
+  strings in `bookmarkPanel.ts` and `popupSettings.ts`, Firefox `siteUi.ts`),
+  and the release snapshot (manifest, `js/listControls.js`, `js/preview.js`,
+  `js/titleBookmark.js`, both stylesheets).
+- **Verification:** Chrome webpack; **459 passing / 4 pending** units;
+  `test:e2e` including the new 107-check title-page suite. Firefox webpack;
+  **535 passing / 4 pending**; smoke 7 PASS; all offline e2e (33 script runs)
+  pass; web-ext lint **0 errors / 0 notices / 31 advisories**, none in the new
+  script. No live request, device or signing run — real-browser verification is
+  still owed for the new button's appearance on the five non-nhentai sites.
+
+---
+
+## Previous work in this working tree — approved item 59 (list-format reads)
+
 **Updated:** 2026-09-21 (same session `arena/01a0bfa1-nh-dw-2-0`) — **approved
 item 59 COMPLETE: saved list-format reads across Firefox consumers.** The
 owner explicitly chose “ok do 59”, not the four opt-in live API checks.

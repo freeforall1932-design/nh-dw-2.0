@@ -12,16 +12,32 @@ input[type="checkbox"] {
     position: relative;
 }
 
+/* The strip spans the card so Select + Bookmark sit at the top-LEFT and the
+   Download button at the top-RIGHT. Clicks between them must still reach the
+   card itself, hence pointer-events on the strip only. */
 .nhdw-card-controls {
     position: absolute;
     top: 4px;
+    left: 4px;
     right: 4px;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    justify-content: space-between;
     gap: 4px;
+    pointer-events: none;
     z-index: 5;
     opacity: 0.55;
     transition: opacity 0.12s ease-in-out;
+}
+
+.nhdw-card-controls > * {
+    pointer-events: auto;
+}
+
+.nhdw-card-controls .nhdw-card-controls-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .nhdw-card:hover .nhdw-card-controls,
@@ -159,10 +175,11 @@ input[type="checkbox"] {
     accent-color: #e31b53;
 }
 
-/* ---- Bookmark star on a gallery card -----------------------------------
-   Sits in the same control strip as Select / Download. A filled star stays
-   visible without hovering: "which of these did I already bookmark" has to be
-   answerable at a glance while scrolling a long listing. ---- */
+/* ---- Bookmark button on a gallery card ---------------------------------
+   Sits with Select at the top-left of the strip, opposite Download. The glyph
+   is a real bookmark icon (inline SVG, js/listControls.js), not a text star,
+   and a filled one stays visible without hovering: "which of these did I
+   already bookmark" has to be answerable at a glance while scrolling. ---- */
 
 .nhdw-card-controls .nhdw-bookmark {
     background: rgba(0, 0, 0, 0.6);
@@ -172,9 +189,17 @@ input[type="checkbox"] {
     width: 26px;
     height: 26px;
     padding: 0;
-    font-size: 15px;
-    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
+}
+
+.nhdw-card-controls .nhdw-bookmark svg.nhdw-bookmark-glyph {
+    width: 15px;
+    height: 15px;
+    display: block;
+    fill: currentColor;
 }
 
 .nhdw-card-controls .nhdw-bookmark:hover {

@@ -128,12 +128,19 @@ Verify in a real Chrome 116+ profile:
       tab" notice, and with one open resolves titles and covers.
 - [ ] Auto-capture on a real infinite-scroll page: cards collect as they render,
       and turning it on mid-page collects what is already there.
-- [ ] The ☆ survives nhentai's own re-renders without duplicating.
+- [ ] The bookmark icon survives nhentai's own re-renders without duplicating (and the gallery-page Bookmark button is not injected twice).
 
 Then add the steps to "Required real-browser verification before PR" in
 `SESSION_HANDOFF.md`.
 
 ### 43. ☆ on the single-title preview and on similar-gallery rows
+
+**Partly landed 2026-09-23:** the gallery page itself now carries the blue
+**Bookmark** button on all six supported sites (`src/content/titleBookmark.ts`,
+`css/titleBookmark.css`, `js/titleBookmark.js`) — added next to the site's own
+Favorite/Download buttons and stored in the same persistent
+`chrome.storage.local` queue. Still open: the panel's single-title preview and
+the similar-gallery rows.
 
 **Cost: low.** The worker side is already done — `bookmarkAdd` accepts
 `source: "page"` and `"similar"`, and `thumbnailUrlFromGallery` derives a cover

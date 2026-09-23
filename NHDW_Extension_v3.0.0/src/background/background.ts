@@ -33,7 +33,7 @@ import { presentBatchFilenames, verifyHistoryOnDisk } from "../utils/downloadVer
 // Failed galleries of the session (chrome.storage.session): remembered so the
 // popup can name them and re-add them even after it was closed mid-job.
 import { rememberFailedGalleries, forgetFailedGalleries, readPendingFailuresSettled, clearPendingFailures } from "../utils/failedGalleries";
-// Persistent bookmark queue (chrome.storage.local): the "titles I clicked ☆
+// Persistent bookmark queue (chrome.storage.local): the "titles I bookmarked
 // on" list. The worker is its single writer because the content script and the
 // panel both mutate it. It OUTLIVES the offscreen job queue, which is
 // memory-only; bookmark rows feed the download pipeline, they never replace it.
