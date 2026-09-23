@@ -100,13 +100,13 @@ context through preview, retries and bookmark enrichment; an extension tab is
 never used as a fallback source. Covered by `e2e-popup.js --full-panel` and
 worker/relay regressions.
 
-### 58. Combined verification (folded P2 + P3) + sign 1.2.0 — **top of the queue**
+### 58. Combined verification (folded P2 + P3) + sign 1.3.0 — **top of the queue**
 
-Manifest already **1.2.0**. One real-device session: desktop Firefox pass
-(queue, history, ☆, in-page controls, header invoker + drawer) AND Android
-matrix (grant prompt, drawer at 360px, keep-alive over 60s+ ZIPs, content
-controls on listings, toolbar opens the drawer); then
-`npm run sign:firefox` (AMO keys via env). Cannot run here.
+Manifest already **1.3.0**. One real-device session: desktop Firefox pass
+(queue, history, bookmark icon, in-page controls, header invoker + drawer,
+multi-site download) AND Android matrix (grant prompt, drawer at 360px,
+keep-alive over 60s+ ZIPs, content controls on listings, toolbar opens the drawer);
+then `npm run sign:firefox` (AMO keys via env). Cannot run here.
 
 ---
 
@@ -200,20 +200,15 @@ both trees. No new stored field: array order **is** the download order, so
 reordering changes the batch. The row's checkbox / Download / Remove keep their
 own hit targets.
 
-### 45. Per-row cancel of an in-flight download — **the surviving half of P3**
+### 45. Per-row cancel of an in-flight download — **DONE 2026-09-24**
 
-**Cost: high, structurally blocked.** The old "P3 queue UI" item is now split:
-the bookmark half shipped in 3.7.0; this half did not, because the blocker was
-always about the *job* queue. It still lives as `queuedJobs` inside the offscreen
-document and is surfaced only as a count.
-
-Cancelling one specific gallery needs the worker to mirror job state into
-`chrome.storage.session` with per-item identity, and the offscreen loop to check
-it between pages.
-
-**Do not** solve this by growing the bookmark list into a job queue — see the
-"Do not" rules in `SESSION_HANDOFF.md`. Until it lands, the existing global
-pause / resume / `clearQueue` are the only stop controls.
+`cancelGallery(id, site)` wired across `batchPipeline.ts`, `Downloader.ts`,
+`offscreen.ts`, `background.ts`, and `src/preview/bookmarkPanel.ts`. Active
+downloading rows render a red Cancel button; clicking it aborts the in-flight
+Downloader and/or filters queued jobs, marking the row failed (`Cancelled`).
+The batch loop in `batchPipeline.ts` skips pre-cancelled items cleanly and
+continues downloading subsequent batch items. Styled with `.nhdwBmCancel` in
+`css/style.css` and tested in `test/batch-pipeline.test.js`.
 
 ### 46. Firefox port of the bookmark queue — **DONE in PR #43 / v1.1.0**
 
@@ -234,11 +229,13 @@ still owed under 58; offline parity is not a device-test result.
       pre-fix bundle fails 8. Wired into `test:e2e` and `test:options`. Narrow
       fixes in Firefox `options.ts`; Chrome untouched. Adjacent shared-reader
       defect was separately approved/completed as 59, not silently included here.
-- [ ] **39. Decide the empty-token separator — needs a human call, not code.**
-      `{id} - {pretty} - {language}` with no language tag produces
-      `"123456_- "`. The empty-token behaviour is pinned on purpose by
-      `test/parsing.test.js`, so this is a contract, not a bug. Two options,
-      both with costs; deliberately undecided.
+- [x] **39. Decide the empty-token separator — DONE 2026-09-24.**
+      Added `cleanEmptyDelimiters()` to `getDownloadName()` in `src/utils/utils.ts`
+      collapsing empty brackets and dangling delimiters (e.g. `Pretty||` ->
+      `Pretty`, `123456 - Pretty - ` -> `123456 - Pretty`). Tests in
+      `test/parsing.test.js` updated to verify middle and trailing empty tokens.
+      Sample preview tags in `popupSettings.ts` / `options.ts` populated so
+      token previews reflect live toggle states.
 - [ ] **40. Popup harness does not bootstrap a listing page.** Item 59 now
       delivers `getGalleries` directly to test format rendering, but does not
       exercise page injection/bootstrap, pagination, listing-job/PDF-merge or
@@ -256,25 +253,28 @@ run in this environment**.
 
 ---
 
-## Planning mode — multi-site v4 (items 48–52, not scheduled)
+## Planning mode — multi-site v4 (items 48–52)
 
 Settled in conversation on 2026-09-14; item 47 has since landed (3.8.0).
 Full design,
 decision record (merge vs new repo) and per-site facts:
-`MULTISITE_V4_PLAN.md`.
+`MULTISITE_V4_PLAN.md` and `ADAPTER_WIRING_PLAN.md`.
 
-- [~] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
-      **the per-site job-splitting half shipped 2026-09-23** (see the DONE
-      section above); the adapter-interface rework, the lab-clone side-panel UI
-      and the site-aware paste box are still open and still follow 49. The
-      site-aware worker messages it owned are now in place (plan §4.2).
-- [ ] **49. Hitomi.la adapter** — first new site; avif plumbing; raw-mode
-      default for 1 GB-class galleries.
-- [ ] **50. Mirror-network adapter** (imhentai / hentaienvy / hentaiera, with
-      hentaifox pending spike) + reading-vs-zip comparison + per-site pacing.
-      No cooldown bypass — see the plan's Do-not rules.
-- [ ] **51. Streaming ZIP writer** — OPFS / File System Access, memory
-      O(one page) instead of O(gallery).
+- [x] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
+      **Landed 2026-09-23** (PR #47): per-site jobs, metadata resolution via
+      matching adapter, bare-id file naming, composite key history/retry, and
+      site-aware paste box (`parseGalleryInput`).
+- [x] **49. Hitomi.la adapter** — **Landed 2026-09-23**: `hitomiSource.ts` +
+      `hitomiResolver.ts` (`gg.js` dynamic math) + `hitomiHtml.ts`; default format
+      `raw` for 1 GB-class galleries; validated with unit and e2e suites.
+- [x] **50. Mirror-network adapter + HentaiFox** — **Landed 2026-09-23**:
+      per-site adapters for `hentaiera`, `imhentai`, `hentaienvy`, and `hentaifox`
+      in `src/sources/` and `src/parsing/`.
+- [x] **51. Streaming ZIP writer** — **Landed 2026-09-24**: OPFS / File System Access,
+      streaming writer in `src/utils/streamingZip.ts` (`StreamingZipWriter`, `OpfsZipSink`,
+      `MemoryZipSink`, `crc32`, `compressDeflateRaw`), memory O(one page) instead of
+      accumulating entire archive in RAM. Automatic cleanup on completion/abort. Pinned
+      by `test/streaming-zip.test.js` and verified in `e2e-offscreen.js`.
 - [x] **52. Queue + history export/import (JSON)** — **DONE 2026-09-23**,
       out of planning and ahead of the rest of this list (it was the cheapest
       item and the one users ask for first). One file, both stores; union merge,
@@ -282,10 +282,8 @@ decision record (merge vs new repo) and per-site facts:
       (`bookmarkImport`) and the history through `historyImport` →
       `writeHistory()`. Coverage: 24 unit tests + the new Queue-panel harness.
 
-Order if called: **49 → 48 → 50 → 51 → 52** (hitomi validates the
-adapter contract before the panel rework bakes it in). Rename/rebrand the
-repo after 49 proves out; keep the nhentai adapter as the regression control
-throughout.
+Order completed: **47 → 49 → 50/53 → 48 → 52 → 39 → 45 → 51**.
+Remaining: **42/58 (real-browser device passes & signing)**.
 
 ### 53. hentaiera adapter — first non-nhentai site, end to end (2026-09-15)
 

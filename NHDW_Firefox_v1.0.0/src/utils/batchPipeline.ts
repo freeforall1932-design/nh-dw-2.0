@@ -66,6 +66,7 @@ export interface BatchHost {
     parsing: AParsing;
     getAbortSignal(): AbortSignal | null;
     wasAborted(): boolean;
+    isGalleryCancelled?: (key: string) => boolean;
     /** Extra fields on broadcasts (offscreen: from + queued). */
     messageExtras(): Record<string, any>;
     sendMessage(payload: any): void;
@@ -75,6 +76,26 @@ export interface BatchHost {
     fetchImpl(url: string, init?: any): Promise<any>;
     newZip(): any;
     downloadGallery(job: GalleryDownloadJob): Promise<void>;
+}
+
+const cancelledGalleries = new Set<string>();
+
+export function cancelGallery(id: string | number, site?: string): boolean {
+    const rawKey = String(id === undefined || id === null ? "" : id);
+    if (!rawKey) return false;
+    cancelledGalleries.add(toGalleryKey(rawKey, site));
+    cancelledGalleries.add(rawKey);
+    return true;
+}
+
+export function isGalleryCancelled(id: string | number, site?: string): boolean {
+    const rawKey = String(id === undefined || id === null ? "" : id);
+    if (!rawKey) return false;
+    return cancelledGalleries.has(toGalleryKey(rawKey, site)) || cancelledGalleries.has(rawKey);
+}
+
+export function resetCancelledGalleries(): void {
+    cancelledGalleries.clear();
 }
 
 export function tryParseGalleryText(text: string): any | null {
@@ -453,7 +474,14 @@ export async function runBatchDownload(args: {
     }
 
     for (let i = 0; i < length; i++) {
+        if (host.wasAborted()) {
+            break;
+        }
         const key = allKeys[i];
+        if (isGalleryCancelled(storeKey(key)) || isGalleryCancelled(key) || (host.isGalleryCancelled && host.isGalleryCancelled(storeKey(key)))) {
+            countFailure(key, "Download was aborted");
+            continue;
+        }
         // The guard composes with THIS job's site (item 48), so a hitomi row is
         // never skipped because a same-numbered nhentai gallery was recorded.
         // The payload key stays bare; the store key is what is compared, and a

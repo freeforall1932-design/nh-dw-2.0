@@ -112,7 +112,7 @@ With an API key, the extension can ask `POST /api/v2/galleries/<id>/download?for
 
 ### Firefox
 
-The original extension supported Firefox; the MV3 version requires `chrome.offscreen` and `chrome.scripting` APIs that are not available in Firefox. Use the [legacy release](https://github.com/Xwilarg/NHentaiDownloader/releases) for Firefox.
+Firefox (desktop and Android) is fully supported via the separate `NHDW_Firefox_v1.0.0` package (v1.3.0). It uses Firefox MV3 event pages (`background.scripts`), the website-embedded header UI drawer, and full parity with Chrome's multi-site download pipeline. See [`NHDW_Firefox_v1.0.0/README.md`](../NHDW_Firefox_v1.0.0/README.md).
 
 ---
 
@@ -166,7 +166,7 @@ cp -a js/. ../NHDW_Release_v3.0.0/js/
 ### Running tests
 
 ```bash
-npm test                          # 398 unit tests (offline)
+npm test                          # 503 unit tests (offline)
 npm run test:smoke                # smoke checks for background + offscreen
 npm run test:e2e                  # window-less end-to-end pipeline tests
 npm run test:live                 # optional live nhentai API test (anonymous)

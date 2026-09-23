@@ -157,7 +157,13 @@ function initListTemplate(elems: any): () => void {
         const masterOn = !!(document.getElementById("listMasterFolder") as HTMLInputElement | null)?.checked;
         const masterName = String((document.getElementById("rawMasterFolder") as HTMLInputElement | null)?.value || "").trim();
         const folder = masterOn && masterName !== "" ? masterName + "/" : "";
-        const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
+        const sampleTags: any[] = [
+            { type: "artist", name: "Sample Artist" },
+            { type: "group", name: "Sample Group" },
+            { type: "character", name: "Sample Character" },
+            { type: "language", name: "english" }
+        ];
+        const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", sampleTags);
         const replaceSpaces = (document.getElementById("replaceSpaces") as HTMLInputElement | null)?.checked
             ?? !!elems.replaceSpaces;
         const clean = utils.cleanName(rendered, replaceSpaces, "123456");

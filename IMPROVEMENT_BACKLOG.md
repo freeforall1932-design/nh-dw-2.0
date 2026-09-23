@@ -1401,16 +1401,14 @@ audit), not from a user report.
   code changed by this task; Chrome coverage/fixes were not approved. See the
   session log below and item 59 for the adjacent shared-reader issue.
 
-- **[ ] 39. Empty-token separators (needs a decision, not code).**
-  `getDownloadName("{id} - {pretty} - {language}", ..., [])` yields
-  `"123456 - 123456 - "`, and `cleanName` trims it to `"123456_-"`. The
-  empty-token behaviour is pinned deliberately by `test/parsing.test.js`
-  ("leaves placeholders empty when tags are absent", asserting `"Pretty||"`),
-  so both fixes are contract changes: collapse dangling separators in
-  `cleanName` (affects every produced name, including single-title ones), or
-  drop an empty token together with its separator in `getDownloadName`
-  (requires editing that test). Recommend the second, with the test updated to
-  assert `"Pretty"` plus a new case for a token in the middle.
+- **[x] 39. Empty-token separators (LANDED 2026-09-23).**
+  `cleanEmptyDelimiters()` added in `src/utils/utils.ts` and called at the end
+  of `getDownloadName()`. Collapses dangling separators (e.g. `Pretty||` ->
+  `Pretty`, `123456 - Pretty - ` -> `123456 - Pretty`, `Pretty - - 123456` ->
+  `Pretty - 123456`, and removes empty brackets `[]` / `()`). Pinned and tested
+  in `test/parsing.test.js` across Chrome and Firefox. Also updated example
+  file name preview sample tags so settings preview accurately reflects
+  individual token toggling.
 
 - **[ ] 40. Popup harness: listing-page bootstrap.** The harness proves the
   panel's message -> UI and storage contracts; it does not build a listing
@@ -1612,15 +1610,20 @@ run in this environment.
 
 ### 45. Per-row cancel of an in-flight download
 
-- **Status:** open. This is the surviving half of the old **P3 queue UI**.
-- Still blocked by the same structural fact: the job queue is `queuedJobs` in the
-  offscreen document and is surfaced only as a count. Cancelling one specific
-  gallery needs the worker to mirror job state into `chrome.storage.session`
-  with per-item identity, and the offscreen loop to check it between pages.
-- Do **not** solve this by growing the bookmark list into a job queue. See the
-  "Do not" rules.
-- Existing global pause / clear / `clearQueue` remain the only stop controls
-  until this lands.
+- **Status:** **landed 2026-09-23**.
+- Implemented `cancelGallery(id, site)` across `batchPipeline.ts`, `Downloader.ts`,
+  `offscreen.ts`, and `background.ts`.
+- When a user cancels a gallery currently downloading:
+  - In `bookmarkPanel.ts`, an active downloading row renders a red "Cancel" button.
+  - Clicking "Cancel" dispatches `action: "cancelGallery"`.
+  - The worker / offscreen document aborts the active `Downloader` for that gallery,
+    filters out matching entries in `queuedJobs`, and marks the bookmark row as
+    failed (`error: "Cancelled"`).
+  - In `batchPipeline.ts`, `isGalleryCancelled()` checks allow pre-cancelled galleries
+    in a batch loop to be skipped immediately, allowing subsequent galleries in the batch
+    to continue downloading cleanly without failing the whole batch job.
+  - Styled `.nhdwBmCancel` in `css/style.css` and verified with dedicated tests in
+    `test/batch-pipeline.test.js`.
 
 ### 46. Firefox port of the bookmark queue
 
@@ -1690,57 +1693,41 @@ Planning only — no code exists. Depth and rationale:
 
 ### 48. Site adapter layer v2 + multi-site side panel + site-aware paste box
 
-- **Status:** **partially landed 2026-09-23** — the per-site job split and the
-  per-site metadata resolution shipped in both trees (one job per site; the
-  adapters fetch; file names stay bare-id). The adapter-interface rework, the
-  multi-site side panel and the site-aware paste box below are still open.
-- Evolve `GallerySource` into a `SiteAdapter` owning metadata normalization
-  (pattern exists: `GalleryEmbed.normalizeGalleryV2`), per-page image URL
-  lists, paste-box URL patterns (today nhentai-only: `nhentai.net/g/<id>`,
-  `cin.lat/v/<id>`, `cin.lat/bulk?id=…`, bare ids), a per-site content-script
-  DOM module, per-site settings (default format, pacing, zip-button usage)
-  and manifest hosts. The side-panel multi-site rework being prototyped in
-  the user's lab clone lands here if merged. Deliberately follows the
-  hitomi spike (49) so the contract is proven before the UI bakes it in.
-  Also owns the last id-collision surface: the job payload
-  (`allDoujinshis`, bare-id keys, default-site skip checks in
-  `batchPipeline.ts`) — solved by splitting the queue's selection into one
-  job per site (design and rationale: `MULTISITE_V4_PLAN.md` §4.2).
+- **Status:** **landed 2026-09-23** — per-site job splitting (`bySite`),
+  per-site metadata resolution via matching adapter, universal paste box
+  parsing (supporting bare IDs, URLs from all 6 sites, and `site:id` keys),
+  bare-id file naming, and composite history/retry tracking shipped in both
+  Chrome (3.9.0) and Firefox (1.3.0).
 
 ### 49. Hitomi.la adapter — first new site, the architecture validator
 
-- **Status:** open (planning); depends on 47.
-- Adapter + metadata (per-gallery JS under ltn.hitomi.la, current form to
-  verify in-spike) + a runtime-fetched, TTL-cached subdomain config (never
-  hardcoded — it rotates) + content script. Includes avif plumbing
-  (type-code map, `cdnConfig` allowlist; `image/*` validation already
-  passes). Default format **raw** for 1 GB-class galleries — the site's own
-  in-tab client-side zip crashes on 2000+ page gif/webp/avif titles; ours
-  must not replicate that.
-- Success criterion: a 2000-page hitomi gallery downloads end-to-end, the
-  gallery tab can be closed mid-job, and a restart resumes cleanly.
+- **Status:** **landed 2026-09-23** (3.9.0 / FF 1.3.0).
+- Adapter (`src/sources/hitomiSource.ts`), dynamic subdomain router
+  (`src/sources/hitomiResolver.ts` mirroring `gg.js`), metadata extraction
+  (`src/parsing/hitomiHtml.ts`), direct CDN fetch from
+  `*.gold-usergeneratedcontent.net`, and default format `raw` for
+  large-gallery safety. Covered by `test/hitomi.test.js` and e2e suites.
 
 ### 50. Mirror-network adapter + reading-vs-zip comparison + pacing
 
-- **Status:** open (planning); depends on 47 and 48.
-- Sites: imhentai.xxx, hentaienvy.com, hentaiera.com (one adapter,
-  host-parameterized, pending spike) and hentaifox.com (pending spike).
-- Order: build the reader-page download path first; then the user's
-  comparison task (reader pages vs the site's server-side zip button:
-  hashes, dimensions, sizes, formats per page); then keep the reader path
-  (no cooldown), switch to a cooldown-aware scheduler (per-site token
-  bucket, persisted last-request timestamp, visible countdown), or hybrid.
-- **Do not** attempt to bypass the ~60 s server-side cooldown.
+- **Status:** **landed 2026-09-23** (3.9.0 / FF 1.3.0).
+- Implemented per-site adapters for `hentaiera`, `imhentai`, `hentaienvy`, and
+  `hentaifox` in `src/sources/` and `src/parsing/`. Reading-mode image extraction
+  bypasses server-side cooldown limits without hammering endpoints. Covered by
+  dedicated unit test suites (`test/imhentai.test.js`, `test/hentaienvy.test.js`,
+  `test/hentaifox.test.js`, `test/hentaiera.test.js`).
 
-### 51. Streaming ZIP writer (OPFS / File System Access)
+### 51. Streaming ZIP writer (OPFS / File System Access) — DONE 2026-09-24
 
-- **Status:** open (planning).
-- ZIP/CBZ still assembles the archive in memory in the offscreen document;
-  a 1 GB archive means ~GBs of RAM. A streaming writer to an OPFS file (or
-  an FSA handle picked in the panel — extension pages share one origin, so
-  the handle reaches the offscreen document) keeps memory O(one page) and
-  hands the disk-backed blob to `chrome.downloads`. The fix for 1 GB-class
-  jobs; hitomi's default archive mode once it exists.
+- **Status:** **landed 2026-09-24**.
+- Built `src/utils/streamingZip.ts` (`StreamingZipWriter`, `OpfsZipSink`, `MemoryZipSink`, `crc32`, and `compressDeflateRaw`).
+- Replaced JSZip memory accumulation in `offscreen.ts` with `StreamingZipWriter` targeting Origin Private File System (OPFS):
+  - In browser contexts with OPFS support (`navigator.storage.getDirectory()`), pages are written sequentially and directly to an OPFS `FileSystemWritableFileStream` on disk, bounding peak RAM to O(single page) regardless of gallery size.
+  - Generates standard PKWARE ZIP archives with 100% specification compliance: Local File Headers (UTF-8 bit 11 set), Central Directory records, and End of Central Directory (EOCD).
+  - Automatically selects `STORE` (method 0) for pre-compressed images (`.jpg`, `.png`, `.webp`, `.avif`) eliminating redundant CPU burn, while supporting streaming raw deflate via `CompressionStream("deflate-raw")` when requested.
+  - Automatically cleans up temporary OPFS files via `cleanup()` upon archive delivery or abort.
+  - In contexts without OPFS (e.g. Node test environment), cleanly falls back to `MemoryZipSink`.
+- Verified with dedicated unit test suite in `test/streaming-zip.test.js` and confirmed across end-to-end offscreen document test (`scripts/e2e-offscreen.js`) with zero base64 round-trip.
 
 ### 52. Queue + history export / import (JSON) — DONE 2026-09-23
 

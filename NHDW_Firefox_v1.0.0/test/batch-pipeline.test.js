@@ -8,7 +8,10 @@ const {
     resolveGalleryMetadata,
     runBatchDownload,
     runPagedBatchDownload,
-    buildRetryJob
+    buildRetryJob,
+    cancelGallery,
+    isGalleryCancelled,
+    resetCancelledGalleries
 } = require('../build/test/utils/batchPipeline.js');
 const { extractGalleryFromHtml } = require('../build/test/parsing/GalleryEmbed.js');
 
@@ -736,5 +739,45 @@ describe('item 48 — a per-site job', () => {
         assert.strictEqual(composite.ok, true);
         assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
             'a composite key wins over a contradicting job site');
+    });
+
+    describe('item 45 — cancelGallery', () => {
+        beforeEach(() => {
+            resetCancelledGalleries();
+        });
+
+        it('cancelGallery records cancelled key and checks both bare and composite', () => {
+            assert.strictEqual(isGalleryCancelled('12345'), false);
+            cancelGallery('12345', 'nhentai');
+            assert.strictEqual(isGalleryCancelled('12345'), true);
+            assert.strictEqual(isGalleryCancelled('12345', 'nhentai'), true);
+            resetCancelledGalleries();
+            assert.strictEqual(isGalleryCancelled('12345'), false);
+        });
+
+        it('skips a pre-cancelled gallery and continues the batch', async () => {
+            cancelGallery('2');
+            const host = makeHost();
+            const outcome = await runBatchDownload({
+                zip: {},
+                allDoujinshis: { '1': 'One', '2': 'Two', '3': 'Three' },
+                finalName: 'Batch',
+                downloadAtEnd: true,
+                galleryMetadata: {
+                    '1': gallery(1, 'One'),
+                    '2': gallery(2, 'Two'),
+                    '3': gallery(3, 'Three')
+                },
+                options: { useZip: 'zip', downloadSeparately: true },
+                host: host
+            });
+
+            assert.strictEqual(host.downloads.length, 2);
+            assert.strictEqual(host.downloads[0].displayName, 'One');
+            assert.strictEqual(host.downloads[1].displayName, 'Three');
+            assert.strictEqual(outcome.failedGalleries.length, 1);
+            assert.strictEqual(outcome.failedGalleries[0].id, '2');
+            assert.strictEqual(outcome.failedGalleries[0].error, 'Download was aborted');
+        });
     });
 });

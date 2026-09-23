@@ -1,16 +1,12 @@
 # Capture guide — how to harvest, and the per-site list
 
-**First, a problem:** the `view-source era to gallery 694133 .txt` you attached
-**did not reach the sandbox**. I searched the whole filesystem — there is no
-`/home/user/uploads/` directory and no file anywhere containing `694133` except
-my own split copy of the homepage. So I have not read it and I will not guess
-at its contents. Two ways to get it to me:
-
-- **Re-attach** it (sometimes a retry is all it takes), or
-- **Drop it in the repo** the way you did with `5 website page source` — save it
-  as `NHDW_Extension_v3.0.0/../captures/hentaiera-694133.txt` (or anywhere under
-  `/home/user/nh-dw-2.0/`) and tell me the name. Files in the repo I can always
-  read.
+> **Status (Updated 2026-09-23):** All 6 initial target sites (`nhentai`,
+> `hentaiera`, `imhentai`, `hentaienvy`, `hentaifox`, and `hitomi`) have been
+> captured and verified in the repository (`captures/`). Their adapters, HTML
+> extractors, and test suites are fully implemented.
+> 
+> This guide is retained as the active reference for capturing **new (7th+) websites**
+> when expanding multi-site coverage.
 
 ---
 

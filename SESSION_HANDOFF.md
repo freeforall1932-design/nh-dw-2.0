@@ -1,8 +1,61 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`), **three passes in
-one day.** Chrome **3.9.0**, Firefox **1.3.0**. Read the sections below in order —
-the first one is the newest work. Preserve all prior work in this tree.
+**Updated:** 2026-09-24 (session `arena/01a0cdce-nh-dw-2-0`). Chrome **3.9.0**,
+Firefox **1.3.0**. Read the sections below in order — the first one is the
+newest work. Preserve all prior work in this tree.
+
+## Architecture & feature implementations: Items 39, 45, and 51 (session `arena/01a0cdce-nh-dw-2-0`)
+
+**Updated:** 2026-09-24. Implemented and thoroughly verified the three queued
+architectural milestones in both Chrome (`NHDW_Extension_v3.0.0`) and Firefox
+(`NHDW_Firefox_v1.0.0`) with identical parity:
+
+1. **Item 39 — Empty-token separator cleanup in filename templates:**
+   - Implemented `cleanEmptyDelimiters(text)` in `src/utils/utils.ts` (and Firefox parity),
+     called at the conclusion of `getDownloadName()`.
+   - Collapses dangling delimiters (` - `, `_`, `|`, `,`), multiple whitespace, and
+     empty brackets `[]`, `()`, `{}` left when placeholders like `{language}`, `{artist}`,
+     or `{group}` resolve empty.
+   - Updated `test/parsing.test.js` to assert `Pretty` (instead of `Pretty||`), middle-empty
+     tokens (`Pretty - 123456`), trailing empty tokens (`123456 - Pretty`), and empty brackets.
+   - Updated settings sample tags in `popupSettings.ts` and `options.ts` so live filename
+     previews immediately reflect individual token toggles.
+
+2. **Item 45 — Per-row cancel of an in-flight download:**
+   - Wired `cancelGallery(id, site)` across `batchPipeline.ts`, `Downloader.ts`, `offscreen.ts`,
+     `background.ts`, and `src/preview/bookmarkPanel.ts`.
+   - In `Downloader.ts`: added `abort()` / `cancel()` methods and `galleryId` / `site` getters.
+   - In `batchPipeline.ts`: added `cancelGallery()` and `isGalleryCancelled()` checks so pre-cancelled
+     or cancelled galleries within a batch abort immediately, count as cancelled, and allow subsequent
+     galleries in the batch to continue smoothly without aborting the entire batch.
+   - In `offscreen.ts` & `background.ts`: message handler for `cancelGallery` aborts the active
+     `Downloader`, filters matching requests from `queuedJobs`, and marks the bookmark row failed
+     with `error: "Cancelled"`.
+   - In `bookmarkPanel.ts`: active downloading rows render a red Cancel button styled with `.nhdwBmCancel`.
+   - Verified with dedicated unit tests in `test/batch-pipeline.test.js`.
+
+3. **Item 51 — Streaming ZIP writer via OPFS (Origin Private File System):**
+   - Built `src/utils/streamingZip.ts` providing `StreamingZipWriter`, `OpfsZipSink`, `MemoryZipSink`,
+     `crc32`, and `compressDeflateRaw`.
+   - In browser contexts with OPFS support (`navigator.storage.getDirectory()`), pages stream
+     directly into an OPFS `FileSystemWritableFileStream` on disk, bounding peak RAM to O(single page)
+     instead of accumulating GBs in memory during large archive compilation.
+   - Generates standard PKWARE ZIP archives with 100% specification compliance: Local File Headers
+     (UTF-8 bit 11 set), Central Directory records, and End of Central Directory (EOCD).
+   - Fast `STORE` method (0% CPU) for pre-compressed images (`.jpg`, `.png`, `.webp`, `.avif`), with
+     streaming raw deflate support via `CompressionStream("deflate-raw")` when requested.
+   - Temporary OPFS files automatically removed via `cleanup()` upon completion or error.
+   - Seamlessly falls back to `MemoryZipSink` in non-OPFS environments (e.g. Node test suites).
+   - Bundles rebuilt in Chrome, Firefox, and copied to `NHDW_Release_v3.0.0/`.
+   - Verified via new unit test suite `test/streaming-zip.test.js` (9 new tests) and validated
+     through `scripts/e2e-offscreen.js`.
+
+**Test Status:**
+- Chrome (`NHDW_Extension_v3.0.0`): **514 unit tests passing**, 4 pending opt-in live tests.
+- Firefox (`NHDW_Firefox_v1.0.0`): **590 unit tests passing**, 4 pending opt-in live tests.
+- Smoke & E2E Suites: All pass across Chrome and Firefox.
+
+---
 
 ## Third pass — item 48, per-site jobs: a `site:id` queue row is downloadable
 

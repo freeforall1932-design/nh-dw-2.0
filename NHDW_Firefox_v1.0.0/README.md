@@ -21,7 +21,8 @@ Settings → In-page panel.
 
 v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
 plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). The Firefox offline
-suite now has **474** passing / 4 deliberately opt-in live tests pending.
+suite now has **579** passing / 4 deliberately opt-in live tests pending
+(including the Item 48 multi-site batch download suite and all 6 site adapters).
 
 Review fixes include working embedded settings, shared Settings/Queue layout
 CSS, safe reattachment/live updates, and a Full panel tab bound to the nhentai

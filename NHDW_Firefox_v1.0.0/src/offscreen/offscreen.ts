@@ -6,7 +6,8 @@ import { errorMessage } from "../utils/utils";
 import { fetchUrlFromTab } from "../background/tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
 import { resolveJobFormat } from "../utils/downloadFormats";
-import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions } from "../utils/batchPipeline";
+import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled } from "../utils/batchPipeline";
+import { toGalleryKey } from "../utils/siteKeys";
 // Pure helpers only: the offscreen document must never call the storage
 // functions of this module (it has no chrome.storage). The service worker
 // relays the recorded IDs with the job and owns every history write.
@@ -15,6 +16,7 @@ import {
     artifactRecordFilename,
     historyRecords
 } from "../utils/downloadHistory";
+import { StreamingZipWriter } from "../utils/streamingZip";
 var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
@@ -351,7 +353,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     applyCdnServers(options);
     const signal = beginJob();
     jobRunning = true;
-    let zip = new JSZip();
+    let zip = new StreamingZipWriter();
     // A failure names the gallery and carries the job settings so the popup
     // can re-add it (same format / master folder; metadata is re-resolved).
     const galleryId = jsonTmp && jsonTmp.id !== undefined ? String(jsonTmp.id) : "";
@@ -394,13 +396,14 @@ function makeOffscreenBatchHost(): BatchHost {
         get parsing() { return parsing; },
         getAbortSignal: () => jobAbortController ? jobAbortController.signal : null,
         wasAborted: () => jobWasAborted(),
+        isGalleryCancelled: (key: string) => isGalleryCancelled(key),
         messageExtras: () => ({ from: "offscreen", queued: queuedJobs.length }),
         sendMessage: (payload: any) => { chrome.runtime.sendMessage(payload); },
         errorCallback: errorCallback,
         progressCallback: progressCallback,
         fetchUrlFromTab: fetchUrlFromTab,
         fetchImpl: (url: string, init?: any) => fetch(url, init),
-        newZip: () => new JSZip(),
+        newZip: () => new StreamingZipWriter(),
         downloadGallery: async (job) => {
             currentDownloader = new Downloader(
                 job.json,
@@ -423,13 +426,46 @@ function makeOffscreenBatchHost(): BatchHost {
     };
 }
 
+function cancelGallery(id: string | number, site?: string): boolean {
+    const strId = String(id);
+    const key = toGalleryKey(strId, site);
+    cancelPipelineGallery(strId, site);
+    let cancelled = false;
+    if (currentDownloader) {
+        const curId = currentDownloader.galleryId;
+        const curSite = currentDownloader.site;
+        if (curId === strId || toGalleryKey(curId, curSite) === key) {
+            currentDownloader.abort();
+            cancelled = true;
+        }
+    }
+    const initialLen = queuedJobs.length;
+    for (let i = queuedJobs.length - 1; i >= 0; i--) {
+        const q = queuedJobs[i];
+        if (q.action === "downloadDoujinshi" && q.json && (String(q.json.id) === strId || toGalleryKey(q.json.id, q.options && q.options.site) === key)) {
+            queuedJobs.splice(i, 1);
+            cancelled = true;
+        } else if (q.allDoujinshis && q.allDoujinshis[strId]) {
+            delete q.allDoujinshis[strId];
+            if (Object.keys(q.allDoujinshis).length === 0) {
+                queuedJobs.splice(i, 1);
+            }
+            cancelled = true;
+        }
+    }
+    if (queuedJobs.length !== initialLen) {
+        broadcastQueueState();
+    }
+    return cancelled;
+}
+
 function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: any) {
     cancelIdleTimer();
     applyParserOptions(options);
     applyCdnServers(options);
     beginJob();
     jobRunning = true;
-    let zip = new JSZip();
+    let zip = new StreamingZipWriter();
     const jobOptions: BatchJobOptions = options || {};
     runBatchDownload({
         zip: zip,
@@ -550,6 +586,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         queuedJobs.splice(0, queuedJobs.length);
         broadcastQueueState();
         sendResponse({ result: "success", removed: removed });
+    } else if (request.action === "cancelGallery") {
+        const cancelled = cancelGallery(request.id, request.site);
+        sendResponse({ result: "success", cancelled: cancelled });
     }
     return false;
 });

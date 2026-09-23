@@ -1,10 +1,12 @@
-# Multi-site v4 plan — planning mode, no code yet
+# Multi-site v4 plan
 
 **Recorded:** 2026-09-14 (session `arena/01a09ee5-nh-dw-2-0`).
-**Status:** M0 (item 47, composite keys) landed the same day as **3.8.0**;
-everything else below is planned, not scheduled. Item numbers 47–52 are registered in `IMPROVEMENT_BACKLOG.md`
-and `WORKLIST.md`; this document carries the depth — the same role
-`BOOKMARK_QUEUE_PLAN.md` plays for 3.7.0.
+**Updated:** 2026-09-23 (session `arena/01a0cdce-nh-dw-2-0`).
+**Status:** **Landed in Chrome 3.9.0 / Firefox 1.3.0.** M0 (composite keys),
+M1 (hitomi adapter + resolver), M2 (per-site jobs + site-aware paste box),
+M3 (mirror network & hentaifox adapters), and M5 (Item 52 backup export/import)
+have all shipped and are verified across 503 Chrome / 579 Firefox unit tests.
+See `ADAPTER_WIRING_PLAN.md` for the wiring matrix and `WORKLIST.md` for remaining open items.
 
 This document records four things so no future session has to re-derive them:
 
@@ -253,23 +255,20 @@ defaults, and the site-aware paste box.
   (the paste box already covers it), user scripts, BitTorrent/M3U8 (video —
   out of category).
 
-## 6. Milestones (order, if called)
+## 6. Milestones
 
 1. **M0 — item 47: composite keys — landed as 3.8.0 (2026-09-14).**
-2. **M1 — item 49:** hitomi spike — adapter, metadata, runtime subdomain
-   config, content script, raw default. Validates the whole adapter
-   contract. **Blocked on user-captured samples (section 8); the sandbox
-   cannot reach hitomi hosts.**
-3. **M2 — item 48:** panel v2 + site-aware paste box (merge the lab's
-   rework here). Deliberately after M1, so the contract is proven before the
-   UI bakes it in.
-4. **M3 — item 50:** comparison task (Strategy C — chosen, waiting for the
-   user's go-ahead), then the mirror-network adapter + pacing; hentaifox
-   rides along if its spike shows the same shape.
-5. **M4 — item 51:** streaming ZIP writer; hitomi (and the mirror network's
-   A-path) switch to it for archives.
-6. **M5 — item 52:** history export/import.
-7. Rename/rebrand after M1 proves out.
+2. **M1 — item 49: hitomi adapter & resolver — landed in 3.9.0 / FF 1.3.0.**
+   Dynamic `gg.js` resolver (`hitomiResolver.ts`), metadata extractor (`hitomiHtml.ts`),
+   and direct CDN fetch (`hitomiSource.ts`), defaulting to `raw` format.
+3. **M2 — item 48: per-site jobs & universal paste box — landed in 3.9.0 / FF 1.3.0.**
+   Queue splits mixed downloads into one job per site; metadata resolves per adapter;
+   paste box accepts bare IDs, URLs from all 6 sites, and composite `site:id` keys.
+4. **M3 — item 50/53: mirror network + hentaifox — landed in 3.9.0 / FF 1.3.0.**
+   Full adapters and HTML parsers for `hentaiera`, `imhentai`, `hentaienvy`, and `hentaifox`.
+5. **M4 — item 51: streaming ZIP writer** — OPFS / File System Access. Scheduled as future work.
+6. **M5 — item 52: queue + history backup export/import — landed in 3.9.0 / FF 1.3.0.**
+7. Combined verification & signing (Items 42/58).
 
 ## 7. Open questions
 

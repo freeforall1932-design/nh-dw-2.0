@@ -869,6 +869,28 @@ html.nhdwPanel body {
     cursor: default;
 }
 
+.nhdwBmCancel {
+    border: 1px solid #c0392b;
+    background: #c0392b;
+    color: #fff;
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.nhdwBmCancel:hover {
+    background: transparent;
+    color: #c0392b;
+}
+
+.nhdwBmCancel:disabled {
+    border-color: #999;
+    background: #999;
+    color: #eee;
+    cursor: default;
+}
+
 .nhdwBmRemove {
     border: none;
     background: transparent;

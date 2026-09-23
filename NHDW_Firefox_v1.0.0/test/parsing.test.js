@@ -342,9 +342,18 @@ describe('utils', () => {
         assert.strictEqual(name, '[artist-a, artist-b] Pretty Name (group-x) [english] #123456');
     });
 
-    it('getDownloadName leaves placeholders empty when tags are absent', () => {
+    it('getDownloadName cleans empty tokens and dangling separators when tags are absent (item 39)', () => {
         const name = utils.getDownloadName('{pretty}|{artist}|{language}', 'Pretty', 'English', 'Japanese', '1', []);
-        assert.strictEqual(name, 'Pretty||');
+        assert.strictEqual(name, 'Pretty');
+
+        const withHyphens = utils.getDownloadName('{id} - {pretty} - {language}', 'Pretty', 'English', 'Japanese', '123456', []);
+        assert.strictEqual(withHyphens, '123456 - Pretty');
+
+        const middleEmpty = utils.getDownloadName('{pretty} - {artist} - {id}', 'Pretty', 'English', 'Japanese', '123456', []);
+        assert.strictEqual(middleEmpty, 'Pretty - 123456');
+
+        const emptyBrackets = utils.getDownloadName('[{artist}] {pretty} ({group})', 'Pretty', 'English', 'Japanese', '123456', []);
+        assert.strictEqual(emptyBrackets, 'Pretty');
     });
 });
 

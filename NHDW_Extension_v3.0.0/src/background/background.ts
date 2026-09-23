@@ -7,7 +7,8 @@ import { getSourceForUrl } from "../sources";
 import { executeInTab } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
-import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions } from "../utils/batchPipeline";
+import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled } from "../utils/batchPipeline";
+import { toGalleryKey } from "../utils/siteKeys";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
 import { installDownloadCompletionTracker, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
@@ -503,6 +504,22 @@ module background
             currentDownloader!.currentProgress = 100;
         }
         currentDownloader = null;
+    }
+
+    export function cancelGallery(id: string | number, site?: string): boolean {
+        const strId = String(id);
+        const key = toGalleryKey(strId, site);
+        cancelPipelineGallery(strId, site);
+        let cancelled = false;
+        if (currentDownloader) {
+            const curId = currentDownloader.galleryId;
+            const curSite = currentDownloader.site;
+            if (curId === strId || toGalleryKey(curId, curSite) === key) {
+                currentDownloader.abort();
+                cancelled = true;
+            }
+        }
+        return cancelled;
     }
 
     export function updateProgress(updateCallback: Function) {
@@ -1316,6 +1333,12 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 sendResponse(response || { result: "error" });
             });
             return true;
+        } else if (request.action === "cancelGallery") {
+            askOffscreen({ action: "cancelGallery", id: request.id, site: request.site }, (response) => {
+                markBookmarksFailed([{ id: request.id, site: request.site, error: "Cancelled" }]);
+                sendResponse(response || { result: "success" });
+            });
+            return true;
         } else if (request.action === "updateProgress") {
             askOffscreen({ action: "getProgress" }, (response) => {
                 if (response && typeof response.progress === "number") {
@@ -1479,6 +1502,11 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     } else if (request.action === "goBack") {
         background.goBack();
         sendResponse({ result: "success" });
+    } else if (request.action === "cancelGallery") {
+        const cancelled = background.cancelGallery(request.id, request.site);
+        markBookmarksFailed([{ id: request.id, site: request.site, error: "Cancelled" }]);
+        sendResponse({ result: "success", cancelled: cancelled });
+        return true;
     } else if (request.action === "updateProgress") {
         // This is handled differently since we need to pass a callback
         // The actual progress updates will be sent via messages
