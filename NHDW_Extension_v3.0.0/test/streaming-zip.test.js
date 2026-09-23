@@ -142,11 +142,18 @@ describe('StreamingZip (item 51)', () => {
     // a document killed before the delayed unlink must not leak the orphan
     // forever (the next archive sweeps stale temp files before it starts).
     describe('OpfsZipSink orphan sweep and delayed cleanup (PR #48 review)', () => {
-        const originalNavigator = globalThis.navigator;
+        // Node 21+ ships a getter-only global `navigator`, so a plain
+        // assignment silently fails there (that is exactly how this suite
+        // broke CI on Node 22 while passing locally on Node 20). Install and
+        // restore through the property descriptor instead.
+        const navigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
 
         afterEach(() => {
-            if (originalNavigator === undefined) delete globalThis.navigator;
-            else globalThis.navigator = originalNavigator;
+            if (navigatorDescriptor) {
+                Object.defineProperty(globalThis, 'navigator', navigatorDescriptor);
+            } else {
+                delete globalThis.navigator;
+            }
         });
 
         function mockOpfs(existingNames) {
@@ -161,7 +168,11 @@ describe('StreamingZip (item 51)', () => {
                     getFile: async () => new Blob(['mock'])
                 })
             };
-            globalThis.navigator = { storage: { getDirectory: async () => root } };
+            Object.defineProperty(globalThis, 'navigator', {
+                value: { storage: { getDirectory: async () => root } },
+                configurable: true,
+                writable: true
+            });
             return removed;
         }
 
@@ -171,7 +182,7 @@ describe('StreamingZip (item 51)', () => {
                 'nhdw_archive_2_bbb.tmp',
                 'keepme.bin'
             ]);
-            const sink = await OpfsZipSink.create();
+            const sink = await OpfsZipSink.create('nhdw_archive_', 0);
             assert.ok(sink, 'create() succeeds against a mock OPFS root');
             assert.deepStrictEqual(removed.slice().sort(), [
                 'nhdw_archive_1_aaa.tmp',
@@ -181,13 +192,13 @@ describe('StreamingZip (item 51)', () => {
 
         it('cleanup() unlinks after the grace delay, never while the download may still read', async () => {
             const removed = mockOpfs([]);
-            const sink = await OpfsZipSink.create('nhdw_archive_', 25);
+            const sink = await OpfsZipSink.create('nhdw_archive_', 30);
             await sink.write(new Uint8Array([1]));
             await sink.close();
             await sink.cleanup();
             assert.strictEqual(removed.length, 0,
                 'cleanup() must not unlink synchronously: the anchor save is not awaited');
-            await new Promise((resolve) => setTimeout(resolve, 90));
+            await new Promise((resolve) => setTimeout(resolve, 250));
             assert.strictEqual(removed.length, 1, 'the temp file is removed once the grace delay passed');
             assert.ok(/^nhdw_archive_.*\.tmp$/.test(removed[0]), 'the removed entry is the sink temp file');
         });
