@@ -189,6 +189,11 @@ is nhentai-keyed.
 
 ### 44. Drag-reorder the bookmark list — **DONE 2026-09-23**
 
+**Follow-up (same day):** `css/style.css` carried the item-44 rules twice; the
+stale copy leaked a dashed border onto the dragging row and a shadow onto the
+drop target, so Chrome rendered differently from Firefox. Removed — one
+definition per selector per tree, verified property by property.
+
 `moveBookmark()` (pure, clamped, same-state no-op), worker action
 `bookmarkReorder`, a dedicated drag handle per row plus row drop targets, CSS in
 both trees. No new stored field: array order **is** the download order, so

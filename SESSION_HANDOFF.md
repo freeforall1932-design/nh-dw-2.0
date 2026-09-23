@@ -2566,6 +2566,12 @@ session.
 - **Do not put auto-capture back inside `injectCardControls()`.** Injection is
   idempotent and skips decorated cards; auto-capture must stay its own pass or
   flipping the setting on an open page does nothing (defect 3).
+- **Do not re-add a second copy of an item-44 CSS block.** `css/style.css` used
+  to carry two overlapping `.nhdwBmDrag` / `.nhdwBmDragging` /
+  `.nhdwBmDropTarget` rule sets; their leftovers made Chrome's dragging row
+  dashed and its drop target shadowed while Firefox showed only the outline.
+  There is now exactly one definition per selector in each tree and the two
+  trees compute the same declarations (checked property by property).
 - **Do not route a bookmark thumbnail into the download path.** `t.nhentai.net`
   is display-only and deliberately absent from `host_permissions`; an `<img>` in
   an extension page needs neither a host permission nor a CORS preflight.

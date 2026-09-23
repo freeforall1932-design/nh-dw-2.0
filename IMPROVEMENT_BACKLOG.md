@@ -2316,3 +2316,16 @@ site. Both trees; no new host permission, no `<all_urls>`, no new adapter.
 - **Not in this task:** the rest of backlog item 48's planning scope (adapter
   interface v2, lab-clone side panel, site-aware paste box) and 42/58
   (real-browser + Android passes, signing — owner only).
+
+## Session log — 2026-09-23 (third pass, same session): CSS tidy-up after the item-44 duplicate
+
+Reviewing the item-43/44 diff turned up a real defect: `css/style.css` (Chrome)
+carried **two** overlapping blocks for the drag handle and its row states. The
+later block did not redeclare everything the earlier one did, so the earlier
+one leaked `border-style: dashed` onto a dragging row and `box-shadow` +
+`border-color` onto the drop target — Chrome's list looked different from
+Firefox's, whose single scoped block in `css/panelRenderers.css` never had them.
+The stale block is deleted, one definition per selector remains in each tree,
+and the two trees were checked property by property for all four selectors
+(no differences). Release snapshot re-synced; units re-run (503/4 Chrome).
+

@@ -663,32 +663,6 @@ html.nhdwPanel body {
     border-top-color: #555;
 }
 
-/* Item 44: the drag handle. Narrow (it should never win a click race with the
-   row's own controls), braille dots so it reads as a grip, and a grab cursor. The row it belongs to gets a dashed outline while a drag is in
-   flight and the row under the pointer is highlighted. */
-.nhdwBmDrag {
-    cursor: grab;
-    opacity: 0.5;
-    letter-spacing: -1px;
-    font-size: 11px;
-    user-select: none;
-    flex: 0 0 auto;
-}
-
-.nhdwBmDrag:hover {
-    opacity: 0.9;
-}
-
-.nhdwBmRow.nhdwBmDragging {
-    opacity: 0.45;
-    border-style: dashed;
-}
-
-.nhdwBmRow.nhdwBmDropTarget {
-    border-color: #e31b53;
-    box-shadow: 0 0 0 2px rgba(227, 27, 83, 0.25);
-}
-
 .nhdwBmCheck {
     font-size: 11px;
     display: inline-flex;
