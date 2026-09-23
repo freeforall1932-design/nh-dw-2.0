@@ -30,6 +30,7 @@ import {
     planBookmarkDownload
 } from "../utils/bookmarkQueue";
 import { historyIds, readHistory } from "../utils/downloadHistory";
+import { DEFAULT_SITE, normalizeSite, toGalleryKey } from "../utils/siteKeys";
 import {
     buildTransferPayload,
     mergeImportedHistory,
@@ -92,8 +93,15 @@ function showNotice(text: string, isError: boolean = false): void {
 
 // One entry point for every download the Queue tab can start: a single row,
 // the whole selection, or a paste that was never bookmarked.
-async function startDownload(ids: string[], titles: Record<string, string>, fromQueue: boolean): Promise<void> {
-    if (ids.length === 0) {
+async function startDownload(groups: Array<{ site: string; titles: Record<string, string> }>, fromQueue: boolean, skippedCount: number = 0): Promise<void> {
+    // The final notice keeps the "already downloaded" suffix: it is the last
+    // thing the user sees, and losing it made a partial download look complete.
+    const skipSuffix = skippedCount > 0 ? " (" + skippedCount + " already downloaded skipped)" : "";
+    const jobs = groups
+        .map((group) => ({ site: normalizeSite(group.site), titles: group.titles || {} }))
+        .filter((group) => Object.keys(group.titles).length > 0);
+    const total = jobs.reduce((sum, group) => sum + Object.keys(group.titles).length, 0);
+    if (total === 0) {
         showNotice("Nothing to download.", true);
         return;
     }
@@ -111,34 +119,72 @@ async function startDownload(ids: string[], titles: Record<string, string>, from
     const tabId = await getActiveNhentaiTabId();
     if (fromQueue) {
         // Rows read "downloading" before the first byte arrives rather than
-        // after the first broadcast.
+        // after the first broadcast. The ids are composite here: a row's status
+        // lives under "site:id", and a bare id would mark the wrong row once two
+        // sites use the same gallery number (item 48).
+        const ids: string[] = [];
+        for (const group of jobs) {
+            for (const id of Object.keys(group.titles)) {
+                ids.push(toGalleryKey(id, group.site));
+            }
+        }
         await send({ action: "bookmarkMarkDownloading", ids: ids });
     }
-    const response = await send({
-        action: "downloadAllDoujinshis",
-        allDoujinshis: titles,
-        galleryMetadata: {},
-        finalName: "bookmarks",
-        tabId: tabId,
-        formatOverride: settings.format,
-        // Always one file per title (see the file header).
-        separate: true,
-        masterFolder: resolveMasterFolder(settings),
-        nameTemplate: settings.template
-    });
-    if (response === null) {
+
+    // ONE JOB PER SITE (item 48): a job payload carries a single site, because
+    // the pipeline composes every store key with it. The jobs are sent in
+    // sequence, so the worker queues them in the order the sites appear in the
+    // list and each one reports its own progress and summary.
+    let started = 0;
+    let queued = 0;
+    let unanswered = 0;
+    for (const group of jobs) {
+        const message: any = {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: group.titles,
+            galleryMetadata: {},
+            finalName: "bookmarks",
+            tabId: tabId,
+            formatOverride: settings.format,
+            // Always one file per title (see the file header).
+            separate: true,
+            masterFolder: resolveMasterFolder(settings),
+            nameTemplate: settings.template
+        };
+        if (group.site !== DEFAULT_SITE) {
+            message.site = group.site;
+        }
+        const response = await send(message);
+        if (response === null) {
+            unanswered++;
+            continue;
+        }
+        if (response.result === "queued") {
+            queued++;
+        } else {
+            started++;
+        }
+    }
+    if (unanswered === jobs.length) {
         showNotice("The extension worker did not answer. Reopen the panel and try again.", true);
         return;
     }
-    if (response.result === "queued") {
-        showNotice(ids.length === 1
+    const sites = jobs.length;
+    if (queued > 0 && queued === jobs.length) {
+        showNotice((total === 1
             ? "Queued behind the download already running."
-            : ids.length + " titles queued behind the download already running.");
+            : total + " titles queued behind the download already running.") + skipSuffix);
         return;
     }
-    showNotice(ids.length === 1
-        ? "Downloading 1 title."
-        : "Downloading " + ids.length + " titles, one file each.");
+    if (sites > 1) {
+        showNotice("Downloading " + total + " titles across " + sites + " sites, one file each."
+            + (queued > 0 ? " " + queued + " queued behind the running download." : "")
+            + (unanswered > 0 ? " " + unanswered + " site(s) could not be started." : "")
+            + skipSuffix,
+            unanswered > 0);
+        return;
+    }
+    showNotice((total === 1 ? "Downloading 1 title." : "Downloading " + total + " titles, one file each.") + skipSuffix);
 }
 
 // ---- backup: export / import --------------------------------------------
@@ -224,7 +270,13 @@ async function downloadSelection(): Promise<void> {
     } catch (_) {
         history = [];
     }
-    const plan = planBookmarkDownload(state, history, includeAlready ? state.items.filter((item) => item.selected).map((item) => item.id) : []);
+    // "Download anyway": the forced ids must be composite, so the exemption
+    // lands on the row that was ticked and not on a same-numbered gallery of
+    // another site.
+    const forced: string[] = includeAlready
+        ? state.items.filter((item) => item.selected).map((item) => toGalleryKey(item.id, item.site))
+        : [];
+    const plan = planBookmarkDownload(state, history, forced);
     if (plan.download.length === 0) {
         if (plan.skip.length > 0) {
             showNotice("All " + plan.skip.length + " selected titles are already downloaded. Tick \"include already downloaded\" to fetch them again.", true);
@@ -234,14 +286,18 @@ async function downloadSelection(): Promise<void> {
         return;
     }
     const suffix = plan.skip.length > 0 ? " (" + plan.skip.length + " already downloaded skipped)" : "";
-    showNotice("Starting " + plan.download.length + (plan.download.length === 1 ? " title" : " titles") + suffix + "\u2026");
-    await startDownload(plan.download, plan.titles, true);
+    const siteCount = plan.bySite.filter((group) => group.download.length > 0).length;
+    showNotice("Starting " + plan.download.length + (plan.download.length === 1 ? " title" : " titles")
+        + (siteCount > 1 ? " across " + siteCount + " sites" : "") + suffix + "\u2026");
+    // Only the rows that actually download, grouped per site.
+    await startDownload(plan.bySite.map((group) => ({ site: group.site, titles: group.titles })), true, plan.skip.length);
 }
 
 async function downloadOne(item: BookmarkItem): Promise<void> {
     const titles: Record<string, string> = {};
     titles[item.id] = item.title !== "" ? item.title : item.id;
-    await startDownload([item.id], titles, true);
+    // A single row is always a single-site job; its site is the row's own.
+    await startDownload([{ site: item.site, titles: titles }], true);
 }
 
 // ---- paste ---------------------------------------------------------------
@@ -269,7 +325,9 @@ async function addPasted(downloadNow: boolean): Promise<void> {
             titles[id] = id;
         }
         box.value = "";
-        await startDownload(parsed.ids, titles, false);
+        // The paste box parses ids and nhentai URLs only (parseGalleryInput),
+        // so this is a default-site job: one group, no site field on the wire.
+        await startDownload([{ site: DEFAULT_SITE, titles: titles }], false);
         return;
     }
 

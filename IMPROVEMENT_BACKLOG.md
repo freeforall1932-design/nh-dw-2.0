@@ -1690,7 +1690,10 @@ Planning only — no code exists. Depth and rationale:
 
 ### 48. Site adapter layer v2 + multi-site side panel + site-aware paste box
 
-- **Status:** open (planning); depends on 47.
+- **Status:** **partially landed 2026-09-23** — the per-site job split and the
+  per-site metadata resolution shipped in both trees (one job per site; the
+  adapters fetch; file names stay bare-id). The adapter-interface rework, the
+  multi-site side panel and the site-aware paste box below are still open.
 - Evolve `GallerySource` into a `SiteAdapter` owning metadata normalization
   (pattern exists: `GalleryEmbed.normalizeGalleryV2`), per-page image URL
   lists, paste-box URL patterns (today nhentai-only: `nhentai.net/g/<id>`,
@@ -2255,3 +2258,61 @@ committed with this log).
   unit-tested instead, and this is stated in `SESSION_HANDOFF.md`.
 - **Next:** the non-nhentai download path (item 48's per-site job split + the
   per-site metadata resolution that makes a `site:id` queue row downloadable).
+
+## Session log — 2026-09-23 (third pass, same session `arena/01a0cc70-nh-dw-2-0`): item 48, per-site jobs
+
+The owner approved the item at the top of `WORKLIST.md` verbatim ("yes do Next
+up … item 48"). The queue's download path is no longer nhentai-keyed: a
+`site:id` row is now downloadable, and a mixed selection becomes one job per
+site. Both trees; no new host permission, no `<all_urls>`, no new adapter.
+
+- **`BatchJobOptions.site?: string`** — one job carries ONE site; absent means
+  the default site, so every pre-existing caller and payload is byte-identical.
+  `runBatchDownload` derives `jobSite = normalizeSite(options.site)`,
+  `storeKey = toGalleryKey(id, jobSite)` and `bareId = splitGalleryKey(storeKey).id`.
+  The skip guard reads the composite key, metadata gets `{site: jobSite}`, and
+  the history `records` / `batchKeys` / failure rows (`{id, name, error, site}`)
+  are composite — while **titles, the `{id}` token and `cleanName()` use the
+  bare id**, so no file name can contain `hitomi:`.
+- **`resolveGalleryMetadata(key, {site})`** — a composite key always wins; a bare
+  key is normalized through `normalizeSite(args.site)`. That is the single line
+  that sends a job's fetch through hentaiera / imhentai / hentaienvy /
+  hentaifox / hitomi instead of nhentai.
+- **`failedGalleries.ts`** — `RetryJob.site?`, `failureSite(entry, job)`, and
+  **`retryJobKey` now includes the site** (undefined/empty → `null`). Without it
+  the same bare id on two sites shares one retry bucket. `batch.site` is written
+  only for a non-default site, so default-site retry payloads stay identical to
+  3.9.0. `groupRetryMessages` buckets on `retryJobKey + "|" + site`.
+- **`bookmarkQueue.ts`** — `plan.bySite: BookmarkDownloadGroup[]`
+  (`{site, download, skip, titles}` in first-appearance order). **`titles` covers
+  only the rows in `download`**: a fully-skipped group is
+  `{site, download: [], skip: [...], titles: {}}` and must not be sent as a job.
+- **`bookmarkPanel.ts`** — `startDownload(groups, fromQueue, skippedCount)`,
+  one message per group in list order (`site` serialized only when
+  non-default), composite ids into `bookmarkMarkDownloading`, the "across N
+  sites" notice and " (N already downloaded skipped)" appended to **every**
+  notice branch. `downloadOne` sends its own row's site; the paste path sends
+  `[{site: DEFAULT_SITE, titles}]` (paste input is ids/nhentai URLs only).
+- **`background.ts` / `bookmarkService.ts`** — the relay forwards `site`, the
+  relay path copies it into the options, `jobOverridesFromRequest` sets it, the
+  worker-options merge passes it on, and `markBookmarksFailed` patches by
+  `toGalleryKey(entry.id, entry.site)`. The Firefox `background.ts` is not the
+  Chrome file: it was patched surgically (six edits) and its FF-only deltas
+  re-verified; FF `bookmarkService.ts` gained the `toGalleryKey` import.
+- **Tests:** `test/batch-pipeline.test.js` (describe "item 48 — a per-site job":
+  adapter routing, bare `{id}` naming, per-site skip guard, failure `site` +
+  `retryJob.site`, default site unchanged, bare-vs-composite metadata),
+  `test/download-control.test.js` (+2), `test/bookmark-queue.test.js` (+2),
+  `test/downloader.test.js` (+1: hitomi URLs, never the nhentai CDN),
+  `scripts/e2e-bookmark-panel.js` (phases 7/7b), `scripts/e2e-worker.js`
+  (phase 8b: worker fallback resolves/caches/brands/records `hitomi:<id>` with
+  zero nhentai API calls), `scripts/e2e-offscreen.js` (composite `jobFinished`).
+- **Verified:** Chrome tsc 0, webpack OK, **503 unit pass / 4 pending**, full
+  e2e exit 0 (**140 PASS**), smoke 7 PASS. Firefox tsc 0, webpack OK,
+  **579 unit pass / 4 pending**, full e2e exit 0 (**172 PASS**), smoke 7 PASS,
+  web-ext lint **0 errors / 0 notices / 31 advisories**. Release snapshot
+  re-synced with the exhaustive file loop (`js/background.js`,
+  `js/offscreen.js`, `js/preview.js` were stale; nothing missing).
+- **Not in this task:** the rest of backlog item 48's planning scope (adapter
+  interface v2, lab-clone side panel, site-aware paste box) and 42/58
+  (real-browser + Android passes, signing — owner only).

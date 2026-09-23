@@ -318,6 +318,34 @@ describe('failed-gallery bookkeeping (pure)', () => {
             'the source tab must not split retries into separate jobs');
     });
 
+    it('item 48: failures from two sites never share one retry command', () => {
+        // A job payload carries a single site, so a merged command would
+        // re-fetch one of these through the wrong adapter.
+        const entries = mergeFailures([], [
+            { id: '123', name: 'From nhentai', error: 'a' },
+            { id: '123', name: 'From hitomi', error: 'b', site: 'hitomi' }
+        ], job, 1);
+        assert.strictEqual(entries.length, 2, 'the same id on two sites is two failures');
+        const messages = groupRetryMessages(entries, 42);
+        assert.strictEqual(messages.length, 2, 'one command per site');
+        const bySite = new Map(messages.map((m) => [m.site === undefined ? 'nhentai' : m.site, m]));
+        assert.deepStrictEqual(bySite.get('nhentai').allDoujinshis, { '123': 'From nhentai' });
+        assert.deepStrictEqual(bySite.get('hitomi').allDoujinshis, { '123': 'From hitomi' });
+        assert.deepStrictEqual(bySite.get('hitomi').redownloadIds, ['123']);
+        assert.strictEqual(bySite.get('nhentai').site, undefined,
+            'the default site is never written, so an nhentai retry is unchanged');
+    });
+
+    it('item 48: the job site groups the retry even when the entry has none', () => {
+        const hitomiJob = Object.assign({}, job, { site: 'hitomi' });
+        const entries = mergeFailures([], [{ id: '5', name: 'Five', error: 'e' }], hitomiJob, 1);
+        const messages = groupRetryMessages(entries);
+        assert.strictEqual(messages.length, 1);
+        assert.strictEqual(messages[0].site, 'hitomi');
+        assert.notStrictEqual(retryJobKey(job), retryJobKey(hitomiJob),
+            'a per-site job is a different set of settings');
+    });
+
     it('still builds a retry (with stored defaults) for entries that carry no job', () => {
         const messages = groupRetryMessages([{ id: '5', name: 'Five', error: 'e', retryJob: null, at: 0 }]);
         assert.strictEqual(messages.length, 1);

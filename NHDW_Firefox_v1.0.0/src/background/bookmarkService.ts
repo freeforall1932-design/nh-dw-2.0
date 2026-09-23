@@ -29,6 +29,7 @@ import {
     pagesFromGallery
 } from "../utils/bookmarkQueue";
 import { mergeImportedBookmarks } from "../utils/queueTransfer";
+import { toGalleryKey } from "../utils/siteKeys";
 import { historyIds, readHistory, writeHistory } from "../utils/downloadHistory";
 import { fetchGalleryViaTab, getActiveNhentaiTabId } from "../preview/activeTabGallery";
 
@@ -93,14 +94,17 @@ export function markBookmarksDownloaded(records: Array<{ id: string | number; fi
     }).then(broadcastBookmarkChanged).catch(() => { /* bookkeeping only */ });
 }
 
-export function markBookmarksFailed(failed: Array<{ id: string | number; name?: string; error?: string }>): Promise<void> {
+export function markBookmarksFailed(failed: Array<{ id: string | number; name?: string; error?: string; site?: string }>): Promise<void> {
     if (!Array.isArray(failed) || failed.length === 0) {
         return Promise.resolve();
     }
     return mutateBookmarks((state) => {
         let next = state;
         for (const entry of failed) {
-            next = patchBookmark(next, entry.id, {
+            // The entry's site, when it has one (item 48): two sites can use the
+            // same numeric id, and the wrong composition would mark the wrong row
+            // - or no row at all. A bare entry still means the default site.
+            next = patchBookmark(next, toGalleryKey(entry.id, entry.site), {
                 status: "failed",
                 error: String(entry.error || "Download failed")
             });

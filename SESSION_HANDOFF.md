@@ -1,11 +1,74 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`), **two passes in one
-day.** Chrome **3.9.0**, Firefox **1.3.0**. Read the top two sections in order —
-the second pass is the newer work; the first pass is the owner's original
-request in this session. Preserve all prior work in this tree.
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`), **three passes in
+one day.** Chrome **3.9.0**, Firefox **1.3.0**. Read the sections below in order —
+the first one is the newest work. Preserve all prior work in this tree.
 
-## Second pass — items 43, 44, 52 and 41 (small wins) — **READ THIS FIRST**
+## Third pass — item 48, per-site jobs: a `site:id` queue row is downloadable
+
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`). The owner approved
+the wording at the top of `WORKLIST.md` verbatim ("yes do Next up … item 48").
+The queue now **splits a mixed selection into one job per site** and the pipeline
+**resolves each job's metadata through that site's own adapter** — no new host
+permission, no `<all_urls>`, no new adapter. Both trees, uncommitted at the time
+of writing (a later commit records it).
+
+- **One job carries ONE site.** `BatchJobOptions.site?: string`
+  (`src/utils/batchPipeline.ts`); absent means the default site, so every
+  pre-existing caller and payload is byte-identical. The queue builds
+  `plan.bySite` (`{site, download, skip, titles}`, first-appearance order) and
+  `bookmarkPanel.startDownload(groups, fromQueue, skippedCount)` sends **one**
+  `downloadAllDoujinshis` per group, in list order.
+- **Per-site keys everywhere downstream.** `runBatchDownload` derives
+  `jobSite = normalizeSite(options.site)`, `storeKey = toGalleryKey(id, jobSite)`
+  and `bareId = splitGalleryKey(storeKey).id`: the skip guard reads `storeKey`,
+  metadata resolution gets `{site: jobSite}`, while **titles, the `{id}`
+  token and `cleanName()` use the bare id** (a file name must not contain
+  `hitomi:`), and history/failure `records`/`batchKeys` are **composite**.
+  `FailedGallery.site` records the failing job's site.
+- **`resolveGalleryMetadata(key, {site})`:** a composite key always wins; a bare
+  key takes `normalizeSite(args.site)`. That is what makes the hitomi / imhentai
+  / hentaiera / hentaienvy / hentaifox adapters do the fetching.
+- **`retryJobKey` MUST include the site** (undefined/empty → `null`). Without it
+  two per-site jobs with the same bare id share one retry bucket. `batch.site`
+  is written only for a non-default site, so default-site retry payloads stay
+  byte-identical to 3.9.0.
+- **The queue's `titles` cover only rows in `download`.** A fully-skipped group
+  is `{site, download: [], skip: [...], titles: {}}` and **must not** be sent as
+  a job (caught by the new e2e phase). `startDownload` threads `skippedCount`
+  and appends " (N already downloaded skipped)" to **every** notice branch.
+- **`background.ts` (both trees):** the relay forwards `site`, the relay path
+  copies `relayedMessage.site` into the options, `jobOverridesFromRequest`
+  sets/serializes it, and the worker-options merge passes it on. Firefox's
+  `background.ts` is **not** the Chrome file — it was patched surgically
+  (6 edits) and its FF-only deltas re-verified; `bookmarkService.ts` gained the
+  `toGalleryKey` import for a site-aware `markBookmarksFailed`.
+- **New coverage:** `test/batch-pipeline.test.js` describe "item 48 — a
+  per-site job" (adapter routing, bare `{id}` naming, per-site skip guard,
+  failure `site` + `retryJob.site`, default site unchanged, bare-vs-composite
+  metadata), `test/download-control.test.js` (+2: same id on two sites → two
+  retry commands), `test/bookmark-queue.test.js` (+2: `bySite` order/titles,
+  per-site history skip), `test/downloader.test.js` (+1: a hitomi gallery is
+  fetched from the hitomi hosts and never the nhentai CDN),
+  `scripts/e2e-bookmark-panel.js` phases 7/7b/7c (2 jobs, payload keys bare,
+  titles travel, "across 2 sites", per-site skip notice, a row's own Download
+  button carries its site),
+  `scripts/e2e-worker.js` phase 8b (the worker fallback resolves, names, fetches
+  **and records under `hitomi:<id>`**, with zero nhentai API calls) and
+  `scripts/e2e-offscreen.js` (composite `jobFinished` keys).
+- **Verified:** Chrome tsc 0, webpack OK, **503 unit pass / 4 pending**, full
+  `test:e2e` exit 0 (**140 PASS** lines, no FAIL), smoke 7 PASS. Firefox tsc 0,
+  webpack OK, **579 unit pass / 4 pending**, full `test:e2e` exit 0
+  (**172 PASS**), smoke 7 PASS, web-ext lint **0 errors / 0 notices / 31
+  advisories**. Release snapshot re-synced with the exhaustive loop
+  (`js/background.js`, `js/offscreen.js`, `js/preview.js` were stale; nothing
+  missing).
+- **Do not** merge the per-site jobs back into one mixed batch, and do not key
+  a file name off the composite key. **Do not** drop `site` from `retryJobKey`.
+
+---
+
+## Second pass — items 43, 44, 52 and 41 (small wins)
 
 **Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`). The owner answered
 "what else can be worked on" by picking **every** option offered, so this pass
@@ -78,11 +141,11 @@ with PR #47, and the release snapshot is re-synced.
   file-by-file loop** (never a fixed file list). This pass it caught
   `js/background.js`, `js/options.js`, `js/preview.js` and `css/style.css` as
   stale; nothing was missing. Run that loop again after any source change.
-- **Still open, and next:** **48** — a `site:id` queue row can be bookmarked,
-  selected, reordered and exported, but **cannot be downloaded yet**, because
-  `downloadSelection` still sends one nhentai-keyed batch
-  (`batchPipeline.ts:322` NOTE / `MULTISITE_V4_PLAN.md` §4.2). Then 42/58
-  (real-browser + Android passes, signing) which only the owner can run.
+- **Item 48 landed after this pass** — see the third-pass section above; the
+  `batchPipeline.ts:322` NOTE is now implemented. What remains open is **42/58**
+  (real-browser + Android passes, signing), which only the owner can run, plus
+  the wider item-48 planning scope (adapter-interface v2, side-panel rework,
+  site-aware paste box) that was never part of this task.
 
 ---
 
@@ -2523,6 +2586,17 @@ session.
   Remove keep their own hit targets (item 44's explicit requirement).
 - **Do not make the Queue tab download in merged mode.** It is always
   `separate: true`; merging a bookmark list is a decision the user did not make.
+- **Do not merge per-site jobs back into one mixed batch.** One
+  `downloadAllDoujinshis` carries one site (`BatchJobOptions.site`); a mixed
+  payload is what made `site:id` rows undownloadable (item 48).
+- **Do not key a file name, title or the `{id}` token off the composite
+  `site:id` key.** Storage/history/retry identity is composite; names and ids
+  are `splitGalleryKey(storeKey).id`.
+- **Do not drop `site` from `retryJobKey`.** `undefined`/empty must normalize to
+  `null`, or the same bare id on two sites shares one retry bucket.
+- **Do not send a queue group whose rows are all skipped.** `group.titles` covers
+  only rows in `download`; a group with `download: []` must produce no job (the
+  panel harness's phase 7b guards this).
 - **Do not re-add `bookmarkSetStatus`.** It was removed as a handler with no
   sender. Status comes from `bookmarkMarkDownloading` and the worker's
   `markBookmarks{Downloaded,Failed}` hooks on `jobFinished` / `batchSummary`.

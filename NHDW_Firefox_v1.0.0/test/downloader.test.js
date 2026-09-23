@@ -167,6 +167,46 @@ describe('Downloader (zip mode)', () => {
         }
     });
 
+    it('item 48: a hitomi gallery is fetched through hitomi URLs, never the nhentai CDN', async () => {
+        // The last link of the per-site chain: the pipeline resolved the
+        // metadata through the hitomi adapter and stamped json.site, and the
+        // Downloader must now pick that adapter up and build hitomi image URLs
+        // (hash-based, on the user-generated-content hosts).
+        const hash = '0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e';
+        const hitomiGallery = {
+            id: 765432,
+            media_id: hash,
+            site: 'hitomi',
+            title: { english: 'Hitomi Title', japanese: '', pretty: 'Hitomi Title' },
+            images: { pages: [{ t: 'w', hash: hash, name: '01.webp' }, { t: 'w', hash: hash, name: '02.webp' }] },
+            tags: []
+        };
+        const attempted = [];
+        globalThis.fetch = (url) => {
+            attempted.push(String(url));
+            return Promise.resolve(new Response(makePageBytes(0x52, 0x49, 0x46, 0x46), { status: 200 }));
+        };
+
+        const downloader = new Downloader(hitomiGallery, 'Downloads/Hitomi', () => {}, () => {}, 'Hitomi Title', new JSZip(), 'Downloads/Hitomi');
+        downloader.revokeObjectUrlDelayMs = 10;
+        downloader.retryBackoffMs = 0;
+        await downloader.startAsync();
+
+        assert.strictEqual(attempted.length >= 2, true, 'both hitomi pages must be fetched');
+        for (const url of attempted) {
+            assert.ok(url.indexOf('gold-usergeneratedcontent.net') !== -1,
+                'a hitomi gallery must be fetched from the hitomi hosts, got ' + url);
+            assert.ok(url.indexOf('/webp/') !== -1, 'hitomi webp pages keep their format, got ' + url);
+            assert.ok(url.indexOf('nhentai.net') === -1, 'the nhentai CDN must never be used for a hitomi gallery');
+        }
+
+        assert.strictEqual(chrome.downloads.calls.length, 1);
+        const zip = await decodeZip(chrome.downloads.calls[0].url);
+        const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+        assert.deepStrictEqual(names, ['Downloads/Hitomi/001.webp', 'Downloads/Hitomi/002.webp'],
+            'hitomi pages keep their own numbering and extension');
+    });
+
     it('reports a failure when every image host fails', async () => {
         fetchStub = makeFetchStub([CANONICAL].concat(MIRRORS));
         globalThis.fetch = fetchStub;

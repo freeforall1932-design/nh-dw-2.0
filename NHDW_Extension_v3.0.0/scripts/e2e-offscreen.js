@@ -618,8 +618,11 @@ function askOffscreen(message) {
         fail("no batchProgress may be sent for a skipped gallery, got " + JSON.stringify(skipProgress));
     }
     const skipRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
-    if (!skipRecords || skipRecords.length !== 1 || String(skipRecords[0].id) !== String(GALLERY_ID)) {
-        fail("jobFinished must carry exactly the newly-downloaded record, got " + JSON.stringify(skipRecords));
+    // Item 48: a record carries the COMPOSITE key ("nhentai:<id>"), which is
+    // what the history store keys on, so a hitomi gallery with the same number
+    // can never be filed - or skipped - under the nhentai one.
+    if (!skipRecords || skipRecords.length !== 1 || String(skipRecords[0].id) !== "nhentai:" + String(GALLERY_ID)) {
+        fail("jobFinished must carry exactly the newly-downloaded record (composite key), got " + JSON.stringify(skipRecords));
     }
     console.log("PASS: recorded gallery skipped without API calls; redownload override still works");
 

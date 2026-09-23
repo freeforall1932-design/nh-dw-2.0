@@ -34,6 +34,11 @@ function assertOk(value, what) {
         fail(what);
     }
 }
+function assertDeepEqual(actual, expected, what) {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+        fail(what + ": expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual));
+    }
+}
 
 // --- minimal DOM -----------------------------------------------------------
 // Two stub requirements beyond a naive fake, both of which the panel relies on:
@@ -266,6 +271,10 @@ const chromeStub = {
             if (msg.action === "historyImport") {
                 history = msg.history;
                 respond({ result: "success", count: Object.keys(history).length });
+                return;
+            }
+            if (msg.action === "downloadAllDoujinshis") {
+                respond({ result: "started" });
                 return;
             }
             if (msg.action === "bookmarkRemove" || msg.action === "bookmarkSelect" || msg.action === "bookmarkMarkDownloading") {
@@ -551,7 +560,100 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         }
         console.log("PASS phase 6: unreadable or foreign files are refused with a reason, and nothing changes");
 
-        console.log("PASS: the Queue tab's rows, drag-reorder and backup behave correctly in a window-less context.");
+        // ---- Phase 7: Download selected splits the queue per site (item 48) ---
+        // One job per site, because a job payload carries a single site: the
+        // pipeline composes every store key with it. The ids inside a job stay
+        // bare, so file names and `{id}` tokens keep the gallery number.
+        bookmarkState = {
+            v: 1,
+            collapsed: false,
+            items: [
+                stateItem("700", "nhentai", { title: "Nhentai seven hundred" }),
+                stateItem("700", "hitomi", { title: "Hitomi seven hundred" }),
+                stateItem("800", "nhentai", { title: "Nhentai eight hundred" }),
+                stateItem("900", "hitomi", { title: "", selected: false })
+            ]
+        };
+        history = {};
+        byId("tabQueue").dispatchLast("click");
+        await wait(30);
+        const beforeJobs = sentMessages.length;
+        byId("nhdwBmDownloadSelected").dispatchLast("click");
+        await wait(60);
+
+        const mark = sentMessages.slice(beforeJobs).find((msg) => msg.action === "bookmarkMarkDownloading");
+        assertOk(mark !== undefined, "starting a queue download must mark the rows as downloading");
+        assertOk(mark.ids.indexOf("nhentai:700") !== -1 && mark.ids.indexOf("hitomi:700") !== -1,
+            "the rows are addressed by composite key, so two sites cannot shadow each other: " + JSON.stringify(mark.ids));
+        assertOk(mark.ids.indexOf("hitomi:900") === -1, "an unselected row is not marked as downloading");
+
+        const jobs = sentMessages.slice(beforeJobs).filter((msg) => msg.action === "downloadAllDoujinshis");
+        assertEqual(jobs.length, 2, "a two-site selection becomes two jobs, one per site");
+        assertEqual(jobs[0].site, undefined,
+            "the default site is never written, so an all-nhentai queue sends exactly what it always did");
+        assertEqual(jobs[1].site, "hitomi", "the second job names its site");
+        assertDeepEqual(Object.keys(jobs[0].allDoujinshis), ["700", "800"],
+            "a job's payload is keyed by the BARE id (that is what the file name and {id} token read)");
+        assertDeepEqual(Object.keys(jobs[1].allDoujinshis), ["700"],
+            "only the hitomi row that is actually selected is in the hitomi job");
+        assertEqual(jobs[1].allDoujinshis["700"], "Hitomi seven hundred", "the titles travel with their ids");
+        assertEqual(jobs[0].separate, true, "the Queue tab always downloads one file per title");
+        assertOk(/across 2 sites/.test(byId("nhdwBmNotice").textContent),
+            "the notice says the selection spans two sites, got \"" + byId("nhdwBmNotice").textContent + "\"");
+        console.log("PASS phase 7: Download selected sends one per-site job, keys bare and stores composite (item 48)");
+
+        // The history guard is per site too: a recorded nhentai id must not
+        // hold back the same-numbered hitomi row (and vice versa).
+        history = { "nhentai:700": { filename: "already.cbz", when: 5 } };
+        bookmarkState = {
+            v: 1,
+            collapsed: false,
+            items: [
+                stateItem("700", "nhentai", { title: "Already here" }),
+                stateItem("700", "hitomi", { title: "Still wanted" })
+            ]
+        };
+        byId("tabQueue").dispatchLast("click");
+        await wait(30);
+        const beforeSkip = sentMessages.length;
+        byId("nhdwBmDownloadSelected").dispatchLast("click");
+        await wait(60);
+        const skipJobs = sentMessages.slice(beforeSkip).filter((msg) => msg.action === "downloadAllDoujinshis");
+        assertEqual(skipJobs.length, 1, "the recorded nhentai row is skipped, so only the hitomi job is sent");
+        assertEqual(skipJobs[0].site, "hitomi", "and it is the hitomi job that survives");
+        assertDeepEqual(Object.keys(skipJobs[0].allDoujinshis), ["700"]);
+        assertOk(/already downloaded skipped/.test(byId("nhdwBmNotice").textContent),
+            "the user is told something was skipped, got \"" + byId("nhdwBmNotice").textContent + "\"");
+        console.log("PASS phase 7b: the history guard is per site, never cross-site (item 48)");
+
+        // A single row's own Download button is the third entry point into the
+        // pipeline (the other two are Download selected and the paste box), so
+        // it must carry its row's site too - otherwise a hitomi row would be
+        // fetched from nhentai by id.
+        history = {};
+        bookmarkState = {
+            v: 1,
+            collapsed: false,
+            items: [stateItem("700", "hitomi", { title: "Hitomi row download" })]
+        };
+        byId("tabQueue").dispatchLast("click");
+        await wait(30);
+        const beforeOne = sentMessages.length;
+        const rowOne = findRows(byId("nhdwBmList"))[0];
+        const oneButton = rowOne === undefined ? null : findDeep(rowOne, "nhdwBmDownload");
+        assertOk(oneButton !== null, "every row keeps its own Download button");
+        oneButton.dispatchLast("click");
+        await wait(60);
+        const oneJobs = sentMessages.slice(beforeOne).filter((msg) => msg.action === "downloadAllDoujinshis");
+        assertEqual(oneJobs.length, 1, "a row's Download button starts exactly one job");
+        assertEqual(oneJobs[0].site, "hitomi", "the row's Download button carries its own site");
+        assertDeepEqual(Object.keys(oneJobs[0].allDoujinshis), ["700"],
+            "the row's job is keyed by the bare id, not the composite key");
+        assertDeepEqual(oneJobs[0].redownloadIds, undefined,
+            "a row that is not recorded in the history is not force-redownloaded");
+        console.log("PASS phase 7c: a row's own Download button carries its site and a bare id (item 48)");
+
+        console.log("PASS: the Queue tab's rows, drag-reorder, backup and per-site downloads behave correctly in a window-less context.");
     } catch (error) {
         fail(error && error.stack ? error.stack : String(error));
     }

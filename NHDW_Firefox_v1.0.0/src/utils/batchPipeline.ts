@@ -15,7 +15,7 @@ import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import { coerceGallery, extractGalleryFromHtml, looksLikeGallery, requireGallery } from "../parsing/GalleryEmbed";
 import { fetchNhentaiApi } from "./apiAuth";
 import { artifactRecordFilename, BatchOutcome, FailedGallery } from "./downloadHistory";
-import { toGalleryKey, splitGalleryKey } from "./siteKeys";
+import { DEFAULT_SITE, GALLERY_KEY_SEPARATOR, normalizeSite, toGalleryKey, splitGalleryKey } from "./siteKeys";
 import { resolveJobFormat } from "./downloadFormats";
 import { clearnetSource } from "../sources/GallerySource";
 import { getSourceForSite } from "../sources/index";
@@ -35,6 +35,21 @@ export interface BatchJobOptions {
     useServerArchive?: boolean;
     alreadyDownloadedIds?: string[];
     redownloadIds?: string[];
+    /**
+     * The site every gallery of THIS job belongs to (item 48).
+     *
+     * Absent (or "nhentai") means the default site, which is what every
+     * caller before item 48 sends, so nothing changes for them. The Queue tab
+     * splits a multi-site selection into **one job per site** before sending
+     * (MULTISITE_V4_PLAN.md §4.2), which is what lets a job keep bare gallery
+     * ids in its payload - file names, `{id}` tokens, titles and every
+     * user-facing message read the bare id - while every *store* lookup in
+     * this file composes the composite key with this site. Without the split,
+     * two same-numbered galleries from different sites would collapse into one
+     * `allDoujinshis` entry and a hitomi row would be skip-checked against
+     * `nhentai:<id>` history records.
+     */
+    site?: string;
 }
 
 export interface GalleryDownloadJob {
@@ -126,6 +141,12 @@ export function buildRetryJob(sourceTabId: number | null | undefined, options: B
         ? (options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined)
         : (options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined);
     if (typeof masterFolder === "string") job.masterFolder = masterFolder;
+    // Item 48: a retry must come back to the site it failed on, or a hitomi row
+    // would be re-fetched through the nhentai path. Only written when it is not
+    // the default, so an nhentai retry payload stays byte-identical to 3.9.0.
+    if (options && typeof options.site === "string" && options.site !== "" && normalizeSite(options.site) !== DEFAULT_SITE) {
+        job.site = normalizeSite(options.site);
+    }
     return job;
 }
 
@@ -182,16 +203,28 @@ export async function resolveGalleryMetadata(
         apiKey: string;
         sourceTabId?: number | null;
         host: BatchHost;
+        /**
+         * The site of the JOB the gallery belongs to (item 48). Only consulted
+         * for a bare key: a composite key ("hitomi:1234") carries its own site
+         * and always wins, because that is the whole point of the composite
+         * form. A bare key with no job site is the default site, exactly as
+         * before.
+         */
+        site?: string;
     }
 ): Promise<MetadataOk | MetadataFail> {
     const { galleryMetadata, apiKey, sourceTabId, host } = args;
     const signal = host.getAbortSignal();
     const parsing = host.parsing;
 
-    const { site, id } = splitGalleryKey(key);
+    const rawKey = String(key === undefined || key === null ? "" : key);
+    const parts = splitGalleryKey(rawKey);
+    const site = rawKey.indexOf(GALLERY_KEY_SEPARATOR) !== -1 ? parts.site : normalizeSite(args.site);
+    const id = parts.id;
     const adapter = getSourceForSite(site) || clearnetSource;
 
     if (galleryMetadata && (galleryMetadata[key] || galleryMetadata[id])) {
+        // Either key works: callers built the map from whichever id they had.
         const candidate = galleryMetadata[key] || galleryMetadata[id];
         const json = requireGallery(candidate);
         if (!json.site) json.site = adapter.site;
@@ -352,6 +385,15 @@ export async function runBatchDownload(args: {
     const rawMasterFolder: string = typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : "NHDW";
     const archiveMasterFolder: string = typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : "";
     const apiKey: string = options.apiKey ? String(options.apiKey) : "";
+    // Item 48: every gallery of this job belongs to ONE site (the Queue tab
+    // splits a mixed selection before it gets here). `storeKey` is the identity
+    // a persistent store must see - history records, bookmark rows, the failed
+    // list - while `bareId` is what the pipeline has always put in file names,
+    // `{id}` tokens and messages. For a default-site job the two differ only by
+    // the "nhentai:" prefix that the stores add anyway.
+    const jobSite: string = normalizeSite(options.site);
+    const storeKey = (id: string | number) => toGalleryKey(id, jobSite);
+    const bareId = (id: string | number) => splitGalleryKey(storeKey(id)).id;
 
     const gallerySettings: any = {
         // The already-resolved format, not the raw request: normalization
@@ -394,7 +436,16 @@ export async function runBatchDownload(args: {
         failed++;
         const { kind } = classifyError(error);
         failedKinds[kind] = (failedKinds[kind] || 0) + 1;
-        failedGalleries.push({ id: String(key), name: String(allDoujinshis[key] || key), error: errorMessage(error) });
+        failedGalleries.push({
+            // The id stays bare (it is what the user sees and what the retry
+            // payload is keyed by); the site is what makes a retry - and the
+            // row's status update - land on the right gallery when two sites
+            // use the same number.
+            id: String(key),
+            name: String(allDoujinshis[key] || key),
+            error: errorMessage(error),
+            site: jobSite
+        });
     }
 
     function broadcast(payload: any) {
@@ -403,12 +454,11 @@ export async function runBatchDownload(args: {
 
     for (let i = 0; i < length; i++) {
         const key = allKeys[i];
-        // NOTE (item 48): toGalleryKey(key) composes with the DEFAULT site —
-        // this pipeline assumes every gallery of a job is nhentai, because
-        // allDoujinshis is keyed by bare ids. Multi-site support must split
-        // jobs per site (MULTISITE_V4_PLAN.md §4.2) or key the payload by
-        // composite id; do not "fix" this by guessing a site here.
-        if (effectiveSeparate && alreadySet.has(toGalleryKey(key)) && !redownloadSet.has(toGalleryKey(key))) {
+        // The guard composes with THIS job's site (item 48), so a hitomi row is
+        // never skipped because a same-numbered nhentai gallery was recorded.
+        // The payload key stays bare; the store key is what is compared, and a
+        // key that is already composite passes through untouched.
+        if (effectiveSeparate && alreadySet.has(storeKey(key)) && !redownloadSet.has(storeKey(key))) {
             skipped++;
             continue;
         }
@@ -422,11 +472,12 @@ export async function runBatchDownload(args: {
 
         let resolved: MetadataOk | MetadataFail;
         try {
-            resolved = await resolveGalleryMetadata(key, {
+            resolved = await resolveGalleryMetadata(storeKey(key), {
                 galleryMetadata: galleryMetadata,
                 apiKey: apiKey,
                 sourceTabId: sourceTabId,
-                host: host
+                host: host,
+                site: jobSite
             });
         } catch (error) {
             countFailure(key, error);
@@ -436,6 +487,7 @@ export async function runBatchDownload(args: {
 
         if (resolved.ok) {
             const json = resolved.json;
+            const galleryId = bareId(key);
             let title = utils.getDownloadName(
                 downloadName,
                 json.title.pretty === ""
@@ -443,7 +495,7 @@ export async function runBatchDownload(args: {
                     : json.title.pretty,
                 json.title.english,
                 json.title.japanese,
-                key,
+                galleryId,
                 json.tags
             );
             if (names.includes(title)) {
@@ -453,14 +505,14 @@ export async function runBatchDownload(args: {
                 }
                 let tmp = title;
                 while (names.includes(tmp)) {
-                    tmp = title + " (" + key + ")";
+                    tmp = title + " (" + galleryId + ")";
                 }
                 title = tmp;
             }
             names.push(title);
             let zipName: string | null = null;
             if (effectiveSeparate) {
-                zipName = utils.cleanName(title, replaceSpaces, key);
+                zipName = utils.cleanName(title, replaceSpaces, galleryId);
             } else if (downloadAtEnd && i === length - 1) {
                 zipName = finalName;
             }
@@ -468,7 +520,7 @@ export async function runBatchDownload(args: {
             try {
                 await host.downloadGallery({
                     json: json,
-                    path: utils.cleanName(title, replaceSpaces, key),
+                    path: utils.cleanName(title, replaceSpaces, galleryId),
                     zipName: zipName,
                     displayName: allDoujinshis[key],
                     zip: effectiveSeparate ? host.newZip() : zip,
@@ -481,15 +533,18 @@ export async function runBatchDownload(args: {
                 }
                 if (effectiveSeparate) {
                     records.push({
-                        id: key,
+                        // Composite (item 48): the history must file a hitomi
+                        // gallery under "hitomi:<id>", or the next run skip-checks
+                        // it against - and records it as - an nhentai gallery.
+                        id: storeKey(key),
                         filename: artifactRecordFilename({
                             format: format,
-                            name: zipName || utils.cleanName(title, replaceSpaces, key),
+                            name: zipName || utils.cleanName(title, replaceSpaces, galleryId),
                             masterFolder: format === "raw" ? rawMasterFolder : archiveMasterFolder
                         })
                     });
                 } else {
-                    batchKeys.push(key);
+                    batchKeys.push(storeKey(key));
                 }
             } catch (error) {
                 countFailure(key, error);

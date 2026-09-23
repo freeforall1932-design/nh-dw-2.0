@@ -2,8 +2,10 @@
 
 **Live, ordered. Updated 2026-09-23** (session
 `arena/01a0cc70-nh-dw-2-0`: **the ☆ became a real bookmark icon, every
-single-gallery page got a blue Bookmark button, and the small-wins bundle
-landed — 43, 44, 52 and 41 are DONE in both trees** (PR #47). 42/58 remain
+single-gallery page got a blue Bookmark button, the small-wins bundle landed
+(43, 44, 52, 41) and item 48 landed too — a `site:id` queue row is now
+downloadable, because the queue splits a mixed selection into one job per site
+and each job resolves through its own adapter** (PR #47). 42/58 remain
 user-only: real-browser and Android passes, signing.)
 
 **38 is done in the approved Firefox-only scope:** 33 options-page tests and
@@ -110,23 +112,36 @@ controls on listings, toolbar opens the drawer); then
 
 ## Open, in the order I would take them
 
-### 48. Non-nhentai queue rows must become downloadable — **highest priority**
+### 48. Non-nhentai queue rows must become downloadable — **DONE 2026-09-23**
 
-The owner chose this explicitly (the "multi-site" option). A `site:id` row can be
-bookmarked, selected, reordered and exported today, but `downloadSelection`
-still hands the worker `downloadAllDoujinshis {allDoujinshis: id -> title}` and
-the pipeline resolves each gallery through nhentai. What has to happen:
+Owner approved verbatim ("yes do Next up … item 48"). Landed in **both** trees,
+no new host permission, no new adapter:
 
-1. **Split the job per site** at `src/utils/batchPipeline.ts:322` (the item-48
-   NOTE) and in `runBatchDownload` — one batch per site, never a mixed list.
-2. **Resolve metadata per site** instead of through an active nhentai tab
-   (`bookmarkEnrich` and `Downloader.ts`'s `jsonTmp.site` → `getSourceForSite`
-   path already exist; the adapter table in `src/utils/titleBookmark.ts` is the
-   same per-site knowledge and should be the single source).
-3. Then the existing hentaiera / imhentai / hentaienvy / hentaifox / hitomi
-   adapters do the fetching with no new permissions.
+1. **The job is per-site.** `BatchJobOptions.site?: string`; absent = the default
+   site, so every older caller/payload is byte-identical. The queue builds
+   `plan.bySite` (`{site, download, skip, titles}`, first-appearance order) and
+   `startDownload()` sends **one** `downloadAllDoujinshis` per group, in list
+   order; a group whose rows are all already downloaded sends nothing.
+2. **Metadata resolves per site.** `resolveGalleryMetadata(key, {site})` —
+   composite key wins, bare key takes `normalizeSite(site)`. In
+   `runBatchDownload`, `jobSite` drives the skip guard (`storeKey`), metadata,
+   history `records`/`batchKeys` (composite) and the failure rows
+   (`{id, name, error, site}`); titles, the `{id}` token and `cleanName()` use
+   the **bare** id so a file name never carries `hitomi:`.
+   `retryJobKey` includes the site (`batch.site` is written only for a
+   non-default site, keeping default retry payloads unchanged).
+3. The existing adapters do the fetching — nothing was widened.
 
-Do **not** widen host permissions or `<all_urls>` to get there.
+Coverage: `test/batch-pipeline.test.js` (per-site job describe),
+`test/bookmark-queue.test.js` (bySite + per-site history skip),
+`test/download-control.test.js` (per-site retry commands),
+`test/downloader.test.js` (hitomi pages from the hitomi hosts, never the
+nhentai CDN), `scripts/e2e-bookmark-panel.js` phases 7/7b (two jobs, bare
+payload keys, "across 2 sites", skip notice), `scripts/e2e-worker.js` phase 8b
+(worker fallback resolves + records under `hitomi:<id>` with zero nhentai API
+calls), `scripts/e2e-offscreen.js` (composite `jobFinished`). The wider
+planning-mode scope of backlog item 48 (adapter-interface v2, side-panel
+rework, site-aware paste box) is **not** part of this and stays in the backlog.
 
 ### 42. Real-browser pass for the Queue tab — after 48, and user-only
 
@@ -243,10 +258,11 @@ Full design,
 decision record (merge vs new repo) and per-site facts:
 `MULTISITE_V4_PLAN.md`.
 
-- [ ] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
-      where the lab-clone UI rework lands if merged. Follows 49 on purpose.
-      Owns the per-site job-splitting design for mixed-site queue selections
-      and the site-aware worker messages (plan §4.2).
+- [~] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
+      **the per-site job-splitting half shipped 2026-09-23** (see the DONE
+      section above); the adapter-interface rework, the lab-clone side-panel UI
+      and the site-aware paste box are still open and still follow 49. The
+      site-aware worker messages it owned are now in place (plan §4.2).
 - [ ] **49. Hitomi.la adapter** — first new site; avif plumbing; raw-mode
       default for 1 GB-class galleries.
 - [ ] **50. Mirror-network adapter** (imhentai / hentaienvy / hentaiera, with
@@ -392,6 +408,16 @@ these hosts (DNS failure)" is wrong — DNS resolves; **egress** is blocked
 ---
 
 ## Done recently
+
+### 48. Per-site jobs — non-nhentai queue rows are downloadable — **DONE 2026-09-23**
+
+Owner approved. One job per site (`BatchJobOptions.site`), per-site metadata
+resolution (`resolveGalleryMetadata(key, {site})`), composite history/failure
+keys with bare-id file names, site in `retryJobKey`, and a queue plan that sends
+nothing for a fully-skipped group. Chrome **503 unit pass / 4 pending**, e2e
+exit 0 (140 PASS); Firefox **579 / 4 pending**, e2e exit 0 (172 PASS); tsc 0 in
+both; smoke 7 PASS; FF lint 0/0/31. Release snapshot re-synced. Full detail in
+the section above and `SESSION_HANDOFF.md` (third pass).
 
 ### 59. Saved list-format reads across shared Firefox consumers — **DONE 2026-09-21**
 

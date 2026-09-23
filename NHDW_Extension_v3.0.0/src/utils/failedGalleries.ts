@@ -19,7 +19,7 @@
 // storage functions are for the worker and the popup only (the offscreen
 // document has no chrome.storage and reports failures by message instead).
 import { FailedGallery } from "./downloadHistory";
-import { toGalleryKey } from "./siteKeys";
+import { DEFAULT_SITE, normalizeSite, toGalleryKey } from "./siteKeys";
 
 export const FAILED_GALLERIES_KEY = "nhdwFailedGalleries";
 
@@ -37,6 +37,8 @@ export interface RetryJob {
     nameTemplate?: string;
     masterFolder?: string;
     finalName?: string;
+    /** Site the job ran on (item 48); absent means the default site. */
+    site?: string;
 }
 
 export interface PendingFailure extends FailedGallery {
@@ -102,8 +104,26 @@ export function retryJobKey(job: RetryJob | null): string {
     return JSON.stringify({
         formatOverride: job.formatOverride === undefined ? null : job.formatOverride,
         nameTemplate: job.nameTemplate === undefined ? null : job.nameTemplate,
-        masterFolder: job.masterFolder === undefined ? null : job.masterFolder
+        masterFolder: job.masterFolder === undefined ? null : job.masterFolder,
+        // The site is part of "the settings a retry must be started with"
+        // (item 48): the same format/template/folder on two sites is still two
+        // different jobs, because a job payload can only name one site.
+        site: job.site === undefined || job.site === "" ? null : job.site
     });
+}
+
+/**
+ * Site of a failure row: the entry's own site wins, then the job's.
+ *
+ * Item 48. Two failures with identical settings from DIFFERENT sites must not
+ * be merged into one retry command — that command can only carry one site, so
+ * one of them would be re-fetched through the wrong site's adapter.
+ */
+export function failureSite(entry: { site?: string } | null | undefined, job: RetryJob | null | undefined): string {
+    const fromEntry = entry && typeof entry.site === "string" && entry.site !== "" ? entry.site : "";
+    if (fromEntry !== "") return normalizeSite(fromEntry);
+    const fromJob = job && typeof job.site === "string" && job.site !== "" ? job.site : "";
+    return normalizeSite(fromJob);
 }
 
 // Turn failures into the worker commands that re-download exactly those
@@ -116,7 +136,14 @@ export function groupRetryMessages(entries: PendingFailure[], tabId?: number): a
     for (const entry of entries) {
         if (!entry || entry.id === undefined || entry.id === "") continue;
         const job: RetryJob = entry.retryJob && typeof entry.retryJob === "object" ? entry.retryJob : {};
-        const key = retryJobKey(job);
+        const site = failureSite(entry, job);
+        // One command per (settings, site): a job payload carries a single
+        // site, so failures from two sites can never share a retry command
+        // (item 48). The site is appended as well as being part of
+        // retryJobKey(), because an entry may carry a site while its job does
+        // not (a failure remembered with no job at all). Same-site failures
+        // still batch exactly as before.
+        const key = retryJobKey(job) + "|" + site;
         let batch = batches.get(key);
         if (!batch) {
             batch = {
@@ -134,6 +161,9 @@ export function groupRetryMessages(entries: PendingFailure[], tabId?: number): a
             if (typeof job.masterFolder === "string") batch.masterFolder = job.masterFolder;
             if (typeof tabId === "number") batch.tabId = tabId;
             else if (typeof job.tabId === "number") batch.tabId = job.tabId;
+            // Only written when it is not the default site, so an nhentai retry
+            // payload stays exactly what 3.9.0 sent.
+            if (site !== DEFAULT_SITE) batch.site = site;
             batches.set(key, batch);
             messages.push(batch);
         }

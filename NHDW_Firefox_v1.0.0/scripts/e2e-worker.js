@@ -166,6 +166,18 @@ const galleryById = {
     [GALLERY_ID2]: galleryJson2
 };
 
+// Item 48 fixture: a hitomi gallery. The worker fallback must resolve this one
+// through the hitomi adapter (its own gallery URL and its own image hosts), not
+// through the nhentai API — that is the whole point of the per-site job.
+const HITOMI_ID = 765432;
+const HITOMI_HASH = "0e".repeat(32);
+const hitomiUrls = [];
+const hitomiPageHtml = '<html><body><script>var galleryinfo = ' + JSON.stringify({
+    id: Number(HITOMI_ID),
+    title: "Hitomi Test",
+    files: [{ hash: HITOMI_HASH, name: "01.webp", haswebp: 1, width: 1280, height: 1800 }]
+}) + ';</script></body></html>';
+
 // Distinct fake "image" bytes so we can confirm the ZIP has 3 different files.
 // Each is a minimal JPEG with a real SOF0 frame (distinct dimensions per page)
 // so the PDF output path can parse dimensions and embed the bytes verbatim.
@@ -217,6 +229,13 @@ function fetchStub(url, init) {
         });
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
+    }
+    if (u.indexOf("hitomi.la/galleries/" + HITOMI_ID) !== -1) {
+        return Promise.resolve(new Response(hitomiPageHtml, { status: 200 }));
+    }
+    if (u.indexOf("gold-usergeneratedcontent.net") !== -1) {
+        hitomiUrls.push(u);
+        return Promise.resolve(new Response(pageBytes[0], { status: 200 }));
     }
     const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(u);
     if (imgMatch) {
@@ -1112,6 +1131,63 @@ const historyKeyFor = (id) => "nhentai:" + String(id);
             + JSON.stringify(cdnStatusAnswer.missingOrigins));
     }
     console.log("PASS phase 8: CDN config fetched once, cached for the session, merged with fallback mirrors");
+
+    // ---- Phase 8b: a per-site job resolves through its own adapter (item 48) --
+    // The Queue tab sends one job per site, and the job's `site` travels
+    // through jobOverridesFromRequest -> resolveWorkerBatchOptions into the
+    // pipeline. This is the worker-fallback half of that path (the relay half
+    // is the offscreen document): the gallery must be fetched from hitomi's own
+    // gallery URL and its own image hosts, must be recorded under
+    // "hitomi:<id>", and must never touch the nhentai API or CDN.
+    sentMessages.length = 0;
+    downloads.length = 0;
+    apiRequestLog.length = 0;
+    hitomiUrls.length = 0;
+    localSettings = { useZip: "zip", maxConcurrentDownloads: "1" };
+    onMessageHandler(
+        {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [HITOMI_ID]: "Hitomi Test" },
+            finalName: "Downloads/HitomiTest",
+            site: "hitomi",
+            separate: true
+        },
+        {},
+        (result) => {
+            if (!result || result.result !== "started") {
+                fail("a per-site downloadAllDoujinshis must answer {result:'started'}, got " + JSON.stringify(result));
+            }
+        }
+    );
+    await waitFor(
+        () => downloads.length === 1,
+        "the hitomi job must deliver its artifact (hitomi URLs seen: " + JSON.stringify(hitomiUrls) + ")"
+    );
+    if (!/Hitomi_Test\.(zip|cbz)$/.test(downloads[0].filename)) {
+        fail("the hitomi artifact must be named from the gallery title, not the id, got " + downloads[0].filename);
+    }
+    if (downloads[0].filename.indexOf(String(HITOMI_ID)) !== -1) {
+        fail("the hitomi artifact must not be named after the bare id, got " + downloads[0].filename);
+    }
+    if (hitomiUrls.length === 0) {
+        fail("the hitomi job must fetch its pages from the hitomi image hosts");
+    }
+    for (const url of hitomiUrls) {
+        if (url.indexOf("/webp/") === -1) {
+            fail("hitomi pages must keep their own format path, got " + url);
+        }
+    }
+    if (apiRequestLog.length !== 0) {
+        fail("a hitomi job must not call the nhentai API, got " + JSON.stringify(apiRequestLog));
+    }
+    await waitFor(
+        () => localSettings.downloadHistory && localSettings.downloadHistory["hitomi:" + HITOMI_ID],
+        "the hitomi download must be recorded under the composite hitomi key"
+    );
+    if (localSettings.downloadHistory["nhentai:" + HITOMI_ID] !== undefined) {
+        fail("a hitomi gallery must never be recorded under the nhentai key");
+    }
+    console.log("PASS phase 8b: a per-site job resolves, names, fetches and records through its own site (item 48)");
 
     // ---- Phase 9: API key mode resolves batch metadata via the keyed API ---
     // With a stored key (chrome.storage.local), the batch must hit the
