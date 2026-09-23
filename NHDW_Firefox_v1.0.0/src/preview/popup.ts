@@ -3,8 +3,8 @@ import ApiParsing from "../parsing/ApiParsing";
 import { utils, escapeHtml, errorMessage } from "../utils/utils";
 import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
-import { getSourceForUrl } from "../sources"
-import { getActiveTabId, getActiveNhentaiTabId, readGalleryFromTab } from "./activeTabGallery"
+import { getSourceForUrl, SiteAdapter, clearnetSource } from "../sources"
+import { getActiveTabId, getActiveNhentaiTabId, readGalleryFromTab, executeInTab } from "./activeTabGallery"
 import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
 import {
     DownloadFormat,
@@ -426,8 +426,8 @@ export default class Popup
         self.url = newUrl;
         const source = getSourceForUrl(self.url);
         const galleryId = source ? source.getGalleryId(self.url) : null;
-        if (galleryId !== null) {
-            await self.#doujinshiPreviewAsync(galleryId);
+        if (galleryId !== null && source !== null) {
+            await self.#doujinshiPreviewAsync(galleryId, source);
         } else if (source !== null) {
             executeActiveTabScript("js/getGalleries.js");
         } else {
@@ -436,7 +436,7 @@ export default class Popup
     }
 
     // Display popup for a doujinshi
-    async #doujinshiPreviewAsync(id: string) {
+    async #doujinshiPreviewAsync(id: string, source: SiteAdapter = clearnetSource) {
         let json: any | null = null;
         let status = 0;
         let statusText = "";
@@ -446,7 +446,7 @@ export default class Popup
         // any keyed failure keep the original order below.
         const modeState = await getApiModeState();
         let keyedRejected = false;
-        if (modeState.mode === "keyed") {
+        if (source.site === "nhentai" && modeState.mode === "keyed") {
             try {
                 const keyedParsing = new ApiParsing();
                 const keyedResp = await fetchNhentaiApi(keyedParsing.GetUrl(id), { cache: "no-store" }, modeState.apiKey);
@@ -466,10 +466,20 @@ export default class Popup
         // API are what Cloudflare 403s; the rendered page already carries its
         // metadata once any challenge is done.
         if (json === null) {
-            json = await getGalleryFromActiveTab(id);
+            if (source.site === "nhentai") {
+                json = await getGalleryFromActiveTab(id);
+            } else {
+                const tabId = await getActiveTabId();
+                if (tabId !== undefined) {
+                    const pageHtml = await executeInTab(tabId, () => document.documentElement ? document.documentElement.outerHTML : "");
+                    if (pageHtml && source.extractGallery) {
+                        json = source.extractGallery(pageHtml);
+                    }
+                }
+            }
         }
 
-        if (json === null) {
+        if (json === null && source.site === "nhentai") {
             try {
                 const resp = await fetch(this.parsing!.GetUrl(id), {
                     credentials: "include",
@@ -484,7 +494,28 @@ export default class Popup
             } catch (error) {
                 statusText = errorMessage(error);
             }
+        } else if (json === null && source.site !== "nhentai") {
+            try {
+                const galleryUrl = source.getGalleryUrl(id);
+                const resp = await fetch(galleryUrl, {
+                    credentials: "include",
+                    cache: "no-store"
+                });
+                status = resp ? resp.status : 0;
+                statusText = resp ? String(resp.statusText || "") : "";
+                if (resp && resp.ok && source.extractGallery) {
+                    const html = typeof resp.text === "function" ? await resp.text() : "";
+                    json = source.extractGallery(html);
+                }
+            } catch (error) {
+                statusText = errorMessage(error);
+            }
         }
+
+        if (json !== null && !json.site) {
+            json.site = source.site;
+        }
+
         if (json === null) {
             let html = status === 404
                 ? message.errorOther(status, statusText)
@@ -623,6 +654,10 @@ export default class Popup
                             updateSelectedCount();
                         };
                         loadSimilar.addEventListener('click', async () => {
+                            if (source.site !== "nhentai") {
+                                similarPanel.innerHTML = message.similarError("Similar galleries are not available for " + source.site + ".");
+                                return;
+                            }
                             loadSimilar.setAttribute("disabled", "disabled");
                             similarPanel.innerHTML = message.similarLoading();
                             try {

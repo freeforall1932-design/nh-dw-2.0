@@ -51,10 +51,10 @@ describe('MV3 manifest', () => {
                     'optional host patterns must be https and nhentai-scoped: ' + pattern);
             }
 
-            // Static hosts: unchanged known mirrors, no broadening.
+            // Static hosts: unchanged known mirrors and supported sites, no broadening.
             for (const pattern of manifest.host_permissions) {
-                assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?nhentai\.net\/\*$/.test(pattern),
-                    'host_permissions must stay https nhentai-scoped: ' + pattern);
+                assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?(?:nhentai\.net|hentaiera\.(?:com|to|site)|imhentai\.(?:xxx|org|net)|hentaienvy\.com|hentaifox\.com|hitomi\.la|gold-usergeneratedcontent\.net)\/\*$/.test(pattern),
+                    'host_permissions must stay https scoped to supported sites: ' + pattern);
                 assert.ok(!pattern.includes('<all_urls>'), 'host_permissions must not contain <all_urls>');
             }
         }
@@ -199,8 +199,8 @@ describe('Firefox manifest (Android-ready)', () => {
 
     it('keeps host permissions https and nhentai-scoped (same hardening as Chrome)', () => {
         for (const pattern of firefoxManifest.host_permissions) {
-            assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?nhentai\.net\/\*$/.test(pattern),
-                'host_permissions must stay https nhentai-scoped: ' + pattern);
+            assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?(?:nhentai\.net|hentaiera\.(?:com|to|site)|imhentai\.(?:xxx|org|net)|hentaienvy\.com|hentaifox\.com|hitomi\.la|gold-usergeneratedcontent\.net)\/\*$/.test(pattern),
+                'host_permissions must stay https scoped to supported sites: ' + pattern);
         }
         for (const pattern of firefoxManifest.optional_host_permissions || []) {
             assert.ok(/^https:\/\/(?:\*\.)?[a-z0-9-]*\*?\.nhentai\.net\/\*$/.test(pattern),

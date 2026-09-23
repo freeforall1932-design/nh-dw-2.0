@@ -1,5 +1,6 @@
 var JSZip = require("jszip");
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
+import { getSourceForSite } from "../sources/index";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
@@ -22,7 +23,12 @@ export default class Downloader
         this.#zip = zip;
         this.downloadName = downloadName;
         this.#abortSignal = signal;
-        this.#source = source;
+        let effectiveSource = source;
+        if (jsonTmp && jsonTmp.site && source === clearnetSource) {
+            const resolved = getSourceForSite(jsonTmp.site);
+            if (resolved) effectiveSource = resolved;
+        }
+        this.#source = effectiveSource;
         this.#settings = settings;
         // Relayed/absent settings both end up normalized: undefined means the
         // default master folder, an explicit empty string disables it.
@@ -511,13 +517,19 @@ export default class Downloader
             case "w":
                 format = ".webp";
                 break;
+            case "b":
+                format = ".bmp";
+                break;
+            case "a":
+                format = ".avif";
+                break;
             case "0": // Invalid page, probably an issue on NHentai side
                 return;
             default:
                 throw "Unknown page format " + page.t;
         }
-        let filenameParsing = (currPage + 1) + format; // Name for parsing
-        this.updateProgress(progress, this.#doujinshiName + "/" + filenameParsing, false);
+        let filenameParsing = (page && page.hash) ? (page.hash + format) : ((currPage + 1) + format); // Name for parsing
+        this.updateProgress(progress, this.#doujinshiName + "/" + ((currPage + 1) + format), false);
 
         let filename = this.#getNumberWithZeros(currPage + 1) + format; // Final file name
 

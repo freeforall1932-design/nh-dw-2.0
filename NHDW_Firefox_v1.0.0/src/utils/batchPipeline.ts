@@ -15,9 +15,10 @@ import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import { coerceGallery, extractGalleryFromHtml, looksLikeGallery, requireGallery } from "../parsing/GalleryEmbed";
 import { fetchNhentaiApi } from "./apiAuth";
 import { artifactRecordFilename, BatchOutcome, FailedGallery } from "./downloadHistory";
-import { toGalleryKey } from "./siteKeys";
+import { toGalleryKey, splitGalleryKey } from "./siteKeys";
 import { resolveJobFormat } from "./downloadFormats";
 import { clearnetSource } from "../sources/GallerySource";
+import { getSourceForSite } from "../sources/index";
 import { utils, classifyError, errorMessage } from "./utils";
 
 export interface BatchJobOptions {
@@ -85,7 +86,9 @@ export async function getGalleryViaTab(
     try {
         urlsToTry.push(parsing.GetUrl(galleryId));
     } catch (_) { /* parser refused */ }
-    urlsToTry.push(clearnetSource.getApiUrl(galleryId));
+    if (typeof clearnetSource.getApiUrl === "function") {
+        urlsToTry.push(clearnetSource.getApiUrl(galleryId));
+    }
     urlsToTry.push(clearnetSource.getGalleryUrl(galleryId));
     if (typeof clearnetSource.getGalleryPageUrl === "function") {
         urlsToTry.push(clearnetSource.getGalleryPageUrl(galleryId));
@@ -185,17 +188,68 @@ export async function resolveGalleryMetadata(
     const signal = host.getAbortSignal();
     const parsing = host.parsing;
 
-    if (galleryMetadata && galleryMetadata[key]) {
-        return { ok: true, json: requireGallery(galleryMetadata[key]) };
+    const { site, id } = splitGalleryKey(key);
+    const adapter = getSourceForSite(site) || clearnetSource;
+
+    if (galleryMetadata && (galleryMetadata[key] || galleryMetadata[id])) {
+        const candidate = galleryMetadata[key] || galleryMetadata[id];
+        const json = requireGallery(candidate);
+        if (!json.site) json.site = adapter.site;
+        return { ok: true, json: json };
     }
 
-    // Keyed official API first. A network/parse miss falls through; a
-    // non-gallery JSON does NOT (requireGallery throws to the caller).
+    // Non-nhentai sites use their adapter
+    if (adapter.site !== "nhentai") {
+        const targetUrl = adapter.getGalleryUrl(id);
+        let htmlText: string | null = null;
+        let status = 0;
+        let statusText = "";
+
+        if (typeof sourceTabId === "number") {
+            const viaTab = await host.fetchUrlFromTab(sourceTabId, targetUrl);
+            if (viaTab && viaTab.ok && viaTab.text !== null) {
+                htmlText = viaTab.text;
+                status = viaTab.status;
+                statusText = viaTab.statusText;
+            }
+        }
+        if (!htmlText) {
+            try {
+                const resp = await host.fetchImpl(targetUrl, {
+                    credentials: "include",
+                    cache: "no-store",
+                    signal: signal || undefined
+                });
+                status = resp ? resp.status : 0;
+                statusText = resp ? String(resp.statusText || "") : "";
+                if (resp && resp.ok) {
+                    htmlText = typeof resp.text === "function" ? await resp.text() : "";
+                }
+            } catch (e: any) {
+                statusText = String(e && e.message ? e.message : e);
+            }
+        }
+        if (htmlText && adapter.extractGallery) {
+            const extracted = adapter.extractGallery(htmlText);
+            if (extracted && looksLikeGallery(extracted)) {
+                if (!extracted.site) extracted.site = adapter.site;
+                return { ok: true, json: requireGallery(extracted) };
+            }
+        }
+        return {
+            ok: false,
+            status: status || 0,
+            statusText: statusText || "Failed to fetch gallery metadata for " + key,
+            contentType: "text/html"
+        };
+    }
+
+    // Keyed official API first for nhentai.
     if (apiKey) {
         try {
             const keyedParsing = new ApiParsing();
             const keyedResp = await fetchNhentaiApi(
-                keyedParsing.GetUrl(key),
+                keyedParsing.GetUrl(id),
                 { credentials: "include", cache: "no-store", signal: signal || undefined },
                 apiKey,
                 { fetchImpl: host.fetchImpl }
@@ -203,6 +257,7 @@ export async function resolveGalleryMetadata(
             if (keyedResp.ok) {
                 const jsonKeyed = await keyedParsing.GetJsonAsync(keyedResp);
                 if (jsonKeyed) {
+                    if (!jsonKeyed.site) jsonKeyed.site = "nhentai";
                     return { ok: true, json: requireGallery(jsonKeyed) };
                 }
             }
@@ -215,15 +270,16 @@ export async function resolveGalleryMetadata(
     }
 
     if (typeof sourceTabId === "number") {
-        const jsonViaTab = await getGalleryViaTab(sourceTabId, key, parsing, host);
+        const jsonViaTab = await getGalleryViaTab(sourceTabId, id, parsing, host);
         if (jsonViaTab) {
+            if (!jsonViaTab.site) jsonViaTab.site = "nhentai";
             return { ok: true, json: requireGallery(jsonViaTab) };
         }
     }
 
     let resp: any = null;
     if (typeof sourceTabId === "number") {
-        const viaTab = await host.fetchUrlFromTab(sourceTabId, parsing.GetUrl(key));
+        const viaTab = await host.fetchUrlFromTab(sourceTabId, parsing.GetUrl(id));
         if (viaTab && viaTab.ok && viaTab.text !== null) {
             resp = replayableResponse({
                 ok: true,
@@ -239,7 +295,7 @@ export async function resolveGalleryMetadata(
             headers["Authorization"] = "Key " + String(apiKey).trim();
         }
         try {
-            resp = await host.fetchImpl(parsing.GetUrl(key), {
+            resp = await host.fetchImpl(parsing.GetUrl(id), {
                 credentials: "include",
                 cache: "no-store",
                 headers: headers,
@@ -258,7 +314,9 @@ export async function resolveGalleryMetadata(
             contentType: headerContentType(resp)
         };
     }
-    return { ok: true, json: await parseResponseGallery(resp, parsing) };
+    const finalGallery = await parseResponseGallery(resp, parsing);
+    if (finalGallery && !finalGallery.site) finalGallery.site = "nhentai";
+    return { ok: true, json: finalGallery };
 }
 
 export async function runBatchDownload(args: {

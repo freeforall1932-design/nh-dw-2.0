@@ -44,7 +44,10 @@ export default class ApiParsing implements AParsing
     }
 
     GetUrl(id: string): string {
-        return this.source.getApiUrl(id);
+        if (typeof this.source.getApiUrl === "function") {
+            return this.source.getApiUrl(id);
+        }
+        return this.source.getGalleryUrl(id);
     }
 
     async GetJsonAsync(response: Response): Promise<any> {

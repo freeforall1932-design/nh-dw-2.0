@@ -1,4 +1,5 @@
-import { GallerySource } from "./GallerySource";
+import { SiteAdapter } from "./GallerySource";
+import { extractHentaieraGallery, extractHentaieraReaderImage } from "../parsing/hentaieraHtml";
 
 // Hentaiera adapter (multi-site v4, item 53 — first non-nhentai site).
 //
@@ -24,9 +25,12 @@ export const HENTAIERA_PAGE_HOST = "https://hentaiera.to";
 /** Host that serves the page images and thumbnails. */
 export const HENTAIERA_IMAGE_HOST = "https://hentaiera.site";
 
-export const hentaieraSource: GallerySource = {
+export const hentaieraSource: SiteAdapter = {
+    site: "hentaiera",
+    defaultFormat: "zip",
+
     matchesUrl(url: string): boolean {
-        return /^https:\/\/hentaiera\.to(?:[/?#]|$)/i.test(url);
+        return /^https:\/\/(?:[a-z0-9-]+\.)?hentaiera\.(?:to|com)(?:[/?#]|$)/i.test(url);
     },
 
     getGalleryId(url: string): string | null {
@@ -38,8 +42,12 @@ export const hentaieraSource: GallerySource = {
         return HENTAIERA_PAGE_HOST + "/gallery/" + encodeURIComponent(id) + "/";
     },
 
-    getGalleryPageUrl(id: string): string {
-        return HENTAIERA_PAGE_HOST + "/gallery/" + encodeURIComponent(id) + "/1/";
+    getGalleryPageUrl(id: string, page: number = 1): string {
+        return HENTAIERA_PAGE_HOST + "/gallery/" + encodeURIComponent(id) + "/" + page + "/";
+    },
+
+    getReaderPageUrl(id: string, page: number): string {
+        return HENTAIERA_PAGE_HOST + "/gallery/" + encodeURIComponent(id) + "/" + page + "/";
     },
 
     // Hentaiera has no JSON API; the gallery page's HTML (parsed by
@@ -50,10 +58,30 @@ export const hentaieraSource: GallerySource = {
         return this.getGalleryUrl(id);
     },
 
+    extractGallery(html: string): any | null {
+        return extractHentaieraGallery(html);
+    },
+
+    extractReaderImage(html: string): string | null {
+        return extractHentaieraReaderImage(html);
+    },
+
     // Reconstruct a full-page image URL. `filename` is what the Downloader
     // builds from the per-page type code, e.g. "1.webp" — unpadded. The
     // extension inside it was already resolved per-gallery upstream.
     getImageUrls(mediaId: string, filename: string): string[] {
         return [HENTAIERA_IMAGE_HOST + "/galleries/" + encodeURIComponent(mediaId) + "/" + filename];
+    },
+
+    getImageHosts(): string[] {
+        return ["hentaiera.site"];
+    },
+
+    getAllowedPathRegex(): RegExp {
+        return /^\/galleries\/[0-9]+\/[0-9]+\.(jpg|jpeg|png|gif|webp)$/i;
+    },
+
+    needsTabFetch(): boolean {
+        return true;
     }
 };

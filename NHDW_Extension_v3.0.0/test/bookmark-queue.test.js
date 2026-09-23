@@ -584,4 +584,19 @@ describe('paste box: viewer mirror family (any cin.* TLD)', () => {
         assert.deepStrictEqual(parsed.ids, ['366224', '177013', '366220', '366221', '366222']);
         assert.deepStrictEqual(parsed.rejected, []);
     });
+
+    it('parses multi-site URLs and composite keys in one paste', () => {
+        const parsed = parseGalleryInput(
+            'hentaiera:1304561 https://imhentai.xxx/gallery/1304562/ https://hentaienvy.com/gallery/1606086/ https://hentaifox.com/gallery/173098/ https://hitomi.la/doujinshi/test-123456.html 366224'
+        );
+        assert.deepStrictEqual(parsed.ids, [
+            'hentaiera:1304561',
+            'imhentai:1304562',
+            'hentaienvy:1606086',
+            'hentaifox:173098',
+            'hitomi:123456',
+            '366224'
+        ]);
+        assert.deepStrictEqual(parsed.rejected, []);
+    });
 });

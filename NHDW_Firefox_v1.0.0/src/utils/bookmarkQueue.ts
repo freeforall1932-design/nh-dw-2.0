@@ -180,8 +180,14 @@ export interface ParsedGalleryInput {
     truncated: boolean;
 }
 
-const NHENTAI_GALLERY_RE = /\/g\/([0-9]+)/i;
-const VIEWER_GALLERY_RE = /\/v\/([0-9]+)/i;
+const COMPOSITE_KEY_RE = /^([a-z0-9_-]+):([0-9]+)$/i;
+const NHENTAI_GALLERY_RE = /(?:^|\/|\.)nhentai\.net\/g\/([0-9]+)/i;
+const HENTAIERA_RE = /(?:^|\/|\.)hentaiera\.(?:com|to|site)\/(?:gallery|view|g)\/([0-9]+)/i;
+const IMHENTAI_RE = /(?:^|\/|\.)imhentai\.(?:xxx|org|net)\/(?:gallery|view)\/([0-9]+)/i;
+const HENTAIENVY_RE = /(?:^|\/|\.)hentaienvy\.com\/(?:gallery|g)\/([0-9]+)/i;
+const HENTAIFOX_RE = /(?:^|\/|\.)hentaifox\.com\/(?:gallery|g)\/([0-9]+)/i;
+const HITOMI_RE = /(?:^|\/|\.)hitomi\.la\/(?:galleries|doujinshi|manga|gamecg|cg|anime|reader)\/(?:.*-)?([0-9]+)(?:\.html)?/i;
+const GENERIC_GALLERY_PATH_RE = /\/(?:g|v|gallery|view)\/([0-9]+)/i;
 const ID_QUERY_RE = /[?&]id=([0-9]+)/i;
 const RANGE_RE = /^([0-9]+)\s*-\s*([0-9]+)$/;
 const BARE_ID_RE = /^[0-9]+$/;
@@ -210,9 +216,44 @@ export function parseGalleryInput(text: string, rangeLimit: number = MAX_PASTE_R
         .filter((token) => token !== "");
 
     for (const token of tokens) {
-        const gallery = NHENTAI_GALLERY_RE.exec(token) || VIEWER_GALLERY_RE.exec(token) || ID_QUERY_RE.exec(token);
-        if (gallery !== null) {
-            push(gallery[1]);
+        const composite = COMPOSITE_KEY_RE.exec(token);
+        if (composite !== null) {
+            push(composite[1].toLowerCase() + ":" + composite[2]);
+            continue;
+        }
+        const hitomi = HITOMI_RE.exec(token);
+        if (hitomi !== null) {
+            push("hitomi:" + hitomi[1]);
+            continue;
+        }
+        const hentaiera = HENTAIERA_RE.exec(token);
+        if (hentaiera !== null) {
+            push("hentaiera:" + hentaiera[1]);
+            continue;
+        }
+        const imhentai = IMHENTAI_RE.exec(token);
+        if (imhentai !== null) {
+            push("imhentai:" + imhentai[1]);
+            continue;
+        }
+        const hentaienvy = HENTAIENVY_RE.exec(token);
+        if (hentaienvy !== null) {
+            push("hentaienvy:" + hentaienvy[1]);
+            continue;
+        }
+        const hentaifox = HENTAIFOX_RE.exec(token);
+        if (hentaifox !== null) {
+            push("hentaifox:" + hentaifox[1]);
+            continue;
+        }
+        const nhentai = NHENTAI_GALLERY_RE.exec(token);
+        if (nhentai !== null) {
+            push(nhentai[1]);
+            continue;
+        }
+        const galleryPath = GENERIC_GALLERY_PATH_RE.exec(token) || ID_QUERY_RE.exec(token);
+        if (galleryPath !== null) {
+            push(galleryPath[1]);
             continue;
         }
         if (BARE_ID_RE.test(token)) {
