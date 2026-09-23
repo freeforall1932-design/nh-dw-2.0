@@ -2215,8 +2215,8 @@ The owner answered "what else can be worked on" by choosing **every** option
 offered: finish the bookmark coverage (43), make non-nhentai queue rows
 downloadable (the multi-site download path), and the small-wins bundle
 (44 + 52 + 41). This pass landed the small-wins bundle plus 43's panel half, in
-Chrome and Firefox, and is **uncommitted at the time of writing** (it is being
-committed with this log).
+Chrome and Firefox, and shipped through PR #47 (merged into `main` as
+`cdeef32`).
 
 - **43 — panel toggles.** `bookmarkTogglePresentation()` (one source for
   label/title/classes); `message.bookmarkButtonHtml()` + `similarList()` rows;
@@ -2316,6 +2316,10 @@ site. Both trees; no new host permission, no `<all_urls>`, no new adapter.
 - **Not in this task:** the rest of backlog item 48's planning scope (adapter
   interface v2, lab-clone side panel, site-aware paste box) and 42/58
   (real-browser + Android passes, signing — owner only).
+- **Shipped:** commits `699adea` (item 48) and `b0c2b4d` (the duplicated item-44
+  CSS block, which had made Chrome's drag states differ from Firefox's) went to
+  `main` in **PR #47**, merged as `cdeef32` on 2026-09-23. Both CI checks passed
+  on the final head.
 
 ## Session log — 2026-09-23 (third pass, same session): CSS tidy-up after the item-44 duplicate
 

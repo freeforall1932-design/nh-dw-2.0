@@ -10,8 +10,9 @@ the first one is the newest work. Preserve all prior work in this tree.
 the wording at the top of `WORKLIST.md` verbatim ("yes do Next up … item 48").
 The queue now **splits a mixed selection into one job per site** and the pipeline
 **resolves each job's metadata through that site's own adapter** — no new host
-permission, no `<all_urls>`, no new adapter. Both trees, uncommitted at the time
-of writing (a later commit records it).
+permission, no `<all_urls>`, no new adapter. Both trees; committed as `699adea`
+plus the item-44 CSS fix `b0c2b4d`, and **merged into `main` as `cdeef32`
+(PR #47) on 2026-09-23**, so `main` carries this work.
 
 - **One job carries ONE site.** `BatchJobOptions.site?: string`
   (`src/utils/batchPipeline.ts`); absent means the default site, so every
@@ -73,8 +74,8 @@ of writing (a later commit records it).
 **Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`). The owner answered
 "what else can be worked on" by picking **every** option offered, so this pass
 adds the bookmark coverage the new feature was missing plus the small-wins
-bundle. All of it is in **both** trees (Chrome 3.9.0 / Firefox 1.3.0), committed
-with PR #47, and the release snapshot is re-synced.
+bundle. All of it is in **both** trees (Chrome 3.9.0 / Firefox 1.3.0), merged
+into `main` with PR #47, and the release snapshot is re-synced.
 
 - **43 — the panel's own toggles.** `bookmarkTogglePresentation(on)` in
   `src/utils/bookmarkQueue.ts` is now the single source of the label, tooltip

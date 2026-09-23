@@ -5,8 +5,8 @@
 single-gallery page got a blue Bookmark button, the small-wins bundle landed
 (43, 44, 52, 41) and item 48 landed too — a `site:id` queue row is now
 downloadable, because the queue splits a mixed selection into one job per site
-and each job resolves through its own adapter** (PR #47). 42/58 remain
-user-only: real-browser and Android passes, signing.)
+and each job resolves through its own adapter** — PR #47, merged into `main` as
+`cdeef32`. 42/58 remain user-only: real-browser and Android passes, signing.)
 
 **38 is done in the approved Firefox-only scope:** 33 options-page tests and
 narrow regression fixes, integrated with offline e2e. That task had no
