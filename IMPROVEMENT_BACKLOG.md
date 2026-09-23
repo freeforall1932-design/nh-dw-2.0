@@ -2414,7 +2414,7 @@ owner's rule: **sanitize source material, keep website naming schemes.**
 
 ### 2. Docs consolidation (owner: "session handoff so bloated")
 
-- **`SESSION_HANDOFF.md` rewritten 192 KB → ~19 KB:** current state, doc map,
+- **`SESSION_HANDOFF.md` rewritten 192 KB → 34 KB:** current state, doc map,
   structural invariants distilled from every shipped version (formats/naming,
   pipeline/lifecycle, identity/history/failures, bookmark queue, multi-site,
   UI surfaces, filename guard), the real-browser checklists (42/58 + PR #48
