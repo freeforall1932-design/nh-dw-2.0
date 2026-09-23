@@ -2164,3 +2164,13 @@ the rest of the queue.
 - **Versions:** Chrome 3.8.0 → **3.9.0**, Firefox 1.2.0 → **1.3.0**, release
   snapshot re-synced (manifest, listControls + preview bundles, new
   titleBookmark bundle, both stylesheets).
+- **Follow-up pass (same session):** the sandbox's egress allowlist blocks
+  nhentai/hentaifox entirely (even `example.com` fails the TLS handshake), so
+  an owner-supplied API key cannot be used — the blocker was never auth. The
+  selectors were re-verified from saved/third-party sources instead: imhentai
+  from a saved gallery page, nhentai from a current extension that appends to
+  `div.buttons`, hentaifox from the four ids its own tooling toggles plus three
+  scrapers. Sizing now copies the anchor button's own classes at injection time
+  (`presentationalButtonClasses`, behavior hooks excluded), which makes the
+  hentaifox row safe despite the missing capture. Chrome 463/4 and Firefox
+  539/4 units; title-page e2e grew to **146 checks**.

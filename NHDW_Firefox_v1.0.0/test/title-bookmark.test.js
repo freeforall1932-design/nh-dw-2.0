@@ -18,6 +18,7 @@ const {
     TITLE_BOOKMARK_ON_CLASS,
     cleanGalleryTitle,
     parsePageCount,
+    presentationalButtonClasses,
     resolveTitleBookmarkPage,
     targetForSite,
     titleBookmarkSites
@@ -151,6 +152,44 @@ describe('title-page bookmark page counts', () => {
         assert.strictEqual(parsePageCount('Tags: big breasts'), 0);
         assert.strictEqual(parsePageCount('999999'), 0);
         assert.strictEqual(parsePageCount('Pages: 0'), 0);
+    });
+});
+
+describe('classes copied from the site\'s own button', () => {
+    it('keeps the presentational classes that carry the sizing', () => {
+        // Verbatim from a saved imhentai gallery page.
+        assert.deepStrictEqual(
+            presentationalButtonClasses('tag btn btn-primary dl_btn'),
+            ['tag', 'btn', 'btn-primary']);
+        assert.deepStrictEqual(
+            presentationalButtonClasses('tag btn btn-primary fav_btn'),
+            ['tag', 'btn', 'btn-primary']);
+        assert.deepStrictEqual(presentationalButtonClasses('hnv-gallery-action'), ['hnv-gallery-action']);
+    });
+
+    it('never copies a behavior hook, a state flag or our own namespace', () => {
+        const filtered = presentationalButtonClasses(
+            'nhdw-title-bookmark btn active selected hidden js-ajax-action js_track save_dl_btn load-trigger');
+        assert.deepStrictEqual(filtered, ['btn']);
+    });
+
+    it('is idempotent, order-preserving and safe on empty input', () => {
+        assert.deepStrictEqual(presentationalButtonClasses('btn btn'), ['btn']);
+        assert.deepStrictEqual(presentationalButtonClasses(''), []);
+        assert.deepStrictEqual(presentationalButtonClasses(null), []);
+        assert.deepStrictEqual(presentationalButtonClasses(undefined), []);
+        assert.deepStrictEqual(presentationalButtonClasses('   '), []);
+        // A template/utility blob is not a class name worth copying.
+        assert.deepStrictEqual(presentationalButtonClasses('a'.repeat(41) + ' btn'), ['btn']);
+    });
+
+    it('pins the hentaifox row to the ids every hentaifox gallery page has', () => {
+        const fox = targetForSite('hentaifox');
+        assert.strictEqual(fox.anchorSelectors[0], '#download_btn',
+            'the visible Download button is #download_btn, not #dl_new');
+        assert.ok(fox.anchorSelectors.includes('#add_fav_btn'));
+        assert.ok(fox.titleSelectors.includes('div.info h1'));
+        assert.ok(fox.thumbnailSelectors.includes('div.cover img'));
     });
 });
 

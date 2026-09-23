@@ -14,20 +14,32 @@
 //   * nhentai      — `div.buttons` with `#favorite` (older markup) and
 //                    `#download` (stable in both the 2021 and the current
 //                    logged-out markup), plus `#info h1.title`, the
-//                    `og:image` cover and the `Pages:` tag row.
+//                    `og:image` cover and the `Pages:` tag row. Re-confirmed
+//                    against a current extension that appends its own
+//                    `btn btn-secondary` control into `document
+//                    .getElementsByClassName('buttons')[0]` and reads `#info`.
 //   * hentaiera.to — `div.others` with `#add_fav_btn` / `#download_btn`
 //                    (captures/view-source era to gallery 694133 .txt, and the
 //                    hentaiera.to HAR gallery 694132).
 //   * imhentai.xxx — `.g_buttons` with `#add_fav_btn` / `#dl_new`
-//                    (imhentai.xxx HAR gallery 1738518), `li.pages` for the
-//                    page count, `.left_cover img` for the cover.
+//                    (imhentai.xxx HAR gallery 1738518, re-confirmed against a
+//                    saved gallery page: `<button class="tag btn btn-primary
+//                    dl_btn" id="dl_new">Download (2996)</button>`), `li.pages`
+//                    for the page count, `.left_cover img` for the cover.
 //   * hentaienvy   — `.hnv-gallery-actions__right` with
 //                    `button[data-action$="/download/start"]` /
 //                    `.../favorite/toggle` (envy com HAR gallery 1606086),
 //                    `.hnv-gallery-pages` for the page count.
-//   * hentaifox    — `#add_fav_btn` / `#dl_new`; the ids come from the site's
-//                    own main.min.js click handlers in captures/fox-173098.har
-//                    (the gallery page HTML itself has never been captured).
+//   * hentaifox    — `#download_btn` / `#add_fav_btn` / `#thumbs_up` /
+//                    `#thumbs_down` are the ids the site's gallery page has
+//                    (HentaiFoxData's Qt browser hides exactly those four on
+//                    `hentaifox.com/gallery/*`, so they must exist);
+//                    `ul.g_buttons`, `div.cover img` and `div.info h1` come
+//                    from three independent gallery scrapers, and `#dl_new` /
+//                    `#add_fav_btn` from the site's own main.min.js handlers
+//                    (captures/fox-173098.har). The gallery page itself has
+//                    never been captured, so this row leans on the fallbacks
+//                    and on copying the anchor's own classes.
 //   * hitomi.la    — `#read-online-button` / `#dl-button` in the hero, with
 //                    `#gallery-brand` and `#bigtn_img` (captures/hitomi-id-
 //                    rendered.html). Hitomi has no favorites affordance, so the
@@ -60,6 +72,50 @@ export const TITLE_BOOKMARK_TITLE_OFF =
     "Add this gallery to the persistent bookmark queue (Queue tab). It survives a browser restart.";
 export const TITLE_BOOKMARK_TITLE_ON =
     "On the bookmark list — click to take it off again (nothing is un-downloaded).";
+
+/**
+ * Classes worth copying from the site's own Download/Favorite button onto ours.
+ *
+ * This is what makes the third button match the row it joins — including on a
+ * site whose gallery markup we have never captured (hentaifox): whatever the
+ * real button wears is copied, at injection time, so the button inherits the
+ * site's sizing/radius/font even if the table's `buttonClasses` guess is stale.
+ *
+ * Deliberately drops:
+ *   * behavior hooks (`_btn`, `js-`, `jsx-`, `-trigger`) — those are how these
+ *     sites bind click handlers, and copying one would enlist our button in
+ *     the site's own AJAX (e.g. imhentai's `dl_btn` / `fav_btn`);
+ *   * state flags (`active`, `selected`, `hidden`, …) that must not be frozen
+ *     onto a brand-new control;
+ *   * our own `nhdw-*` namespace, which the table already adds;
+ *   * anything that looks like a template/utility artifact.
+ */
+export function presentationalButtonClasses(className: string | null | undefined): string[] {
+    const raw = String(className === undefined || className === null ? "" : className);
+    const out: string[] = [];
+    const seen: Record<string, boolean> = {};
+    for (const token of raw.split(/\s+/)) {
+        const name = token.trim();
+        if (name === "" || seen[name] === true) {
+            continue;
+        }
+        seen[name] = true;
+        if (name.length > 40) {
+            continue;
+        }
+        if (/^(?:nhdw-|js[-_]|jsx-)/i.test(name)) {
+            continue;
+        }
+        if (/_btn$/i.test(name) || /-btn$|_trigger$|-trigger$/i.test(name)) {
+            continue;
+        }
+        if (/^(?:active|selected|checked|hidden|disabled|open|opened|closed|hover|focus|current|loading|on|off)$/i.test(name)) {
+            continue;
+        }
+        out.push(name);
+    }
+    return out;
+}
 
 export interface TitleBookmarkTarget {
     site: string;
@@ -113,7 +169,7 @@ const TITLE_BOOKMARK_TARGETS: Record<string, TitleBookmarkTarget> = {
         anchorSelectors: ["#dl_new", "#add_fav_btn", ".g_buttons .btn"],
         containerSelectors: [".g_buttons"],
         buttonClasses: ["tag", "btn", "btn-primary"],
-        titleSelectors: ["h1"],
+        titleSelectors: ["h1", "#gallery_title"],
         thumbnailSelectors: [".left_cover img", ".cover_photo img", 'meta[property="og:image"]'],
         pageCountSelectors: ["li.pages", "ul.galleries_info"]
     },
@@ -134,15 +190,17 @@ const TITLE_BOOKMARK_TARGETS: Record<string, TitleBookmarkTarget> = {
     hentaifox: {
         site: "hentaifox",
         pagePattern: /^https:\/\/[a-z0-9-]*\.?hentaifox\.com\/gallery\/[0-9]+\/?(?:[?#]|$)/i,
-        anchorSelectors: ["#dl_new", "#add_fav_btn"],
-        // No container of its own has been captured for hentaifox: `#dl_new`
-        // is the anchor, never a place to append INTO (that would nest our
-        // button inside the site's own).
-        containerSelectors: [".buttons"],
-        buttonClasses: ["btn", "btn_colored"],
-        titleSelectors: ["h1", ".gallery_first h1"],
-        thumbnailSelectors: [".left_cover img", 'img[alt$="cover"]', 'meta[property="og:image"]'],
-        pageCountSelectors: [".galleries_info", ".right_details"]
+        anchorSelectors: ["#download_btn", "#dl_new", "#add_fav_btn"],
+        // `ul.g_buttons` is the row's own container (the site is the same
+        // lineage as imhentai: `g_th`, `gallery_thumb`, `g_buttons`).
+        containerSelectors: [".g_buttons", ".info"],
+        // Fallback only: the real classes are copied off the anchor at
+        // injection time (see presentationalButtonClasses), which is what makes
+        // this row survive not having the page's HTML captured.
+        buttonClasses: ["tag", "btn", "btn-primary"],
+        titleSelectors: ["div.info h1", "#gallery_title", "h1"],
+        thumbnailSelectors: ["div.cover img", "img.cover", ".left_cover img", 'meta[property="og:image"]'],
+        pageCountSelectors: [".i_text.pages", ".info", ".galleries_info", ".right_details"]
     },
     hitomi: {
         site: "hitomi",

@@ -38,6 +38,7 @@ import {
     TITLE_BOOKMARK_TITLE_ON,
     cleanGalleryTitle,
     parsePageCount,
+    presentationalButtonClasses,
     resolveTitleBookmarkPage
 } from "../utils/titleBookmark";
 import { BOOKMARK_QUEUE_KEY, BookmarkState, normalizeBookmarkState } from "../utils/bookmarkQueue";
@@ -49,6 +50,8 @@ const INJECT_INTERVAL_MS = 500;
 /** Ancestors that mean "this is our own UI, not the site's button row". */
 const OWN_UI_CLASSES = ["nhdw-card-controls", "nhdw-action-bar", TITLE_BOOKMARK_CLASS];
 
+/** Where the build-time class list is remembered for later repaints. */
+const BASE_CLASS_ATTR = "data-nhdw-title-base-class";
 const FAVORITE_TEXT_RE = /^(?:add to\s+)?(?:favourites?|favorites?)\b/i;
 const DOWNLOAD_TEXT_RE = /^(?:download|download all)\b/i;
 
@@ -57,6 +60,14 @@ const DOWNLOAD_TEXT_RE = /^(?:download|download all)\b/i;
 function nodeText(node: Element | null): string {
     if (node === null) {
         return "";
+    }
+    const tag = String(node.tagName || "").toLowerCase();
+    // hentaifox / imhentai publish the gallery title in a hidden
+    // <input id="gallery_title" value="…">, which has no text at all.
+    const input = node as any;
+    const value = input && typeof input.value === "string" ? input.value : "";
+    if ((tag === "input" || tag === "textarea") && value !== "") {
+        return String(value).replace(/\s+/g, " ").trim();
     }
     return String(node.textContent || "").replace(/\s+/g, " ").trim();
 }
@@ -274,15 +285,22 @@ function buildIcon(): { svg: SVGSVGElement; path: SVGPathElement } {
     return { svg: svg as SVGSVGElement, path: path as SVGPathElement };
 }
 
-function buildBookmarkButton(page: ResolvedTitleBookmarkPage): BookmarkButton {
+function buildBookmarkButton(page: ResolvedTitleBookmarkPage, anchor: Element | null): BookmarkButton {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "";
-    const classes = [TITLE_BOOKMARK_CLASS].concat(page.target.buttonClasses);
+    // The site's own button is the source of truth for sizing: its classes are
+    // copied (minus behavior hooks / state flags), with the table's list kept as
+    // the fallback for the append-into-a-container path.
+    const classes = [TITLE_BOOKMARK_CLASS].concat(
+        page.target.buttonClasses,
+        anchor === null ? [] : presentationalButtonClasses(String((anchor as any).className || ""))
+    ).filter((name, index, all) => name !== "" && all.indexOf(name) === index);
     button.className = classes.join(" ");
     // Its own marker, so a second run of this script recognizes its own button
     // (and the anchor search can skip it) without depending on the site's ids.
     button.setAttribute("data-nhdw-title-bookmark", page.galleryKey);
+    button.setAttribute(BASE_CLASS_ATTR, button.className);
 
     const icon = buildIcon();
     button.appendChild(icon.svg);
@@ -296,9 +314,12 @@ function buildBookmarkButton(page: ResolvedTitleBookmarkPage): BookmarkButton {
 
 function paint(button: BookmarkButton, page: ResolvedTitleBookmarkPage): void {
     const on = isBookmarked(page);
-    button.node.className = [TITLE_BOOKMARK_CLASS]
-        .concat(page.target.buttonClasses)
+    // The base classes are remembered from build time (they include whatever
+    // the site's own button wore), so a repaint never loses the sizing.
+    const base = (button.node.getAttribute(BASE_CLASS_ATTR) || TITLE_BOOKMARK_CLASS).split(/\s+/);
+    button.node.className = base
         .concat(on ? [TITLE_BOOKMARK_ON_CLASS] : [])
+        .filter((name, index, all) => name !== "" && all.indexOf(name) === index)
         .join(" ");
     button.label.textContent = on ? TITLE_BOOKMARK_LABEL_ON : TITLE_BOOKMARK_LABEL;
     button.node.title = on ? TITLE_BOOKMARK_TITLE_ON : TITLE_BOOKMARK_TITLE_OFF;
@@ -339,7 +360,7 @@ function inject(page: ResolvedTitleBookmarkPage): boolean {
     if (found === null) {
         return false;
     }
-    const button = buildBookmarkButton(page);
+    const button = buildBookmarkButton(page, found.mode === "after" ? found.anchor : null);
     paint(button, page);
     button.node.addEventListener("click", (event) => {
         event.preventDefault();

@@ -44,12 +44,29 @@ Chrome **3.9.0**, Firefox **1.3.0**. Preserve all prior work in this tree.
   strings in `bookmarkPanel.ts` and `popupSettings.ts`, Firefox `siteUi.ts`),
   and the release snapshot (manifest, `js/listControls.js`, `js/preview.js`,
   `js/titleBookmark.js`, both stylesheets).
-- **Verification:** Chrome webpack; **459 passing / 4 pending** units;
-  `test:e2e` including the new 107-check title-page suite. Firefox webpack;
-  **535 passing / 4 pending**; smoke 7 PASS; all offline e2e (33 script runs)
+- **Selector evidence (added after the first pass, when the sandbox DNS/TLS
+  allowlist made a live fetch impossible and the owner's API key could not help
+  — an API key does not defeat an egress block, and the failure was never
+  auth):** imhentai re-confirmed against a *saved real gallery page*
+  (`<button class="tag btn btn-primary dl_btn" id="dl_new">Download (2996)`,
+  `li.pages`, `.left_cover img`); nhentai re-confirmed against a current
+  extension that appends its own `btn btn-secondary` control into
+  `getElementsByClassName('buttons')[0]` and reads `#info`; hentaifox re-pinned
+  to `#download_btn` (the four ids HentaiFoxData's Qt browser toggles on
+  `hentaifox.com/gallery/*`), with `div.info h1` / `div.cover img` /
+  `ul.g_buttons` from three independent scrapers.
+- **Sizing is now copied, not guessed:** `presentationalButtonClasses()`
+  copies the anchor's own classes at injection time (minus behavior hooks such
+  as imhentai's `dl_btn`/`fav_btn`, minus state flags and our own namespace), so
+  the button matches the row even on hentaifox, whose gallery markup has never
+  been captured. A hidden `<input id="gallery_title" value=…>` is also read for
+  the title now.
+- **Verification:** Chrome webpack; **463 passing / 4 pending** units;
+  `test:e2e` including the **146-check** title-page suite. Firefox webpack;
+  **539 passing / 4 pending**; smoke 7 PASS; all offline e2e (33 script runs)
   pass; web-ext lint **0 errors / 0 notices / 31 advisories**, none in the new
-  script. No live request, device or signing run — real-browser verification is
-  still owed for the new button's appearance on the five non-nhentai sites.
+  script. No live request, device or signing run — a real-browser look at the
+  button's appearance is still owed.
 
 ---
 

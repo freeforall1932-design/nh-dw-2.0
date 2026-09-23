@@ -483,36 +483,49 @@ const SITES = {
         url: 'https://imhentai.xxx/gallery/1738518/',
         classes: ['tag', 'btn', 'btn-primary'],
         build(document) {
+            // Markup taken verbatim from a saved imhentai gallery page:
+            //   <div class="g_buttons"> … <button class="tag btn btn-primary
+            //   fav_btn" id="add_fav_btn">Favourite (1352)</button>
+            //   <button class="tag btn btn-primary dl_btn" id="dl_new">
+            //   Download (<span>2996</span>)</button> … <li class="pages">
+            //   Pages: 487</li>
             const body = document.body;
             const h1 = makeEl('h1');
             h1.textContent = '[Ochiba] Mahou Shoujo no Himitsu';
             body.appendChild(h1);
             const cover = makeEl('div');
-            cover.className = 'col left_cover';
+            cover.className = 'col-md-4 col left_cover';
             const img = makeEl('img');
-            img.setAttribute('data-src', 'https://m11.imhentai.xxx/033/w62za5o4v3/cover.jpg');
+            img.setAttribute('data-src', 'https://m9.imhentai.xxx/027/7gix9myduq/1t.jpg');
             img.setAttribute('src', 'data:image/svg+xml,placeholder');
             cover.appendChild(img);
             body.appendChild(cover);
             const buttons = makeEl('div');
             buttons.className = 'g_buttons';
+            const likes = makeEl('div');
+            likes.className = 'likes';
+            const like = makeEl('button', { id: 'like_btn' });
+            like.className = 'tag btn btn-primary fap_btn';
+            like.textContent = '7';
+            likes.appendChild(like);
             const fav = makeEl('button', { id: 'add_fav_btn' });
             fav.className = 'tag btn btn-primary fav_btn';
-            fav.textContent = 'Favourite (0)';
+            fav.textContent = 'Favourite (1352)';
             const download = makeEl('button', { id: 'dl_new' });
             download.className = 'tag btn btn-primary dl_btn';
-            download.textContent = 'Download (0)';
+            download.textContent = 'Download (2996)';
+            buttons.appendChild(likes);
             buttons.appendChild(fav);
             buttons.appendChild(download);
             const list = makeEl('ul');
             list.className = 'galleries_info';
             const pages = makeEl('li');
             pages.className = 'pages';
-            pages.textContent = 'Pages: 49';
+            pages.textContent = 'Pages: 487';
             list.appendChild(pages);
             body.appendChild(buttons);
             body.appendChild(list);
-            body.textContent = 'Favourite (0) Download (0) Pages: 49';
+            body.textContent = 'Favourite (1352) Download (2996) Pages: 487';
             return { container: buttons, download: download };
         }
     },
@@ -564,31 +577,48 @@ const SITES = {
     },
     hentaifox: {
         url: 'https://hentaifox.com/gallery/173098/',
-        classes: ['btn', 'btn_colored'],
+        classes: ['tag', 'btn', 'btn-primary'],
         build(document) {
+            // hentaifox's gallery page has never been captured (Cloudflare
+            // blocks it), so this fixture is built from the two independent
+            // facts that ARE known: the four ids every hentaifox gallery page
+            // must expose (`download_btn`, `add_fav_btn`, `thumbs_up`,
+            // `thumbs_down` — HentaiFoxData's Qt browser toggles exactly those),
+            // and the shared `g_buttons` / `div.info` / `div.cover` structure of
+            // the site family. The button must still land correctly AND copy
+            // the anchor's own classes, which is what makes an uncaptured site
+            // safe.
             const body = document.body;
+            const info = makeEl('div');
+            info.className = 'info';
             const h1 = makeEl('h1');
             h1.textContent = 'The Girllove Diary';
-            body.appendChild(h1);
-            const buttons = makeEl('div');
-            buttons.className = 'buttons';
-            // The hentaifox gallery markup itself was never captured (Cloudflare
-            // blocks it); the ids come from the site's own main.min.js click
-            // handlers, so the row shape is modelled on the sibling sites.
+            info.appendChild(h1);
+            const cover = makeEl('div');
+            cover.className = 'cover';
+            const img = makeEl('img');
+            img.setAttribute('src', 'https://i.hentaifox.com/005/4190711/cover.jpg');
+            cover.appendChild(img);
+            info.appendChild(cover);
+            const pages = makeEl('span');
+            pages.className = 'i_text pages';
+            pages.textContent = 'Pages: 24';
+            info.appendChild(pages);
+            const buttons = makeEl('ul');
+            buttons.className = 'g_buttons';
+            const up = makeEl('button', { id: 'thumbs_up' });
+            up.className = 'tag btn btn-primary fap_btn';
+            up.textContent = '12';
             const fav = makeEl('button', { id: 'add_fav_btn' });
-            fav.className = 'btn btn_colored';
+            fav.className = 'tag btn btn-primary fav_btn';
             fav.textContent = 'Favorite (0)';
-            const download = makeEl('button', { id: 'dl_new' });
-            download.className = 'btn btn_colored';
+            const download = makeEl('button', { id: 'download_btn' });
+            download.className = 'tag btn btn-primary dl_btn';
             download.textContent = 'Download';
-            buttons.appendChild(fav);
-            buttons.appendChild(download);
-            body.appendChild(buttons);
-            const og = makeEl('meta');
-            og.setAttribute('property', 'og:image');
-            og.setAttribute('content', 'https://i.hentaifox.com/005/4190711/cover.jpg');
-            body.appendChild(og);
-            body.textContent = 'Favorite (0) Download';
+            for (const node of [up, fav, download]) buttons.appendChild(node);
+            info.appendChild(buttons);
+            body.appendChild(info);
+            body.textContent = 'Favorite (0) Download Pages: 24';
             return { container: buttons, download: download };
         }
     },
@@ -645,6 +675,12 @@ async function main() {
                 site + ': the button carries the site\'s class "' + className + '"');
         }
         ok(button.classList.contains('nhdw-title-bookmark'), site + ': the button is namespaced');
+        // Sizing is copied from the site's own button, but never its behavior
+        // hooks: those are how these sites bind their own AJAX handlers.
+        for (const name of button.className.split(/\s+/)) {
+            ok(!/_btn$|^js[-_]|-trigger$/i.test(name),
+                site + ': the site behavior hook "' + name + '" must not be copied onto our button');
+        }
         ok(!button.classList.contains('nhdw-title-bookmark-on'), site + ': a fresh button renders as OFF');
         ok(labelOf(button) === 'Bookmark', site + ': the label reads "Bookmark", got ' + JSON.stringify(labelOf(button)));
         ok(glyphPath(button) === OUTLINE, site + ': the outline glyph is drawn while OFF');
@@ -861,6 +897,73 @@ async function main() {
         ok(buttonIn(unset.document) !== null, 'an unset toggle defaults to injected (the 3.7.0 default)');
     }
     pass('the Settings "In-page controls" toggle also governs the gallery-page Bookmark button');
+
+    // --- 9. the sizing really is copied from the site's own button --------
+    {
+        // imhentai: anchor wears "tag btn btn-primary dl_btn"; our button must
+        // pick up the three presentational classes and NOT the dl_btn hook.
+        const imh = run({ url: SITES.imhentai.url, build: SITES.imhentai.build });
+        await flush();
+        const imhButton = buttonIn(imh.document);
+        for (const name of ['tag', 'btn', 'btn-primary']) {
+            ok(imhButton.classList.contains(name), 'imhentai: copied "' + name + '" from the site Download button');
+        }
+        ok(!imhButton.classList.contains('dl_btn'), 'imhentai: the dl_btn AJAX hook is NOT copied');
+        ok(!imhButton.classList.contains('fav_btn'), 'imhentai: the fav_btn AJAX hook is NOT copied');
+
+        // hentaifox: the same, on the site whose gallery markup we only know
+        // through its ids — the copy is what carries the sizing there.
+        const fox = run({ url: SITES.hentaifox.url, build: SITES.hentaifox.build });
+        await flush();
+        const foxButton = buttonIn(fox.document);
+        ok(foxButton.parentElement === fox.document.querySelector('.g_buttons'),
+            'hentaifox: the button lands in the gallery button row');
+        ok(foxButton.classList.contains('btn') && foxButton.classList.contains('btn-primary'),
+                "hentaifox: the anchor's own classes are copied for sizing");
+        ok(!foxButton.classList.contains('dl_btn'), "hentaifox: the anchor's behavior hook stays behind");
+        ok(labelOf(foxButton) === 'Bookmark', 'hentaifox: the label is right on the uncaptured row');
+
+        // hentaifox: the page count comes from the info box, and the title from
+        // the <h1> inside it.
+        foxButton.dispatch('click');
+        await flush();
+        const foxAdd = fox.chrome.sent.filter((m) => m.action === 'bookmarkAdd').pop();
+        ok(foxAdd !== undefined, 'hentaifox: clicking Bookmark sends bookmarkAdd');
+        ok(foxAdd.items[0].pages === 24, 'hentaifox: the page count is read from div.info, got ' + foxAdd.items[0].pages);
+        ok(foxAdd.items[0].title === 'The Girllove Diary', 'hentaifox: the title is read from div.info h1, got ' + JSON.stringify(foxAdd.items[0].title));
+        ok(foxAdd.items[0].thumbnail === 'https://i.hentaifox.com/005/4190711/cover.jpg',
+            'hentaifox: the cover is read from div.cover img, got ' + foxAdd.items[0].thumbnail);
+
+        // The title input fallback (both hentaifox and imhentai publish one).
+        const inputTitle = run({
+            url: 'https://imhentai.xxx/gallery/4242/',
+            build(document) {
+                const holder = makeEl('div');
+                holder.className = 'g_buttons';
+                const fav = makeEl('button', { id: 'add_fav_btn' });
+                fav.className = 'tag btn btn-primary fav_btn';
+                fav.textContent = 'Favourite (0)';
+                const download = makeEl('button', { id: 'dl_new' });
+                download.className = 'tag btn btn-primary dl_btn';
+                download.textContent = 'Download (0)';
+                holder.appendChild(fav);
+                holder.appendChild(download);
+                document.body.appendChild(holder);
+                const hidden = makeEl('input', { id: 'gallery_title' });
+                hidden.value = 'Title From The Hidden Input';
+                hidden.setAttribute('value', 'Title From The Hidden Input');
+                document.body.appendChild(hidden);
+                document.body.textContent = 'Favourite (0) Download (0)';
+            }
+        });
+        await flush();
+        buttonIn(inputTitle.document).dispatch('click');
+        await flush();
+        const inputAdd = inputTitle.chrome.sent.filter((m) => m.action === 'bookmarkAdd').pop();
+        ok(inputAdd.items[0].title === 'Title From The Hidden Input',
+            'a title published only in a hidden <input value> is still picked up, got ' + JSON.stringify(inputAdd.items[0].title));
+    }
+    pass("the button copies the site button's own presentational classes, and never its behavior hooks");
 
     console.log('');
     console.log(checks + ' checks passed.');
