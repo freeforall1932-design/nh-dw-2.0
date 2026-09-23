@@ -43,7 +43,21 @@ item-42/58 real-browser list.
 Release snapshot re-synced with the exhaustive file-by-file loop (only
 `js/background.js` + `js/offscreen.js` were stale; nothing missing). No
 manifest, permission, dependency, CI or version change in this pass — the PR
-keeps shipping as 3.9.0 / 1.3.0.
+keeps shipping as 3.9.0 / 1.3.0. **CI (`extension-tests`) is green on the
+review commits** — after one red cycle that taught two gotchas, recorded here
+so nobody pays for them twice:
+
+- **CI runs Node 22; this sandbox runs Node 20.** Node 21+ ships a global
+  `navigator` as a **getter-only accessor**, so `globalThis.navigator = mock`
+  in a test silently does nothing there while working locally. Stub it with
+  `Object.defineProperty` (descriptor save/restore) — see
+  `test/streaming-zip.test.js`. Related decoder ring: **mocha's exit code is
+  its failure count** (exit 3 = exactly 3 failing tests), which is what the
+  CI annotation "exit code 3" meant.
+- **CI failures ARE diagnosable from this environment without raw logs:** the
+  check-run **annotations** API and the run's **jobs/steps** API both answered
+  (open question 19 below only rules out `results-receiver` log downloads —
+  that part still holds).
 
 ---
 

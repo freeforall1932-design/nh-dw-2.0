@@ -522,6 +522,13 @@ item 40 remain open. Production source delta: ten existing + two new files.
 
 ## Harness notes that will cost you a round if you miss them
 
+- **CI runs Node 22, the sandbox runs Node 20.** Node 21+ has a getter-only
+  global `navigator`: a plain `globalThis.navigator = mock` assignment in a
+  test silently does nothing on CI (stub it via `Object.defineProperty`). And
+  **mocha's exit code is its failure count** — CI's "exit code 3" meant three
+  failing tests. Check-run annotations + jobs/steps APIs are readable from
+  the sandbox even though raw log downloads are not.
+
 - **Bare `npx mocha test/x.test.js` uses a stale `build/test/`.** Only
   `npm test` runs `build:test` first. A brand-new export will look like
   "not a function" purely because `tsc` never re-ran.
