@@ -1,8 +1,12 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-21** (session
-`arena/01a0bfa1-nh-dw-2-0`: **PR #44 review + approved item 38 preserved;
-dependency maintenance preserved; approved 59 complete; 58 still open**).
+**Live, ordered. Updated 2026-09-23** (session
+`arena/01a0cc70-nh-dw-2-0`: **the ☆ became a real bookmark icon, every
+single-gallery page got a blue Bookmark button, the small-wins bundle landed
+(43, 44, 52, 41) and item 48 landed too — a `site:id` queue row is now
+downloadable, because the queue splits a mixed selection into one job per site
+and each job resolves through its own adapter** (PR #47). 42/58 remain
+user-only: real-browser and Android passes, signing.)
 
 **38 is done in the approved Firefox-only scope:** 33 options-page tests and
 narrow regression fixes, integrated with offline e2e. That task had no
@@ -108,7 +112,38 @@ controls on listings, toolbar opens the drawer); then
 
 ## Open, in the order I would take them
 
-### 42. Real-browser pass for the Queue tab — **highest priority**
+### 48. Non-nhentai queue rows must become downloadable — **DONE 2026-09-23**
+
+Owner approved verbatim ("yes do Next up … item 48"). Landed in **both** trees,
+no new host permission, no new adapter:
+
+1. **The job is per-site.** `BatchJobOptions.site?: string`; absent = the default
+   site, so every older caller/payload is byte-identical. The queue builds
+   `plan.bySite` (`{site, download, skip, titles}`, first-appearance order) and
+   `startDownload()` sends **one** `downloadAllDoujinshis` per group, in list
+   order; a group whose rows are all already downloaded sends nothing.
+2. **Metadata resolves per site.** `resolveGalleryMetadata(key, {site})` —
+   composite key wins, bare key takes `normalizeSite(site)`. In
+   `runBatchDownload`, `jobSite` drives the skip guard (`storeKey`), metadata,
+   history `records`/`batchKeys` (composite) and the failure rows
+   (`{id, name, error, site}`); titles, the `{id}` token and `cleanName()` use
+   the **bare** id so a file name never carries `hitomi:`.
+   `retryJobKey` includes the site (`batch.site` is written only for a
+   non-default site, keeping default retry payloads unchanged).
+3. The existing adapters do the fetching — nothing was widened.
+
+Coverage: `test/batch-pipeline.test.js` (per-site job describe),
+`test/bookmark-queue.test.js` (bySite + per-site history skip),
+`test/download-control.test.js` (per-site retry commands),
+`test/downloader.test.js` (hitomi pages from the hitomi hosts, never the
+nhentai CDN), `scripts/e2e-bookmark-panel.js` phases 7/7b (two jobs, bare
+payload keys, "across 2 sites", skip notice), `scripts/e2e-worker.js` phase 8b
+(worker fallback resolves + records under `hitomi:<id>` with zero nhentai API
+calls), `scripts/e2e-offscreen.js` (composite `jobFinished`). The wider
+planning-mode scope of backlog item 48 (adapter-interface v2, side-panel
+rework, site-aware paste box) is **not** part of this and stays in the backlog.
+
+### 42. Real-browser pass for the Queue tab — after 48, and user-only
 
 **Why first:** 3.7.0 shipped on offline evidence. `npm run test:browser` has
 **never** run in this environment, so every claim about rendering, restart and
@@ -128,29 +163,42 @@ Verify in a real Chrome 116+ profile:
       tab" notice, and with one open resolves titles and covers.
 - [ ] Auto-capture on a real infinite-scroll page: cards collect as they render,
       and turning it on mid-page collects what is already there.
-- [ ] The ☆ survives nhentai's own re-renders without duplicating.
+- [ ] The bookmark icon survives nhentai's own re-renders without duplicating (and the gallery-page Bookmark button is not injected twice).
 
 Then add the steps to "Required real-browser verification before PR" in
 `SESSION_HANDOFF.md`.
 
-### 43. ☆ on the single-title preview and on similar-gallery rows
+### 43. Bookmark control on the single-title preview and on similar-gallery rows — **DONE 2026-09-23**
 
-**Cost: low.** The worker side is already done — `bookmarkAdd` accepts
-`source: "page"` and `"similar"`, and `thumbnailUrlFromGallery` derives a cover
-from a resolved `media_id`. Only two render sites are missing:
-`popup.ts #doujinshiPreviewAsync` (single title) and the similar-galleries list
-built by `message.similarList`.
+Landed in both trees: the gallery page itself carries the blue **Bookmark**
+button on all six supported sites (`src/content/titleBookmark.ts`,
+`css/titleBookmark.css`, `js/titleBookmark.js`), and the panel's own surfaces
+now have their toggle too — `#buttonBookmark` beside Download in the
+single-title preview and `input.similarBookmark[data-id]` on every
+similar-gallery row (built by `message.bookmarkButtonHtml` / `similarList`,
+**outside** the row's `<label>` so a click cannot also tick the checkbox).
+`bookmarkTogglePresentation()` is the single source of the words and classes.
 
-Decision needed: use the derived `media_id` thumbnail (the metadata is already in
-hand at both sites) rather than leaving the row coverless until enrichment.
-Recommend yes.
+**Coverage note:** the markup contract is unit-tested; the preview/similar
+*wiring* has no e2e because both render through `innerHTML` and the window-less
+popup harness has no HTML parser. See `SESSION_HANDOFF.md`.
 
-### 44. Drag-reorder the bookmark list
+**Remaining sub-issue (still open, tracked as 48):** a non-nhentai row is stored
+and reorderable but not yet downloadable, because the queue's download pipeline
+is nhentai-keyed.
 
-**Cost: low.** `planBookmarkDownload` already emits ids **in list order**, so
-reordering the list already reorders the batch — only the affordance is missing.
-Order is already implicit in the stored array; add **no** new field. Must not
-fight the row's checkbox / Download / Remove hit targets.
+### 44. Drag-reorder the bookmark list — **DONE 2026-09-23**
+
+**Follow-up (same day):** `css/style.css` carried the item-44 rules twice; the
+stale copy leaked a dashed border onto the dragging row and a shadow onto the
+drop target, so Chrome rendered differently from Firefox. Removed — one
+definition per selector per tree, verified property by property.
+
+`moveBookmark()` (pure, clamped, same-state no-op), worker action
+`bookmarkReorder`, a dedicated drag handle per row plus row drop targets, CSS in
+both trees. No new stored field: array order **is** the download order, so
+reordering changes the batch. The row's checkbox / Download / Remove keep their
+own hit targets.
 
 ### 45. Per-row cancel of an in-flight download — **the surviving half of P3**
 
@@ -195,10 +243,12 @@ still owed under 58; offline parity is not a device-test result.
       delivers `getGalleries` directly to test format rendering, but does not
       exercise page injection/bootstrap, pagination, listing-job/PDF-merge or
       similar-gallery workflows. Those broader paths remain open.
-- [ ] **41. Non-canonical separators are canonicalised on tick (UX decision).**
-      `isTokenOnlyTemplate("{pretty}_{id}")` is `true`, so the first tick
-      rewrites it to `"{pretty} - {id}"`. Suggested: an `isCanonicalTemplate()`
-      gate routing odd separators to the manual input.
+- [x] **41. Non-canonical separators are canonicalised on tick — DONE
+      2026-09-23.** `isCanonicalTemplate()` (= token-only **and** byte-identical
+      to `buildTemplate(tokens)`) now gates the tick boxes in both `options.ts`
+      and the panel's `popupSettings.ts`, so `{pretty}_{id}` and
+      `{id} - {pretty}` keep the manual field. This was the suggested fix,
+      implemented as suggested.
 
 Also carried, older: raw retry-policy follow-ups, raw list-mode verification in
 a browser, and the standing fact that **no real-browser verification has ever
@@ -213,10 +263,11 @@ Full design,
 decision record (merge vs new repo) and per-site facts:
 `MULTISITE_V4_PLAN.md`.
 
-- [ ] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
-      where the lab-clone UI rework lands if merged. Follows 49 on purpose.
-      Owns the per-site job-splitting design for mixed-site queue selections
-      and the site-aware worker messages (plan §4.2).
+- [~] **48. Adapter layer v2 + multi-site side panel + site-aware paste box** —
+      **the per-site job-splitting half shipped 2026-09-23** (see the DONE
+      section above); the adapter-interface rework, the lab-clone side-panel UI
+      and the site-aware paste box are still open and still follow 49. The
+      site-aware worker messages it owned are now in place (plan §4.2).
 - [ ] **49. Hitomi.la adapter** — first new site; avif plumbing; raw-mode
       default for 1 GB-class galleries.
 - [ ] **50. Mirror-network adapter** (imhentai / hentaienvy / hentaiera, with
@@ -224,7 +275,12 @@ decision record (merge vs new repo) and per-site facts:
       No cooldown bypass — see the plan's Do-not rules.
 - [ ] **51. Streaming ZIP writer** — OPFS / File System Access, memory
       O(one page) instead of O(gallery).
-- [ ] **52. History export/import (JSON)** — cross-machine carry-over.
+- [x] **52. Queue + history export/import (JSON)** — **DONE 2026-09-23**,
+      out of planning and ahead of the rest of this list (it was the cheapest
+      item and the one users ask for first). One file, both stores; union merge,
+      local wins, nothing is ever deleted; the queue goes through the worker
+      (`bookmarkImport`) and the history through `historyImport` →
+      `writeHistory()`. Coverage: 24 unit tests + the new Queue-panel harness.
 
 Order if called: **49 → 48 → 50 → 51 → 52** (hitomi validates the
 adapter contract before the panel rework bakes it in). Rename/rebrand the
@@ -357,6 +413,16 @@ these hosts (DNS failure)" is wrong — DNS resolves; **egress** is blocked
 ---
 
 ## Done recently
+
+### 48. Per-site jobs — non-nhentai queue rows are downloadable — **DONE 2026-09-23**
+
+Owner approved. One job per site (`BatchJobOptions.site`), per-site metadata
+resolution (`resolveGalleryMetadata(key, {site})`), composite history/failure
+keys with bare-id file names, site in `retryJobKey`, and a queue plan that sends
+nothing for a fully-skipped group. Chrome **503 unit pass / 4 pending**, e2e
+exit 0 (140 PASS); Firefox **579 / 4 pending**, e2e exit 0 (172 PASS); tsc 0 in
+both; smoke 7 PASS; FF lint 0/0/31. Release snapshot re-synced. Full detail in
+the section above and `SESSION_HANDOFF.md` (third pass).
 
 ### 59. Saved list-format reads across shared Firefox consumers — **DONE 2026-09-21**
 

@@ -1,4 +1,4 @@
-// Persistent bookmark queue — the "I clicked ☆ on this title" list.
+// Persistent bookmark queue — the "I bookmarked this title" list.
 //
 // Why this exists separately from the download job queue:
 //   * The job queue lives in the offscreen document (`queuedJobs`,
@@ -377,7 +377,7 @@ export interface AddResult {
  * Add bookmarks. Newest first, like the Twitter queue's unshift.
  *
  * An id that is already bookmarked is NOT re-added and NOT reset: re-clicking
- * ☆ on a card that already downloaded must not turn a finished row back into a
+ * bookmark on a card that already downloaded must not turn a finished row back into a
  * pending one. That is what `duplicates` reports.
  */
 export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate[], now: number = Date.now()): AddResult {
@@ -431,6 +431,33 @@ export function removeBookmarks(state: BookmarkState, ids: Array<string | number
         return state;
     }
     return { v: state.v, items: state.items.filter((item) => !drop.has(itemKey(item))), collapsed: state.collapsed };
+}
+
+/**
+ * Move one bookmark to a new position in the list.
+ *
+ * The list order IS the download order (`planBookmarkDownload` walks
+ * `state.items`), so this is the whole storage side of drag-reorder: no new
+ * field, no separate sort key — array order was always the source of truth.
+ *
+ * `toIndex` is clamped into range; an unknown id or a move that changes
+ * nothing returns the SAME state object, so callers can skip a re-render.
+ */
+export function moveBookmark(state: BookmarkState, id: string | number, toIndex: number): BookmarkState {
+    const key = toGalleryKey(id);
+    const from = state.items.findIndex((item) => itemKey(item) === key);
+    if (from === -1) {
+        return state;
+    }
+    const parsed = Math.floor(Number(toIndex));
+    const target = Math.max(0, Math.min(state.items.length - 1, Number.isFinite(parsed) ? parsed : from));
+    if (target === from) {
+        return state;
+    }
+    const items = state.items.slice();
+    const moved = items.splice(from, 1)[0];
+    items.splice(target, 0, moved);
+    return { v: state.v, items: items, collapsed: state.collapsed };
 }
 
 export function clearBookmarks(state: BookmarkState): BookmarkState {
@@ -543,11 +570,54 @@ export function reconcileBookmarksAfterRestart(state: BookmarkState, historyIds?
 // ---- download wiring -----------------------------------------------------
 
 export interface BookmarkDownloadPlan {
-    /** Selected ids to send to the pipeline, in list order. */
+    /**
+     * Selected ids to send to the pipeline, in list order, bare.
+     *
+     * Kept for the default-site case and for callers that never see two sites.
+     * Once the queue holds rows from more than one site these bare ids are NOT
+     * enough to build a job - use `bySite`.
+     */
     download: string[];
     /** Selected ids skipped because the history already records them. */
     skip: string[];
-    /** id -> display title, the shape downloadAllDoujinshis expects. */
+    /**
+     * id -> display title for every SELECTED row (skipped rows included).
+     *
+     * This is the flat view kept for the default-site case and for messaging.
+     * It is deliberately **not** a ready job payload once rows can be skipped:
+     * build each command from `bySite`, whose `titles` cover only the rows that
+     * group will actually download.
+     */
+    titles: Record<string, string>;
+    /**
+     * The same selection, split into ONE JOB PER SITE (item 48).
+     *
+     * A job payload may only carry one site (`BatchJobOptions.site`), so a
+     * mixed-site selection has to become one downloadAllDoujinshis command per
+     * site. Without the split, "123" from two sites would collapse into a
+     * single `allDoujinshis` entry, and the pipeline's skip guard would check a
+     * hitomi row against the `nhentai:123` history record.
+     *
+     * Groups appear in first-appearance order, and `download` inside each group
+     * keeps list order, so "reorder the list" is still "reorder the batch".
+     * `site` is always a real slug (never empty), and the history check for
+     * every id in it used `toGalleryKey(id, site)`.
+     */
+    bySite: BookmarkDownloadGroup[];
+}
+
+export interface BookmarkDownloadGroup {
+    /** Site slug (siteKeys.ts): every id in this group belongs to it. */
+    site: string;
+    /** Selected ids of this site that will be downloaded, in list order, bare. */
+    download: string[];
+    /** Ids of this site already covered by the history. */
+    skip: string[];
+    /**
+     * id -> display title for the ids in `download` only, which is exactly the
+     * `allDoujinshis` payload for this site's job. Skipped rows are absent, so
+     * an empty object means "do not send a job for this site".
+     */
     titles: Record<string, string>;
 }
 
@@ -559,20 +629,56 @@ export interface BookmarkDownloadPlan {
 export function planBookmarkDownload(state: BookmarkState, historyIds: Array<string | number>, redownloadIds: Array<string | number> = []): BookmarkDownloadPlan {
     const recorded = new Set<string>((historyIds || []).map((id) => toGalleryKey(id)));
     const forced = new Set<string>((redownloadIds || []).map((id) => toGalleryKey(id)));
-    const plan: BookmarkDownloadPlan = { download: [], skip: [], titles: {} };
+    const plan: BookmarkDownloadPlan = { download: [], skip: [], titles: {}, bySite: [] };
+    const groups = new Map<string, BookmarkDownloadGroup>();
+    const groupFor = (site: string): BookmarkDownloadGroup => {
+        let group = groups.get(site);
+        if (!group) {
+            group = { site: site, download: [], skip: [], titles: {} };
+            groups.set(site, group);
+            plan.bySite.push(group);
+        }
+        return group;
+    };
     for (const item of state.items) {
         if (!item.selected) {
             continue;
         }
         // A title the row never learned is still traceable by its id.
         plan.titles[item.id] = item.title !== "" ? item.title : item.id;
+        // The row's own site decides its group: a row added from a gallery page
+        // carries it, and a legacy row without one is the default site.
+        const site = normalizeSite(item.site);
+        const group = groupFor(site);
         if (recorded.has(itemKey(item)) && !forced.has(itemKey(item))) {
             plan.skip.push(item.id);
+            group.skip.push(item.id);
         } else {
             plan.download.push(item.id);
+            group.download.push(item.id);
+            // A group's titles cover exactly the rows it will download, so the
+            // group IS a ready job payload - the skipped rows must not travel
+            // in it, or a "nothing left for this site" group would still send
+            // a command.
+            group.titles[item.id] = item.title !== "" ? item.title : item.id;
         }
     }
     return plan;
+}
+
+/**
+ * Label / tooltip / class for a bookmark toggle button, so every surface that
+ * offers the toggle (panel preview, similar-gallery rows, and any future
+ * consumer) shows the same words and the same on-state class.
+ */
+export function bookmarkTogglePresentation(on: boolean): { label: string; title: string; className: string } {
+    return {
+        label: on ? "Bookmarked" : "Bookmark",
+        title: on
+            ? "On the bookmark queue - click to take it off again (nothing is un-downloaded)"
+            : "Add this title to the persistent bookmark queue (Queue tab). It survives a browser restart.",
+        className: on ? "nhdwBookmarkToggle nhdwBookmarkOn" : "nhdwBookmarkToggle"
+    };
 }
 
 export function countBookmarks(state: BookmarkState): number {

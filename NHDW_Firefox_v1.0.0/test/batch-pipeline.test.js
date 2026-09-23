@@ -220,9 +220,14 @@ describe('runBatchDownload', () => {
         });
         assert.strictEqual(outcome.skipped, 0);
         assert.strictEqual(outcome.records.length, 1);
-        assert.strictEqual(outcome.records[0].id, '1');
+        // Item 48: a history record carries the COMPOSITE key, which for a
+        // default-site job is the same stored key as before ("nhentai:1").
+        assert.strictEqual(outcome.records[0].id, 'nhentai:1');
         assert.strictEqual(outcome.failedGalleries.length, 1);
+        // The failed id stays bare (it is what the user sees and what the retry
+        // payload is keyed by) with the site beside it.
         assert.strictEqual(outcome.failedGalleries[0].id, '9');
+        assert.strictEqual(outcome.failedGalleries[0].site, 'nhentai');
         assert.ok(/not gallery metadata/.test(outcome.failedGalleries[0].error));
         const summary = host.messages.find((m) => m.action === 'batchSummary');
         assert.ok(summary);
@@ -247,7 +252,7 @@ describe('runBatchDownload', () => {
         });
         assert.strictEqual(outcome.skipped, 0);
         assert.strictEqual(outcome.clean, true);
-        assert.deepStrictEqual(outcome.batchKeys, ['11', '22']);
+        assert.deepStrictEqual(outcome.batchKeys, ['nhentai:11', 'nhentai:22']);
         assert.strictEqual(host.downloads.length, 2);
         assert.strictEqual(host.downloads[0].path, 'Test');
         assert.strictEqual(host.downloads[1].path, 'Test_(22)');
@@ -561,5 +566,175 @@ describe('job format contract (item 33)', () => {
         assert.strictEqual(host.downloads[0].gallerySettings.useZip, 'pdf');
         assert.strictEqual(host.downloads[0].gallerySettings.useZip.indexOf('folder'), -1,
             'the retired folder value must not survive into the Downloader settings');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Item 48: one download job per site
+//
+// A job payload carries ONE site (`BatchJobOptions.site`). Everything that
+// touches a persistent store inside the pipeline must therefore compose the
+// composite key with that site, while file names and `{id}` tokens keep using
+// the bare id the user recognises. These tests pin both halves, because only
+// the combination makes a non-nhentai queue row downloadable:
+//   * the right adapter resolves the metadata (not the nhentai route),
+//   * the history/bookmark key is "hitomi:1234" and never "nhentai:1234",
+//   * the artifact name is still built from the bare id.
+// ---------------------------------------------------------------------------
+
+function hitomiPage(id, title) {
+    // The real page carries a JSON blob the adapter's extractor reads
+    // (src/parsing/hitomiHtml.ts): files[] with hash + name per page.
+    const info = {
+        id: Number(id),
+        title: title,
+        files: [{ hash: 'f'.repeat(64), name: '01.webp', haswebp: 1, width: 100, height: 200 }]
+    };
+    return '<html><body><script>var galleryinfo = ' + JSON.stringify(info) + ';</script></body></html>';
+}
+
+describe('item 48 — a per-site job', () => {
+    const HITOMI_ID = '60001';
+
+    function hitomiHost(overrides) {
+        return makeHost(Object.assign({
+            fetchImpl: async (url) => {
+                if (String(url).indexOf('hitomi.la/galleries/' + HITOMI_ID) !== -1) {
+                    return {
+                        ok: true,
+                        status: 200,
+                        statusText: 'OK',
+                        headers: { get: () => 'text/html' },
+                        text: async () => hitomiPage(HITOMI_ID, 'Hitomi Title')
+                    };
+                }
+                return { ok: false, status: 404, statusText: 'not found', headers: { get: () => null }, text: async () => '' };
+            }
+        }, overrides || {}));
+    }
+
+    it('resolves metadata through the job site\'s adapter, not the nhentai route', async () => {
+        const host = hitomiHost();
+        const outcome = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Hitomi Title' },
+            finalName: 'SiteJob',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true, site: 'hitomi' },
+            host: host
+        });
+        assert.strictEqual(outcome.failedGalleries.length, 0, JSON.stringify(host.errors));
+        assert.strictEqual(host.downloads.length, 1);
+        const json = host.downloads[0].json;
+        assert.strictEqual(json.site, 'hitomi', 'the resolved gallery must carry its site for the Downloader');
+        assert.strictEqual(json.title.pretty, 'Hitomi Title');
+        assert.strictEqual(outcome.records[0].id, 'hitomi:' + HITOMI_ID,
+            'the history record is filed under the hitomi key, not nhentai:<id>');
+    });
+
+    it('keeps the artifact name on the bare id', async () => {
+        const host = hitomiHost();
+        await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Hitomi Title' },
+            finalName: 'SiteJob',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'cbz', downloadSeparately: true, site: 'hitomi', downloadName: '{pretty} - {id}' },
+            host: host
+        });
+        // cleanName() replaces spaces for the on-disk path, so compare that.
+        assert.strictEqual(host.downloads[0].path, 'Hitomi_Title_-_' + HITOMI_ID,
+            'a {id} token must print the gallery id, never "hitomi:1234"');
+    });
+
+    it('never skip-checks a hitomi row against an nhentai record (and vice versa)', async () => {
+        // Same numeric id on two sites: the store keys must not collide.
+        const crossSite = hitomiHost();
+        const notSkipped = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Hitomi Title' },
+            finalName: 'CrossSite',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true, site: 'hitomi', alreadyDownloadedIds: ['nhentai:' + HITOMI_ID] },
+            host: crossSite
+        });
+        assert.strictEqual(notSkipped.skipped, 0, 'an nhentai record must not skip a hitomi gallery');
+        assert.strictEqual(crossSite.downloads.length, 1);
+
+        const sameSite = hitomiHost({ fetchImpl: async () => { throw new Error('must not fetch a skipped gallery'); } });
+        const skipped = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Hitomi Title' },
+            finalName: 'SameSite',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true, site: 'hitomi', alreadyDownloadedIds: ['hitomi:' + HITOMI_ID] },
+            host: sameSite
+        });
+        assert.strictEqual(skipped.skipped, 1, 'the hitomi record is the one that skips it');
+    });
+
+    it('names the failure with its site, and the retry job remembers it', async () => {
+        const host = hitomiHost({
+            fetchImpl: async () => ({ ok: false, status: 503, statusText: 'busy', headers: { get: () => 'text/html' }, text: async () => '' })
+        });
+        await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Hitomi Title' },
+            finalName: 'FailJob',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true, site: 'hitomi' },
+            host: host
+        });
+        const summary = host.messages.find((m) => m.action === 'batchSummary');
+        assert.strictEqual(summary.failedGalleries.length, 1);
+        assert.strictEqual(summary.failedGalleries[0].id, HITOMI_ID, 'the user-facing id stays bare');
+        assert.strictEqual(summary.failedGalleries[0].site, 'hitomi', 'the failure carries its site');
+        assert.strictEqual(summary.retryJob.site, 'hitomi', 'a retry must come back to the same site');
+    });
+
+    it('writes no site field for a default-site job, so nhentai payloads are unchanged', async () => {
+        const host = makeHost({
+            fetchImpl: async () => ({ ok: false, status: 503, statusText: 'busy', headers: { get: () => 'text/html' }, text: async () => '' })
+        });
+        await runBatchDownload({
+            zip: {},
+            allDoujinshis: { '9': 'Nine' },
+            finalName: 'DefaultJob',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true },
+            host: host
+        });
+        const summary = host.messages.find((m) => m.action === 'batchSummary');
+        assert.strictEqual(summary.retryJob.site, undefined);
+        assert.strictEqual(summary.failedGalleries[0].site, 'nhentai', 'the effective site is still reported');
+        const explicit = buildRetryJob(3, { useZip: 'zip', site: 'nhentai' });
+        assert.strictEqual(explicit.site, undefined);
+    });
+
+    it('resolveGalleryMetadata takes the job site for a bare key and the key itself for a composite one', async () => {
+        const calls = [];
+        const host = makeHost({
+            fetchImpl: async (url) => {
+                calls.push(String(url));
+                return { ok: true, status: 200, statusText: 'OK', headers: { get: () => 'text/html' }, text: async () => hitomiPage('70007', 'Bare') };
+            }
+        });
+        const bare = await resolveGalleryMetadata('70007', { galleryMetadata: {}, apiKey: '', host: host, site: 'hitomi' });
+        assert.strictEqual(bare.ok, true);
+        assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
+            'a bare key with a job site must use that site\'s adapter URL');
+        assert.strictEqual(bare.json.site, 'hitomi');
+
+        calls.length = 0;
+        const composite = await resolveGalleryMetadata('hitomi:70007', { galleryMetadata: {}, apiKey: '', host: host, site: 'nhentai' });
+        assert.strictEqual(composite.ok, true);
+        assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
+            'a composite key wins over a contradicting job site');
     });
 });

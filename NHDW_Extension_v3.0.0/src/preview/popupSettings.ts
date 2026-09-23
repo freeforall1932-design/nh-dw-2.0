@@ -9,7 +9,7 @@
 // dynamic values) so a malicious title or username cannot inject markup.
 
 import { verifyAndSaveApiKey, removeApiKey } from "../options/apiKey";
-import { TEMPLATE_TOKENS, templateTokensInUse, isTokenOnlyTemplate, buildTemplate } from "../options/nameTemplate";
+import { TEMPLATE_TOKENS, templateTokensInUse, isCanonicalTemplate, buildTemplate } from "../options/nameTemplate";
 import { utils } from "../utils/utils";
 import { clearHistory, countHistory, readHistory } from "../utils/downloadHistory";
 import {
@@ -181,10 +181,16 @@ export function renderSettings(container: HTMLElement): void {
         });
 
         const storedTemplate: string = elems.downloadName;
-        if (!isTokenOnlyTemplate(storedTemplate)) {
-            // A custom template the checkboxes cannot represent: show it as text.
-            namePreview.textContent = "Custom template in use: " + storedTemplate +
-                " (edit it in the full options page)";
+        if (!isCanonicalTemplate(storedTemplate)) {
+            // Two cases, one outcome: a template the checkbox builder cannot
+            // reproduce EXACTLY. Either it is custom ("My gallery {id}"), or it
+            // is token-only with a separator / spacing the builder does not
+            // emit ("{pretty}_{id}", "{pretty} {id}"). Ticking a box would
+            // silently rewrite those, so the boxes are not offered here; the
+            // stored template is shown as-is and edited in the full options
+            // page (item 41).
+            namePreview.textContent = "Template in use: " + storedTemplate +
+                " - keep it, or edit it in the full options page (the tick boxes would rewrite its separator).";
             return;
         }
 
@@ -543,7 +549,7 @@ function renderInterfaceSection(container: HTMLElement): void {
     section.appendChild(controlsLabel);
 
     const controlsHint = el("small");
-    controlsHint.textContent = "Adds a Download button, a Bookmark star and a Select box to every gallery card, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
+    controlsHint.textContent = "Adds a Download button, a bookmark icon and a Select box to every gallery card, a blue Bookmark button on every gallery page, plus a floating bar with the selection count, so you never have to open this panel. Reload the page after changing this.";
     section.appendChild(controlsHint);
 
     // ---- bookmark queue ------------------------------------------------
@@ -561,7 +567,7 @@ function renderInterfaceSection(container: HTMLElement): void {
     section.appendChild(autoLabel);
 
     const autoHint = el("small");
-    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Queue tab without a click per card. Clicking a card's filled star always removes it again.";
+    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Queue tab without a click per card. Clicking a card's filled bookmark icon always removes it again.";
     section.appendChild(autoHint);
 
     // The "advanced feature" entry point: from the hovering popup there is no

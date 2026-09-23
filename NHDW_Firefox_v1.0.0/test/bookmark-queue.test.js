@@ -536,6 +536,48 @@ describe('composite site keys on bookmark rows (item 47)', () => {
         assert.strictEqual(findBookmark(state, '999'), null);
     });
 
+    it('item 48: a mixed selection becomes one job per site, in list order', () => {
+        const state = normalizeBookmarkState({
+            v: 1,
+            items: [
+                { id: '111', site: 'nhentai', title: 'Nhentai one', selected: true },
+                { id: '111', site: 'hitomi', title: 'Hitomi one', selected: true },
+                { id: '222', site: 'nhentai', title: 'Nhentai two', selected: true },
+                { id: '333', site: 'hitomi', title: '', selected: true },
+                { id: '444', site: 'hitomi', title: 'Not selected', selected: false }
+            ]
+        });
+        const plan = planBookmarkDownload(state, []);
+        assert.deepStrictEqual(plan.bySite.map((group) => group.site), ['nhentai', 'hitomi'],
+            'groups appear in first-appearance order');
+        const nhentai = plan.bySite[0];
+        assert.deepStrictEqual(nhentai.download, ['111', '222']);
+        assert.deepStrictEqual(nhentai.titles, { '111': 'Nhentai one', '222': 'Nhentai two' });
+        const hitomi = plan.bySite[1];
+        assert.deepStrictEqual(hitomi.download, ['111', '333'], 'the group keeps list order');
+        assert.deepStrictEqual(hitomi.titles, { '111': 'Hitomi one', '333': '333' },
+            'a row with no title falls back to its id');
+        assert.strictEqual(plan.download.includes('444'), false, 'unselected rows are in no group');
+    });
+
+    it('item 48: a history record only skips the row of ITS site', () => {
+        const state = normalizeBookmarkState({
+            v: 1,
+            items: [
+                { id: '500', site: 'nhentai', title: 'N', selected: true },
+                { id: '500', site: 'hitomi', title: 'H', selected: true }
+            ]
+        });
+        const plan = planBookmarkDownload(state, ['nhentai:500']);
+        assert.deepStrictEqual(plan.bySite[0], { site: 'nhentai', download: [], skip: ['500'], titles: {} },
+            'a fully-skipped group carries no payload, so no job is sent for it');
+        assert.deepStrictEqual(plan.bySite[1], { site: 'hitomi', download: ['500'], skip: [], titles: { '500': 'H' } });
+
+        // ...and "download anyway" only defeats it for that same site.
+        const forced = planBookmarkDownload(state, ['nhentai:500'], ['nhentai:500']);
+        assert.deepStrictEqual(forced.bySite[0].download, ['500']);
+    });
+
     it('planBookmarkDownload skips only the row the composite history records', () => {
         const state = addBookmarks(emptyBookmarkState(), [
             { id: '1', title: 'One' },

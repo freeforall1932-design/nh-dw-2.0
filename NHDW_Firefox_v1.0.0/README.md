@@ -1,8 +1,15 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.2.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.3.0)
 
-**Updated:** 2026-09-21 · status: **website-embedded UI + PR #44 review fixes
-(items 56/57), options harness/fixes (38), and shared list-format fix (59)
-complete; real-device verification + signing remain pending (58)**
+**Updated:** 2026-09-23 · status: **website-embedded UI + PR #44 review fixes
+(items 56/57), options harness/fixes (38), shared list-format fix (59) and the
+Chrome-3.9.0 backport — bookmark icon, gallery-page Bookmark button, Queue-tab
+markup (43), drag-reorder (44), backup import/export (52), canonical-separator
+gate (41) — complete; real-device verification + signing remain pending (58)**
+
+v1.3.0 = the Chrome 3.9.0 bookmark work, ported: the card control is a real
+bookmark glyph, every single-gallery page (all six sites) carries a blue
+**Bookmark** button, the Queue tab's rows drag-reorder, and the tab can export
+and import the queue + history as one JSON file.
 
 v1.2.0 = the in-page drawer is the primary surface on nhentai.net. A
 **Downloader** button sits in the site header next to the hamburger; it opens
@@ -20,7 +27,7 @@ Review fixes include working embedded settings, shared Settings/Queue layout
 CSS, safe reattachment/live updates, and a Full panel tab bound to the nhentai
 page that opened it (including retries and pasted-bookmark metadata). Offline
 tests cover these paths; this is **not** a claim of Firefox/Android device
-verification. Manifest remains 1.2.0; no signing run has been performed.
+verification. Manifest is 1.3.0 (the 1.3.0 change is the bookmark icon, the gallery-page Bookmark button and the Queue-tab extras backported from Chrome 3.9.0); no signing run has been performed.
 
 Item 38 adds **33 offline options-page tests**, using the actual HTML and built
 bundle. Options now restore saved list formats, display legacy PDF values,
@@ -119,7 +126,7 @@ builds survive; when nothing is downloading, idle suspension still applies.
 | F3 | Keep-alive alarm active only during jobs | ✅ shipped |
 | F4 | First-run host-permission grant guard (Firefox MV3 semantics) | ✅ shipped |
 | F5 | Manifest regression tests incl. Firefox guards (gecko.id, event page, no offscreen perm, viewport metas, icon files, host scoping, min-version, data declaration) | ✅ 9 new tests, suite green |
-| F6 | Packaging: `npm run package:firefox` → clean zip (no src/test/scripts/build/node_modules/.git, no .ts/.map/logs, no offscreen files) | ✅ 25 entries in reviewed 1.2.0, including shared renderer CSS |
+| F6 | Packaging: `npm run package:firefox` → clean zip (no src/test/scripts/build/node_modules/.git, no .ts/.map/logs, no offscreen files) | ✅ entries reviewed in 1.2.0, including shared renderer CSS; re-run before signing 1.3.0 |
 | F7 | Device-test + signing runbooks (below), incl. AMO content-policy caveat | ✅ this README |
 | F8 | Chrome folders untouched; CI stays green (new lint step added to the Firefox job) | ✅ |
 

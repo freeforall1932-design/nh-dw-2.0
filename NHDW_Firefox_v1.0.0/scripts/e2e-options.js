@@ -279,15 +279,31 @@ test("list template typing is preview-only; change saves only that template or t
     assert.match(preview(ctx), /Sample_Title\.zip$/);
 });
 
-test("opening a token template preserves its order; ticking explicitly saves canonical tokens", async () => {
-    const ctx = await page({ sync: { downloadName: "{id} - {pretty}" } });
+test("a canonical token template opens the tick boxes and only an explicit tick writes (item 41)", async () => {
+    // Canonical = exactly what buildTemplate emits for its tokens: canonical
+    // token order AND the " - " separator.
+    const ctx = await page({ sync: { downloadName: "{pretty} - {id}" } });
     assert.equal(ctx.el("downloadNameAdvanced").style.display, "none");
-    assert.equal(ctx.el("template_id").checked, true);
     assert.equal(ctx.el("template_pretty").checked, true);
-    assert.match(ctx.el("downloadNamePreview").textContent, /\{id\} - \{pretty\}/);
-    assert.deepEqual(ctx.writes, []);
+    assert.equal(ctx.el("template_id").checked, true);
+    assert.deepEqual(ctx.writes, [], "opening a canonical template writes nothing");
     await ctx.change("template_language", true);
     onlySet(ctx, "sync", "downloadName", "{pretty} - {id} - {language}");
+});
+
+test("a token template with the user's OWN order or separator keeps the manual field (item 41)", async () => {
+    // Before the gate, isTokenOnlyTemplate accepted both of these, so the first
+    // tick of ANY box silently rewrote them ("{id} - {pretty}" ->
+    // "{pretty} - {id} - {language}", "{pretty}_{id}" -> "{pretty} - {id} - ...").
+    for (const stored of ["{id} - {pretty}", "{pretty}_{id}", "{pretty} {id}"]) {
+        const ctx = await page({ sync: { downloadName: stored } });
+        assert.equal(ctx.el("downloadNameChecks").style.display, "none", stored + ": boxes hidden");
+        assert.equal(ctx.el("downloadNameAdvanced").style.display, "", stored + ": manual field shown");
+        assert.equal(ctx.el("downloadName").value, stored, stored + ": stored verbatim in the field");
+        assert.equal(ctx.document.getElementById("template_pretty"), null, stored + ": no tick box rendered");
+        assert.deepEqual(ctx.writes, [], stored + ": opening writes nothing");
+        assert.match(ctx.el("downloadNamePreview").textContent, /Custom template in use/);
+    }
 });
 
 test("custom templates use the manual field and are saved verbatim only on change", async () => {

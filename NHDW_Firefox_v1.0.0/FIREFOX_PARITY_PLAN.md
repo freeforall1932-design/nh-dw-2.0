@@ -85,7 +85,8 @@ Everything else must be **byte-identical to Chrome** after the rebase.
 ## 5. Versioning
 
 1.0.0 = Android-ready snapshot (shipped). 1.1.0 = parity elevation (+ its
-Android re-plan). 1.2.0 = website-embedded UI (items 56/57). Independent
+Android re-plan). 1.2.0 = website-embedded UI (items 56/57); 1.3.0 =
+bookmark icon + gallery-page Bookmark button + Queue-tab extras (Chrome 3.9.0). Independent
 sequence, never synced to Chrome's numbers.
 
 ## 6. P1 review (2026-09-19, same session) — results
@@ -115,7 +116,8 @@ Owner-mandated hunt for truncated/broken code after the rebase. Findings:
 Real desktop-Firefox + Android-device verification cannot run in this
 sandbox (no browser/device). **P2 is folded into item 58**: one combined
 verification session after the embedded-UI work, covering both surfaces,
-then sign 1.2.0. Nothing is lost; it is rescheduled, not skipped.
+then sign the current version (**1.3.0** as of 2026-09-23; it was 1.2.0 when
+this plan was written). Nothing is lost; it is rescheduled, not skipped.
 
 ## 8. P4 — website-embedded UI (owner direction, 2026-09-19)
 

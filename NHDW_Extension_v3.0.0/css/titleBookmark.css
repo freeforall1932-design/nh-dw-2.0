@@ -1,0 +1,69 @@
+/* ---- Title-page Bookmark button (NHentai Downloader) --------------------
+   The third button next to a site's own Favorite and Download buttons on a
+   single gallery page. It is injected by js/titleBookmark.js, which copies the
+   site's own button classes onto it (see src/utils/titleBookmark.ts) so the
+   SIZING comes from the site's framework — `:where()` below keeps these
+   defaults at zero specificity so a site's own `.btn` rule can win.
+
+   The colours are the part the user asked to differ, so those are the only
+   declarations that use !important: a site's `.btn.btn-primary` selector is
+   more specific than a single class, and the button has to stay blue on all
+   six sites. ------------------------------------------------------------------ */
+
+:where(.nhdw-title-bookmark) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    margin: 0 0 0 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: bold;
+    line-height: 1.2;
+    vertical-align: middle;
+    text-decoration: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.nhdw-title-bookmark {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #1d4ed8 !important;
+}
+
+.nhdw-title-bookmark:hover,
+.nhdw-title-bookmark:focus {
+    background: #1d4ed8 !important;
+    color: #ffffff !important;
+}
+
+.nhdw-title-bookmark:focus-visible {
+    outline: 2px solid #93c5fd;
+    outline-offset: 1px;
+}
+
+/* Bookmarked: same blue family, darker and pressed-looking, so on/off is
+   readable at a glance without a second colour in the button row. */
+.nhdw-title-bookmark-on,
+.nhdw-title-bookmark-on:hover,
+.nhdw-title-bookmark-on:focus {
+    background: #0f3fa8 !important;
+    border-color: #0b2f7f !important;
+    color: #ffffff !important;
+}
+
+.nhdw-title-bookmark .nhdw-title-bookmark-icon {
+    width: 16px;
+    height: 16px;
+    display: block;
+    fill: currentColor;
+    flex: 0 0 auto;
+}
+
+.nhdw-title-bookmark .nhdw-title-bookmark-label {
+    white-space: nowrap;
+}

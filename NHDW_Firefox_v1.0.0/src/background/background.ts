@@ -15,6 +15,7 @@ import { normalizeFormat, normalizeFormatOverride, resolveJobFormat, formatExten
 // The worker OWNS the persistent download history (chrome.storage.local): it
 // reads it for the pipeline guard, writes it when jobs report success and
 // clears it on user request. The offscreen document never touches storage.
+import * as historyTransfer from "../utils/downloadHistory";
 import {
     BatchOutcome,
     DownloadHistory,
@@ -33,7 +34,7 @@ import { presentBatchFilenames, verifyHistoryOnDisk } from "../utils/downloadVer
 // Failed galleries of the session (chrome.storage.session): remembered so the
 // popup can name them and re-add them even after it was closed mid-job.
 import { rememberFailedGalleries, forgetFailedGalleries, readPendingFailuresSettled, clearPendingFailures } from "../utils/failedGalleries";
-// Persistent bookmark queue (chrome.storage.local): the "titles I clicked ☆
+// Persistent bookmark queue (chrome.storage.local): the "titles I bookmarked
 // on" list. The worker is its single writer because the content script and the
 // panel both mutate it. It OUTLIVES the offscreen job queue, which is
 // memory-only; bookmark rows feed the download pipeline, they never replace it.
@@ -689,7 +690,7 @@ module background
         };
     }
 
-    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }) {
+    export function downloadAllDoujinshis(allDoujinshis: Record<string, string>, finalName: string, errorCallback: Function, progressCallback: Function, galleryMetadata: Record<string, any> = {}, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[]; site?: string }) {
         beginJob();
         const zip = new JSZip();
         resolveWorkerBatchOptions(options).then((resolved) => {
@@ -794,6 +795,7 @@ function jobOverridesFromRequest(request: any): {
     rawMasterFolder?: string;
     archiveMasterFolder?: string;
     redownloadIds?: string[];
+    site?: string;
 } {
     const overrides: any = { useZip: normalizeFormatOverride(request.formatOverride) };
     if (request.separate !== undefined) {
@@ -809,6 +811,11 @@ function jobOverridesFromRequest(request: any): {
     // Per-download "download anyway" override: recorded galleries in this list
     // are exempt from the history guard.
     overrides.redownloadIds = Array.isArray(request.redownloadIds) ? request.redownloadIds.map(String) : [];
+    // Item 48: the site of this job's galleries. Absent for every caller that
+    // predates the Queue tab's per-site split, which then means the default site.
+    if (typeof request.site === "string" && request.site !== "") {
+        overrides.site = request.site;
+    }
     return overrides;
 }
 
@@ -1165,6 +1172,9 @@ function resolveWorkerBatchOptions(options?: BatchJobOptions): Promise<BatchJobO
                 if (options.rawMaxConcurrent !== undefined) merged.rawMaxConcurrent = options.rawMaxConcurrent;
                 if (Array.isArray(options.alreadyDownloadedIds)) merged.alreadyDownloadedIds = options.alreadyDownloadedIds;
                 if (Array.isArray(options.redownloadIds)) merged.redownloadIds = options.redownloadIds;
+                // Item 48: the per-site job. Merged like every other override, so
+                // both the relay path and the worker fallback resolve the same site.
+                if (typeof options.site === "string" && options.site !== "") merged.site = options.site;
             }
             resolve(merged);
         };
@@ -1480,6 +1490,14 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 if (Array.isArray(relayedMessage.redownloadIds)) {
                     options.redownloadIds = relayedMessage.redownloadIds.map(String);
                 }
+                if (typeof relayedMessage.site === "string" && relayedMessage.site !== "") {
+                    // Item 48: the Queue tab splits a mixed selection into one
+                    // job per site, and this is the site every gallery of THIS
+                    // job belongs to. It travels inside the job options because
+                    // the offscreen document cannot read anything else, and the
+                    // pipeline reads it from there.
+                    options.site = relayedMessage.site;
+                }
                 // Relay the persistent history with the job: the offscreen
                 // guard (and Download all across pages) needs the recorded ID
                 // list to skip already-downloaded galleries without fetching
@@ -1552,8 +1570,17 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         };
         if (request.action === "downloadDoujinshi") {
             return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
+        } else if (request.action === "historyImport") {
+            // Import arrives from the panel with an ALREADY-MERGED map (local
+            // records win: only this machine knows whether the file is still on
+            // disk). Writing here keeps history single-writer like the bookmark
+            // queue, and the panel gets the resulting count back for its notice.
+            historyTransfer.writeHistory(request.history)
+                .then(() => sendResponse({ result: "success", count: Object.keys(request.history || {}).length }))
+                .catch(() => sendResponse({ result: "error", error: "Could not write the import." }));
+            return true;
         } else if (request.action === "downloadAllDoujinshis") {
-            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
+            return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, site: request.site, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "downloadAllPages") {
             return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "goBack") {

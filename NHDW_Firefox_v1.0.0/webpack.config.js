@@ -16,6 +16,7 @@ module.exports = {
     content: './src/content/content.ts',
     updateContent: './src/content/updateContent.ts',
     listControls: './src/content/listControls.ts',
+    titleBookmark: './src/content/titleBookmark.ts',
     siteUi: './src/content/siteUi.ts',
     preview: './src/preview/preview.ts',
     getGalleries: './src/preview/getGalleries.ts',

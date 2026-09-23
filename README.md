@@ -34,7 +34,7 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 - 🗂️ **Four output formats** — `ZIP`, `CBZ`, `PDF`, or raw numbered pages (`001.jpg`…) in a titled folder under one master folder.
 - 🖱️ **Works in the page** — every gallery card gets its own **Download** button and **Select** box; a floating bar batches your selection. No popup round-trips needed.
 - 🚀 **Large-gallery safe** — archives are handed to Chrome through an MV3 *offscreen document*, so huge galleries never choke the service worker.
-- ⭐ **Bookmark queue** — click ☆ on any card and the title waits in the **Queue** tab with its cover and page count. Survives closing the browser and restarting the PC. Collapses to a taskbar-style dock.
+- ⭐ **Bookmark queue** — click the bookmark icon on any card, or the blue **Bookmark** button on a gallery page (next to the site's own Favorite/Download buttons, all six supported sites), and the title waits in the **Queue** tab with its cover and page count. Survives closing the browser and restarting the PC. Collapses to a taskbar-style dock.
 - 📋 **Paste anything** — ids, `nhentai.net/g/…` links, any `cin.*` mirror link, `?id=…` bulk strings, ranges like `366220-366224`, mixed freely. Bookmark them or download straight away.
 - 🧠 **Remembers what you downloaded** — re-running the same search skips finished galleries, shows a ✓ badge with the saved file name, and offers per-gallery *Download anyway*. *Verify-then-redownload*: a deleted file is fetched again; a cancelled or partial download is never recorded.
 - 🪟 **Dockable side panel** — the toolbar button opens a resizable side panel (popup still available in Settings).
@@ -62,7 +62,7 @@ Open a gallery page → click the extension icon → edit the save name if you l
 - Or do the same from the side panel, which lists every gallery on the page and can walk all result pages.
 
 ### The Queue tab
-- **☆** bookmark cards on any listing, or paste ids/links into the box and **Add to queue** / **Download now**.
+- **Bookmark** any card from its icon, any gallery page from its blue **Bookmark** button, or paste ids/links into the box and **Add to queue** / **Download now**.
 - Tick rows → **Download N selected** → one file per title, in list order, named by the list-mode template.
 - **Auto-capture** (Settings, off by default) bookmarks every card as you scroll.
 - Rows report `bookmarked → downloading → done` (with the saved file name) `→ failed` (with the reason + retry).
@@ -100,7 +100,8 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 
 - **Download history is local** — it lives in this browser profile, starts empty, and never syncs. `chrome.downloads` can only verify files this profile saved.
 - **No per-item cancel in the queue** — global pause / clear exist; cancelling one specific in-flight gallery is recorded as future work.
-- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.2.0 build with Queue, ☆ and list controls; offline checks do not replace the desktop/Android release gate (58).
+- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.3.0 build with Queue, the bookmark icon and list controls; offline checks do not replace the desktop/Android release gate (58).
+- **Queue rows from the other five sites cannot be downloaded yet** — they are stored correctly as `site:id`, but the download pipeline is still nhentai-keyed (multi-site job split, roadmap below).
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
@@ -159,6 +160,7 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| **3.9.0** | Real bookmark icon on cards (was ☆), blue **Bookmark** button on every gallery page of all six supported sites, Select/Bookmark moved left with Download kept right. |
 | **3.8.0** | Composite `(site, id)` keys — multi-site groundwork; viewer-mirror (`cin.*`) paste support pinned by tests. |
 | **3.7.0** | Bookmark queue: ☆ on cards, persistent Queue tab, paste box, dock, auto-capture. |
 | **3.6.x** | Failure tracking by name + *Retry failed*, error-message hardening, one format decision per job. |

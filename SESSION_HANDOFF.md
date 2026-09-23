@@ -1,5 +1,228 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`), **three passes in
+one day.** Chrome **3.9.0**, Firefox **1.3.0**. Read the sections below in order —
+the first one is the newest work. Preserve all prior work in this tree.
+
+## Third pass — item 48, per-site jobs: a `site:id` queue row is downloadable
+
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`). The owner approved
+the wording at the top of `WORKLIST.md` verbatim ("yes do Next up … item 48").
+The queue now **splits a mixed selection into one job per site** and the pipeline
+**resolves each job's metadata through that site's own adapter** — no new host
+permission, no `<all_urls>`, no new adapter. Both trees, uncommitted at the time
+of writing (a later commit records it).
+
+- **One job carries ONE site.** `BatchJobOptions.site?: string`
+  (`src/utils/batchPipeline.ts`); absent means the default site, so every
+  pre-existing caller and payload is byte-identical. The queue builds
+  `plan.bySite` (`{site, download, skip, titles}`, first-appearance order) and
+  `bookmarkPanel.startDownload(groups, fromQueue, skippedCount)` sends **one**
+  `downloadAllDoujinshis` per group, in list order.
+- **Per-site keys everywhere downstream.** `runBatchDownload` derives
+  `jobSite = normalizeSite(options.site)`, `storeKey = toGalleryKey(id, jobSite)`
+  and `bareId = splitGalleryKey(storeKey).id`: the skip guard reads `storeKey`,
+  metadata resolution gets `{site: jobSite}`, while **titles, the `{id}`
+  token and `cleanName()` use the bare id** (a file name must not contain
+  `hitomi:`), and history/failure `records`/`batchKeys` are **composite**.
+  `FailedGallery.site` records the failing job's site.
+- **`resolveGalleryMetadata(key, {site})`:** a composite key always wins; a bare
+  key takes `normalizeSite(args.site)`. That is what makes the hitomi / imhentai
+  / hentaiera / hentaienvy / hentaifox adapters do the fetching.
+- **`retryJobKey` MUST include the site** (undefined/empty → `null`). Without it
+  two per-site jobs with the same bare id share one retry bucket. `batch.site`
+  is written only for a non-default site, so default-site retry payloads stay
+  byte-identical to 3.9.0.
+- **The queue's `titles` cover only rows in `download`.** A fully-skipped group
+  is `{site, download: [], skip: [...], titles: {}}` and **must not** be sent as
+  a job (caught by the new e2e phase). `startDownload` threads `skippedCount`
+  and appends " (N already downloaded skipped)" to **every** notice branch.
+- **`background.ts` (both trees):** the relay forwards `site`, the relay path
+  copies `relayedMessage.site` into the options, `jobOverridesFromRequest`
+  sets/serializes it, and the worker-options merge passes it on. Firefox's
+  `background.ts` is **not** the Chrome file — it was patched surgically
+  (6 edits) and its FF-only deltas re-verified; `bookmarkService.ts` gained the
+  `toGalleryKey` import for a site-aware `markBookmarksFailed`.
+- **New coverage:** `test/batch-pipeline.test.js` describe "item 48 — a
+  per-site job" (adapter routing, bare `{id}` naming, per-site skip guard,
+  failure `site` + `retryJob.site`, default site unchanged, bare-vs-composite
+  metadata), `test/download-control.test.js` (+2: same id on two sites → two
+  retry commands), `test/bookmark-queue.test.js` (+2: `bySite` order/titles,
+  per-site history skip), `test/downloader.test.js` (+1: a hitomi gallery is
+  fetched from the hitomi hosts and never the nhentai CDN),
+  `scripts/e2e-bookmark-panel.js` phases 7/7b/7c (2 jobs, payload keys bare,
+  titles travel, "across 2 sites", per-site skip notice, a row's own Download
+  button carries its site),
+  `scripts/e2e-worker.js` phase 8b (the worker fallback resolves, names, fetches
+  **and records under `hitomi:<id>`**, with zero nhentai API calls) and
+  `scripts/e2e-offscreen.js` (composite `jobFinished` keys).
+- **Verified:** Chrome tsc 0, webpack OK, **503 unit pass / 4 pending**, full
+  `test:e2e` exit 0 (**140 PASS** lines, no FAIL), smoke 7 PASS. Firefox tsc 0,
+  webpack OK, **579 unit pass / 4 pending**, full `test:e2e` exit 0
+  (**172 PASS**), smoke 7 PASS, web-ext lint **0 errors / 0 notices / 31
+  advisories**. Release snapshot re-synced with the exhaustive loop
+  (`js/background.js`, `js/offscreen.js`, `js/preview.js` were stale; nothing
+  missing).
+- **Do not** merge the per-site jobs back into one mixed batch, and do not key
+  a file name off the composite key. **Do not** drop `site` from `retryJobKey`.
+
+---
+
+## Second pass — items 43, 44, 52 and 41 (small wins)
+
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`). The owner answered
+"what else can be worked on" by picking **every** option offered, so this pass
+adds the bookmark coverage the new feature was missing plus the small-wins
+bundle. All of it is in **both** trees (Chrome 3.9.0 / Firefox 1.3.0), committed
+with PR #47, and the release snapshot is re-synced.
+
+- **43 — the panel's own toggles.** `bookmarkTogglePresentation(on)` in
+  `src/utils/bookmarkQueue.ts` is now the single source of the label, tooltip
+  and classes (Bookmark/Bookmarked, blue `.nhdwBookmarkOn`). `message.ts` gained
+  `bookmarkButtonHtml(id, extraClass, on, dataId)`; `downloadInfo(…, bookmarked)`
+  embeds it beside Download as `#buttonBookmark`, and `similarList()` renders one
+  `input.similarBookmark[data-id]` per row. **The button is rendered outside each
+  row's `<label>`** — nested inside, a click would also toggle that gallery's
+  download checkbox, and that rule is asserted by a unit test. `popup.ts`
+  wires both (optimistic paint → `bookmarkAdd`/`bookmarkRemove` → repaint from
+  the worker's answer, with a `readBookmarks` fallback).
+  **Coverage limit, stated plainly:** the markup contract is unit-tested; the
+  preview/similar *wiring* has **no** e2e, because both surfaces render through
+  `innerHTML` and the window-less popup harness has no HTML parser — an e2e
+  there would mostly test the parser. Do not "fix" that by hand-rolling a parser
+  inside the harness.
+- **44 — drag-reorder.** `moveBookmark(state, id, toIndex)` (pure; clamps;
+  returns the **same** state on a no-op or unknown id so callers can skip a
+  repaint; keyed through `toGalleryKey`, so `site:id` rows drag too). Worker
+  action `bookmarkReorder`; panel `span.nhdwBmDrag` handle (the only draggable
+  element — the row's checkbox/Download/Remove keep their hit targets) plus row
+  `dragover`/`dragleave`/`drop`. `dragstart` also sets `text/plain` on the
+  transfer, because Firefox refuses to start a drag with an empty
+  `dataTransfer`. **No new stored field:** array order is the download order.
+- **52 — backup file (export/import).** New pure module
+  `src/utils/queueTransfer.ts` with `buildTransferPayload` /
+  `serializeTransfer` / `parseTransferPayload` / `mergeImportedHistory`.
+  `app: "nh-downloader-transfer"`, `version: 1`, pretty-printed JSON, both
+  stores in one file. **Policy: union, local wins, imported rows appended,
+  nothing is ever deleted** — a wrong file cannot wipe the list, and only this
+  machine knows whether a file is still on disk. Validation refuses empty,
+  unparseable, foreign, newer-version and empty-content files **with a reason**,
+  and normalizes every row through the same readers as the live path (bad rows
+  are dropped, not fatal). Writes stay single-writer: the queue goes through the
+  worker's new `bookmarkImport` action, the history through `historyImport` →
+  new `writeHistory()` (keeps the file's own timestamps, reuses the serialized
+  write chain so it cannot race a settling download). **The panel never writes
+  storage itself.** Re-importing the same file is a no-op.
+- **41 — the odd-separator gate.** `isCanonicalTemplate(tpl)` = token-only
+  **and** `buildTemplate(templateTokensInUse(tpl)) === tpl`, so
+  `{pretty}_{id}`, `{pretty} {id}` and `{id} - {pretty}` keep the manual field
+  instead of being rewritten by the first tick. Both `options.ts` and the
+  panel's `popupSettings.ts` gate on it (they are separate implementations —
+  change both).
+- **New coverage:** `test/queue-transfer.test.js` (24 tests: 41's gate, 43's
+  presentation, `moveBookmark`, the whole 52 contract), `test/message.test.js`
+  (+5 markup tests), **`scripts/e2e-bookmark-panel.js`** — a new Queue-panel
+  harness that drives the built `js/preview.js`: rows/status classes, the full
+  drag sequence (and that an abandoned drag sends nothing), the export blob and
+  its contents, import + re-import + six refusal cases. Firefox
+  `scripts/e2e-options.js` gained canonical-vs-non-canonical template routing.
+  Both `package.json` test lists and `test:e2e` chains were extended.
+- **Harness stub requirements (do not remove):** `textContent = ""` must
+  **replace** children (the panel clears the row list that way), and assigning
+  `.id` must register the node for `getElementById` (the backup buttons are built
+  with `createElement` and then found by id). `URL.createObjectURL`/`revokeObjectURL`
+  are stubbed and the blob is captured — that is what makes the export testable.
+- **Verified (this pass):** Chrome tsc 0, webpack OK, **492 unit pass / 4
+  pending**, full `test:e2e` green (title-page suite still **146 checks**, new
+  panel suite 8 phases), smoke 7 PASS. Firefox tsc 0, webpack OK, **568 unit
+  pass / 4 pending**, e2e green (site-ui 15, embedded-toolbar 11, options **34**),
+  smoke 7 PASS, web-ext lint **0 errors / 0 notices / 31 advisories**.
+- **Release:** `NHDW_Release_v3.0.0` re-synced with the **exhaustive
+  file-by-file loop** (never a fixed file list). This pass it caught
+  `js/background.js`, `js/options.js`, `js/preview.js` and `css/style.css` as
+  stale; nothing was missing. Run that loop again after any source change.
+- **Item 48 landed after this pass** — see the third-pass section above; the
+  `batchPipeline.ts:322` NOTE is now implemented. What remains open is **42/58**
+  (real-browser + Android passes, signing), which only the owner can run, plus
+  the wider item-48 planning scope (adapter-interface v2, side-panel rework,
+  site-aware paste box) that was never part of this task.
+
+---
+
+## First pass of this session — the bookmark icon and the gallery-page Bookmark button
+
+**Updated:** 2026-09-23 (session `arena/01a0cc70-nh-dw-2-0`) — **owner request:
+the bookmark ☆ became a real bookmark icon, and every single-gallery page got a
+blue "Bookmark" button next to the site's own Favorite/Download buttons.**
+Chrome **3.9.0**, Firefox **1.3.0**. Preserve all prior work in this tree.
+
+- **Card controls:** the ☆/★ text glyph is gone. Each listing card's bookmark
+  control is still the same 26x26 box in the same strip, but it now draws an
+  inline SVG bookmark (`createElementNS`, never `innerHTML`) — outline when the
+  title is not bookmarked, filled when it is — and stays text-free. Select +
+  Bookmark moved into a left-hand group; **Download stayed the strip's own
+  right-most child** (`css/content.css`, `src/content/listControls.ts`).
+- **New single-title Bookmark button (`src/content/titleBookmark.ts`,
+  `css/titleBookmark.css`, `js/titleBookmark.js`):** blue glyph + the word
+  "Bookmark" ("Bookmarked" when on), inserted immediately AFTER the site's own
+  Download button so the row reads Favorite / Download / Bookmark. Sizing comes
+  from copying the site's presentational button classes (nhentai `btn
+  btn-secondary`; hentaiera/hentaifox `btn btn_colored`; imhentai `tag btn
+  btn-primary`; hentaienvy `hnv-gallery-action`; hitomi none) — never the site's
+  behavior hooks (`js-*`, `*_btn`). Per-site anchors, title/cover/page-count
+  selectors live in one declarative table, `src/utils/titleBookmark.ts`.
+- **All six sites:** manifest `content_scripts` now also match `nhentai.net/g/*`,
+  hentaiera (.com/.to/.site), imhentai (.xxx/.org/.net), hentaienvy.com,
+  hentaifox.com and hitomi.la for the new script + stylesheet. Host permissions
+  already covered these origins (PR #46) — nothing was broadened, no new
+  permission, no `<all_urls>`, and the same edit is in the Firefox manifest.
+  Listing/reader pages are deliberately excluded (`pagePattern`), and the script
+  does nothing when no anchor is found.
+- **Persistence:** unchanged and reused — `chrome.storage.local`
+  `BOOKMARK_QUEUE_KEY` via the worker's `bookmarkAdd` with
+  `source: "page" | "auto" | "card"`, so a gallery-page bookmark survives a
+  restart exactly like a card bookmark, and the button repaints from
+  `storage.onChanged` when the panel changes the list. Adds carry title, cover
+  and page count at insertion time, because `bookmarkEnrich` can only resolve
+  metadata through an active nhentai tab. Non-nhentai rows are stored as
+  `site:id`; the queue's download pipeline is still nhentai-keyed
+  (batchPipeline item 48 / MULTISITE_V4_PLAN §4.2), so downloading those rows
+  remains part of the multi-site work.
+- **Files:** new `src/utils/titleBookmark.ts`, `src/content/titleBookmark.ts`,
+  `css/titleBookmark.css`, `js/titleBookmark.js`, `test/title-bookmark.test.js`,
+  `scripts/e2e-title-bookmark.js`; changed card controls, CSS, manifests,
+  webpack entries, package.json test lists, panellett wording (the ☆/star
+  strings in `bookmarkPanel.ts` and `popupSettings.ts`, Firefox `siteUi.ts`),
+  and the release snapshot (manifest, `js/listControls.js`, `js/preview.js`,
+  `js/titleBookmark.js`, both stylesheets).
+- **Selector evidence (added after the first pass, when the sandbox DNS/TLS
+  allowlist made a live fetch impossible and the owner's API key could not help
+  — an API key does not defeat an egress block, and the failure was never
+  auth):** imhentai re-confirmed against a *saved real gallery page*
+  (`<button class="tag btn btn-primary dl_btn" id="dl_new">Download (2996)`,
+  `li.pages`, `.left_cover img`); nhentai re-confirmed against a current
+  extension that appends its own `btn btn-secondary` control into
+  `getElementsByClassName('buttons')[0]` and reads `#info`; hentaifox re-pinned
+  to `#download_btn` (the four ids HentaiFoxData's Qt browser toggles on
+  `hentaifox.com/gallery/*`), with `div.info h1` / `div.cover img` /
+  `ul.g_buttons` from three independent scrapers.
+- **Sizing is now copied, not guessed:** `presentationalButtonClasses()`
+  copies the anchor's own classes at injection time (minus behavior hooks such
+  as imhentai's `dl_btn`/`fav_btn`, minus state flags and our own namespace), so
+  the button matches the row even on hentaifox, whose gallery markup has never
+  been captured. A hidden `<input id="gallery_title" value=…>` is also read for
+  the title now.
+- **Verification:** Chrome webpack; **463 passing / 4 pending** units;
+  `test:e2e` including the **146-check** title-page suite. Firefox webpack;
+  **539 passing / 4 pending**; smoke 7 PASS; all offline e2e (33 script runs)
+  pass; web-ext lint **0 errors / 0 notices / 31 advisories**, none in the new
+  script. No live request, device or signing run — a real-browser look at the
+  button's appearance is still owed.
+
+---
+
+## Previous work in this working tree — approved item 59 (list-format reads)
+
 **Updated:** 2026-09-21 (same session `arena/01a0bfa1-nh-dw-2-0`) — **approved
 item 59 COMPLETE: saved list-format reads across Firefox consumers.** The
 owner explicitly chose “ok do 59”, not the four opt-in live API checks.
@@ -2343,11 +2566,43 @@ session.
 - **Do not put auto-capture back inside `injectCardControls()`.** Injection is
   idempotent and skips decorated cards; auto-capture must stay its own pass or
   flipping the setting on an open page does nothing (defect 3).
+- **Do not re-add a second copy of an item-44 CSS block.** `css/style.css` used
+  to carry two overlapping `.nhdwBmDrag` / `.nhdwBmDragging` /
+  `.nhdwBmDropTarget` rule sets; their leftovers made Chrome's dragging row
+  dashed and its drop target shadowed while Firefox showed only the outline.
+  There is now exactly one definition per selector in each tree and the two
+  trees compute the same declarations (checked property by property).
 - **Do not route a bookmark thumbnail into the download path.** `t.nhentai.net`
   is display-only and deliberately absent from `host_permissions`; an `<img>` in
   an extension page needs neither a host permission nor a CORS preflight.
+- **Do not add a destructive import.** `parseTransferPayload` +
+  `mergeImportedBookmarks` exist to *add*: union, local row wins, imported rows
+  appended, nothing removed. There is no "replace" mode on purpose — the whole
+  point is that a wrong file cannot wipe a queue built over months.
+- **Do not let the Queue tab write the queue or the history itself.** The worker
+  is the single writer for `bookmarkImport`; history goes through
+  `historyImport` → `writeHistory()` (which keeps the file's own timestamps and
+  reuses the serialized write chain). `test/e2e-bookmark-panel.js` asserts no
+  panel write touches those two keys.
+- **Do not move a similar row's bookmark button inside its `<label>`.** Nested
+  inside, a click on Bookmark would also toggle that gallery's download
+  checkbox. `test/message.test.js` asserts the button comes after `</label>`.
+- **Do not give the drag-reorder row itself `draggable`.** Only the
+  `span.nhdwBmDrag` handle is draggable, so the row's checkbox / Download /
+  Remove keep their own hit targets (item 44's explicit requirement).
 - **Do not make the Queue tab download in merged mode.** It is always
   `separate: true`; merging a bookmark list is a decision the user did not make.
+- **Do not merge per-site jobs back into one mixed batch.** One
+  `downloadAllDoujinshis` carries one site (`BatchJobOptions.site`); a mixed
+  payload is what made `site:id` rows undownloadable (item 48).
+- **Do not key a file name, title or the `{id}` token off the composite
+  `site:id` key.** Storage/history/retry identity is composite; names and ids
+  are `splitGalleryKey(storeKey).id`.
+- **Do not drop `site` from `retryJobKey`.** `undefined`/empty must normalize to
+  `null`, or the same bare id on two sites shares one retry bucket.
+- **Do not send a queue group whose rows are all skipped.** `group.titles` covers
+  only rows in `download`; a group with `download: []` must produce no job (the
+  panel harness's phase 7b guards this).
 - **Do not re-add `bookmarkSetStatus`.** It was removed as a handler with no
   sender. Status comes from `bookmarkMarkDownloading` and the worker's
   `markBookmarks{Downloaded,Failed}` hooks on `jobFinished` / `batchSummary`.

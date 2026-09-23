@@ -30,6 +30,13 @@ import {
     planBookmarkDownload
 } from "../utils/bookmarkQueue";
 import { historyIds, readHistory } from "../utils/downloadHistory";
+import { DEFAULT_SITE, normalizeSite, toGalleryKey } from "../utils/siteKeys";
+import {
+    buildTransferPayload,
+    mergeImportedHistory,
+    parseTransferPayload,
+    serializeTransfer
+} from "../utils/queueTransfer";
 import { readListSettings, resolveMasterFolder, ListModeSettings } from "../utils/listSettings";
 import { getActiveNhentaiTabId } from "./activeTabGallery";
 
@@ -53,6 +60,10 @@ function send(message: any): Promise<any> {
 }
 
 let state: BookmarkState = emptyBookmarkState();
+// Drag-reorder: the id being dragged right now (null when no drag is active).
+// Module-level because the handle and the drop targets are built by different
+// calls and the browser's drag events carry no usable payload in every engine.
+let draggingId: string | null = null;
 let built = false;
 let includeAlready = false;
 let noticeTimer: any = null;
@@ -82,8 +93,15 @@ function showNotice(text: string, isError: boolean = false): void {
 
 // One entry point for every download the Queue tab can start: a single row,
 // the whole selection, or a paste that was never bookmarked.
-async function startDownload(ids: string[], titles: Record<string, string>, fromQueue: boolean): Promise<void> {
-    if (ids.length === 0) {
+async function startDownload(groups: Array<{ site: string; titles: Record<string, string> }>, fromQueue: boolean, skippedCount: number = 0): Promise<void> {
+    // The final notice keeps the "already downloaded" suffix: it is the last
+    // thing the user sees, and losing it made a partial download look complete.
+    const skipSuffix = skippedCount > 0 ? " (" + skippedCount + " already downloaded skipped)" : "";
+    const jobs = groups
+        .map((group) => ({ site: normalizeSite(group.site), titles: group.titles || {} }))
+        .filter((group) => Object.keys(group.titles).length > 0);
+    const total = jobs.reduce((sum, group) => sum + Object.keys(group.titles).length, 0);
+    if (total === 0) {
         showNotice("Nothing to download.", true);
         return;
     }
@@ -101,34 +119,148 @@ async function startDownload(ids: string[], titles: Record<string, string>, from
     const tabId = await getActiveNhentaiTabId();
     if (fromQueue) {
         // Rows read "downloading" before the first byte arrives rather than
-        // after the first broadcast.
+        // after the first broadcast. The ids are composite here: a row's status
+        // lives under "site:id", and a bare id would mark the wrong row once two
+        // sites use the same gallery number (item 48).
+        const ids: string[] = [];
+        for (const group of jobs) {
+            for (const id of Object.keys(group.titles)) {
+                ids.push(toGalleryKey(id, group.site));
+            }
+        }
         await send({ action: "bookmarkMarkDownloading", ids: ids });
     }
-    const response = await send({
-        action: "downloadAllDoujinshis",
-        allDoujinshis: titles,
-        galleryMetadata: {},
-        finalName: "bookmarks",
-        tabId: tabId,
-        formatOverride: settings.format,
-        // Always one file per title (see the file header).
-        separate: true,
-        masterFolder: resolveMasterFolder(settings),
-        nameTemplate: settings.template
-    });
-    if (response === null) {
+
+    // ONE JOB PER SITE (item 48): a job payload carries a single site, because
+    // the pipeline composes every store key with it. The jobs are sent in
+    // sequence, so the worker queues them in the order the sites appear in the
+    // list and each one reports its own progress and summary.
+    let started = 0;
+    let queued = 0;
+    let unanswered = 0;
+    for (const group of jobs) {
+        const message: any = {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: group.titles,
+            galleryMetadata: {},
+            finalName: "bookmarks",
+            tabId: tabId,
+            formatOverride: settings.format,
+            // Always one file per title (see the file header).
+            separate: true,
+            masterFolder: resolveMasterFolder(settings),
+            nameTemplate: settings.template
+        };
+        if (group.site !== DEFAULT_SITE) {
+            message.site = group.site;
+        }
+        const response = await send(message);
+        if (response === null) {
+            unanswered++;
+            continue;
+        }
+        if (response.result === "queued") {
+            queued++;
+        } else {
+            started++;
+        }
+    }
+    if (unanswered === jobs.length) {
         showNotice("The extension worker did not answer. Reopen the panel and try again.", true);
         return;
     }
-    if (response.result === "queued") {
-        showNotice(ids.length === 1
+    const sites = jobs.length;
+    if (queued > 0 && queued === jobs.length) {
+        showNotice((total === 1
             ? "Queued behind the download already running."
-            : ids.length + " titles queued behind the download already running.");
+            : total + " titles queued behind the download already running.") + skipSuffix);
         return;
     }
-    showNotice(ids.length === 1
-        ? "Downloading 1 title."
-        : "Downloading " + ids.length + " titles, one file each.");
+    if (sites > 1) {
+        showNotice("Downloading " + total + " titles across " + sites + " sites, one file each."
+            + (queued > 0 ? " " + queued + " queued behind the running download." : "")
+            + (unanswered > 0 ? " " + unanswered + " site(s) could not be started." : "")
+            + skipSuffix,
+            unanswered > 0);
+        return;
+    }
+    showNotice((total === 1 ? "Downloading 1 title." : "Downloading " + total + " titles, one file each.") + skipSuffix);
+}
+
+// ---- backup: export / import --------------------------------------------
+
+async function exportBackup(button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    try {
+        const history = await readHistory();
+        const payload = buildTransferPayload(state, history);
+        const text = serializeTransfer(payload);
+        // A blob URL plus a plain <a download> click: the panel is a document,
+        // so this needs no permission and never passes through the download
+        // path (thumbnails and exports alike stay out of chrome.downloads).
+        const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+        const link = el("a");
+        link.href = url;
+        link.download = "nh-downloader-backup-" + new Date().toISOString().slice(0, 10) + ".json";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => { try { URL.revokeObjectURL(url); } catch (_) { /* already gone */ } }, 30000);
+        showNotice("Exported " + payload.bookmarkCount + " bookmarks and " + payload.historyCount + " history records.");
+    } catch (_) {
+        showNotice("Could not build the backup file.", true);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function importBackup(input: HTMLInputElement): Promise<void> {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    input.value = ""; // so picking the SAME file again still fires change
+    if (file === null) {
+        return;
+    }
+    let text = "";
+    try {
+        text = await file.text();
+    } catch (_) {
+        showNotice("Could not read that file.", true);
+        return;
+    }
+    const parsed = parseTransferPayload(text);
+    if (!parsed.ok) {
+        showNotice("Import failed: " + parsed.error, true);
+        return;
+    }
+
+    // History first (its write does not depend on the worker's reply), then the
+    // queue through the worker so the single-writer rule holds.
+    let localHistory: any = {};
+    try {
+        localHistory = await readHistory();
+    } catch (_) { /* an unreadable history just means nothing to merge with */ }
+    const mergedHistory = mergeImportedHistory(localHistory, parsed.history as any);
+    const beforeBookmarks = state.items.length;
+
+    const response = await send({ action: "bookmarkImport", state: parsed.bookmarks });
+    if (response === null) {
+        showNotice("The extension worker did not answer. Nothing was imported.", true);
+        return;
+    }
+    if (response.state) {
+        state = normalizeBookmarkState(response.state);
+        renderList();
+    }
+    // The history merge is expressed as what is NEW, so a re-import of the same
+    // file is a no-op rather than a rewrite.
+    const addedHistory = Object.keys(mergedHistory).length - Object.keys(localHistory || {}).length;
+    if (addedHistory > 0) {
+        await send({ action: "historyImport", history: mergedHistory });
+    }
+    const addedBookmarks = Math.max(0, state.items.length - beforeBookmarks);
+    showNotice("Import done: added " + addedBookmarks + " bookmark" + (addedBookmarks === 1 ? "" : "s") +
+        " and " + addedHistory + " history record" + (addedHistory === 1 ? "" : "s") +
+        ". Rows already here were kept unchanged.");
 }
 
 async function downloadSelection(): Promise<void> {
@@ -138,7 +270,13 @@ async function downloadSelection(): Promise<void> {
     } catch (_) {
         history = [];
     }
-    const plan = planBookmarkDownload(state, history, includeAlready ? state.items.filter((item) => item.selected).map((item) => item.id) : []);
+    // "Download anyway": the forced ids must be composite, so the exemption
+    // lands on the row that was ticked and not on a same-numbered gallery of
+    // another site.
+    const forced: string[] = includeAlready
+        ? state.items.filter((item) => item.selected).map((item) => toGalleryKey(item.id, item.site))
+        : [];
+    const plan = planBookmarkDownload(state, history, forced);
     if (plan.download.length === 0) {
         if (plan.skip.length > 0) {
             showNotice("All " + plan.skip.length + " selected titles are already downloaded. Tick \"include already downloaded\" to fetch them again.", true);
@@ -148,14 +286,18 @@ async function downloadSelection(): Promise<void> {
         return;
     }
     const suffix = plan.skip.length > 0 ? " (" + plan.skip.length + " already downloaded skipped)" : "";
-    showNotice("Starting " + plan.download.length + (plan.download.length === 1 ? " title" : " titles") + suffix + "\u2026");
-    await startDownload(plan.download, plan.titles, true);
+    const siteCount = plan.bySite.filter((group) => group.download.length > 0).length;
+    showNotice("Starting " + plan.download.length + (plan.download.length === 1 ? " title" : " titles")
+        + (siteCount > 1 ? " across " + siteCount + " sites" : "") + suffix + "\u2026");
+    // Only the rows that actually download, grouped per site.
+    await startDownload(plan.bySite.map((group) => ({ site: group.site, titles: group.titles })), true, plan.skip.length);
 }
 
 async function downloadOne(item: BookmarkItem): Promise<void> {
     const titles: Record<string, string> = {};
     titles[item.id] = item.title !== "" ? item.title : item.id;
-    await startDownload([item.id], titles, true);
+    // A single row is always a single-site job; its site is the row's own.
+    await startDownload([{ site: item.site, titles: titles }], true);
 }
 
 // ---- paste ---------------------------------------------------------------
@@ -183,7 +325,9 @@ async function addPasted(downloadNow: boolean): Promise<void> {
             titles[id] = id;
         }
         box.value = "";
-        await startDownload(parsed.ids, titles, false);
+        // The paste box parses ids and nhentai URLs only (parseGalleryInput),
+        // so this is a default-site job: one group, no site field on the wire.
+        await startDownload([{ site: DEFAULT_SITE, titles: titles }], false);
         return;
     }
 
@@ -249,6 +393,67 @@ function buildRow(item: BookmarkItem): HTMLElement {
         });
     });
     row.appendChild(select);
+
+    // Drag handle. Only the handle is draggable, so a drag can never start by
+    // accident on the row's checkbox, Download button or Remove button - those
+    // keep their own hit targets (item 44's explicit requirement).
+    const dragHandle = el("span");
+    dragHandle.className = "nhdwBmDrag";
+    dragHandle.textContent = "\u28ff\u28ff";
+    dragHandle.title = "Drag to reorder - the queue downloads in this order";
+    dragHandle.setAttribute("draggable", "true");
+    dragHandle.addEventListener("dragstart", (event: any) => {
+        draggingId = item.id;
+        row.className = row.className + " nhdwBmDragging";
+        if (event && event.dataTransfer && typeof event.dataTransfer.setData === "function") {
+            // Firefox refuses to start a drag without data in the transfer.
+            try { event.dataTransfer.setData("text/plain", item.id); } catch (_) { /* ignore */ }
+        }
+    });
+    dragHandle.addEventListener("dragend", () => {
+        draggingId = null;
+        row.className = row.className.replace(" nhdwBmDragging", "");
+    });
+    row.appendChild(dragHandle);
+
+    // Drop target: dropping on a row moves the dragged bookmark to that row's
+    // position. Reordering happens in the WORKER (single writer) - the panel
+    // only asks for the move and repaints from the state it gets back.
+    row.addEventListener("dragover", (event: any) => {
+        if (draggingId === null || draggingId === item.id) {
+            return;
+        }
+        if (event && typeof event.preventDefault === "function") {
+            event.preventDefault(); // required so the drop event fires
+        }
+        row.className = row.className.indexOf("nhdwBmDropTarget") === -1
+            ? row.className + " nhdwBmDropTarget"
+            : row.className;
+    });
+    row.addEventListener("dragleave", () => {
+        row.className = row.className.replace(" nhdwBmDropTarget", "");
+    });
+    row.addEventListener("drop", (event: any) => {
+        row.className = row.className.replace(" nhdwBmDropTarget", "");
+        if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+        }
+        const movingId = draggingId;
+        draggingId = null;
+        if (movingId === null || movingId === item.id) {
+            return;
+        }
+        const targetIndex = state.items.map((candidate) => candidate.id).indexOf(item.id);
+        if (targetIndex === -1) {
+            return;
+        }
+        send({ action: "bookmarkReorder", id: movingId, toIndex: targetIndex }).then((response) => {
+            if (response && response.state) {
+                state = normalizeBookmarkState(response.state);
+                renderList();
+            }
+        });
+    });
 
     // Thumbnail. Display only: a remote <img> needs no host permission, and no
     // thumbnail ever reaches the download path.
@@ -394,7 +599,7 @@ function renderList(): void {
     if (total === 0) {
         const empty = el("div");
         empty.className = "nhdwBmEmpty";
-        empty.textContent = "Nothing bookmarked yet. Click the \u2606 on a gallery card, paste ids below, or turn on auto-capture in Settings.";
+        empty.textContent = "Nothing bookmarked yet. Tap the bookmark icon on a card or the Bookmark button on a gallery page, paste ids below, or turn on auto-capture in Settings.";
         list.appendChild(empty);
         return;
     }
@@ -613,9 +818,46 @@ function buildChrome(container: HTMLElement): void {
     footer.appendChild(downloadSelected);
 
     const footerHint = el("small");
-    footerHint.textContent = "One file per title, named by the list-mode template in Settings. Format, folder and naming are shared with the in-page bar.";
+    footerHint.textContent = "One file per title, named by the list-mode template in Settings. Format, folder and naming are shared with the in-page bar. The list downloads in this order - drag a row by its handle to change it.";
     footer.appendChild(footerHint);
     body.appendChild(footer);
+
+    // ---- backup (item 52) ------------------------------------------------
+    // Export/import the queue AND the history as one JSON file. Import MERGES
+    // (nothing is ever deleted by a file): a wrong file cannot wipe the list,
+    // and this machine's records win, because only it knows whether the file
+    // is still on disk.
+    const backup = el("div");
+    backup.className = "nhdwBmToolbar nhdwBmBackup";
+
+    const exportButton = el("button");
+    exportButton.type = "button";
+    exportButton.id = "nhdwBmExport";
+    exportButton.textContent = "Export backup";
+    exportButton.title = "Save the bookmark queue and the download history as one JSON file";
+    exportButton.addEventListener("click", () => { void exportBackup(exportButton); });
+    backup.appendChild(exportButton);
+
+    const importInput = el("input");
+    importInput.type = "file";
+    importInput.accept = ".json,application/json";
+    importInput.id = "nhdwBmImportFile";
+    importInput.style.display = "none";
+    importInput.addEventListener("change", () => { void importBackup(importInput); });
+    backup.appendChild(importInput);
+
+    const importButton = el("button");
+    importButton.type = "button";
+    importButton.id = "nhdwBmImport";
+    importButton.textContent = "Import backup";
+    importButton.title = "Merge a previously exported JSON file into this profile (nothing is removed)";
+    importButton.addEventListener("click", () => importInput.click());
+    backup.appendChild(importButton);
+
+    const backupHint = el("small");
+    backupHint.textContent = "Merges, never replaces: rows already here keep their status and file name.";
+    backup.appendChild(backupHint);
+    body.appendChild(backup);
 }
 
 // ---- entry point ---------------------------------------------------------

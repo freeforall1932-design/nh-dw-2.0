@@ -14,7 +14,9 @@ import {
     BookmarkState,
     addBookmarks,
     clearBookmarks,
+    moveBookmark,
     mutateBookmarks,
+    normalizeBookmarkState,
     patchBookmark,
     readBookmarks,
     reconcileBookmarksAfterRestart,
@@ -26,7 +28,9 @@ import {
     titleFromGallery,
     pagesFromGallery
 } from "../utils/bookmarkQueue";
-import { historyIds, readHistory } from "../utils/downloadHistory";
+import { mergeImportedBookmarks } from "../utils/queueTransfer";
+import { toGalleryKey } from "../utils/siteKeys";
+import { historyIds, readHistory, writeHistory } from "../utils/downloadHistory";
 import { fetchGalleryViaTab, getActiveNhentaiTabId } from "../preview/activeTabGallery";
 
 // Reconciliation runs once per worker lifetime, exactly like getQueueState()
@@ -51,6 +55,13 @@ export async function getBookmarkState(): Promise<BookmarkState> {
         return mutateBookmarks((state) => reconcileBookmarksAfterRestart(state, knownIds));
     }
     return readBookmarks();
+}
+
+// An import payload arrives as JSON from a file the user picked: normalize it
+// through the same reader every other bookmark input uses, so a malformed row
+// is dropped here instead of reaching storage.
+function normalizeImportedState(raw: any): BookmarkState {
+    return normalizeBookmarkState(raw);
 }
 
 export function broadcastBookmarkChanged(state: BookmarkState): void {
@@ -83,14 +94,17 @@ export function markBookmarksDownloaded(records: Array<{ id: string | number; fi
     }).then(broadcastBookmarkChanged).catch(() => { /* bookkeeping only */ });
 }
 
-export function markBookmarksFailed(failed: Array<{ id: string | number; name?: string; error?: string }>): Promise<void> {
+export function markBookmarksFailed(failed: Array<{ id: string | number; name?: string; error?: string; site?: string }>): Promise<void> {
     if (!Array.isArray(failed) || failed.length === 0) {
         return Promise.resolve();
     }
     return mutateBookmarks((state) => {
         let next = state;
         for (const entry of failed) {
-            next = patchBookmark(next, entry.id, {
+            // The entry's site, when it has one (item 48): two sites can use the
+            // same numeric id, and the wrong composition would mark the wrong row
+            // - or no row at all. A bare entry still means the default site.
+            next = patchBookmark(next, toGalleryKey(entry.id, entry.site), {
                 status: "failed",
                 error: String(entry.error || "Download failed")
             });
@@ -211,6 +225,31 @@ export function handleBookmarkMessage(request: any, sendResponse: (response: any
         mutateBookmarks((state) => request.all === true
             ? setAllBookmarksSelected(state, selected)
             : setBookmarkSelected(state, Array.isArray(request.ids) ? request.ids : [], selected))
+            .then((state) => {
+                broadcastBookmarkChanged(state);
+                sendResponse({ result: "success", state: state });
+            });
+        return true;
+    }
+
+    if (action === "bookmarkReorder") {
+        // Drag-reorder: the list order is the download order, and the worker
+        // stays the only writer, so the panel sends the move instead of
+        // rewriting the array itself.
+        mutateBookmarks((state) => moveBookmark(state, request.id, Number(request.toIndex)))
+            .then((state) => {
+                broadcastBookmarkChanged(state);
+                sendResponse({ result: "success", state: state });
+            });
+        return true;
+    }
+
+    if (action === "bookmarkImport") {
+        // Import goes through the worker too: it is a mutation of the same
+        // store, and a panel rewriting the array itself would race a card
+        // bookmark landing at the same moment.
+        const imported = normalizeImportedState(request.state);
+        mutateBookmarks((state) => mergeImportedBookmarks(state, imported))
             .then((state) => {
                 broadcastBookmarkChanged(state);
                 sendResponse({ result: "success", state: state });

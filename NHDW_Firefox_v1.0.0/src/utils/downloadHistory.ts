@@ -327,6 +327,34 @@ function writeHistoryEntries(entries: Array<{ id: string; filename: string }>): 
     });
 }
 
+/**
+ * Write a whole history map (the import path).
+ *
+ * Unlike recordHistory — which stamps "now" and is what a finished download
+ * means — this keeps the timestamps the file carried, so an imported backup
+ * still says when each gallery was really downloaded. It goes through the same
+ * serialized write chain as every other history write, so an import landing
+ * while a batch finishes cannot clobber either one.
+ */
+export function writeHistory(history: DownloadHistory): Promise<void> {
+    const safe = normalizeHistory(history);
+    historyWriteChain = historyWriteChain
+        .then(() => new Promise<void>((resolve) => {
+            try {
+                const patch: any = {};
+                patch[DOWNLOAD_HISTORY_KEY] = safe;
+                chrome.storage.local.set(patch, () => {
+                    try { void (chrome.runtime && chrome.runtime.lastError); } catch (_) { /* no runtime */ }
+                    resolve();
+                });
+            } catch (_) {
+                resolve();
+            }
+        }))
+        .catch(() => { /* storage write is best-effort */ });
+    return historyWriteChain;
+}
+
 export function clearHistory(): Promise<void> {
     const clear = historyWriteChain.then(() => new Promise<void>((resolve) => {
         try {
