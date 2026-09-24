@@ -21,7 +21,7 @@ This is the single place to look for *what to do next*.
 | **`MULTISITE_V4_PLAN.md`** | Multi-site decision record, cooldown strategies (C pending owner), bucket list. |
 | **`ADAPTER_WIRING_PLAN.md`** | Per-site contract matrix + adapter interface — the reference for site #7+. |
 | **`CAPTURE_GUIDE.md`** | How to capture samples for a NEW site. |
-| **`CANDIDATE_SITES.md`** | Candidate roster for site #7+ (tiers + owner picks in §4a — no overlap between them). |
+| **`CANDIDATE_SITES.md`** | Candidate analysis for site #7+ (tiers, onboarding checklist, the 2026-09-24 swap decision). The canonical URL roster lives in `new domain candidate` on main. |
 
 Item numbers are shared with `IMPROVEMENT_BACKLOG.md` and are never reused.
 
@@ -73,13 +73,15 @@ workflows are still only covered by the content-script harnesses
       (reader-mode pages won the quality comparison; mirror zips were
       byte-identical), but C is the recorded decision path. A/B/C descriptions:
       `MULTISITE_V4_PLAN.md` §3.
-- [ ] **⏳ Site #7 pick.** Owner picks three candidates live in
-      `new domain candidate` on main (tailspace.com, mangak.io,
-      omegascans.org — mirrored sanitized into `CANDIDATE_SITES.md` §4a; no
-      overlap with the desktop-repo-derived tier list). Next step per
-      `CAPTURE_GUIDE.md`: one sanitized HAR (or gallery+reader HTML and 3
-      image URLs) per chosen site, then implement against
-      `ADAPTER_WIRING_PLAN.md` §1/§3/§4.
+- [ ] **⏳ Site #7 pick.** The 2026-09-24 owner-directed swap landed:
+      `new domain candidate` on main now carries the reference roster
+      (Tier 1: asmhentai, e-hentai, pururin, simply-hentai, myreadingmanga,
+      nhentai.com; Tier 2 boorus), matching `CANDIDATE_SITES.md` §2/§3 1:1 —
+      no double entries. The chapter-based webtoon/manhwa picks (tailspace,
+      mangak.io, omegascans) swapped to the desktop archiver project. When
+      the owner picks one: capture per `CAPTURE_GUIDE.md` (one sanitized HAR,
+      or gallery+reader HTML and 3 image URLs), then implement against
+      `ADAPTER_WIRING_PLAN.md` §1/§3/§4/§6.
 - [ ] **Merge PR #48** (items 39/45/51 + review fixes; CI green; mergeable).
 - [ ] **Cross-mirror fallback chains** from the owner's live-testing note
       (throttle-route imhentai↔hentaienvy via the shared `/033/<token>/` store

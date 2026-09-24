@@ -2445,3 +2445,21 @@ owner's rule: **sanitize source material, keep website naming schemes.**
   legacy upstream readme) was replaced with an accurate short stub.
 - Cross-references swept: no remaining links to the deleted files except this
   log and the deletion notes themselves.
+
+### Follow-up (same day): the owner-directed roster swap landed
+
+The other session's swap (prepared in its sandbox, never pushed) was landed
+here on the owner's instruction. `new domain candidate` on `main` was
+rewritten (commit `6ad0b5c0`, 21 lines): the owner's three chapter-based
+webtoon/manhwa picks (tailspace.com, mangak.io, omegascans.org) swapped to
+the desktop archiver project, replaced by the desktop-repo reference roster —
+Tier 1 (asmhentai, e-hentai, pururin, simply-hentai, myreadingmanga,
+nhentai.com) + Tier 2 boorus (danbooru, gelbooru, rule34.xxx, yande.re,
+sankaku, kemono.cr, coomer.st). Site naming schemes kept verbatim; no slugs,
+no explicit terms. `CANDIDATE_SITES.md` §4/§4a on the branch was replaced by
+the swap-decision section (the owner-picks mirror is superseded; the
+slug-addressing `siteKeys` caveat is preserved for the desktop archiver's
+benefit), and every cross-reference (WORKLIST, handoff doc map, v4 plan,
+capture guide) now names `new domain candidate` as the canonical roster.
+Dedupe stands: the roster matches this document's tier analysis 1:1, no
+double entries anywhere.

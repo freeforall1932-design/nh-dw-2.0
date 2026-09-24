@@ -214,8 +214,8 @@ blocks stripped, website naming kept).
 
 ## Part C — order
 
-The six initial sites are done. For site #7+: pick from `CANDIDATE_SITES.md`
-(owner picks in §4a), capture one site completely (HAR + any extras its
+The six initial sites are done. For site #7+: pick from the roster in
+`new domain candidate` on main (analysis: `CANDIDATE_SITES.md`), capture one site completely (HAR + any extras its
 frontend class needs), then implement per `ADAPTER_WIRING_PLAN.md` §6 — one
 site at a time, per the owner's standing scope call.
 

@@ -71,7 +71,8 @@ from the user. (An earlier draft mislabelled this a DNS failure.)
 
 Per-site contract details (hosts, URL shapes, metadata sources, referer/CDN
 behaviour) live in the **`ADAPTER_WIRING_PLAN.md` §1 matrix** — the operative
-reference for site #7+. The owner's next-site picks: `CANDIDATE_SITES.md` §4a.
+reference for site #7+. The canonical next-site roster: `new domain candidate`
+on main (2026-09-24 swap); analysis in `CANDIDATE_SITES.md`.
 
 The **cin.* family** (cin.lat, cin.mom, cin.monster, cin.wiki, cin.wtf, …)
 is NOT a new site: those are viewer mirrors of nhentai content. The paste

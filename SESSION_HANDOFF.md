@@ -20,7 +20,7 @@ is recoverable from git history (commit `62697a2` and earlier).
 | **`MULTISITE_V4_PLAN.md`** | Multi-site decision record, cooldown strategies (C still pending owner go), bucket list. |
 | **`ADAPTER_WIRING_PLAN.md`** | The per-site contract matrix + adapter interface — the reference for adding site #7+. |
 | **`CAPTURE_GUIDE.md`** | How to capture samples for a NEW site (method + handover). |
-| **`CANDIDATE_SITES.md`** | Candidate roster for site #7+ (tiers + the owner's own picks in §4a). |
+| **`CANDIDATE_SITES.md`** | Candidate analysis + onboarding checklist for site #7+; the canonical URL roster is `new domain candidate` on main (2026-09-24 swap: webtoon/manhwa picks moved to the desktop archiver). |
 | **`DEPENDENCY_MAINTENANCE.md`** | Tooling versions, the scoped validator override, recheck procedure. |
 | **`FOLDER_NAMING_STUDY.md`** | Why the filename guard exists (Chromium bug 579563) and its known limits. |
 | **`NHDW_Extension_v3.0.0/ci/README.md`** | The workflows-are-manual-commit rule + the pending-workflows mirror. |
