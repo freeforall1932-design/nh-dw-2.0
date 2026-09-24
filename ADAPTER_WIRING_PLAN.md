@@ -98,66 +98,33 @@ export interface SiteAdapter extends GallerySource {
 
 ---
 
-## 5. Step-by-Step Implementation Roadmap
+## 5. Implementation status — ALL SIX PHASES SHIPPED (2026-09-22/23, 3.9.0 / FF 1.3.0)
 
-To avoid context drift and ensure zero regressions, implementation is split into 6 focused phases:
+Phase 1 adapter contracts & registry (`src/sources/index.ts`:
+`getAdapterForUrl` / `getAdapterForSite`, per-adapter `cdnConfig` allowlists) ·
+Phase 2 hentaiera + imhentai · Phase 3 hentaienvy + hentaifox · Phase 4 hitomi
+(`hitomiResolver.ts` implementing `gg.m`/`gg.s`/`full_path_from_hash`, default
+format `raw`) · Phase 5 universal paste box (all six sites' URL shapes +
+composite `site:id` keys) + manifest host permissions + per-site job splitting
+(`batchPipeline.ts`) · Phase 6 verification (unit + e2e both trees, release
+sync). Per-phase detail and test names: `IMPROVEMENT_BACKLOG.md` session logs
+2026-09-22/23. This document's §§1–4 stay as the operative reference for
+adding **site #7+**: copy the matrix row, implement the interface, wire the
+six seams, follow `CAPTURE_GUIDE.md` for samples first.
 
-```
-[Phase 1: Adapter Registry & Contracts]
-                  │
-                  ▼
-[Phase 2: Hentaiera & Imhentai Adapters]
-                  │
-                  ▼
-[Phase 3: Hentaienvy & HentaiFox Adapters]
-                  │
-                  ▼
-[Phase 4: Hitomi.la Adapter & Subdomain Resolver]
-                  │
-                  ▼
-[Phase 5: Universal Paste Box & Multi-Site UI]
-                  │
-                  ▼
-[Phase 6: Full Verification & Parity Audit]
-```
+## 6. Adding site #7 (the live checklist)
 
-### Phase 1: Core Adapter Contracts & Registry Refactoring
-* [x] Define `SiteAdapter` interface in `src/sources/SiteAdapter.ts` (or `GallerySource.ts`).
-* [x] Refactor `src/sources/cdnConfig.ts` to accept multi-site host allowlists and path regexes.
-* [x] Build `src/sources/index.ts` registry with lookup methods (`getAdapterForUrl`, `getAdapterForSite`).
-* [x] Add unit tests for registry routing and `cdnConfig` multi-site allowlists.
-
-### Phase 2: Hentaiera & Imhentai Adapters
-* [x] Integrate `src/sources/hentaieraSource.ts` and `src/parsing/hentaieraHtml.ts` into registry.
-* [x] Build `src/sources/imhentaiSource.ts` and `src/parsing/imhentaiHtml.ts` (token-based `/033/` storage).
-* [x] Wire Popup preview seam with nhentai-API collision guard.
-* [x] Wire Downloader engine to use adapter candidate lists.
-* [x] Add unit test suite `test/imhentai.test.js` + `test/hentaiera.test.js`.
-
-### Phase 3: Hentaienvy & HentaiFox Adapters
-* [x] Build `src/sources/hentaienvySource.ts` & `src/parsing/hentaienvyHtml.ts` (parsing `#readerPagesJson` + shared token store).
-* [x] Build `src/sources/hentaifoxSource.ts` & `src/parsing/hentaifoxHtml.ts` (`g_th` type codes, `/004/` and `/005/` dirs).
-* [x] Register both adapters in `src/sources/index.ts`.
-* [x] Add unit test suites `test/hentaienvy.test.js` and `test/hentaifox.test.js`.
-
-### Phase 4: Hitomi.la Adapter & Subdomain Resolver
-* [x] Build `src/sources/hitomiResolver.ts` (implementing `gg.m`, `gg.s`, `full_path_from_hash`, dynamic subdomain routing).
-* [x] Build `src/sources/hitomiSource.ts` and `src/parsing/hitomiHtml.ts` (handling `galleries/<id>.js` metadata and dual AVIF/WEBP paths).
-* [x] Set default format for Hitomi to `raw` (with warning for large 1GB+ memory archives until streaming ZIP lands).
-* [x] Add unit test suite `test/hitomi.test.js`.
-
-### Phase 5: Universal Paste Box & UI Polish
-* [x] Update `CardParsing.ts` and paste-box parser in `popup.ts` / `listControls.ts` to recognize:
-  * `/g/<id>/` (nhentai, hentaienvy, hentaifox)
-  * `/gallery/<id>/` (hentaiera, imhentai, hentaienvy, hentaifox)
-  * `/view/<id>/` (imhentai)
-  * `hitomi.la/doujinshi/...-<id>.html` or `hitomi.la/galleries/<id>.html`
-  * Composite keys: `nhentai:<id>`, `hentaiera:<id>`, `imhentai:<id>`, `hentaienvy:<id>`, `hentaifox:<id>`, `hitomi:<id>`.
-* [x] Update `manifest.json` `host_permissions` across Chrome and Firefox builds.
-* [x] Split mixed bookmark batches in `batchPipeline.ts` (one job per site).
-
-### Phase 6: Verification & Test Automation
-* [x] Run all unit test suites (`npm test`).
-* [x] Run all offline e2e suites (`npm run test:e2e`).
-* [x] Sync bundles to Firefox build (`NHDW_Firefox_v1.0.0`) and release directory (`NHDW_Release_v3.0.0`).
-* [x] Update `SESSION_HANDOFF.md` and `WORKLIST.md`.
+1. Owner capture per `CAPTURE_GUIDE.md` (one sanitized HAR per site, or
+   gallery+reader HTML and 3 image URLs; rendered DOM instead of HAR for
+   client-side-rendered sites).
+2. Add the contract row to §1's matrix (every field measured from the
+   capture, never assumed — the 2026-09-15 audit's wrong assumptions are the
+   cautionary tale).
+3. `src/parsing/<site>Html.ts` + `src/sources/<site>Source.ts`; register in
+   `src/sources/index.ts`; site slug in `siteKeys`; per-adapter host/path
+   allowlists in `cdnConfig`; paste-box shapes; `titleBookmark.ts` table entry
+   if the site has a gallery page button anchor; manifest `host_permissions`
+   (both trees).
+4. Unit suite `test/<site>.test.js` (+ append to BOTH `package.json` mocha
+   lists), e2e coverage, both trees, release sync.
+5. Real-browser check is owner-only (items 42/58 pattern).

@@ -6,8 +6,9 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.8.0-blue)
-![Manifest](https://img.shields.io/badge/Manifest-V3-orange)
+![Version](https://img.shields.io/badge/version-3.9.0-blue)
+![Firefox](https://img.shields.io/badge/Firefox-1.3.0-orange)
+![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -22,10 +23,12 @@
 | Site | Status | Notes |
 | :--- | :---: | :--- |
 | **nhentai.net** | ✅ Shipped | Full support: single titles, listings, search / tag / artist pages, queue, history. |
-| `cin.*` viewer links | ✅ Shipped | The paste box accepts every mirror of the viewer site (`cin.lat`, `cin.mom`, `cin.monster`, `cin.wiki`, `cin.wtf`, …) — URL shapes are matched, never hosts, because the site rotates TLDs. |
-| **hitomi.la** | 🚧 Planned (v4) | Client-rendered; needs rendered-DOM + `gg.js` capture (`ADAPTER_WIRING_PLAN.md` §7). CDN moved to `ltn.gold-usergeneratedcontent.net`. |
-| **imhentai.xxx / hentaienvy.com / hentaiera.com** | 🚧 Planned (v4) | Captures resolved (3 HARs); per-site adapters — two backends, four frontends, not one shared adapter. Wiring pending (`ADAPTER_WIRING_PLAN.md`). |
-| **hentaifox.com** | 🚧 Planned (v4) | Needs 1–2 HARs (`ADAPTER_WIRING_PLAN.md` §7). |
+| `cin.*` viewer links | ✅ Shipped | The paste box accepts any mirror or domain of the viewer site (`cin.lat`, `cin.mom`, `cin.monster`, `cin.wiki`, `cin.wtf`, `cin.red`, …) — URL shapes (`/v/<id>`, `?id=…`) are matched rather than fixed hosts, so newly rotating TLDs work automatically. |
+| **hentaiera.to** (`.com`, `.site`) | ✅ Shipped | Full support: gallery & reader pages, `application/ld+json` ImageGallery parsing, numeric media addressing, `/galleries/<media>/<n>.<ext>` image fetches. |
+| **imhentai.xxx** (`.org`, `.net`) | ✅ Shipped | Full support: gallery HTML parsing, unpadded `/033/<token>/<n>.<ext>` CDN image mirror downloads. |
+| **hentaienvy.com** | ✅ Shipped | Full support: Tailwind BEM parsing, `#readerPagesJson` reader metadata, shared `/033/<token>/` content store. |
+| **hentaifox.com** | ✅ Shipped | Full support: gallery page metadata, `g_th` type code mapping, `/004/` and `/005/` numeric media directories. |
+| **hitomi.la** | ✅ Shipped | Full support: `galleries/<id>.js` galleryinfo metadata, dynamic hash path & subdomain math (`gg.js`), direct CDN image fetching (`gold-usergeneratedcontent.net`), default format `raw` to prevent tab RAM exhaustion. |
 
 The multi-site plan — decision record, cooldown analysis, per-site facts — lives in [`MULTISITE_V4_PLAN.md`](MULTISITE_V4_PLAN.md).
 
@@ -33,14 +36,18 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 
 - 🗂️ **Four output formats** — `ZIP`, `CBZ`, `PDF`, or raw numbered pages (`001.jpg`…) in a titled folder under one master folder.
 - 🖱️ **Works in the page** — every gallery card gets its own **Download** button and **Select** box; a floating bar batches your selection. No popup round-trips needed.
-- 🚀 **Large-gallery safe** — archives are handed to Chrome through an MV3 *offscreen document*, so huge galleries never choke the service worker.
-- ⭐ **Bookmark queue** — click the bookmark icon on any card, or the blue **Bookmark** button on a gallery page (next to the site's own Favorite/Download buttons, all six supported sites), and the title waits in the **Queue** tab with its cover and page count. Survives closing the browser and restarting the PC. Collapses to a taskbar-style dock.
-- 📋 **Paste anything** — ids, `nhentai.net/g/…` links, any `cin.*` mirror link, `?id=…` bulk strings, ranges like `366220-366224`, mixed freely. Bookmark them or download straight away.
+- 🚀 **Large-gallery safe** — archives are handed to Chrome through an MV3 *offscreen document*, and a constant-memory **streaming ZIP writer** streams pages straight to disk (OPFS), so even 1 GB-class galleries never pile up in RAM.
+- ⭐ **Bookmark queue across 6 sites** — click the bookmark icon on any card, or the blue **Bookmark** button on a gallery page (next to the site's own Favorite/Download buttons, all six supported sites), and the title waits in the **Queue** tab with its cover and page count. Survives closing the browser and restarting the PC. Collapses to a taskbar-style dock.
+- ⏹️ **Per-row cancel (Item 45)** — stop one in-flight gallery from its Queue row; the rest of the batch carries on, and the cancelled title can be retried straight away.
+- 🔀 **Per-site job dispatching (Item 48)** — mixed queues containing titles from different websites automatically split into discrete jobs per site. Each job fetches from its own site's CDN with clean bare-ID naming (`001.jpg`, `Title [123456].zip`) and composite keys (`site:id`) in history and retry queues.
+- ↕️ **Drag-and-drop queue reordering (Item 44)** — grab handles let you manually reorder the bookmark queue to set your exact download order.
+- 💾 **Export / Import backups (Item 52)** — export queue and download history into a single clean JSON backup (`nh-downloader-transfer`). Import merges with union policy (local wins, never deletes).
+- 📋 **Paste anything** — bare IDs, `site:id` composite keys, `nhentai.net/g/…` links, any `cin.*` mirror link (e.g. `cin.lat`, `cin.red`), mirror network links (`hentaiera`, `imhentai`, `hentaienvy`, `hentaifox`, `hitomi`), `?id=…` bulk strings, ranges like `366220-366224`, mixed freely. Bookmark them or download straight away.
 - 🧠 **Remembers what you downloaded** — re-running the same search skips finished galleries, shows a ✓ badge with the saved file name, and offers per-gallery *Download anyway*. *Verify-then-redownload*: a deleted file is fetched again; a cancelled or partial download is never recorded.
 - 🪟 **Dockable side panel** — the toolbar button opens a resizable side panel (popup still available in Settings).
 - 🛡️ **Cloudflare-aware** — metadata and pages are fetched through your open gallery tab's session first. Not a bypass: a challenge page has no images, so complete it and retry.
 - 🔁 **Retry that knows what failed** — every failure names the gallery and reason; **Retry failed** re-downloads exactly those titles with the same settings.
-- 🦊 **Firefox desktop + Android build** — separate 1.2.0 build with an in-page drawer; tested offline, device verification/signing pending ([Firefox README](NHDW_Firefox_v1.0.0/README.md)).
+- 🦊 **Firefox desktop + Android build** — separate 1.3.0 build with an in-page drawer and full parity ([Firefox README](NHDW_Firefox_v1.0.0/README.md)).
 
 ## 📦 Installation
 
@@ -65,7 +72,7 @@ Open a gallery page → click the extension icon → edit the save name if you l
 - **Bookmark** any card from its icon, any gallery page from its blue **Bookmark** button, or paste ids/links into the box and **Add to queue** / **Download now**.
 - Tick rows → **Download N selected** → one file per title, in list order, named by the list-mode template.
 - **Auto-capture** (Settings, off by default) bookmarks every card as you scroll.
-- Rows report `bookmarked → downloading → done` (with the saved file name) `→ failed` (with the reason + retry).
+- Rows report `bookmarked → downloading → done` (with the saved file name) `→ failed` (with the reason + retry); a downloading row shows **Cancel**, which stops just that title and lets the rest of the batch continue.
 
 > **Merging different titles into one PDF** always asks first — a merged PDF is a tankoubon and can't be taken apart afterwards. *Switch to separate files* is the default answer.
 
@@ -98,22 +105,20 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 
 ## ⚠️ Known limitations
 
-- **Download history is local** — it lives in this browser profile, starts empty, and never syncs. `chrome.downloads` can only verify files this profile saved.
-- **No per-item cancel in the queue** — global pause / clear exist; cancelling one specific in-flight gallery is recorded as future work.
-- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.3.0 build with Queue, the bookmark icon and list controls; offline checks do not replace the desktop/Android release gate (58).
-- **Queue rows from the other five sites cannot be downloaded yet** — they are stored correctly as `site:id`, but the download pipeline is still nhentai-keyed (multi-site job split, roadmap below).
+- **Download history is local** — it lives in this browser profile, starts empty, and never syncs via browser cloud accounts. Use **Export / Import backup** in the Queue tab to migrate history between machines.
+- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.3.0 build with Queue, the bookmark icon, list controls and multi-site download support; offline checks do not replace the desktop/Android release gate (58).
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
 
-One extension, several sites, one shared history. The full plan (merge-vs-fork decision record, cooldown strategies A/B/C, streaming ZIP writer, sample-capture checklist) lives in [`MULTISITE_V4_PLAN.md`](MULTISITE_V4_PLAN.md):
+One extension, several sites, one shared history. The full plan lives in [`MULTISITE_V4_PLAN.md`](MULTISITE_V4_PLAN.md) and [`ADAPTER_WIRING_PLAN.md`](ADAPTER_WIRING_PLAN.md):
 
-- [x] **Composite `(site, id)` keys** — landed in 3.8.0; every store is collision-proof for a second site.
-- [ ] **hitomi.la adapter** — blocked on rendered-DOM / `gg.js` captures; sandbox egress (not DNS) is blocked (`ADAPTER_WIRING_PLAN.md` §7).
-- [ ] **Multi-site side panel + site-aware paste box.**
-- [ ] **Mirror-network sites** — reading-vs-zip comparison first (Strategy C, awaiting the owner's go).
-- [ ] **Streaming ZIP writer** (OPFS / File System Access) — constant-memory archives for 1 GB-class galleries.
-- [ ] **History export / import** (JSON) for cross-machine carry-over.
+- [x] **Composite `(site, id)` keys (Item 47)** — landed in 3.8.0; all stores collision-proof across sites.
+- [x] **Multi-site adapters (Items 49, 50, 53)** — landed in 3.9.0 / FF 1.3.0 for `hentaiera`, `imhentai`, `hentaienvy`, `hentaifox`, and `hitomi`.
+- [x] **Site-aware universal paste box & per-site job splitting (Item 48)** — landed in 3.9.0 / FF 1.3.0.
+- [x] **History & queue export / import JSON (Item 52)** — landed in 3.9.0 / FF 1.3.0.
+- [x] **Streaming ZIP writer (Item 51)** — landed in 3.9.0 / FF 1.3.0: OPFS-backed constant-memory archives (memory sink fallback where OPFS is absent).
+- [ ] **Combined device verification & Firefox signing (Items 42/58)** — real-browser and Android checks.
 
 ## 🧪 Development
 
@@ -131,10 +136,20 @@ installs under npm 10.9.8 and 12.0.2.
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build     # webpack -> js/ (copy changed bundles to the release folder)
-npm test          # 398 unit tests (builds test modules first)
+npm test          # 519 passing unit tests (Chrome)
 npm run test:smoke
-npm run test:e2e   # six offline e2e suites against the built bundles
+npm run test:e2e   # offline e2e suites against the built bundles
 npm audit
+```
+
+For Firefox:
+```bash
+cd NHDW_Firefox_v1.0.0
+npm ci
+npm run build     # webpack -> js/
+npm test          # 595 passing unit tests (Firefox)
+npm run test:smoke
+npm run test:e2e
 ```
 
 Dependency maintenance (2026-09-21): both maintained projects audit at **0
@@ -148,11 +163,9 @@ Firefox-only item 59 (2026-09-21) fixes saved list-format reads across shared
 Settings and download consumers. Saved ZIP/CBZ/PDF/raw wins; unset/invalid
 values inherit the single-title choice without saving defaults. A 36-case
 matrix covers the real reader and built popup/Full panel, page controls and
-embedded Settings/Queue/gallery paths. Firefox checks: **474 passing / 4
+embedded Settings/Queue/gallery paths. Firefox checks: **595 passing / 4
 opt-in live pending**, smoke and offline e2e green; lint **0 errors / 0
-notices / 30 unchanged warnings**. Chrome and dependencies were unchanged by
-this task; see the [Firefox README](NHDW_Firefox_v1.0.0/README.md) for scope and
-remaining device/signing limits.
+notices / 31 advisories**.
 
 Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (last session's rules) · [`IMPROVEMENT_BACKLOG.md`](IMPROVEMENT_BACKLOG.md) (full specs & history).
 
@@ -160,7 +173,7 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
-| **3.9.0** | Real bookmark icon on cards (was ☆), blue **Bookmark** button on every gallery page of all six supported sites, Select/Bookmark moved left with Download kept right. |
+| **3.9.0** | Per-site jobs & multi-site download pipeline (item 48): non-nhentai rows downloadable across 6 sites (nhentai, hentaiera, imhentai, hentaienvy, hentaifox, hitomi); real bookmark SVG icon on cards (was ☆); blue **Bookmark** button on every gallery page of all six sites; panel & similar bookmark toggles (43); drag-and-drop queue reordering (44); queue + history export/import JSON (52); template odd-separator gate (41); empty-token filename cleanup (39); per-row Cancel of an in-flight download (45); constant-memory streaming ZIP writer via OPFS (51). |
 | **3.8.0** | Composite `(site, id)` keys — multi-site groundwork; viewer-mirror (`cin.*`) paste support pinned by tests. |
 | **3.7.0** | Bookmark queue: ☆ on cards, persistent Queue tab, paste box, dock, auto-capture. |
 | **3.6.x** | Failure tracking by name + *Retry failed*, error-message hardening, one format decision per job. |

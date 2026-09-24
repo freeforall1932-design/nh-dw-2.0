@@ -62,6 +62,20 @@ export default class Downloader
         this.isPaused = false;
         if (this.#resumePaused) { this.#resumePaused(); this.#resumePaused = null; }
     }
+    abort() {
+        this.isAwaitingAbort = true;
+        this.currentProgress = 100;
+        this.resume();
+    }
+    cancel() {
+        this.abort();
+    }
+    get galleryId(): string {
+        return this.#json && this.#json.id !== undefined ? String(this.#json.id) : "";
+    }
+    get site(): string {
+        return this.#json && this.#json.site ? String(this.#json.site) : "nhentai";
+    }
     async #waitIfPaused() {
         while (this.isPaused && !this.#isAborted()) {
             await new Promise<void>((resolve) => { this.#resumePaused = resolve; });
@@ -358,6 +372,9 @@ export default class Downloader
                             })
                                 .then(async function (content: any) { // Zipping done
                                     await self.#downloadBlob(content, self.downloadName + "." + self.useZip);
+                                    if (self.#zip && typeof (self.#zip as any).cleanup === "function") {
+                                        try { await (self.#zip as any).cleanup(); } catch (_) {}
+                                    }
                                     self.currentProgress = 100;
                                     try {
                                         self.updateProgress(100, null, true); // Notify popup that we are done
@@ -398,6 +415,9 @@ export default class Downloader
         catch (error)
         {
             this.currentProgress = 100;
+            if (this.#zip && typeof (this.#zip as any).cleanup === "function") {
+                try { await (this.#zip as any).cleanup(); } catch (_) {}
+            }
             // A user cancellation is not an error: the popup already reset the
             // UI when the user pressed Cancel, so do not surface "Download was
             // aborted" as if the download had failed.

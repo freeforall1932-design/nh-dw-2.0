@@ -77,6 +77,25 @@ export module utils
         return newName;
     }
 
+    export function cleanEmptyDelimiters(text: string): string {
+        let s = text;
+        // 1. Remove empty brackets/parentheses where the token inside was empty: [], (), {}
+        s = s.replace(/\[\s*\]/g, "");
+        s = s.replace(/\(\s*\)/g, "");
+        s = s.replace(/\{\s*\}/g, "");
+        // 2. Collapse repeated separators (hyphens, underscores, pipes, commas)
+        s = s.replace(/(?:\s*-\s*){2,}/g, " - ");
+        s = s.replace(/(?:\s*_\s*){2,}/g, " _ ");
+        s = s.replace(/(?:\s*,\s*){2,}/g, ", ");
+        s = s.replace(/(?:\s*\|\s*){2,}/g, " | ");
+        // 3. Collapse multiple whitespace
+        s = s.replace(/ +/g, " ");
+        // 4. Trim leading and trailing separators and whitespace
+        s = s.replace(/^[\s\-_,|]+/, "");
+        s = s.replace(/[\s\-_,|]+$/, "");
+        return s.trim();
+    }
+
     export function getDownloadName(exampleString: string, prettyName: string, englishName: string, japaneseName: string, id: string, tags: Array<Tag>): string {
         exampleString = exampleString.replace(/{pretty}/g, prettyName);
         exampleString = exampleString.replace(/{english}/g, englishName);
@@ -96,7 +115,7 @@ export module utils
         exampleString = exampleString.replace(/{character}/g, characters.join(", "));
         exampleString = exampleString.replace(/{artist}/g, artists.join(", "));
         exampleString = exampleString.replace(/{language}/g, language);
-        return exampleString;
+        return cleanEmptyDelimiters(exampleString);
     }
 
     let invalidCharacter: Array<string> = [

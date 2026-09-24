@@ -1,10 +1,13 @@
-# Multi-site v4 plan — planning mode, no code yet
+# Multi-site v4 plan
 
 **Recorded:** 2026-09-14 (session `arena/01a09ee5-nh-dw-2-0`).
-**Status:** M0 (item 47, composite keys) landed the same day as **3.8.0**;
-everything else below is planned, not scheduled. Item numbers 47–52 are registered in `IMPROVEMENT_BACKLOG.md`
-and `WORKLIST.md`; this document carries the depth — the same role
-`BOOKMARK_QUEUE_PLAN.md` plays for 3.7.0.
+**Updated:** 2026-09-23 (session `arena/01a0cdce-nh-dw-2-0`).
+**Status:** **Landed in Chrome 3.9.0 / Firefox 1.3.0.** M0 (composite keys),
+M1 (hitomi adapter + resolver), M2 (per-site jobs + site-aware paste box),
+M3 (mirror network & hentaifox adapters), M4 (streaming ZIP writer, 2026-09-24)
+and M5 (Item 52 backup export/import)
+have all shipped and are verified across 519 Chrome / 595 Firefox unit tests.
+See `ADAPTER_WIRING_PLAN.md` for the wiring matrix and `WORKLIST.md` for remaining open items.
 
 This document records four things so no future session has to re-derive them:
 
@@ -61,10 +64,15 @@ from the user. (An earlier draft mislabelled this a DNS failure.)
 
 | Site(s) | Status | Notes |
 |---|---|---|
-| nhentai.net | Shipped (3.7.0) | Reference adapter. Keep. |
-| hitomi.la | First new site (item 49) — scaffolded, **blocked on user-captured samples** (see section 8) | See 2.1. |
-| imhentai.xxx, hentaienvy.com, hentaiera.com | Planned (item 50) — Strategy C chosen, awaiting the user's go | Per-site adapters: imhentai+envy share a store, hentaiera separate. See 2.2 (corrected). |
-| hentaifox.com | Planned, pending spike (item 50) — samples pending | Separate platform unless the spike shows shared structure. See 2.3. |
+| nhentai.net | **Shipped** | Reference adapter + regression control. Keep. |
+| hitomi.la | **Shipped (item 49, 3.9.0)** | Dynamic `gg.js` resolver, default format `raw`. See 2.1. |
+| imhentai.xxx, hentaienvy.com, hentaiera.to | **Shipped (items 50/53, 3.9.0)** | Per-site adapters: imhentai+envy share a content store (not ids), hentaiera a separate backend. See 2.2. Strategy C still pending owner go. |
+| hentaifox.com | **Shipped (item 50, 3.9.0)** | Its own platform (`g_th` type codes, `/004/`+`/005/` dirs). See 2.3. |
+
+Per-site contract details (hosts, URL shapes, metadata sources, referer/CDN
+behaviour) live in the **`ADAPTER_WIRING_PLAN.md` §1 matrix** — the operative
+reference for site #7+. The canonical next-site roster: `new domain candidate`
+on main (2026-09-24 swap); analysis in `CANDIDATE_SITES.md`.
 
 The **cin.* family** (cin.lat, cin.mom, cin.monster, cin.wiki, cin.wtf, …)
 is NOT a new site: those are viewer mirrors of nhentai content. The paste
@@ -75,47 +83,34 @@ by tests since 3.8.0; no adapter work needed.
 Explicitly out of scope: onion (stays dropped, backlog item 9), video sites,
 and every site the user does not actually visit.
 
-### 2.1 hitomi.la — first new site, the architecture validator
+### 2.1 hitomi.la (shipped)
 
-- The site's own in-browser download path accumulates every page blob in the
-  reader tab's heap and zips client-side; 2000-page gif/webp/avif galleries
-  can reach 1 GB+ and crash the tab **[user]**. This is precisely the failure
-  mode the offscreen pipeline + `chrome.downloads` exists to avoid.
-- Metadata: the known shape from public extractors is a per-gallery JS file
-  under `ltn.gold-usergeneratedcontent.net/galleries/<id>.js` (the captured shell
-references that host, **not** `ltn.hitomi.la`); image addressing has historically
-  required a small runtime config (`gg.js`) that maps image numbers to CDN
-  subdomain prefixes and rotates over time. **Verify the current form in the
-  spike** — never hardcode subdomains; fetch the config at runtime and cache
-  it with a TTL, the way gallery-dl does.
-- Originals reportedly include webp/gif and possibly avif **[user]** — avif
-  plumbing (type-code map + `cdnConfig` path allowlist; the `image/*`
-  content-type validation already accepts it) is part of item 49.
-- Huge galleries: default format for this site is **raw** (or the streaming
-  ZIP writer, item 51, once it exists), never an in-memory zip.
+Durable facts the adapter is built on: the site's own in-browser download path
+accumulates every page blob in the reader tab's heap (1 GB+ galleries crash
+it — the reason this site defaults to **raw**, with the streaming ZIP writer
+(item 51, landed) as the archive answer); metadata is a per-gallery JS file
+(`galleries/<id>.js` on `ltn.gold-usergeneratedcontent.net`); image addressing
+needs the runtime `gg.js` config (subdomains **rotate** — fetch at runtime,
+cache with a TTL, never hardcode). Owner's live-testing note: reading-mode
+originals are PNG/~10x webp size (possible pending avif conversion — avif
+plumbing exists in the type-code map); the site's own zip button serves
+**webp, not originals**.
 
-### 2.2 The mirror network (imhentai / hentaienvy / hentaiera)
+### 2.2 The mirror network (imhentai / hentaienvy / hentaiera) (shipped)
 
-- Strong indicators the three hosts are one operator/network: identical
-  frontend, shared galleries **[user]**; traffic-analysis affinity
-  **[external]**. Working assumption: **one adapter, parameterized by
-  host**. Confirm in the spike; if they diverge, split then — not before.
-- **Corrected 2026-09-15 (captures):** the "identical frontend / one adapter"
-  assumption is false. imhentai+envy share one content store (`/033/<token>/`,
-  0/19 matching gallery ids) but have different frontends (`thumbnail`/
-  `gallery_title` vs BEM `hnv-*`, reader `#gimg` vs `#readerImg`, `/view/` vs
-  `/g/`); hentaiera is a separate backend (`hentaiera.site`, numeric media
-  ids, webp). Plan per-site adapters — `ADAPTER_WIRING_PLAN.md` §1.
-- They expose a **server-side ZIP download button** (their bandwidth and
-  CPU, not the user's RAM) with a **strict ~1 minute cooldown** between uses
-  **[user]**.
-- Reader pages are served individually from their CDN with no zip endpoint
-  involved **[spike: confirm the reader CDN pattern]**.
+The "identical frontend, one adapter" assumption was **false** (2026-09-15
+captures): two storage backends, four frontends. imhentai + hentaienvy share
+one content store (`/033/<token>/`) with **disjoint gallery-id spaces** (19/19
+shared tokens, 0/19 matching ids) — cross-mirror fallback there is a host swap
+on the token, never an id lookup. hentaiera is a separate backend
+(`hentaiera.site`, numeric media ids, webp). They expose a server-side ZIP
+button with a strict ~1-minute cooldown — see §3 (Strategy C still pending).
 
-### 2.3 hentaifox.com
+### 2.3 hentaifox.com (shipped)
 
-Same category **[user]**, treated as its own platform until the spike shows
-otherwise. Assume the same cooldown-queue treatment until measured.
+Its own platform: `g_th` type-code map, CDN prefix varies per gallery
+(`/004/` older vs `/005/` newer — read, never assumed). Its zip came out the
+largest in the owner's comparison (~1-2% over the mirror baseline).
 
 ## 3. Cooldown analysis (the four new sites)
 
@@ -167,69 +162,20 @@ Order once the user confirms: build the reader-page path first (it also
   keep A, switch to B, or run both as a per-site setting. **Do not skip C** —
   the whole A-vs-B choice hinges on it.
 
-## 4. v4 architecture changes (items 47–48)
+## 4. v4 architecture changes (items 47–48) — LANDED
 
-### 4.1 Composite (site, id) keys — item 47 — landed as 3.8.0 (2026-09-14)
-
-Implemented by `src/utils/siteKeys.ts` + the store changes described in the
-2026-09-14 implementation session log (`IMPROVEMENT_BACKLOG.md`). The
-original spec follows.
-
-Every persistent store is keyed by the bare numeric gallery id today:
-download history (`downloadHistory.ts`), bookmark queue
-(`bookmarkQueue.ts`), failed galleries (`failedGalleries.ts`) **[repo]**.
-Ids collide across sites (nhentai #366224 ≠ another site's #366224), so
-keys become `"<site>:<id>"`; existing rows migrate as `nhentai:<id>`. Small,
-safe, worth doing even if the multi-site direction is later abandoned.
-
-### 4.2 Adapter layer v2 + multi-site panel — item 48
-
-Evolve `GallerySource` **[repo]** into a `SiteAdapter` that additionally
-owns:
-
-- metadata normalization into the internal gallery shape (the pattern
-  already exists: `GalleryEmbed.normalizeGalleryV2` for the API-v2 path),
-- per-page image URL lists incl. mirror/fallback ordering,
-- URL parse/format registration for the **paste box** — today it accepts
-  only `nhentai.net/g/<id>`, `cin.lat/v/<id>`, `cin.lat/bulk?id=…` and bare
-  ids **[repo]**; one pattern per adapter makes it site-aware,
-- a content-script DOM module per site (the in-page buttons / floating bar
-  are nhentai-DOM-bound today),
-- **site-aware worker messages** — `bookmarkAdd` / `bookmarkEnrich` /
-  `bookmarkSelect` / `bookmarkRemove` and the failed-gallery retry & dismiss
-  messages carry only bare ids today. The queue functions already compose
-  both sides, so nothing is broken while only nhentai rows exist, but a
-  non-default-site row could not be selected, retried or dismissed until the
-  messages carry its site (found by the 2026-09-14 review pass; part of this
-  item, not a separate one),
-- **per-site job splitting — the last id-collision surface.** The composite
-  keys made the *stores* collision-proof, but the *job payload* is still
-  bare-id: `allDoujinshis` is `Record<bare gallery id, title>`, and the
-  pipeline's skip guard composes every key with the default site
-  (`toGalleryKey(key)` — `batchPipeline.ts`, marked by a comment). Two
-  consequences once a second site exists: two same-numbered galleries from
-  different sites in ONE batch would collapse into a single
-  `allDoujinshis` entry, and a non-nhentai gallery would be skip-checked
-  against `nhentai:<id>` history records (possible wrong skip / wrong
-  redownload). A mixed-site batch becomes real the moment the bookmark queue
-  holds rows from two sites and the user presses "Download N selected".
-  **Chosen direction (item 48): one job per site** — the queue splits the
-  selection into one `downloadAllDoujinshis` job per site before sending
-  (jobs are single-site in practice anyway: a job's format, template and
-  master folder resolve per site). Alternative, if a true mixed job is ever
-  wanted: key the payload by composite id and thread per-gallery site
-  through the pipeline — more invasive, no current need.
-- per-site settings: default format (hitomi → raw), inter-page pacing,
-  zip-button usage on/off,
-- its manifest hosts (optional `host_permissions`, requested on use).
-
-The side-panel multi-site rework being prototyped in the user's lab clone
-lands here if merged: site sections/filters in Queue and history, per-site
-defaults, and the site-aware paste box.
+Item 47 (composite `<site>:<id>` keys, `src/utils/siteKeys.ts`) landed as
+3.8.0; item 48 (per-site jobs, site-aware paste box, per-adapter metadata
+resolution, composite history/retry with bare-id names) landed in 3.9.0 /
+FF 1.3.0 (PR #47). The operative rules now live in `SESSION_HANDOFF.md` →
+"Structural invariants" and the Do-not list; implementation history is in
+`IMPROVEMENT_BACKLOG.md` (2026-09-14…23 logs). The wider planning scope of
+item 48 (adapter-interface v2 formalization, the lab clone's side-panel
+rework merge) remains open — see §7.
 
 ## 5. Bucket list — worth keeping, not yet scheduled
 
-- **Streaming ZIP writer (item 51).** ZIP/CBZ today still *assembles* the
+- **Streaming ZIP writer (item 51) — LANDED 2026-09-24.** ZIP/CBZ today still *assembles* the
   archive in memory in the offscreen document — the object-URL handoff fixed
   the base64 round-trip, not the assembly — so a 1 GB archive means ~GBs of
   RAM. A streaming writer (zip.js-style) targeting an OPFS file, or a File
@@ -253,33 +199,28 @@ defaults, and the site-aware paste box.
   (the paste box already covers it), user scripts, BitTorrent/M3U8 (video —
   out of category).
 
-## 6. Milestones (order, if called)
+## 6. Milestones (all landed)
 
-1. **M0 — item 47: composite keys — landed as 3.8.0 (2026-09-14).**
-2. **M1 — item 49:** hitomi spike — adapter, metadata, runtime subdomain
-   config, content script, raw default. Validates the whole adapter
-   contract. **Blocked on user-captured samples (section 8); the sandbox
-   cannot reach hitomi hosts.**
-3. **M2 — item 48:** panel v2 + site-aware paste box (merge the lab's
-   rework here). Deliberately after M1, so the contract is proven before the
-   UI bakes it in.
-4. **M3 — item 50:** comparison task (Strategy C — chosen, waiting for the
-   user's go-ahead), then the mirror-network adapter + pacing; hentaifox
-   rides along if its spike shows the same shape.
-5. **M4 — item 51:** streaming ZIP writer; hitomi (and the mirror network's
-   A-path) switch to it for archives.
-6. **M5 — item 52:** history export/import.
-7. Rename/rebrand after M1 proves out.
+M0 item 47 composite keys (3.8.0) · M1 item 49 hitomi adapter+resolver ·
+M2 item 48 per-site jobs + universal paste box · M3 items 50/53 mirror
+network + hentaifox · M4 item 51 streaming ZIP writer (OPFS; 2026-09-24 incl.
+review fixes) · M5 item 52 queue+history export/import. All in 3.9.0 /
+FF 1.3.0 except M0 (3.8.0). Remaining gate: items 42/58 (device passes +
+signing). Details: `IMPROVEMENT_BACKLOG.md`.
 
-## 7. Open questions
+## 7. Open questions (still open after the 3.9.0 landing)
 
-- Final merge call for the lab clone's panel rework — stays open until
-  hitomi works end-to-end somewhere.
-- Are the three mirror hosts byte-identical platforms (one adapter)?
-- Does hentaifox share the cooldown mechanism?
-- Reader vs zip quality on the mirror network (Strategy C).
-- Does hitomi serve avif natively, and what is the current subdomain-config
-  form? (Verify in the spike; sandbox egress to hitomi hosts is blocked.)
+- Final merge call for the lab clone's panel rework (side-panel multi-site
+  UI) — hitomi now works end-to-end offline; the call is the owner's.
+- Does hentaifox share the mirror network's ~60 s zip cooldown mechanism?
+  (Unmeasured; its adapter uses Strategy A like the others.)
+- Reader vs zip quality on the mirror network (Strategy C) — chosen, awaiting
+  the owner's go; the owner's live note already leans Strategy A.
+- hitomi avif: the owner's note found PNG originals with avif conversion
+  possibly pending; confirm on a fresh sample during a real-browser pass.
+- Cross-mirror fallback chains (owner's live-testing note): deferred by the
+  owner's 2026-09-15 call; token-host-swap design for imhentai↔hentaienvy is
+  recorded in §2.2 so it is not re-derived.
 
 ## Do-not rules (planning level)
 
@@ -295,37 +236,11 @@ defaults, and the site-aware paste box.
 - **Do not put site-specific logic in the core pipeline** — it goes in the
   adapter, or the adapter contract is wrong.
 
-## 8. Sample-capture checklist (unblocks items 49 and 50) — PENDING, user-owned
+## 8. Sample captures — DONE for all six sites; guide moved
 
-The sandbox has no egress to these hosts (DNS resolves, TLS blocked), so the
-extractors must be
-written against real captures. The user grabs these; nothing below is
-scheduled until they arrive. Save each item as a plain text / .html file and
-drop them into a folder for a future session.
-
-**hitomi.la (item 49):**
-1. A gallery page's full HTML (e.g. `https://hitomi.la/galleries/<id>.html`).
-2. The gallery's data JS from `ltn.hitomi.la` (view-source on the gallery
-   page will show the `<script src=...galleries/<id>.js>` URL; save what it
-   returns).
-3. `https://ltn.hitomi.la/gg.js` (the subdomain configuration — small file).
-4. One reader page's HTML (the URL the site uses when you read the gallery).
-5. Two or three full image URLs as the network tab shows them (right-click a
-   page image → copy image address), plus their `Content-Type` response
-   headers if easy to grab.
-6. One GIF or animated WebP gallery id if known — needed to confirm avif /
-   animation handling.
-
-**imhentai.xxx / hentaienvy.com / hentaiera.com / hentaifox.com (item 50):**
-1. One gallery page's full HTML per site (they may differ in small ways).
-2. One reader page's HTML per site.
-3. Two or three page-image URLs per site as the network tab shows them
-   (these reveal the CDN host pattern).
-4. What the site's own download button actually does: the URL it opens /
-   POSTs (visible in the network tab after clicking it once), and the
-   cooldown message shown when clicked again too soon.
-5. One zip downloaded via the button on ONE small gallery — kept unopened;
-   it is Strategy C's comparison sample.
-
-Everything on this list is page-source and URL capture only — no account,
-no payment, nothing beyond what a normal browser visit produces.
+All six initial sites are captured, audited and shipped (2026-09-15…23). The
+capture method + handover rules for the NEXT site live in `CAPTURE_GUIDE.md`;
+the candidate roster in `CANDIDATE_SITES.md`. Capture files in `captures/`
+were sanitized 2026-09-24 (dummy titles/tags, ad blocks stripped, website
+naming kept); originals only in git history — sandbox egress to these hosts
+stays blocked, so new captures remain owner-owned.

@@ -8,7 +8,10 @@ const {
     resolveGalleryMetadata,
     runBatchDownload,
     runPagedBatchDownload,
-    buildRetryJob
+    buildRetryJob,
+    cancelGallery,
+    isGalleryCancelled,
+    resetCancelledGalleries
 } = require('../build/test/utils/batchPipeline.js');
 const { extractGalleryFromHtml } = require('../build/test/parsing/GalleryEmbed.js');
 
@@ -736,5 +739,92 @@ describe('item 48 — a per-site job', () => {
         assert.strictEqual(composite.ok, true);
         assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
             'a composite key wins over a contradicting job site');
+    });
+
+    describe('item 45 — cancelGallery', () => {
+        beforeEach(() => {
+            resetCancelledGalleries();
+        });
+
+        it('cancelGallery records cancelled key and checks both bare and composite', () => {
+            assert.strictEqual(isGalleryCancelled('12345'), false);
+            cancelGallery('12345', 'nhentai');
+            assert.strictEqual(isGalleryCancelled('12345'), true);
+            assert.strictEqual(isGalleryCancelled('12345', 'nhentai'), true);
+            resetCancelledGalleries();
+            assert.strictEqual(isGalleryCancelled('12345'), false);
+        });
+
+        it('skips a pre-cancelled gallery and continues the batch', async () => {
+            cancelGallery('2');
+            const host = makeHost();
+            const outcome = await runBatchDownload({
+                zip: {},
+                allDoujinshis: { '1': 'One', '2': 'Two', '3': 'Three' },
+                finalName: 'Batch',
+                downloadAtEnd: true,
+                galleryMetadata: {
+                    '1': gallery(1, 'One'),
+                    '2': gallery(2, 'Two'),
+                    '3': gallery(3, 'Three')
+                },
+                options: { useZip: 'zip', downloadSeparately: true },
+                host: host
+            });
+
+            assert.strictEqual(host.downloads.length, 2);
+            assert.strictEqual(host.downloads[0].displayName, 'One');
+            assert.strictEqual(host.downloads[1].displayName, 'Three');
+            assert.strictEqual(outcome.failedGalleries.length, 1);
+            assert.strictEqual(outcome.failedGalleries[0].id, '2');
+            assert.strictEqual(outcome.failedGalleries[0].error, 'Download was aborted');
+        });
+
+        it('a cancel on one site never cancels the same id on another (PR #48 review)', () => {
+            // Composite keys are the identity contract (item 47/48): the same
+            // number on two sites is two different galleries. A bare-id mark
+            // would let cancelling the hitomi row silently kill an in-flight
+            // nhentai batch entry with the same number.
+            cancelGallery('12345', 'hitomi');
+            assert.strictEqual(isGalleryCancelled('12345', 'hitomi'), true);
+            assert.strictEqual(isGalleryCancelled('12345', 'nhentai'), false,
+                'the nhentai gallery with the same number must not be cancelled');
+            assert.strictEqual(isGalleryCancelled('12345'), false,
+                'a bare check means the DEFAULT site and must not match a hitomi cancel');
+        });
+
+        it('skipping consumes the cancel mark, so the next job re-downloads it (PR #48 review)', async () => {
+            // The cancel belonged to ONE job. A mark that survives it makes the
+            // gallery undownloadable for the lifetime of the document/worker -
+            // the row's Retry and "Retry failed" would fail instantly forever.
+            cancelGallery('2');
+            const host = makeHost();
+            const first = await runBatchDownload({
+                zip: {},
+                allDoujinshis: { '2': 'Two' },
+                finalName: 'Batch',
+                downloadAtEnd: true,
+                galleryMetadata: { '2': gallery(2, 'Two') },
+                options: { useZip: 'zip', downloadSeparately: true },
+                host: host
+            });
+            assert.strictEqual(first.failedGalleries.length, 1, 'the first job skips the cancelled gallery');
+            assert.strictEqual(isGalleryCancelled('2', 'nhentai'), false,
+                'the skip must consume the mark instead of keeping it forever');
+
+            const retryHost = makeHost();
+            const second = await runBatchDownload({
+                zip: {},
+                allDoujinshis: { '2': 'Two' },
+                finalName: 'Batch',
+                downloadAtEnd: true,
+                galleryMetadata: { '2': gallery(2, 'Two') },
+                options: { useZip: 'zip', downloadSeparately: true },
+                host: retryHost
+            });
+            assert.strictEqual(retryHost.downloads.length, 1,
+                'the retry job downloads the previously cancelled gallery');
+            assert.strictEqual(second.failedGalleries.length, 0);
+        });
     });
 });

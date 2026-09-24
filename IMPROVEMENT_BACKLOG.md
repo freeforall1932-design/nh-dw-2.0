@@ -1401,16 +1401,14 @@ audit), not from a user report.
   code changed by this task; Chrome coverage/fixes were not approved. See the
   session log below and item 59 for the adjacent shared-reader issue.
 
-- **[ ] 39. Empty-token separators (needs a decision, not code).**
-  `getDownloadName("{id} - {pretty} - {language}", ..., [])` yields
-  `"123456 - 123456 - "`, and `cleanName` trims it to `"123456_-"`. The
-  empty-token behaviour is pinned deliberately by `test/parsing.test.js`
-  ("leaves placeholders empty when tags are absent", asserting `"Pretty||"`),
-  so both fixes are contract changes: collapse dangling separators in
-  `cleanName` (affects every produced name, including single-title ones), or
-  drop an empty token together with its separator in `getDownloadName`
-  (requires editing that test). Recommend the second, with the test updated to
-  assert `"Pretty"` plus a new case for a token in the middle.
+- **[x] 39. Empty-token separators (LANDED 2026-09-23).**
+  `cleanEmptyDelimiters()` added in `src/utils/utils.ts` and called at the end
+  of `getDownloadName()`. Collapses dangling separators (e.g. `Pretty||` ->
+  `Pretty`, `123456 - Pretty - ` -> `123456 - Pretty`, `Pretty - - 123456` ->
+  `Pretty - 123456`, and removes empty brackets `[]` / `()`). Pinned and tested
+  in `test/parsing.test.js` across Chrome and Firefox. Also updated example
+  file name preview sample tags so settings preview accurately reflects
+  individual token toggling.
 
 - **[ ] 40. Popup harness: listing-page bootstrap.** The harness proves the
   panel's message -> UI and storage contracts; it does not build a listing
@@ -1612,15 +1610,20 @@ run in this environment.
 
 ### 45. Per-row cancel of an in-flight download
 
-- **Status:** open. This is the surviving half of the old **P3 queue UI**.
-- Still blocked by the same structural fact: the job queue is `queuedJobs` in the
-  offscreen document and is surfaced only as a count. Cancelling one specific
-  gallery needs the worker to mirror job state into `chrome.storage.session`
-  with per-item identity, and the offscreen loop to check it between pages.
-- Do **not** solve this by growing the bookmark list into a job queue. See the
-  "Do not" rules.
-- Existing global pause / clear / `clearQueue` remain the only stop controls
-  until this lands.
+- **Status:** **landed 2026-09-23**.
+- Implemented `cancelGallery(id, site)` across `batchPipeline.ts`, `Downloader.ts`,
+  `offscreen.ts`, and `background.ts`.
+- When a user cancels a gallery currently downloading:
+  - In `bookmarkPanel.ts`, an active downloading row renders a red "Cancel" button.
+  - Clicking "Cancel" dispatches `action: "cancelGallery"`.
+  - The worker / offscreen document aborts the active `Downloader` for that gallery,
+    filters out matching entries in `queuedJobs`, and marks the bookmark row as
+    failed (`error: "Cancelled"`).
+  - In `batchPipeline.ts`, `isGalleryCancelled()` checks allow pre-cancelled galleries
+    in a batch loop to be skipped immediately, allowing subsequent galleries in the batch
+    to continue downloading cleanly without failing the whole batch job.
+  - Styled `.nhdwBmCancel` in `css/style.css` and verified with dedicated tests in
+    `test/batch-pipeline.test.js`.
 
 ### 46. Firefox port of the bookmark queue
 
@@ -1690,57 +1693,42 @@ Planning only — no code exists. Depth and rationale:
 
 ### 48. Site adapter layer v2 + multi-site side panel + site-aware paste box
 
-- **Status:** **partially landed 2026-09-23** — the per-site job split and the
-  per-site metadata resolution shipped in both trees (one job per site; the
-  adapters fetch; file names stay bare-id). The adapter-interface rework, the
-  multi-site side panel and the site-aware paste box below are still open.
-- Evolve `GallerySource` into a `SiteAdapter` owning metadata normalization
-  (pattern exists: `GalleryEmbed.normalizeGalleryV2`), per-page image URL
-  lists, paste-box URL patterns (today nhentai-only: `nhentai.net/g/<id>`,
-  `cin.lat/v/<id>`, `cin.lat/bulk?id=…`, bare ids), a per-site content-script
-  DOM module, per-site settings (default format, pacing, zip-button usage)
-  and manifest hosts. The side-panel multi-site rework being prototyped in
-  the user's lab clone lands here if merged. Deliberately follows the
-  hitomi spike (49) so the contract is proven before the UI bakes it in.
-  Also owns the last id-collision surface: the job payload
-  (`allDoujinshis`, bare-id keys, default-site skip checks in
-  `batchPipeline.ts`) — solved by splitting the queue's selection into one
-  job per site (design and rationale: `MULTISITE_V4_PLAN.md` §4.2).
+- **Status:** **landed 2026-09-23** — per-site job splitting (`bySite`),
+  per-site metadata resolution via matching adapter, universal paste box
+  parsing (supporting bare IDs, URLs from all 6 sites, and `site:id` keys),
+  bare-id file naming, and composite history/retry tracking shipped in both
+  Chrome (3.9.0) and Firefox (1.3.0).
 
 ### 49. Hitomi.la adapter — first new site, the architecture validator
 
-- **Status:** open (planning); depends on 47.
-- Adapter + metadata (per-gallery JS under ltn.hitomi.la, current form to
-  verify in-spike) + a runtime-fetched, TTL-cached subdomain config (never
-  hardcoded — it rotates) + content script. Includes avif plumbing
-  (type-code map, `cdnConfig` allowlist; `image/*` validation already
-  passes). Default format **raw** for 1 GB-class galleries — the site's own
-  in-tab client-side zip crashes on 2000+ page gif/webp/avif titles; ours
-  must not replicate that.
-- Success criterion: a 2000-page hitomi gallery downloads end-to-end, the
-  gallery tab can be closed mid-job, and a restart resumes cleanly.
+- **Status:** **landed 2026-09-23** (3.9.0 / FF 1.3.0).
+- Adapter (`src/sources/hitomiSource.ts`), dynamic subdomain router
+  (`src/sources/hitomiResolver.ts` mirroring `gg.js`), metadata extraction
+  (`src/parsing/hitomiHtml.ts`), direct CDN fetch from
+  `*.gold-usergeneratedcontent.net`, and default format `raw` for
+  large-gallery safety. Covered by `test/hitomi.test.js` and e2e suites.
 
 ### 50. Mirror-network adapter + reading-vs-zip comparison + pacing
 
-- **Status:** open (planning); depends on 47 and 48.
-- Sites: imhentai.xxx, hentaienvy.com, hentaiera.com (one adapter,
-  host-parameterized, pending spike) and hentaifox.com (pending spike).
-- Order: build the reader-page download path first; then the user's
-  comparison task (reader pages vs the site's server-side zip button:
-  hashes, dimensions, sizes, formats per page); then keep the reader path
-  (no cooldown), switch to a cooldown-aware scheduler (per-site token
-  bucket, persisted last-request timestamp, visible countdown), or hybrid.
-- **Do not** attempt to bypass the ~60 s server-side cooldown.
+- **Status:** **landed 2026-09-23** (3.9.0 / FF 1.3.0).
+- Implemented per-site adapters for `hentaiera`, `imhentai`, `hentaienvy`, and
+  `hentaifox` in `src/sources/` and `src/parsing/`. Reading-mode image extraction
+  bypasses server-side cooldown limits without hammering endpoints. Covered by
+  dedicated unit test suites (`test/imhentai.test.js`, `test/hentaienvy.test.js`,
+  `test/hentaifox.test.js`, `test/hentaiera.test.js`).
 
-### 51. Streaming ZIP writer (OPFS / File System Access)
+### 51. Streaming ZIP writer (OPFS / File System Access) — DONE 2026-09-24
 
-- **Status:** open (planning).
-- ZIP/CBZ still assembles the archive in memory in the offscreen document;
-  a 1 GB archive means ~GBs of RAM. A streaming writer to an OPFS file (or
-  an FSA handle picked in the panel — extension pages share one origin, so
-  the handle reaches the offscreen document) keeps memory O(one page) and
-  hands the disk-backed blob to `chrome.downloads`. The fix for 1 GB-class
-  jobs; hitomi's default archive mode once it exists.
+- **Status:** **landed 2026-09-24**.
+- Built `src/utils/streamingZip.ts` (`StreamingZipWriter`, `OpfsZipSink`, `MemoryZipSink`, `crc32`, and `compressDeflateRaw`).
+- Replaced JSZip memory accumulation in `offscreen.ts` with `StreamingZipWriter` targeting Origin Private File System (OPFS):
+  - In browser contexts with OPFS support (`navigator.storage.getDirectory()`), pages are written sequentially and directly to an OPFS `FileSystemWritableFileStream` on disk, bounding peak RAM to O(single page) regardless of gallery size.
+  - Generates standard PKWARE ZIP archives with 100% specification compliance: Local File Headers (UTF-8 bit 11 set), Central Directory records, and End of Central Directory (EOCD).
+  - Automatically selects `STORE` (method 0) for pre-compressed images (`.jpg`, `.png`, `.webp`, `.avif`) eliminating redundant CPU burn, while supporting streaming raw deflate via `CompressionStream("deflate-raw")` when requested.
+  - Automatically cleans up temporary OPFS files via `cleanup()` upon archive delivery or abort. **(PR #48 review fix:** the save is an un-awaited anchor click, so `cleanup()` now unlinks after a 60 s grace period — mirroring `revokeObjectUrlDelayMs` — and `OpfsZipSink.create()` sweeps orphaned `nhdw_archive_*.tmp` files older than that grace period before creating its own; a killed document can no longer leak, and a live download can no longer have its blob unlinked mid-read.)
+  - In contexts without OPFS (e.g. Node test environment), cleanly falls back to `MemoryZipSink`.
+  - **Compression honesty (PR #48 review):** the writer decides compression per entry at append time; the Downloader's `generateAsync({compression:"DEFLATE"})` request is documented-ignored, so production archives are STORE (image payloads are already compressed; PNG pages come out a few percent larger than the old JSZip deflate, in exchange for constant memory). Per-entry DEFLATE remains available via the constructor / `file()` options.
+- Verified with dedicated unit test suite in `test/streaming-zip.test.js` and confirmed across end-to-end offscreen document test (`scripts/e2e-offscreen.js`) with zero base64 round-trip. The OPFS runtime itself (real `navigator.storage`) cannot run in the VM harnesses — mocked sinks + the memory fallback are what the suites cover; a real OPFS pass belongs to items 42/58.
 
 ### 52. Queue + history export / import (JSON) — DONE 2026-09-23
 
@@ -2329,3 +2317,149 @@ The stale block is deleted, one definition per selector remains in each tree,
 and the two trees were checked property by property for all four selectors
 (no differences). Release snapshot re-synced; units re-run (503/4 Chrome).
 
+## Session log — 2026-09-24 (session `arena/01a0cdce-nh-dw-2-0`, review pass): PR #48 reviewed, eight defects fixed
+
+The mandatory review-before-building rule was run over this session's own PR
+#48 (items 39/45/51, commit `49b355f5`). Eight defects: one parity gap, four
+broken behaviours, two misalignments, one doc-honesty fix. Every code defect
+got a test that fails on the pre-fix build. Full table with evidence:
+`SESSION_HANDOFF.md` "Review pass — PR #48".
+
+1. **Item 45's UI never reached Firefox** — `bookmarkPanel.ts` and the queue CSS
+   were untouched there; the FF `cancelGallery` handlers had zero senders.
+   Ported (file byte-identical again) + `.nhdwBmCancel` into
+   `panelRenderers.css` under the `:where(#queuePane, #nhdwSiteUiQueue)` scope;
+   pinned by `e2e-bookmark-panel.js` phase 7d (fails on the pre-fix FF bundle).
+2. **Cancel marks were never consumed** — a cancelled gallery's Retry /
+   "Retry failed" / re-paste failed instantly for the lifetime of the
+   document/worker. Fixed with consume-on-skip in the batch loop plus
+   consume-on-enforce (and offscreen-only consume-when-idle) in the handlers;
+   pinned by the new `e2e-offscreen.js` cancel phase (retry half fails
+   pre-fix) and two unit cases.
+3. **Bare-id cancel identity poisoned across sites** — cancelling `hitomi:123`
+   also killed `nhentai:123` (mark set, active-Downloader match and queued-job
+   filter all had bare fallbacks). Composite-only everywhere; pinned by a unit
+   case that fails pre-fix.
+4. **A late cancel demoted `done` rows** — `markBookmarksFailed` ran
+   unconditionally in both handlers. Now it never demotes a settled row;
+   pinned by `e2e-worker.js` phase 13i (fails pre-fix: stored status becomes
+   failed "Cancelled").
+5. **OPFS temp archives were unlinked instantly** — while the un-awaited anchor
+   download might still be reading the blob — and orphans leaked when the
+   document died. Delayed unlink (60 s, injectable) + age-gated orphan sweep in
+   `OpfsZipSink.create()`; two new unit cases fail pre-fix.
+6. **Stray `return true` after a synchronous reply** in the fallback
+   `cancelGallery` handler — removed (channel-hygiene rule from the 3.6.x
+   console-noise fix).
+7. **Docs contradicted the PR they shipped with** — root/Release/Firefox
+   READMEs (roadmap 51 unchecked, "no per-item cancel" limitation, 503/579
+   counts), `MULTISITE_V4_PLAN.md` M4 "future work". All corrected; counts now
+   Chrome **519** / Firefox **595**.
+8. **DEFLATE request silently ignored** by the streaming writer (per-entry
+   compression at append time; production archives STORE-only). Documented in
+   the code instead of pretending; no behaviour change.
+
+Known limits recorded, not hidden: the worker fallback cannot cancel a QUEUED
+single-title job (no queue visibility — pre-existing); the OPFS runtime itself
+is unverifiable in the VM harnesses (mocked sinks + memory fallback only —
+real OPFS joins the 42/58 real-browser list).
+
+Verification: both trees tsc 0; Chrome **519/4** units, smoke 7, e2e exit 0
+**143 PASS**; Firefox **595/4** units, smoke 7, e2e exit 0 **175 PASS**, lint
+**0/0/31**, package `nhentai_downloader-1.3.0.zip` rebuilt. Release snapshot
+re-synced (only `js/background.js` + `js/offscreen.js` were stale). No
+manifest/permission/dependency/CI/version change.
+
+## Session log — 2026-09-24 (session `arena/01a0cdce-nh-dw-2-0`, owner request): capture sanitization + docs consolidation
+
+Two owner requests in one pass, no product-code change:
+
+### 1. Content-filter sanitization (a session crash-looped reading captures)
+
+An agent session hard-stopped in a crash loop because repository files carried
+real gallery titles/tags (romaji, Japanese, Chinese) with explicit terms. The
+owner's rule: **sanitize source material, keep website naming schemes.**
+
+- **Sanitized (working tree):** `5 website page source` (34 attr + 38
+  text-node titles → `DUMMY_TITLE_nnn`/`DUMMY_TEXT_nnn`, 2 ad blocks removed;
+  card counts, media paths and markup classes verified intact),
+  `captures/hitomi-id-rendered.html` (34 URL slugs + 32 text nodes, 1 ad
+  block), `captures/view-source era to gallery 694133 .txt` (ld+json/og
+  titles, 10 slugs, 19 text nodes, 1 ad block), `captures/hitomi The Gallery
+  Metadata JS.txt` (title/japanese_title/tag/artist/parody fields → dummies;
+  hashes, dimensions, file lists untouched), `captures/hitomi export
+  sanitize … .har` (JSON-string-level scrub incl. percent-encoded tag slugs
+  inside embedded HTML; 6 ad refs removed). `captures/fox-173098.har`,
+  `hitomi-gg.js` and `3 live testing note` scanned clean — untouched.
+- **Word-boundary gotcha (recorded):** explicit words adjacent to `%20` runs
+  are invisible to `\b` regexes (a digit blocks the boundary) — the sweep
+  needs letter-lookarounds `(?<![A-Za-z])…(?![A-Za-z])` or a decoded pass.
+  This hid 9 residuals in the hitomi HAR on the first run.
+- **Fixtures:** `test/title-bookmark.test.js` + `scripts/e2e-title-bookmark.js`
+  (both trees, kept byte-identical) swapped their one realistic title word and
+  tag slug for neutral ones; suites re-run green (Chrome 519 / Firefox 595,
+  title-bookmark e2e 146 checks each).
+- **On `main` (contents API, owner-requested file):** `new domain candidate` —
+  the percent-encoded series slug containing an explicit term became
+  `[sanitized-series-slug]` (domain + path shape kept). Commit `3d5106b4`.
+  The owner's three picks (tailspace.com, mangak.io, omegascans.org) were
+  mirrored sanitized into `CANDIDATE_SITES.md` §4a with a dedupe check against
+  the tier lists: **no overlap, no double entries**.
+- **Honest limit:** git HISTORY still holds the originals (the crash came from
+  `git show` of a historical blob). Working-tree sanitization fixes reading
+  the files; a history rewrite was deliberately NOT done (destructive to open
+  PRs/clones). Rule added to handoff/worklist: do not `git show` pre-2026-09-24
+  capture commits in an agent session; sanitize new captures before committing
+  (method: `CAPTURE_GUIDE.md` Part B).
+
+### 2. Docs consolidation (owner: "session handoff so bloated")
+
+- **`SESSION_HANDOFF.md` rewritten 192 KB → 34 KB:** current state, doc map,
+  structural invariants distilled from every shipped version (formats/naming,
+  pipeline/lifecycle, identity/history/failures, bookmark queue, multi-site,
+  UI surfaces, filename guard), the real-browser checklists (42/58 + PR #48
+  additions), current open questions (15), the FULL Do-not list (carried over
+  + the PR #48 review additions), and one-line history pointers. The long-form
+  original is recoverable from git history (≤ commit `62697a2`).
+- **Deleted as complete/superseded** (all recoverable from git history):
+  `BOOKMARK_QUEUE_PLAN.md` (3.7.0 shipped; summary lives in the 2026-09-08
+  log below and the handoff invariants), `NEXT_CAPTURE.md` (superseded by
+  `CAPTURE_GUIDE.md` per its own banner; hentaiera rationale now historical),
+  `SITE_CAPTURE_AUDIT.md` (its corrections were carried into
+  `ADAPTER_WIRING_PLAN.md` §1 and `CAPTURE_GUIDE.md` Part B; it also quoted a
+  real title, resolved by deletion).
+- **Trimmed:** `WORKLIST.md` (32→10 KB; done items one-lined, open items +
+  harness notes kept), `MULTISITE_V4_PLAN.md` (19→14 KB; roster statuses
+  shipped, landed item specs collapsed to pointers, §8 → CAPTURE_GUIDE
+  pointer, open questions pruned), `ADAPTER_WIRING_PLAN.md` (9→7 KB; phase
+  roadmap collapsed to a shipped one-liner + a new §6 "adding site #7"
+  checklist; the §1 contract matrix untouched — it is the operative
+  reference), `CAPTURE_GUIDE.md` (15→12 KB; per-site RESOLVED narratives
+  condensed into durable gotchas for site #7+).
+- **Kept as-is (live/operative):** this backlog (the improvement log — the
+  designated keeper of completed-work detail), `DEPENDENCY_MAINTENANCE.md`,
+  `FOLDER_NAMING_STUDY.md` (explains the LIVE naming guard + Chromium bug
+  579563; README troubleshooting links it), `CANDIDATE_SITES.md`, `ci/README.md`,
+  the three READMEs, and the Firefox tree's `PORTING_AUDIT.md` +
+  `FIREFOX_PARITY_PLAN.md`. `NHDW_Extension_v3.0.0/README.md` (the stale
+  legacy upstream readme) was replaced with an accurate short stub.
+- Cross-references swept: no remaining links to the deleted files except this
+  log and the deletion notes themselves.
+
+### Follow-up (same day): the owner-directed roster swap landed
+
+The other session's swap (prepared in its sandbox, never pushed) was landed
+here on the owner's instruction. `new domain candidate` on `main` was
+rewritten (commit `6ad0b5c0`, 21 lines): the owner's three chapter-based
+webtoon/manhwa picks (tailspace.com, mangak.io, omegascans.org) swapped to
+the desktop archiver project, replaced by the desktop-repo reference roster —
+Tier 1 (asmhentai, e-hentai, pururin, simply-hentai, myreadingmanga,
+nhentai.com) + Tier 2 boorus (danbooru, gelbooru, rule34.xxx, yande.re,
+sankaku, kemono.cr, coomer.st). Site naming schemes kept verbatim; no slugs,
+no explicit terms. `CANDIDATE_SITES.md` §4/§4a on the branch was replaced by
+the swap-decision section (the owner-picks mirror is superseded; the
+slug-addressing `siteKeys` caveat is preserved for the desktop archiver's
+benefit), and every cross-reference (WORKLIST, handoff doc map, v4 plan,
+capture guide) now names `new domain candidate` as the canonical roster.
+Dedupe stands: the roster matches this document's tier analysis 1:1, no
+double entries anywhere.

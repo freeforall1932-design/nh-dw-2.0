@@ -42,6 +42,13 @@ const TEMPLATE_LABELS: Record<string, string> = {
     language: "Language"
 };
 
+const SAMPLE_TAGS: any[] = [
+    { type: "artist", name: "Sample Artist" },
+    { type: "group", name: "Sample Group" },
+    { type: "character", name: "Sample Character" },
+    { type: "language", name: "english" }
+];
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K): HTMLElementTagNameMap[K] {
     return document.createElement(tag);
 }
@@ -219,7 +226,7 @@ export function renderSettings(container: HTMLElement): void {
                 chrome.storage.sync.set({ downloadName: template });
             }
             // Show a concrete example of the resulting file name.
-            const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
+            const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", SAMPLE_TAGS);
             const clean = utils.cleanName(rendered, spacesBox.checked, "123456");
             namePreview.textContent = template === ""
                 ? "Nothing ticked - file name falls back to the gallery ID."
@@ -453,7 +460,7 @@ function renderListModeSection(container: HTMLElement): void {
         const renderPreview = () => {
             const template = currentTemplate();
             const format = normalizeFormat(formatSelect.value, "zip");
-            const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", []);
+            const rendered = utils.getDownloadName(template, "Sample Title", "Sample Title", "", "123456", SAMPLE_TAGS);
             const clean = utils.cleanName(rendered, !!elems.replaceSpaces, "123456");
             const folder = masterBox.checked && String(elems.rawMasterFolder || "") !== ""
                 ? String(elems.rawMasterFolder) + "/"
