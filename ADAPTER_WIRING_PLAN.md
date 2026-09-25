@@ -98,7 +98,7 @@ export interface SiteAdapter extends GallerySource {
 
 ---
 
-## 5. Implementation status — ALL SIX PHASES SHIPPED (2026-09-22/23, 3.9.0 / FF 1.3.0)
+## 5. Implementation status — ALL SIX PHASES SHIPPED (2026-09-22/23, 3.9.0 / FF 1.3.0); listing-card surface shipped 2026-09-25 (3.10.0 / FF 1.4.0, PR #50)
 
 Phase 1 adapter contracts & registry (`src/sources/index.ts`:
 `getAdapterForUrl` / `getAdapterForSite`, per-adapter `cdnConfig` allowlists) ·
@@ -108,15 +108,23 @@ format `raw`) · Phase 5 universal paste box (all six sites' URL shapes +
 composite `site:id` keys) + manifest host permissions + per-site job splitting
 (`batchPipeline.ts`) · Phase 6 verification (unit + e2e both trees, release
 sync). Per-phase detail and test names: `IMPROVEMENT_BACKLOG.md` session logs
-2026-09-22/23. This document's §§1–4 stay as the operative reference for
+2026-09-22/23. **Listing-card surface (item 63, 2026-09-25, 3.10.0 / FF 1.4.0):** the six
+sites' listings are now covered by `src/utils/listCards.ts` (per-site
+container/cover/title/id table dispatched from `findCards()` via
+`getSourceForUrl(location.href).site`), with a second `content_scripts` block
+for the five non-nhentai listing hosts — see §6 step 3.
+
+This document's §§1–4 stay as the operative reference for
 adding **site #7+**: copy the matrix row, implement the interface, wire the
 six seams, follow `CAPTURE_GUIDE.md` for samples first.
 
 ## 6. Adding site #7 (the live checklist)
 
 1. Owner capture per `CAPTURE_GUIDE.md` (one sanitized HAR per site, or
-   gallery+reader HTML and 3 image URLs; rendered DOM instead of HAR for
-   client-side-rendered sites).
+   gallery+reader **and listing-page** HTML and 3 image URLs; rendered DOM
+   instead of HAR for client-side-rendered sites). The listing sample is what
+   the card-control table is measured from — without it, site #7 ships without
+   Select/Bookmark/Download on its cards.
 2. Add the contract row to §1's matrix (every field measured from the
    capture, never assumed — the 2026-09-15 audit's wrong assumptions are the
    cautionary tale).
@@ -125,6 +133,13 @@ six seams, follow `CAPTURE_GUIDE.md` for samples first.
    allowlists in `cdnConfig`; paste-box shapes; `titleBookmark.ts` table entry
    if the site has a gallery page button anchor; manifest `host_permissions`
    (both trees).
-4. Unit suite `test/<site>.test.js` (+ append to BOTH `package.json` mocha
-   lists), e2e coverage, both trees, release sync.
-5. Real-browser check is owner-only (items 42/58 pattern).
+4. **Card controls:** a row in `src/utils/listCards.ts` (container, cover/link
+   selector, title selector, id regex — measured from the listing capture, never
+   assumed) **and** the site's listing host in the second `content_scripts`
+   block of both `manifest.json`s; without both, cards render no controls and
+   Select-all has nothing to select.
+5. Unit suite `test/<site>.test.js` (+ append to BOTH `package.json` mocha
+   lists), e2e coverage — including a `e2e-list-controls` per-site discovery
+   fixture and an `e2e-title-bookmark` gallery-page case — both trees, release
+   sync.
+6. Real-browser check is owner-only (items 42/58 pattern).

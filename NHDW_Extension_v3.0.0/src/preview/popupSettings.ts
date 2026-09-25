@@ -417,17 +417,20 @@ function renderListModeSection(container: HTMLElement): void {
 
     container.appendChild(section);
 
-    chrome.storage.sync.get({
+    // listFormat is requested WITHOUT a default: storage.get answers only the
+    // keys a caller asks for, so an unset key is what makes the documented
+    // "follow the single-title format" inheritance observable here.
+    const defaults = {
         useZip: "zip",
         downloadName: "{pretty}",
         replaceSpaces: true,
         rawMasterFolder: "NHDW",
-        // listFormat has NO default here on purpose: an unset key means
-        // "follow the single-title format", and a "zip" default would hide that.
         listOutputMode: "separate",
         listMasterFolder: true,
         listDownloadName: LIST_TEMPLATE_INHERIT
-    }, (elems: any) => {
+    };
+    chrome.storage.sync.get(Object.keys(defaults).concat("listFormat"), (stored: any) => {
+        const elems = stored;
         const singleTemplate = String(elems.downloadName || "{pretty}");
         formatSelect.value = resolveListFormat(elems.listFormat, elems.useZip);
         modeSelect.value = normalizeOutputMode(elems.listOutputMode, "separate");

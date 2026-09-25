@@ -90,17 +90,18 @@ export function countHistory(history: DownloadHistory): number {
 export function partitionKnown(
     history: DownloadHistory,
     candidates: Array<string | number>,
-    redownloadIds: Array<string | number> = []
+    redownloadIds: Array<string | number> = [],
+    site?: string
 ): { download: string[]; skip: string[] } {
     const force = new Set<string>();
     for (const id of redownloadIds) {
-        force.add(toGalleryKey(id));
+        force.add(toGalleryKey(id, site));
     }
     const download: string[] = [];
     const skip: string[] = [];
     for (const id of candidates) {
         const key = String(id);
-        const recorded = toGalleryKey(key);
+        const recorded = toGalleryKey(key, site);
         if (Object.prototype.hasOwnProperty.call(history, recorded) && !force.has(recorded)) {
             skip.push(key);
         } else {

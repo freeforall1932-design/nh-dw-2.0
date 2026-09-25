@@ -115,7 +115,8 @@ export module message
             historyNote +
             'Downloads/<input type="text" id="path"/>' + extension + '<br/><br/>' +
             '<input type="button" id="button" value="' + buttonLabel + '" autofocus/> ' +
-            bookmarkButtonHtml('buttonBookmark', '', bookmarked) +
+            bookmarkButtonHtml('buttonBookmark', '', bookmarked) + ' ' +
+            '<input type="button" id="buttonSaveOffline" value="Save offline" title="Save this title with list-mode settings. Hold Alt to open the existing download form."/>' +
             '</div>' +
             '<div class="popupColumn">' +
             '<b>Similar galleries</b>' +

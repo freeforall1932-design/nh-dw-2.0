@@ -35,7 +35,7 @@ let options = [
     new CheckBox("inPageControls")
 ]
 
-chrome.storage.sync.get({
+const OPTIONS_DEFAULTS = {
     useZip: "zip",
     downloadName: "{pretty}",
     displayCheckbox: true,
@@ -55,7 +55,12 @@ chrome.storage.sync.get({
     listDownloadName: LIST_TEMPLATE_INHERIT,
     uiMode: "sidepanel",
     inPageControls: true
-}, function(elems) {
+// listFormat is requested WITHOUT a default: storage.get answers only the keys
+// a caller asks for, and a "zip" default here would both hide "never set" and
+// make the inherited value indistinguishable from a chosen one.
+};
+
+chrome.storage.sync.get(Object.keys(OPTIONS_DEFAULTS).concat("listFormat"), function(elems) {
     options.forEach(o => {
         o.init(elems);
         document.getElementById(o.getId())!.addEventListener("change", function() {

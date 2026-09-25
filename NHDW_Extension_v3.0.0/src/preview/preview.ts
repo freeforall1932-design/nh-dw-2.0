@@ -5,6 +5,7 @@ import { message } from "./message";
 import { renderSettings } from "./popupSettings";
 import { renderBookmarks, watchBookmarkChanges } from "./bookmarkPanel";
 import { readListSettings } from "../utils/listSettings";
+import { getSourceForUrl } from "../sources/index";
 
 let popup = Popup.getInstance();
 
@@ -120,6 +121,15 @@ function refreshCdnNotice() {
     } catch (_) { /* worker unreachable: no notice */ }
 }
 
+function siteForSelection(url: string): string {
+    try {
+        const source = getSourceForUrl(url);
+        return source ? source.site : "";
+    } catch (_) {
+        return "";
+    }
+}
+
 // Last URL the view was rendered for (side-panel mode re-renders on change).
 let lastBootstrappedUrl: string | null = null;
 
@@ -148,19 +158,25 @@ function bootstrapForActiveTab() {
         // Galleries that failed earlier in this session (named, retryable).
         refreshFailedNotice();
         chrome.storage.local.get({
-            lastUrl: ""
-        }, function(elemsLocal) {
-            if (elemsLocal.lastUrl !== currUrl) {
-                // Reset ONLY the checkbox selection when moving between pages.
-                // Never use storage.local.clear() here: it would also destroy
-                // the stored API key, the gate decision and the archive
-                // toggle, which must survive URL changes, browser restarts
-                // and disabling/re-enabling the extension. The content script
-                // resets allIds in the same targeted way.
-                chrome.storage.local.remove("allIds", function() {
-                    chrome.storage.local.set({
-                        lastUrl: currUrl
-                    });
+            lastUrl: "",
+            allIds: [],
+            allIdsSite: ""
+        }, function(elemsLocal: any) {
+            const currentSite = siteForSelection(currUrl);
+            const storedSite = String(elemsLocal && elemsLocal.allIdsSite ? elemsLocal.allIdsSite : "nhentai");
+            if (storedSite !== currentSite) {
+                // Reset ONLY the transient selection when the site namespace
+                // changes. Same-site URL changes keep allIds so a listing
+                // selection survives opening a title or moving through pages.
+                chrome.storage.local.set({
+                    allIds: [],
+                    allIdsSite: currentSite,
+                    lastUrl: currUrl
+                });
+            } else {
+                chrome.storage.local.set({
+                    allIdsSite: currentSite,
+                    lastUrl: currUrl
                 });
             }
             // Use message passing instead of direct background page access for Firefox private mode compatibility

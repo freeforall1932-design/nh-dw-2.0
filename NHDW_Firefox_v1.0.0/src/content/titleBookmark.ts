@@ -42,13 +42,18 @@ import {
     resolveTitleBookmarkPage
 } from "../utils/titleBookmark";
 import { BOOKMARK_QUEUE_KEY, BookmarkState, normalizeBookmarkState } from "../utils/bookmarkQueue";
+import { readHistory } from "../utils/downloadHistory";
+import { readListSettings, resolveMasterFolder } from "../utils/listSettings";
+import { toGalleryKey } from "../utils/siteKeys";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 /** Gallery pages of JS-rendered sites need a moment; this is where we stop. */
 const INJECT_ATTEMPTS = 20;
 const INJECT_INTERVAL_MS = 500;
 /** Ancestors that mean "this is our own UI, not the site's button row". */
-const OWN_UI_CLASSES = ["nhdw-card-controls", "nhdw-action-bar", TITLE_BOOKMARK_CLASS];
+const TITLE_SAVE_CLASS = "nhdw-title-save";
+const TITLE_SELECT_CLASS = "nhdw-title-select";
+const OWN_UI_CLASSES = ["nhdw-card-controls", "nhdw-action-bar", TITLE_BOOKMARK_CLASS, TITLE_SAVE_CLASS, TITLE_SELECT_CLASS];
 
 /** Where the build-time class list is remembered for later repaints. */
 const BASE_CLASS_ATTR = "data-nhdw-title-base-class";
@@ -259,6 +264,142 @@ function sendBookmarkMessage(message: any): void {
     } catch (_) { /* worker unreachable from this page */ }
 }
 
+// ---- shared title-page controls -----------------------------------------
+
+let selectedOn = false;
+
+function readTitleSelection(page: ResolvedTitleBookmarkPage): Promise<boolean> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ allIds: [], allIdsSite: "" }, (elems: any) => {
+                // Legacy allIds were nhentai-only. They remain valid on that
+                // site, but are cleared before use on another site's page.
+                const storedSite = String(elems && elems.allIdsSite ? elems.allIdsSite : "nhentai");
+                const ids = storedSite === page.site && elems && Array.isArray(elems.allIds)
+                    ? elems.allIds.map(String) : [];
+                if (storedSite !== page.site) {
+                    try { chrome.storage.local.set({ allIds: [], allIdsSite: page.site }); } catch (_) { /* best effort */ }
+                } else if (!elems || !elems.allIdsSite) {
+                    try { chrome.storage.local.set({ allIdsSite: page.site }); } catch (_) { /* best effort */ }
+                }
+                resolve(ids.indexOf(page.id) !== -1);
+            });
+        } catch (_) {
+            resolve(false);
+        }
+    });
+}
+
+function setTitleSelection(page: ResolvedTitleBookmarkPage, on: boolean): void {
+    try {
+        chrome.storage.local.get({ allIds: [], allIdsSite: page.site }, (elems: any) => {
+            const ids: string[] = elems && Array.isArray(elems.allIds) && String(elems.allIdsSite || page.site) === page.site
+                ? elems.allIds.map(String) : [];
+            const next = ids.filter((id, index) => ids.indexOf(id) === index && id !== page.id);
+            if (on) {
+                next.push(page.id);
+            }
+            chrome.storage.local.set({ allIds: next, allIdsSite: page.site });
+        });
+    } catch (_) { /* selection is best-effort */ }
+}
+
+function paintTitleSelect(button: HTMLButtonElement, on: boolean): void {
+    button.textContent = on ? "Selected" : "Select";
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    button.classList.toggle(TITLE_SELECT_CLASS + "-on", on);
+    button.title = on ? "Selected for the next listing download; click to remove" : "Select this title for the next listing download";
+}
+
+function presentationalClassesFor(page: ResolvedTitleBookmarkPage, anchor: Element | null): string[] {
+    return [page.target.buttonClasses]
+        .concat(anchor === null ? [] : presentationalButtonClasses(String((anchor as any).className || "")))
+        .reduce((out: string[], values: string[] | string) => {
+            const list = Array.isArray(values) ? values : [values];
+            for (const value of list) {
+                if (value && out.indexOf(value) === -1) out.push(value);
+            }
+            return out;
+        }, []);
+}
+
+function buildTitleActionButton(page: ResolvedTitleBookmarkPage, anchor: Element | null, className: string, label: string, title: string): HTMLButtonElement {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = [className].concat(presentationalClassesFor(page, anchor)).join(" ");
+    button.textContent = label;
+    button.title = title;
+    button.setAttribute("data-nhdw-title-" + (className === TITLE_SAVE_CLASS ? "save" : "select"), page.galleryKey);
+    return button;
+}
+
+function repaintBookmarkElement(button: HTMLButtonElement, page: ResolvedTitleBookmarkPage): void {
+    const on = isBookmarked(page);
+    const base = (button.getAttribute(BASE_CLASS_ATTR) || TITLE_BOOKMARK_CLASS).split(/\\s+/);
+    button.className = base.concat(on ? [TITLE_BOOKMARK_ON_CLASS] : [])
+        .filter((name, index, all) => name !== "" && all.indexOf(name) === index).join(" ");
+    const label = button.querySelector("." + TITLE_BOOKMARK_LABEL_CLASS);
+    if (label) label.textContent = on ? TITLE_BOOKMARK_LABEL_ON : TITLE_BOOKMARK_LABEL;
+    button.title = on ? TITLE_BOOKMARK_TITLE_ON : TITLE_BOOKMARK_TITLE_OFF;
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+    const path = button.querySelector("." + TITLE_BOOKMARK_ICON_CLASS + " path");
+    if (path) path.setAttribute("d", on ? BOOKMARK_ICON_PATH : BOOKMARK_ICON_OUTLINE_PATH);
+}
+
+function insertTitleActionAfter(anchor: Element, page: ResolvedTitleBookmarkPage, className: string, label: string, title: string): HTMLButtonElement | null {
+    const button = buildTitleActionButton(page, anchor, className, label, title);
+    return insertAfter(anchor, button) ? button : null;
+}
+
+function openPanelFromGalleryPage(): void {
+    const sidePanelApi: any = (chrome as any).sidePanel;
+    if (sidePanelApi && typeof sidePanelApi.open === "function") {
+        try {
+            const result = sidePanelApi.open({});
+            if (result && typeof result.catch === "function") {
+                result.catch(() => sendBookmarkMessage({ action: "siteUiOpenPanel" }));
+            }
+            return;
+        } catch (_) { /* Firefox / an older Chromium: use the worker route */ }
+    }
+    sendBookmarkMessage({ action: "siteUiOpenPanel" });
+}
+
+async function saveTitleOffline(page: ResolvedTitleBookmarkPage, button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    try {
+        const listSettings = await readListSettings();
+        const history = await readHistory();
+        const record = history[toGalleryKey(page.id, page.site)];
+        const redownloadIds: string[] = [];
+        if (record) {
+            const again = window.confirm("Already downloaded as:\\n" + record.filename + "\\n\\nSave it again with the list-mode settings?");
+            if (!again) {
+                button.disabled = false;
+                return;
+            }
+            redownloadIds.push(page.id);
+        }
+        chrome.runtime.sendMessage({
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [page.id]: readTitle(page) },
+            galleryMetadata: {},
+            finalName: readTitle(page),
+            site: page.site,
+            formatOverride: listSettings.format,
+            separate: true,
+            masterFolder: resolveMasterFolder(listSettings),
+            nameTemplate: listSettings.template,
+            redownloadIds: redownloadIds
+        }, () => {
+            try { void chrome.runtime.lastError; } catch (_) { /* worker restarting */ }
+            button.disabled = false;
+        });
+    } catch (_) {
+        button.disabled = false;
+    }
+}
+
 // ---- the button ----------------------------------------------------------
 
 interface BookmarkButton {
@@ -352,58 +493,119 @@ function findAnchor(page: ResolvedTitleBookmarkPage): { anchor: Element; mode: "
     return null;
 }
 
-function inject(page: ResolvedTitleBookmarkPage): boolean {
-    if (document.querySelector("[" + "data-nhdw-title-bookmark" + "]") !== null) {
-        return true; // already injected (a retry ran after a success)
+function wireTitleExtras(page: ResolvedTitleBookmarkPage, bookmarkNode: Element): void {
+    let saveButton = document.querySelector('[data-nhdw-title-save="' + page.galleryKey + '"]') as HTMLButtonElement | null;
+    if (saveButton === null) {
+        saveButton = insertTitleActionAfter(
+            bookmarkNode,
+            page,
+            TITLE_SAVE_CLASS,
+            "Save offline",
+            "Save this gallery with list-mode settings. Hold Alt to open the existing download form.");
     }
-    const found = findAnchor(page);
-    if (found === null) {
-        return false;
-    }
-    const button = buildBookmarkButton(page, found.mode === "after" ? found.anchor : null);
-    paint(button, page);
-    button.node.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const wasOn = isBookmarked(page);
-        optimistic = !wasOn;
-        paint(button, page);
-        if (wasOn) {
-            // Composite key: the row is identified as "<site>:<id>", so a bare
-            // id would only ever match the default site's rows.
-            sendBookmarkMessage({ action: "bookmarkRemove", ids: [page.galleryKey] });
-        } else {
-            sendBookmarkMessage({
-                action: "bookmarkAdd",
-                items: [{
-                    id: page.id,
-                    site: page.site,
-                    title: readTitle(page),
-                    thumbnail: readThumbnail(page),
-                    pages: readPages(page),
-                    source: "page",
-                    sourceUrl: typeof location !== "undefined" ? location.href : ""
-                }]
-            });
-        }
-    });
-
-    const inserted = found.mode === "after"
-        ? insertAfter(found.anchor, button.node)
-        : (found.anchor.appendChild(button.node), true);
-    if (!inserted) {
-        return false;
-    }
-
-    // Repaint when the list changes anywhere else (the Queue tab, another tab,
-    // a finished download): storage is authoritative again at that moment.
-    try {
-        chrome.storage.onChanged.addListener((changes: any, area: string) => {
-            if (area !== "local" || !changes || !changes[BOOKMARK_QUEUE_KEY]) {
+    if (saveButton !== null && !saveButton.getAttribute("data-nhdw-save-wired")) {
+        saveButton.setAttribute("data-nhdw-save-wired", "true");
+        saveButton.addEventListener("click", (event: Event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if ((event as MouseEvent).altKey) {
+                openPanelFromGalleryPage();
                 return;
             }
-            optimistic = null;
-            readBookmarkState().then(() => paint(button, page));
+            void saveTitleOffline(page, saveButton as HTMLButtonElement);
+        });
+    }
+
+    if (saveButton !== null) {
+        let selectButton = document.querySelector('[data-nhdw-title-select="' + page.galleryKey + '"]') as HTMLButtonElement | null;
+        if (selectButton === null) {
+            selectButton = insertTitleActionAfter(
+                saveButton,
+                page,
+                TITLE_SELECT_CLASS,
+                selectedOn ? "Selected" : "Select",
+                selectedOn ? "Selected for the next listing download; click to remove" : "Select this title for the next listing download");
+        }
+        if (selectButton !== null && !selectButton.getAttribute("data-nhdw-select-wired")) {
+            selectButton.setAttribute("data-nhdw-select-wired", "true");
+            paintTitleSelect(selectButton, selectedOn);
+            selectButton.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                selectedOn = !selectedOn;
+                paintTitleSelect(selectButton as HTMLButtonElement, selectedOn);
+                setTitleSelection(page, selectedOn);
+            });
+        }
+    }
+}
+
+function inject(page: ResolvedTitleBookmarkPage): boolean {
+    let bookmark = document.querySelector("[" + "data-nhdw-title-bookmark" + "]") as HTMLElement | null;
+    if (bookmark === null) {
+        const found = findAnchor(page);
+        if (found === null) {
+            return false;
+        }
+        const button = buildBookmarkButton(page, found.mode === "after" ? found.anchor : null);
+        paint(button, page);
+        button.node.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const wasOn = isBookmarked(page);
+            optimistic = !wasOn;
+            paint(button, page);
+            if (wasOn) {
+                sendBookmarkMessage({ action: "bookmarkRemove", ids: [page.galleryKey] });
+            } else {
+                sendBookmarkMessage({
+                    action: "bookmarkAdd",
+                    items: [{
+                        id: page.id,
+                        site: page.site,
+                        title: readTitle(page),
+                        thumbnail: readThumbnail(page),
+                        pages: readPages(page),
+                        source: "page",
+                        sourceUrl: typeof location !== "undefined" ? location.href : ""
+                    }]
+                });
+            }
+        });
+        const inserted = found.mode === "after"
+            ? insertAfter(found.anchor, button.node)
+            : (found.anchor.appendChild(button.node), true);
+        if (!inserted) {
+            return false;
+        }
+        bookmark = button.node;
+    }
+
+    wireTitleExtras(page, bookmark);
+
+    // Repaint when the list changes anywhere else (the Queue tab, another tab,
+    // a finished download), and keep the title Select state in sync too.
+    try {
+        chrome.storage.onChanged.addListener((changes: any, area: string) => {
+            if (area !== "local" || !changes) {
+                return;
+            }
+            if (changes[BOOKMARK_QUEUE_KEY]) {
+                optimistic = null;
+                readBookmarkState().then(() => {
+                    const button = document.querySelector("[data-nhdw-title-bookmark]") as HTMLButtonElement | null;
+                    if (button) {
+                        repaintBookmarkElement(button, page);
+                    }
+                });
+            }
+            if (changes.allIds || changes.allIdsSite) {
+                readTitleSelection(page).then((on) => {
+                    selectedOn = on;
+                    const select = document.querySelector('[data-nhdw-title-select="' + page.galleryKey + '"]') as HTMLButtonElement | null;
+                    if (select) paintTitleSelect(select, on);
+                });
+            }
         });
     } catch (_) { /* no storage events in this context */ }
 
@@ -420,7 +622,8 @@ function start(page: ResolvedTitleBookmarkPage): void {
 }
 
 function ready(page: ResolvedTitleBookmarkPage): void {
-    readBookmarkState().then(() => {
+    Promise.all([readBookmarkState(), readTitleSelection(page)]).then((values) => {
+        selectedOn = values[1];
         if (inject(page)) {
             return;
         }

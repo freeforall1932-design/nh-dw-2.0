@@ -1,6 +1,6 @@
 {
   "name": "NHentai Downloader",
-  "version": "3.9.0",
+  "version": "3.10.0",
   "description": "A chrome extension to download doujinshi from NHentai - Updated for Manifest V3",
   "icons": {
     "64": "Icon.png",
@@ -66,6 +66,33 @@
     {
       "matches": [
         "https://nhentai.net/*"
+      ],
+      "css": [
+        "css/content.css"
+      ],
+      "js": [
+        "js/content.js",
+        "js/listControls.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://hentaiera.com/*",
+        "https://*.hentaiera.com/*",
+        "https://hentaiera.to/*",
+        "https://*.hentaiera.to/*",
+        "https://imhentai.xxx/*",
+        "https://*.imhentai.xxx/*",
+        "https://imhentai.org/*",
+        "https://*.imhentai.org/*",
+        "https://imhentai.net/*",
+        "https://*.imhentai.net/*",
+        "https://hentaienvy.com/*",
+        "https://*.hentaienvy.com/*",
+        "https://hentaifox.com/*",
+        "https://*.hentaifox.com/*",
+        "https://hitomi.la/*",
+        "https://*.hitomi.la/*"
       ],
       "css": [
         "css/content.css"

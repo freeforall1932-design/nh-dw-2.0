@@ -67,3 +67,49 @@
 .nhdw-title-bookmark .nhdw-title-bookmark-label {
     white-space: nowrap;
 }
+
+/* Smart gallery-page actions share the site's button sizing classes, while
+   these names own the differentiated colour and the Select pressed state. */
+:where(.nhdw-title-save),
+:where(.nhdw-title-select) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    margin: 0 0 0 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: bold;
+    line-height: 1.2;
+    vertical-align: middle;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.nhdw-title-save {
+    background: #0f766e !important;
+    color: #ffffff !important;
+    border-color: #0f5f59 !important;
+}
+
+.nhdw-title-save:hover,
+.nhdw-title-save:focus {
+    background: #115e59 !important;
+    color: #ffffff !important;
+}
+
+.nhdw-title-select {
+    background: #4b5563 !important;
+    color: #ffffff !important;
+    border-color: #374151 !important;
+}
+
+.nhdw-title-select:hover,
+.nhdw-title-select:focus,
+.nhdw-title-select-on {
+    background: #7c3aed !important;
+    color: #ffffff !important;
+    border-color: #6d28d9 !important;
+}

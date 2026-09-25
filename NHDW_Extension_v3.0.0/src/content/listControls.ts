@@ -35,6 +35,8 @@ import {
 } from "../utils/downloadFormats";
 import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 import { toGalleryKey } from "../utils/siteKeys";
+import { getSourceForUrl } from "../sources/index";
+import { ListCardTarget, cardIdFromHref, listCardTargetForSite } from "../utils/listCards";
 // Bookmark queue: the persistent "titles I clicked Bookmark on" list. The
 // content script only READS the stored list directly (to render the on/off
 // icon) — every WRITE goes through the worker, which is the single writer, so
@@ -48,6 +50,7 @@ import { BOOKMARK_ICON_OUTLINE_PATH, BOOKMARK_ICON_PATH, BOOKMARK_ICON_VIEWBOX }
 
 interface CardInfo {
     id: string;
+    site: string;
     title: string;
     card: HTMLElement;
 }
@@ -94,16 +97,10 @@ function readHistoryState(): Promise<void> {
 // it).
 let bookmarkState: BookmarkState = normalizeBookmarkState(null);
 /** Ids confirmed by the last storage read. */
-const bookmarkedIds = new Set<string>();
+const bookmarkedKeys = new Set<string>();
 // Unconfirmed optimistic paint: true = "I just bookmarked this", false = "I
-// just removed it". A click has to feel instant, but the worker's write has not
-// landed yet when the click returns - and a storage re-read in that window
-// (a settings flip, a history change) would otherwise wipe the paint and make
-// the next auto-capture sweep re-send cards that are already queued.
-//
-// Cleared ONLY by the bookmarkQueue storage-change event, because that event
-// fires after the worker's write landed, which makes storage authoritative
-// again. A plain read must never clear it.
+// just removed it". Keys are composite so a same-numbered title on another
+// supported site cannot borrow this page's optimistic state.
 const bookmarkOverlay = new Map<string, boolean>();
 
 function readBookmarkState(): Promise<void> {
@@ -113,9 +110,9 @@ function readBookmarkState(): Promise<void> {
             defaults[BOOKMARK_QUEUE_KEY] = null;
             chrome.storage.local.get(defaults, (elems: any) => {
                 bookmarkState = normalizeBookmarkState(elems && elems[BOOKMARK_QUEUE_KEY]);
-                bookmarkedIds.clear();
+                bookmarkedKeys.clear();
                 for (const item of bookmarkState.items) {
-                    bookmarkedIds.add(item.id);
+                    bookmarkedKeys.add(toGalleryKey(item.id, item.site));
                 }
                 resolve();
             });
@@ -125,8 +122,15 @@ function readBookmarkState(): Promise<void> {
     });
 }
 
-function isBookmarked(id: string): boolean {
-    return bookmarkOverlay.has(id) ? bookmarkOverlay.get(id) === true : bookmarkedIds.has(id);
+function bookmarkKey(infoOrId: CardInfo | string, site?: string): string {
+    return typeof infoOrId === "string"
+        ? toGalleryKey(infoOrId, site)
+        : toGalleryKey(infoOrId.id, infoOrId.site);
+}
+
+function isBookmarked(infoOrId: CardInfo | string, site?: string): boolean {
+    const key = bookmarkKey(infoOrId, site);
+    return bookmarkOverlay.has(key) ? bookmarkOverlay.get(key) === true : bookmarkedKeys.has(key);
 }
 
 // nhentai lazyloads covers: the real address sits in data-src while src holds a
@@ -174,6 +178,7 @@ function bookmarkCard(info: CardInfo, source: "card" | "auto"): void {
         action: "bookmarkAdd",
         items: [{
             id: info.id,
+            site: info.site,
             title: info.title || info.id,
             thumbnail: cardThumbnail(info.card),
             pages: cardPages(info.card),
@@ -183,8 +188,8 @@ function bookmarkCard(info: CardInfo, source: "card" | "auto"): void {
     });
 }
 
-function unbookmarkCard(id: string): void {
-    sendBookmarkMessage({ action: "bookmarkRemove", ids: [id] });
+function unbookmarkCard(info: CardInfo): void {
+    sendBookmarkMessage({ action: "bookmarkRemove", ids: [bookmarkKey(info)] });
 }
 
 // The glyph is an inline SVG bookmark (outline when off, filled when on) built
@@ -203,8 +208,8 @@ function buildBookmarkGlyph(): SVGSVGElement {
     return svg;
 }
 
-function applyBookmarkButton(button: HTMLElement, id: string): void {
-    const on = isBookmarked(id);
+function applyBookmarkButton(button: HTMLElement, id: string, site: string = currentSite()): void {
+    const on = isBookmarked(id, site);
     button.className = "nhdw-bookmark" + (on ? " nhdw-bookmark-on" : "");
     button.title = on
         ? "Bookmarked - click to take it off the bookmark list"
@@ -226,7 +231,7 @@ function refreshBookmarkButtons(): void {
         const id = card.getAttribute(MARKER_ATTR) || "";
         const button = card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
         if (button !== null && id !== "") {
-            applyBookmarkButton(button, id);
+            applyBookmarkButton(button, id, currentSite());
         }
     }
 }
@@ -238,7 +243,9 @@ function readSelection(): Promise<void> {
         try {
             chrome.storage.local.get({ allIds: [] }, (elems: any) => {
                 selected.clear();
-                const ids = elems && Array.isArray(elems.allIds) ? elems.allIds : [];
+                const storedSite = String(elems && elems.allIdsSite ? elems.allIdsSite : currentSite());
+                const site = currentSite();
+                const ids = elems && Array.isArray(elems.allIds) && storedSite === site ? elems.allIds : [];
                 for (const id of ids) {
                     selected.add(String(id));
                 }
@@ -250,9 +257,18 @@ function readSelection(): Promise<void> {
     });
 }
 
+function currentSite(): string {
+    try {
+        const source = getSourceForUrl(typeof location === "undefined" ? "" : location.href);
+        return source ? source.site : "";
+    } catch (_) {
+        return "";
+    }
+}
+
 function persistSelection(): void {
     try {
-        chrome.storage.local.set({ allIds: Array.from(selected) });
+        chrome.storage.local.set({ allIds: Array.from(selected), allIdsSite: currentSite() });
     } catch (_) { /* selection is best-effort */ }
 }
 
@@ -266,8 +282,10 @@ function readSettings(): Promise<boolean> {
             bookmarkAutoCapture: false
         }, LIST_MODE_DEFAULTS);
         try {
-            chrome.storage.sync.get(defaults, (elems: any) => {
-                const stored = elems || defaults;
+            // listFormat has no concrete default (unset means inherit), but
+            // storage.get must still request it to see a saved list choice.
+            chrome.storage.sync.get(Object.keys(defaults).concat("listFormat"), (elems: any) => {
+                const stored = Object.assign({}, defaults, elems);
                 settings.format = resolveListFormat(stored.listFormat, stored.useZip);
                 settings.outputMode = normalizeOutputMode(stored.listOutputMode, "separate");
                 settings.masterFolder = stored.listMasterFolder === undefined ? true : !!stored.listMasterFolder;
@@ -300,32 +318,104 @@ function saveListSetting(patch: Record<string, any>): void {
 
 // ---- card discovery ------------------------------------------------------
 
-// On nhentai the caption sits INSIDE the cover link
-// (<a class="cover" href="/g/123/"><img><div class="caption">Title</div></a>),
-// so the gallery container is the link's parent (.gallery / .gallery-favorite).
+function querySelectorAllForSelector(selector: string): Element[] {
+    const nodes: Element[] = [];
+    // A table row may carry a small fallback selector list. Query each part
+    // separately so old DOM stubs and browsers agree on comma handling.
+    for (const part of String(selector || "").split(",")) {
+        try {
+            const found = document.querySelectorAll(part.trim());
+            for (let i = 0; i < found.length; i++) {
+                if (nodes.indexOf(found[i]) === -1) {
+                    nodes.push(found[i]);
+                }
+            }
+        } catch (_) { /* a moved/unsupported selector is simply absent */ }
+    }
+    return nodes;
+}
+
+function ancestorMatching(node: Element, selector: string): HTMLElement | null {
+    let current: any = node;
+    let hops = 0;
+    while (current !== null && current !== undefined && hops < 40) {
+        try {
+            if (typeof current.matches === "function" && current.matches(selector)) {
+                return current as HTMLElement;
+            }
+            const simple = /^(?:([a-z0-9-]+))?\\.([a-z0-9_-]+)$/i.exec(selector);
+            if (simple !== null
+                && (!simple[1] || String(current.tagName || "").toLowerCase() === simple[1].toLowerCase())
+                && current.classList && current.classList.contains(simple[2])) {
+                return current as HTMLElement;
+            }
+        } catch (_) { /* fall through to the next ancestor */ }
+        current = current.parentElement;
+        hops++;
+    }
+    return null;
+}
+
+function contentCard(link: Element, target: ListCardTarget): HTMLElement {
+    let current: any = link;
+    const ancestorClass = target.containerAncestorClass || "";
+    while (current && current.parentElement) {
+        if (ancestorClass && current.parentElement.classList
+            && current.parentElement.classList.contains(ancestorClass)) {
+            return current as HTMLElement;
+        }
+        current = current.parentElement;
+    }
+    return (link.parentElement as HTMLElement) || (link as HTMLElement);
+}
+
+function cardTitle(node: Element | null, fallback: string): string {
+    const raw = node === null ? "" : String(node.textContent || "");
+    return raw.replace(/NHentai Downloader:[\\s\\S]*$/, "").replace(/\\s+/g, " ").trim() || fallback;
+}
+
+// Discover cards through the adapter selected by the page URL. A card's own
+// cover link is the only id source; title links and related text cannot create
+// duplicate or cross-site rows by accident.
 function findCards(): CardInfo[] {
     const cards: CardInfo[] = [];
+    const source = getSourceForUrl(typeof location === "undefined" ? "" : location.href);
+    if (source === null) {
+        return cards;
+    }
+    const target = listCardTargetForSite(source.site);
+    if (target === null) {
+        return cards;
+    }
     const seen = new Set<string>();
-    const links = document.querySelectorAll('a[href*="/g/"]');
-    links.forEach((link) => {
-        const match = /\/g\/([0-9]+)\//.exec(link.getAttribute("href") || "");
-        if (match === null) {
-            return;
+    const links = querySelectorAllForSelector(target.linkSelector);
+    for (const link of links) {
+        const id = cardIdFromHref(target, link.getAttribute("href") || "");
+        if (id === null || seen.has(id)) {
+            continue;
         }
-        const caption = link.querySelector(".caption");
-        if (caption === null) {
-            return; // not a listing card (e.g. a plain in-text link)
-        }
-        const id = match[1];
-        if (seen.has(id)) {
-            return; // the same gallery can appear on several cards
+        let card: HTMLElement;
+        let titleNode: Element | null = null;
+        if (target.mode === "link") {
+            titleNode = target.captionSelector ? link.querySelector(target.captionSelector) : null;
+            if (titleNode === null) {
+                continue;
+            }
+            card = (link.parentElement as HTMLElement) || (link as HTMLElement);
+        } else if (target.mode === "content") {
+            card = contentCard(link, target);
+            titleNode = target.titleSelector ? card.querySelector(target.titleSelector) : null;
+        } else {
+            card = target.containerSelector
+                ? (ancestorMatching(link, target.containerSelector) || (link.parentElement as HTMLElement) || (link as HTMLElement))
+                : ((link.parentElement as HTMLElement) || (link as HTMLElement));
+            titleNode = target.titleSelector ? card.querySelector(target.titleSelector) : null;
         }
         seen.add(id);
-        const container = (link.parentElement as HTMLElement) || (link as HTMLElement);
-        const title = (caption.textContent || "").replace(/NHentai Downloader:[\s\S]*$/, "").trim();
+        const title = cardTitle(titleNode, id);
         titleById[id] = title;
-        cards.push({ id: id, title: title, card: container });
-    });
+        cards.push({ id: id, site: source.site, title: title, card: card });
+    }
     return cards;
 }
 
@@ -369,20 +459,21 @@ function buildCardControls(info: CardInfo): HTMLElement {
     const bookmarkButton = document.createElement("button");
     bookmarkButton.type = "button";
     bookmarkButton.appendChild(buildBookmarkGlyph());
-    applyBookmarkButton(bookmarkButton, info.id);
+    applyBookmarkButton(bookmarkButton, info.id, info.site);
     bookmarkButton.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (isBookmarked(info.id)) {
-            bookmarkOverlay.set(info.id, false);
-            unbookmarkCard(info.id);
+        const key = bookmarkKey(info);
+        if (isBookmarked(info)) {
+            bookmarkOverlay.set(key, false);
+            unbookmarkCard(info);
         } else {
-            bookmarkOverlay.set(info.id, true);
+            bookmarkOverlay.set(key, true);
             bookmarkCard(info, "card");
         }
         // Optimistic paint: the storage round trip lands in a few ms and the
         // onChanged listener confirms it, but the click must feel instant.
-        applyBookmarkButton(bookmarkButton, info.id);
+        applyBookmarkButton(bookmarkButton, info.id, info.site);
     });
     left.appendChild(bookmarkButton);
     box.appendChild(left);
@@ -392,7 +483,7 @@ function buildCardControls(info: CardInfo): HTMLElement {
     downloadButton.className = "nhdw-download";
     // Composite history key (siteKeys.ts): the card's bare gallery id is
     // namespaced with the default site before the lookup.
-    const recorded = history[toGalleryKey(info.id)];
+    const recorded = history[toGalleryKey(info.id, info.site)];
     downloadButton.textContent = recorded ? "Downloaded" : "Download";
     downloadButton.title = recorded
         ? "Already downloaded as " + recorded.filename + ". Click to download it again."
@@ -404,9 +495,9 @@ function buildCardControls(info: CardInfo): HTMLElement {
         single[info.id] = info.title || info.id;
         // Per-download "download anyway": an already-downloaded card asks for
         // an explicit confirmation instead of silently re-downloading.
-        if (history[toGalleryKey(info.id)]) {
+        if (history[toGalleryKey(info.id, info.site)]) {
             const again = window.confirm(
-                "Already downloaded as:\n" + history[toGalleryKey(info.id)].filename +
+                "Already downloaded as:\n" + history[toGalleryKey(info.id, info.site)].filename +
                 "\n\nDownload it again?");
             if (!again) {
                 flashStatus("Already downloaded - cancel again to re-download");
@@ -417,10 +508,10 @@ function buildCardControls(info: CardInfo): HTMLElement {
         downloadButton.disabled = true;
         downloadButton.textContent = "Queued";
         // A single card is always one title: no merge risk, so no warning.
-        startDownload(single, "separate", forcedIds.has(info.id) ? [info.id] : []);
+        startDownload(single, "separate", forcedIds.has(info.id) ? [info.id] : [], info.site);
         setTimeout(() => {
             downloadButton.disabled = false;
-            downloadButton.textContent = history[toGalleryKey(info.id)] ? "Downloaded" : "Download";
+            downloadButton.textContent = history[toGalleryKey(info.id, info.site)] ? "Downloaded" : "Download";
         }, 2500);
     });
     box.appendChild(downloadButton);
@@ -447,11 +538,11 @@ function injectCardControls(): void {
             }
             const existingButton = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-download") as HTMLButtonElement | null;
             if (existingButton) {
-                existingButton.textContent = history[toGalleryKey(info.id)] ? "Downloaded" : "Download";
+                existingButton.textContent = history[toGalleryKey(info.id, info.site)] ? "Downloaded" : "Download";
             }
             const existingBookmark = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
             if (existingBookmark) {
-                applyBookmarkButton(existingBookmark, info.id);
+                applyBookmarkButton(existingBookmark, info.id, info.site);
             }
             continue;
         }
@@ -475,14 +566,14 @@ function autoCaptureCards(): void {
         return;
     }
     for (const info of findCards()) {
-        if (isBookmarked(info.id)) {
+        if (isBookmarked(info)) {
             continue;
         }
-        bookmarkOverlay.set(info.id, true);
+        bookmarkOverlay.set(bookmarkKey(info), true);
         bookmarkCard(info, "auto");
         const button = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
         if (button !== null) {
-            applyBookmarkButton(button, info.id);
+            applyBookmarkButton(button, info.id, info.site);
         }
     }
 }
@@ -575,13 +666,31 @@ function buildActionBar(): HTMLElement {
         // "Download anyway" ids: per-card confirmations plus the bulk toggle.
         const forced: string[] = [];
         selected.forEach((id) => {
-            if (forcedIds.has(id) || (includeAlready && history[toGalleryKey(id)])) {
+            if (forcedIds.has(id) || (includeAlready && history[toGalleryKey(id, currentSite())])) {
                 forced.push(id);
             }
         });
-        startDownload(chosen, settings.outputMode, forced);
+        startDownload(chosen, settings.outputMode, forced, currentSite());
     });
     bar.appendChild(downloadButton);
+
+    const selectAllButton = document.createElement("button");
+    selectAllButton.type = "button";
+    selectAllButton.id = "nhdw-select-all";
+    selectAllButton.textContent = "Select all";
+    selectAllButton.title = "Select every gallery card on this page";
+    selectAllButton.addEventListener("click", () => {
+        for (const info of findCards()) {
+            selected.add(info.id);
+            syncLegacyCheckbox(info.id, true);
+        }
+        document.querySelectorAll<HTMLInputElement>("." + CONTROL_CLASS + " .nhdw-select-box").forEach((box) => {
+            box.checked = true;
+        });
+        persistSelection();
+        renderActionBar();
+    });
+    bar.appendChild(selectAllButton);
 
     const clearButton = document.createElement("button");
     clearButton.type = "button";
@@ -609,7 +718,8 @@ function renderActionBar(): void {
     }
     const count = document.getElementById("nhdw-count");
     const selectedIds = Array.from(selected);
-    const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id)]);
+    const site = currentSite();
+    const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id, site)]);
     const skipped = alreadySelected.filter((id) => !forcedIds.has(id) && !includeAlready);
     const mode = effectiveOutputMode(settings.format, settings.outputMode);
     if (count) {
@@ -642,12 +752,15 @@ function renderActionBar(): void {
         modeSelect.disabled = settings.format === "raw";
         modeSelect.value = effectiveOutputMode(settings.format, settings.outputMode);
     }
-    actionBar.classList.toggle("nhdw-hidden", selected.size === 0);
+    // Select-all is useful before anything is checked, so the bar is a listing
+    // affordance rather than a selection-only affordance. Hide it only when a
+    // page has no discoverable cards at all.
+    actionBar.classList.toggle("nhdw-hidden", findCards().length === 0);
 }
 
 // ---- download ------------------------------------------------------------
 
-function startDownload(galleries: Record<string, string>, outputMode: OutputMode, redownload: string[] = []): void {
+function startDownload(galleries: Record<string, string>, outputMode: OutputMode, redownload: string[] = [], site: string = currentSite()): void {
     const force = new Set(redownload.map(String));
     const effective = effectiveOutputMode(settings.format, outputMode);
     // Persistent history: separate mode drops already-downloaded galleries
@@ -659,7 +772,7 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
     let redownloadIds: string[] = [];
     let skippedCount = 0;
     if (effective === "separate") {
-        const download = partitionKnown(history, Object.keys(galleries), redownload).download;
+        const download = partitionKnown(history, Object.keys(galleries), redownload, site).download;
         for (const id of download) {
             toDownload[id] = galleries[id];
         }
@@ -695,7 +808,7 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
         // counts shown to the user do not match what is sent, and the skipped
         // titles cost metadata/API calls they were supposed to cost zero
         // (3.5.0 invariant).
-        const keep = partitionKnown(history, Object.keys(galleries), redownload).download;
+        const keep = partitionKnown(history, Object.keys(galleries), redownload, site).download;
         toDownload = {};
         for (const id of keep) {
             toDownload[id] = galleries[id];
@@ -716,7 +829,8 @@ function startDownload(galleries: Record<string, string>, outputMode: OutputMode
         separate: outputModeToSeparate(settings.format, mode),
         masterFolder: settings.masterFolder ? settings.masterFolderName : "",
         nameTemplate: settings.template,
-        redownloadIds: redownloadIds
+        redownloadIds: redownloadIds,
+        site: site
     };
     try {
         chrome.runtime.sendMessage(message, (response: any) => {
@@ -798,6 +912,7 @@ function start(): void {
             pending = null;
             injectCardControls();
             autoCaptureCards();
+            renderActionBar();
         }, 150);
     });
     observer.observe(document.body, { childList: true, subtree: true });

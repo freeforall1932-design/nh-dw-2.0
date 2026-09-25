@@ -18,6 +18,9 @@
 const fs = require("fs");
 const vm = require("vm");
 const path = require("path");
+const assert = require("node:assert/strict");
+const { readStorage } = require("./test-support/storage");
+const { formats, formatCases } = require("./test-support/list-format-cases");
 
 const bundlePath = process.argv[2] || path.join(__dirname, "..", "js", "listControls.js");
 const code = fs.readFileSync(bundlePath, "utf8");
@@ -341,7 +344,7 @@ function makeDocument(ids, site) {
 }
 
 function run(options) {
-    const settings = options.settings || {};
+    const settings = structuredClone(options.settings || {});
     // Persistent download-history fixture (chrome.storage.local "downloadHistory").
     const localStore = Object.assign({ allIds: [] }, options.history || {});
     const syncWrites = [];
@@ -364,12 +367,15 @@ function run(options) {
     const chromeStub = {
         storage: {
             sync: {
-                get(defaults, cb) { cb(Object.assign({}, defaults, settings)); },
-                set(items) { syncWrites.push(items); },
+                // StorageArea.get answers ONLY the requested keys; a
+                // whole-store merge mock hides that rule (and with it every
+                // optional key a reader forgot to ask for - item 59).
+                get(keys, cb) { queueMicrotask(() => cb(readStorage(settings, keys))); },
+                set(items) { const copy = structuredClone(items); syncWrites.push(copy); Object.assign(settings, copy); },
                 onChanged: { addListener(fn) { syncChangeCallbacks.push(fn); } }
             },
             local: {
-                get(defaults, cb) { cb(Object.assign({}, defaults, localStore)); },
+                get(keys, cb) { queueMicrotask(() => cb(readStorage(localStore, keys))); },
                 set(items) { localWrites.push(items); Object.assign(localStore, items); }
             },
             onChanged: { addListener() {} }
@@ -406,6 +412,7 @@ function run(options) {
 
     return {
         dom: dom,
+        settings: settings,
         localStore: localStore,
         syncWrites: syncWrites,
         syncChangeCallbacks: syncChangeCallbacks,
@@ -950,6 +957,172 @@ function wait(ms) {
             fail("an unbookmarked card must draw the outline bookmark glyph");
         }
         console.log("PASS: bookmarked cards come back with the filled bookmark icon after a reload");
+    }
+
+    // --- Item 59: real key-scoped reads, every stored/inherited format -----
+    // The bar's picker and every card/bar job must show and dispatch the SAVED
+    // list format; an unset key still inherits the single-title format. Each
+    // case runs the real bundle against a storage stub that returns only the
+    // keys the bundle actually requested.
+    {
+        const selectedFormat = (ctx) => {
+            const select = ctx.dom.document.getElementById("nhdw-format");
+            if (!select) {
+                fail("the bar must offer the format picker");
+            }
+            assert.deepEqual(select.children.map((option) => option.value), formats);
+            return select.children.filter((option) => option.selected).map((option) => option.value);
+        };
+        for (const entry of formatCases) {
+            const ctx = run({ settings: entry.stored });
+            await wait(0);
+            assert.deepEqual(selectedFormat(ctx), [entry.expected], entry.label + ": selected bar option");
+            assert.deepEqual(ctx.syncWrites, [], entry.label + ": opening the page is read-only");
+            assert.deepEqual(ctx.settings, entry.stored, entry.label + ": no normalization written back");
+            cardControls(ctx.dom)[0].querySelector(".nhdw-download").dispatch("click");
+            const job = ctx.sentMessages.find((message) => message.action === "downloadAllDoujinshis");
+            assert.ok(job, entry.label + ": card dispatch");
+            assert.equal(job.formatOverride, entry.expected, entry.label + ": card format");
+            assert.equal(job.separate, true, entry.label + ": a single card is one file");
+            const sent = ctx.sentMessages.length;
+            for (const control of cardControls(ctx.dom).slice(0, 2)) {
+                const box = control.querySelector(".nhdw-select-box");
+                box.checked = true;
+                box.dispatch("change");
+            }
+            ctx.dom.document.getElementById("nhdw-download-selected").dispatch("click");
+            const barJob = ctx.sentMessages.slice(sent).find((message) => message.action === "downloadAllDoujinshis");
+            assert.ok(barJob, entry.label + ": bar dispatch");
+            assert.equal(barJob.formatOverride, entry.expected, entry.label + ": bar format");
+            assert.equal(barJob.separate, true, entry.label + ": separate files");
+            assert.deepEqual(Object.keys(barJob.allDoujinshis), ["111111", "222222"]);
+            assert.deepEqual(ctx.syncWrites, [], entry.label + ": downloads do not materialize defaults");
+        }
+        console.log("PASS: card/bar controls display and dispatch all " + formatCases.length + " explicit/inherited/legacy list formats without writes (item 59)");
+
+        // An explicit edit persists on its own key and survives a reload,
+        // without touching the single-title format or unrelated keys.
+        const edited = run({ settings: { useZip: "cbz", listFormat: "pdf", unrelated: "keep" } });
+        await wait(0);
+        for (const format of formats) {
+            edited.syncWrites.length = 0;
+            const control = edited.dom.document.getElementById("nhdw-format");
+            control.value = format;
+            control.dispatch("change");
+            assert.deepEqual(edited.syncWrites, [{ listFormat: format }]);
+            assert.equal(edited.settings.useZip, "cbz");
+            assert.equal(edited.settings.unrelated, "keep");
+            const reopened = run({ settings: edited.settings });
+            await wait(0);
+            assert.deepEqual(selectedFormat(reopened), [format]);
+            assert.deepEqual(reopened.syncWrites, []);
+        }
+        console.log("PASS: list bar format edits persist independently and survive a page reload (item 59)");
+    }
+
+    // --- N+4. every supported site's listing markup (item 63) --------------
+    // Each row in utils/listCards.ts declares its own card boundary, so the
+    // fixtures mirror the captured markup instead of nhentai's. Discovery that
+    // silently fell back to a global selector would decorate nothing here.
+    {
+        const SITES = [
+            { site: "nhentai", location: "https://nhentai.net/", ids: ["111111", "222222", "333333"] },
+            { site: "hentaifox", location: "https://hentaifox.com/", ids: ["173098", "173099", "173100"] },
+            { site: "imhentai", location: "https://imhentai.xxx/", ids: ["1738519", "1738520", "1738521"] },
+            { site: "hentaiera", location: "https://hentaiera.to/tag/milf/", ids: ["694133", "694134", "694135"] },
+            { site: "hentaienvy", location: "https://hentaienvy.com/", ids: ["1606086", "1606087", "1606088"] },
+            { site: "hitomi", location: "https://hitomi.la/search.html?tag%3Afemale%3Aschoolgirl", ids: ["7363", "7364", "7365"] }
+        ];
+        for (const entry of SITES) {
+            const ctx = run({ site: entry.site, location: entry.location, ids: entry.ids });
+            await wait(0);
+            const controls = cardControls(ctx.dom);
+            if (controls.length !== entry.ids.length) {
+                fail(entry.site + ": expected " + entry.ids.length + " decorated cards, got " + controls.length);
+            }
+            const decorated = controls.map((box) => box.parentElement && box.parentElement.getAttribute("data-nhdw-controls"));
+            for (const id of entry.ids) {
+                if (decorated.indexOf(id) === -1) {
+                    fail(entry.site + ": card " + id + " was not decorated, got " + JSON.stringify(decorated));
+                }
+            }
+            for (const box of controls) {
+                if (!box.querySelector(".nhdw-select-box") || !box.querySelector(".nhdw-download")
+                    || !box.querySelector(".nhdw-bookmark")) {
+                    fail(entry.site + ": a card is missing Select / Download / Bookmark");
+                }
+            }
+            // The bookmark write carries the PAGE's site, never the default one.
+            controls[0].querySelector(".nhdw-bookmark").dispatch("click");
+            const add = ctx.sentMessages.filter((message) => message.action === "bookmarkAdd").pop();
+            if (!add || add.items[0].id !== entry.ids[0] || add.items[0].site !== entry.site) {
+                fail(entry.site + ": bookmarkAdd must carry the page site, got " + JSON.stringify(add));
+            }
+            // ...and a per-card download is dispatched as that site's job.
+            controls[0].querySelector(".nhdw-download").dispatch("click");
+            const job = ctx.sentMessages[ctx.sentMessages.length - 1];
+            if (!job || job.action !== "downloadAllDoujinshis" || job.site !== entry.site) {
+                fail(entry.site + ": the card job must name its site, got " + JSON.stringify(job));
+            }
+            if (!job.allDoujinshis[entry.ids[0]]) {
+                fail(entry.site + ": the job must carry the card's gallery id, got " + JSON.stringify(job.allDoujinshis));
+            }
+        }
+        console.log("PASS: card controls discover every supported site's own listing markup (item 63)");
+
+        // A gallery page of another site must not be treated as this one, and
+        // an unsupported host decorates nothing at all.
+        const offSite = run({ site: "hentaifox", location: "https://nhentai.net/", ids: ["173098"] });
+        await wait(0);
+        if (cardControls(offSite.dom).length !== 0) {
+            fail("a fixture whose location disagrees with its markup must not decorate cards");
+        }
+    }
+
+    // --- N+5. Select all (item 64a) ---------------------------------------
+    {
+        const ctx = run({});
+        await wait(0);
+        const bar = ctx.dom.document.getElementById("nhdw-action-bar");
+        if (bar.classList.contains("nhdw-hidden")) {
+            fail("the action bar must be visible while listing cards exist (item 64a)");
+        }
+        const selectAll = ctx.dom.document.getElementById("nhdw-select-all");
+        if (!selectAll) {
+            fail("the floating action bar must offer Select all (item 64a)");
+        }
+        if (ctx.localStore.allIds.length !== 0) {
+            fail("the fixture must start with an empty selection");
+        }
+        selectAll.dispatch("click");
+        const expected = ["111111", "222222", "333333"];
+        for (const id of expected) {
+            if (!ctx.localStore.allIds.includes(id)) {
+                fail("Select all must select every card, got " + JSON.stringify(ctx.localStore.allIds));
+            }
+        }
+        const count = ctx.dom.document.getElementById("nhdw-count");
+        if (!count || count.textContent !== "3 selected") {
+            fail("Select all must refresh the bar count, got " + (count && count.textContent));
+        }
+        for (const box of cardControls(ctx.dom)) {
+            if (!box.querySelector(".nhdw-select-box").checked) {
+                fail("Select all must tick every card's Select box");
+            }
+        }
+        console.log("PASS: Select all selects every card on the page and drives the bar (item 64a)");
+
+        // Clear still empties the shared list, so the panel follows.
+        ctx.dom.document.getElementById("nhdw-clear-selected").dispatch("click");
+        if (ctx.localStore.allIds.length !== 0) {
+            fail("Clear must empty the shared allIds list, got " + JSON.stringify(ctx.localStore.allIds));
+        }
+        for (const box of cardControls(ctx.dom)) {
+            if (box.querySelector(".nhdw-select-box").checked) {
+                fail("Clear must untick every card's Select box");
+            }
+        }
+        console.log("PASS: Clear still empties the shared selection");
     }
 
     console.log("PASS: in-page listing card controls behave correctly.");

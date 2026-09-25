@@ -730,7 +730,7 @@ module background
         });
     }
 
-    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[] }) {
+    export function downloadAllPages(allDoujinshis: Record<string, string>, pagesArr: Array<number>, path: string, errorCallback: Function, progressCallback: Function, url: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; alreadyDownloadedIds?: string[]; redownloadIds?: string[]; site?: string }) {
         beginJob();
         resolveWorkerBatchOptions(options).then((resolved) => {
             runPagedBatchDownload({
@@ -1611,7 +1611,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         } else if (request.action === "downloadAllDoujinshis") {
             return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, site: request.site, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "downloadAllPages") {
-            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
+            return startRelayedJob({ action: "downloadAllPages", allDoujinshis: request.allDoujinshis, pages: request.pages, finalName: request.finalName, url: request.url, site: request.site, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "goBack") {
             background.clearJobMarker();
             askOffscreen({ action: "goBack" }, () => sendResponse({ result: "success" }));
