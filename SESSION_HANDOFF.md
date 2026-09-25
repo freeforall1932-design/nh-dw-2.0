@@ -9,6 +9,14 @@ ported into Chrome (see "Current state" + the review log in
 `IMPROVEMENT_BACKLOG.md`). Read the **"Next session"** section before starting
 new work.
 
+**MERGED — this session is complete.** The branch landed on **main** as
+**PR #50** (merge commit; CI green on both jobs: *Offline suites (fixtures +
+window-less VM bundles)* and *Firefox snapshot (offline suites)*). A fresh
+session starts from `main`, not from this branch. The docs listed under
+"Document map" were refreshed in the same commit (status lines, the site-#7
+checklists in `ADAPTER_WIRING_PLAN.md` §6 / `CANDIDATE_SITES.md` §5 /
+`CAPTURE_GUIDE.md`, and the `MULTISITE_V4_PLAN.md` status).
+
 **This file was deliberately slimmed on 2026-09-24.** It used to carry every
 session's full narrative (192 KB). It now carries only what a fresh session
 needs to operate: current state, the durable rules the shipped code depends on,
@@ -47,11 +55,15 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   writer via OPFS), plus this session's review pass that found and fixed eight
   defects in them (summary below; full table in `IMPROVEMENT_BACKLOG.md`'s
   2026-09-24 review log).
-- **Suites:** Chrome **519 unit / 4 pending**, smoke 7, e2e exit 0 (**143
-  PASS**). Firefox **595 unit / 4 pending**, smoke 7, e2e exit 0 (**175
-  PASS**), lint **0 errors / 0 notices / 31 advisories**, package
-  `nhentai_downloader-1.3.0.zip`. CI (`extension-tests`, Node 22) green on both
-  jobs.
+- **Suites (after 62/63/64 + the item-59 port):** Chrome **587 unit / 4
+  pending**, smoke 7, e2e exit 0 (**263 PASS** for `e2e-title-bookmark`, all
+  other e2e green). Firefox **620 unit / 4 pending**, smoke 7, e2e exit 0,
+  lint **0 errors / 0 notices / 32 warnings** (26 pre-existing
+  `UNSAFE_VAR_ASSIGNMENT`, 3 `UNSUPPORTED_API` sidePanel/offscreen, 1
+  `DANGEROUS_EVAL`, plus 1 new `UNSAFE_VAR_ASSIGNMENT` from the legacy
+  checkbox `innerHTML` — same class as the panel's), package
+  `nhentai_downloader-1.4.0.zip`. CI green on both jobs; **PR #50 merged to
+  main**.
 - **Shipped on this branch (2026-09-25):** items **62/63/64**, implemented in
   **both** trees behind the previous session's red tests (all 8 per-tree unit
   reds + the 3 `e2e-list-controls` flips are green). `src/utils/listCards.ts`
@@ -109,6 +121,15 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Latest work (2026-09-23/24) — one paragraph per pass
 
+- **Merge + doc refresh (2026-09-25, end of session):** PR #50 → main as
+  a merge commit (CI green on both jobs). Every doc that carries next-session
+  state was refreshed in the same commit: this file (MERGED banner, corrected
+  suite counts, next-session ordering), `WORKLIST.md` (merge banner, stale
+  "merge PR #48" owner bullet removed, 71 → 65 → 40 queue), the backlog
+  session log + item table, `ADAPTER_WIRING_PLAN.md` §5/§6 (site #7 needs a
+  `listCards.ts` row and a listing-host `content_scripts` block),
+  `CANDIDATE_SITES.md` §5, `CAPTURE_GUIDE.md` (capture the LISTING page too),
+  `MULTISITE_V4_PLAN.md` status, and the three READMEs.
 - **3.9.0 first pass:** the card ☆ became a real SVG bookmark icon; every
   gallery page on all six sites got a blue **Bookmark** button next to the
   site's own buttons (`src/content/titleBookmark.ts` + the declarative table in
@@ -178,7 +199,7 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   assertion flips, red at the item-64a "bar visible while cards exist" assert.
   Nothing implemented yet — see the "Next session" section.
 
-## Next session (2026-09-25) — what is left after 62/63/64
+## Next session — what is left after 62/63/64 (merged on main, PR #50)
 
 **Mandatory first step, unchanged: review the previous session's diff before
 writing code** (`WORKLIST.md` "Mandatory first step"). The 2026-09-25 review
@@ -637,10 +658,16 @@ byte-identical — keep them in sync on any future change).
   **3.8.0** composite `(site,id)` keys + `cin.*` mirrors pinned · **3.9.0**
   multi-site adapters (6 sites), bookmark icon + gallery-page button,
   43/44/52/41, item 48 per-site jobs, 39/45/51 (PR #48) + its review pass.
+  **3.10.0** (PR #50, merged 2026-09-25) items **62/63/64** — per-site listing
+  card controls (`utils/listCards.ts`), panel **Save offline**, gallery-page
+  **Save offline** + **Select**, **Select all**, `allIdsSite` wipe — plus the
+  Chrome port of item 59 (saved list format).
 - **Firefox:** 1.0.0 Android snapshot → 1.1.0 parity elevation (rebase onto
   Chrome src + audited delta) → 1.2.0 website-embedded UI (items 56/57, PR #44
-  review) → 1.3.0 Chrome-3.9.0 backport. Items 38 (options harness) and 59
-  (list-format readers) were Firefox-scoped fixes. `PORTING_AUDIT.md` +
+  review) → 1.3.0 Chrome-3.9.0 backport → **1.4.0** Chrome-3.10.0 backport
+  (62/63/64 card controls, Save offline, Select all). Items 38 (options
+  harness) and 59 (list-format readers) were Firefox-scoped fixes — 59 is now
+  also in Chrome. `PORTING_AUDIT.md` +
   `FIREFOX_PARITY_PLAN.md` in the Firefox folder are the port's own records.
 - **Dependency maintenance (2026-09-21):** Mocha 12.0.2 both trees, web-ext
   10.6.0 + scoped addons-linter 10.13.0 override (Firefox), audits 16→0 /

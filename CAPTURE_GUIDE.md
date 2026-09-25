@@ -211,13 +211,22 @@ blocks stripped, website naming kept).
 - Sanitize BEFORE committing (owner rule 2026-09-24): dummy titles/artists/
   tags/CJK, strip ad blocks, keep domains/URL shapes/media paths/card markup.
   Unsanitized captures hard-stop agent sessions on content filters.
+- **Capture the LISTING page too** (2026-09-25, item 63): a search/tag/home
+  page saved as HTML (rendered DOM for client-rendered sites) so the card
+  container, cover/link selector, title selector and id shape can be *measured*
+  for `src/utils/listCards.ts`. Gallery + reader alone now ships a site that
+  downloads but shows no on-card Select/Bookmark/Download. Note in the handover
+  which block wraps one card — hitomi's `.gallery-content` boundary is the
+  still-unverified case.
 
 ## Part C — order
 
 The six initial sites are done. For site #7+: pick from the roster in
-`new domain candidate` on main (analysis: `CANDIDATE_SITES.md`), capture one site completely (HAR + any extras its
-frontend class needs), then implement per `ADAPTER_WIRING_PLAN.md` §6 — one
-site at a time, per the owner's standing scope call.
+`new domain candidate` on main (analysis: `CANDIDATE_SITES.md`), capture one site completely (HAR + **listing-page HTML** +
+any extras its frontend class needs), then implement per
+`ADAPTER_WIRING_PLAN.md` §6 — one site at a time, per the owner's standing
+scope call. Budget for the listing capture: it is now a hard gate, not a nice
+extra.
 
 ## Part D — how to hand it over
 

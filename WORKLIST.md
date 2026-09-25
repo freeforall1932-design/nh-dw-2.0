@@ -15,10 +15,21 @@ Firefox tree** — three Chrome readers never asked storage for the optional
 `listControls.ts`). Ported to Chrome with the key-scoped fixtures and the
 36-case matrix; the Chrome `list-mode.test.js` store stub was a whole-store
 merge mock, which is exactly what hid it. Chrome **3.10.0 / 587 unit**, Firefox
-**1.4.0 / 620 unit**, all offline e2e green both trees. Previous session
+**1.4.0 / 620 unit**, all offline e2e green both trees.
+
+**Merged:** the whole 62/63/64 + item-59-Chrome bundle is on **main** via
+**PR #50** (merge commit, both CI jobs green: *Offline suites (fixtures +
+window-less VM bundles)* and *Firefox snapshot (offline suites)*). Docs were
+refreshed in the same commit for the next session: `SESSION_HANDOFF.md` (state +
+next-session ordering), this file, `IMPROVEMENT_BACKLOG.md` (session log + item
+table), `ADAPTER_WIRING_PLAN.md` §5/§6 (site #7 now **also** needs a
+`listCards.ts` row and a listing-host `content_scripts` block),
+`CANDIDATE_SITES.md` §5, `CAPTURE_GUIDE.md` (capture a LISTING page too),
+`MULTISITE_V4_PLAN.md` (status), and the three READMEs.
+
+Previous session
 `arena/01a0d31d-nh-dw-2-0` (2026-09-25) did the 62/63/64 recon + red-first
-state; `arena/01a0cdce-nh-dw-2-0` (2026-09-24) landed 39/45/51 + its review.
-`arena/01a0cdce-nh-dw-2-0` (2026-09-24):
+state; `arena/01a0cdce-nh-dw-2-0` (2026-09-24) landed 39/45/51 + its review —
 items **39/45/51** landed with PR #48, the mandatory review pass fixed eight
 defects in them (Firefox cancel-UI parity, cancel-mark lifecycle, cross-site
 cancel identity, done-row guard, OPFS cleanup hardening, stale docs), captures
@@ -71,6 +82,15 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
+**Top of the queue (2026-09-25, after 62/63/64 merged):** **71** (demote the
+panel's blanket "Download all (N pages)" now that on-page Select + Select-all
+exist — unblocked by 63/64), then **65** (rename the Queue tab to **Bookmark
+tab**, UI-only — storage key, message actions and the export format stay
+as-is), then **40** (bootstrap a listing page in `scripts/e2e-popup.js`; the
+only offline-feasible backlog item, and the reason the panel **Save offline**
+click handler still has no offline coverage). Items **42/58** (real-browser + Android
+passes, then signing) stay owner-only and outrank all of these in value.
+
 ### Owner roadmap 2026-09-24 — panel rewrite, site parity, auto-fetch (items 60–71)
 
 Owner order confirmed: **bug first, then UI fill**. Specs below are the
@@ -90,7 +110,8 @@ open parts until the owner answers).
   affordance (chevron / long-press / alt) = open the existing download form.
 - On gallery pages the site already has its own Download control — ours must
   be **visually and verbally differentiated** (working names from owner:
-  "save gallery" / "save it" / "save offline"; final label TBD).
+  "save gallery" / "save it" / "save offline"; **label locked: "Save
+  offline"** — shipped in 3.10.0 / FF 1.4.0, item 62).
 - **Queue tab → renamed Bookmark tab** (storage key `bookmarkQueue` and
   message actions stay as-is — rename is UI-only; see Do-not in handoff).
 - Bookmark list must stay **persistent across full browser restart** (already
@@ -316,9 +337,9 @@ workflows are still only covered by the content-script harnesses
       no double entries. The chapter-based webtoon/manhwa picks (tailspace,
       mangak.io, omegascans) swapped to the desktop archiver project. When
       the owner picks one: capture per `CAPTURE_GUIDE.md` (one sanitized HAR,
-      or gallery+reader HTML and 3 image URLs), then implement against
+      or gallery+reader **and listing-page** HTML and 3 image URLs — the
+      listing sample is required since item 63), then implement against
       `ADAPTER_WIRING_PLAN.md` §1/§3/§4/§6.
-- [ ] **Merge PR #48** (items 39/45/51 + review fixes; CI green; mergeable).
 - [ ] **Cross-mirror fallback chains** from the owner's live-testing note
       (throttle-route imhentai↔hentaienvy via the shared `/033/<token>/` store
       by host swap — never by id; hentaiera→hentaienvy→imhentai and

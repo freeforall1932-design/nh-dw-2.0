@@ -1,8 +1,12 @@
 # Multi-site v4 plan
 
 **Recorded:** 2026-09-14 (session `arena/01a09ee5-nh-dw-2-0`).
-**Updated:** 2026-09-23 (session `arena/01a0cdce-nh-dw-2-0`).
-**Status:** **Landed in Chrome 3.9.0 / Firefox 1.3.0.** M0 (composite keys),
+**Updated:** 2026-09-25 (session `arena/01a0d7b8-nh-dw-2-0`; merged to main in PR #50).
+**Status:** **Landed in Chrome 3.9.0 / Firefox 1.3.0** (adapters, per-site
+jobs, paste box) — **and the listing surface closed in Chrome 3.10.0 /
+Firefox 1.4.0** (item 63: per-site card controls via `utils/listCards.ts`,
+item 62: panel + gallery-page **Save offline**, item 64: **Select all** + a
+site-scoped `allIds` wipe; PR #50, merged 2026-09-25). M0 (composite keys),
 M1 (hitomi adapter + resolver), M2 (per-site jobs + site-aware paste box),
 M3 (mirror network & hentaifox adapters), M4 (streaming ZIP writer, 2026-09-24)
 and M5 (Item 52 backup export/import)
@@ -201,6 +205,8 @@ rework merge) remains open — see §7.
 
 ## 6. Milestones (all landed)
 
+M6 item 63 listing-card surface + items 62/64 (card **Save offline**, **Select
+all**, site-scoped `allIds`) — **3.10.0 / FF 1.4.0, merged 2026-09-25 (PR #50)**.
 M0 item 47 composite keys (3.8.0) · M1 item 49 hitomi adapter+resolver ·
 M2 item 48 per-site jobs + universal paste box · M3 items 50/53 mirror
 network + hentaifox · M4 item 51 streaming ZIP writer (OPFS; 2026-09-24 incl.
@@ -208,7 +214,7 @@ review fixes) · M5 item 52 queue+history export/import. All in 3.9.0 /
 FF 1.3.0 except M0 (3.8.0). Remaining gate: items 42/58 (device passes +
 signing). Details: `IMPROVEMENT_BACKLOG.md`.
 
-## 7. Open questions (still open after the 3.9.0 landing)
+## 7. Open questions (still open after the 3.9.0 / 3.10.0 landing)
 
 - Final merge call for the lab clone's panel rework (side-panel multi-site
   UI) — hitomi now works end-to-end offline; the call is the owner's.

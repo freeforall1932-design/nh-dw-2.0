@@ -114,9 +114,12 @@ When selecting any candidate from Tier 1 to implement:
 1. [ ] **Capture 1 Gallery Page HTML** (`view-source:https://<site>/<gallery-path>`)
 2. [ ] **Capture 1 Reader Page HTML** (page 1)
 3. [ ] **Capture 2–3 Full Image URLs** from DevTools Network tab (`Img` filter)
-4. [ ] Check Cloudflare / Anti-bot status (is it behind Turnstile / managed challenge?)
-5. [ ] Check numbering invariant (unpadded online URL, zero-padded local file)
-6. [ ] Add parser `src/parsing/<site>Html.ts` + adapter `src/sources/<site>Source.ts`
-7. [ ] Register in `src/sources/index.ts`, `titleBookmark.ts`, and `bookmarkQueue.ts`
-8. [ ] Update Chrome & Firefox `manifest.json` host permissions
-9. [ ] Add unit test suite `test/<site>.test.js`
+4. [ ] **Capture 1 Listing Page HTML** (search/tag/home page with card markup —
+      the sample `src/utils/listCards.ts` is measured from; no listing sample = no
+      on-card Select/Bookmark/Download for the site)
+5. [ ] Check Cloudflare / Anti-bot status (is it behind Turnstile / managed challenge?)
+6. [ ] Check numbering invariant (unpadded online URL, zero-padded local file)
+7. [ ] Add parser `src/parsing/<site>Html.ts` + adapter `src/sources/<site>Source.ts`
+8. [ ] Register in `src/sources/index.ts`, `titleBookmark.ts`, `listCards.ts`, and `bookmarkQueue.ts`
+9. [ ] Update Chrome & Firefox `manifest.json` host permissions **and** add the listing host to the second `content_scripts` block (both trees)
+10. [ ] Add unit test suite `test/<site>.test.js` (+ both `package.json` mocha lists) and an `e2e-list-controls` per-site discovery fixture

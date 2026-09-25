@@ -2658,15 +2658,49 @@ title on the same site and is dropped when the namespace changes.
   (the `getGalleries` content script is nhentai-only), so this is latent, not
   live — worth folding into item 71/70 rather than a silent fix.
 
+## F. Merge + next-session handoff (end of 2026-09-25)
+
+**Merged to `main`: PR #50** (`arena/01a0d7b8-nh-dw-2-0` → `main`, **merge
+commit**, not a squash). CI green on both jobs — *Offline suites (fixtures +
+window-less VM bundles)* (~1m54s) and *Firefox snapshot (offline suites)*
+(~2m29s) — `mergeStateStatus: CLEAN`, 1 commit at merge time, Chrome **3.10.0**
+/ Firefox **1.4.0**, `NHDW_Release_v3.0.0` synced exhaustively (source →
+release diff clean, reverse check clean).
+
+What the merge carries: items **62/63/64** in both trees (per-site listing card
+controls, panel + gallery-page **Save offline**, **Select all**, site-scoped
+`allIds` wipe via `allIdsSite`) **and** the Chrome port of item **59** (saved
+list format wins over single-title format — `listSettings.readListSettings`,
+`options.ts`, `popupSettings.ts`, `listControls.ts` now request the optional
+`listFormat` key, plus the key-scoped storage fixture and the 36-case matrix in
+both trees).
+
+**Docs refreshed with the merge** (so a fresh session starts accurate):
+`SESSION_HANDOFF.md` (MERGED banner, corrected suite counts, next-session
+ordering, history pointers 3.10.0 / FF 1.4.0), `WORKLIST.md` (merge banner;
+stale "merge PR #48" owner bullet removed; queue is **65 → 71 → 40**, then
+owner-only 42/58), this file (sections A–E above + this one + the item table),
+`ADAPTER_WIRING_PLAN.md` §5/§6, `CANDIDATE_SITES.md` §5, `CAPTURE_GUIDE.md`,
+`MULTISITE_V4_PLAN.md`, and the root / Chrome / Firefox / Release READMEs.
+
+**Next session, in order:** (1) review this diff first — always; (2) item **65**
+(rename the Queue tab to **Bookmark tab**, UI-only: storage key, message actions
+and export format stay as-is); (3) item **71** (demote the panel's blanket
+"Download all (N pages)" now that on-page Select + Select-all exist);
+(4) item **40** (bootstrap a listing page in `scripts/e2e-popup.js` — the only
+offline-feasible backlog item, and the reason the panel Save-offline *handler*
+has no offline coverage); (5) owner-only **42/58** (real-browser + Android
+passes, then signing).
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
 |---|---|---|
 | 60 | Side-panel query-wash / view-reload bug — **fixed 2026-09-24**: `updatePreviewAsync` only paints `invalidPage` over a placeholder, never a live `#action` view; red-first e2e Chrome phase 9 / FF phase 13 | done |
 | 61 | Download-tab auto-fetch fill (page-range v1) | done — range block + dual actions both trees, e2e green, Release synced |
-| 62 | Smart Download control (direct + open form) beside Bookmark | **partial** — red-first (no impl yet), 2026-09-25; label locked "save offline"; red: `message.test.js` Save-offline control. See handoff "Next session" |
-| 63 | Card Select/Bookmark/Download on all six sites | **done 2026-09-25** — real `utils/listCards.ts` table + `findCards()` per-site dispatch (cards carry their site), site-aware history (`partitionKnown(..., site)`), composite bookmark identity, `site:` on every card/bar job, listing-host `content_scripts` block for the five non-nhentai hosts, per-site e2e discovery; `getGalleries` port out of scope |
-| 64 | Select-all on listings + title-page select into `allIds` | **done 2026-09-25** — `#nhdw-select-all` beside Clear with the bar visible whenever `findCards()` finds cards; gallery-page `nhdw-title-select` writes the bare id into the shared `allIds`; `allIdsSite` makes the wipe site-scoped (selection survives same-site navigation, dropped across sites) |
+| 62 | Smart Download control (direct + open form) beside Bookmark | **done 2026-09-25 (merged, PR #50)** — label **"Save offline"**: panel preview header (`#buttonSaveOffline`, 62a) and the site gallery page (`nhdw-title-save`, 62b), both trees; primary = one-gallery `downloadAllDoujinshis` with `readListSettings()` format/template, `separate:true`, fresh-history guard → confirm → `redownloadIds:[id]`; secondary (Alt) = focus `#downloadFormat` / open the panel via `siteUiOpenPanel` |
+| 63 | Card Select/Bookmark/Download on all six sites | **done 2026-09-25 (merged, PR #50)** — real `utils/listCards.ts` table + `findCards()` per-site dispatch (cards carry their site), site-aware history (`partitionKnown(..., site)`), composite bookmark identity, `site:` on every card/bar job, listing-host `content_scripts` block for the five non-nhentai hosts, per-site e2e discovery; `getGalleries` port out of scope |
+| 64 | Select-all on listings + title-page select into `allIds` | **done 2026-09-25 (merged, PR #50)** — `#nhdw-select-all` beside Clear with the bar visible whenever `findCards()` finds cards; gallery-page `nhdw-title-select` writes the bare id into the shared `allIds`; `allIdsSite` makes the wipe site-scoped (selection survives same-site navigation, dropped across sites) |
 | 65 | Rename Queue tab → Bookmark tab (UI-only) | open |
 | 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | confirmed — with 65 |
 | 67 | On-page cart — **badge + expandable mini-cart** (owner pick, elaboration 1 closed 2026-09-24) | confirmed — after 65/68 |
