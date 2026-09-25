@@ -2463,3 +2463,100 @@ benefit), and every cross-reference (WORKLIST, handoff doc map, v4 plan,
 capture guide) now names `new domain candidate` as the canonical roster.
 Dedupe stands: the roster matches this document's tier analysis 1:1, no
 double entries anywhere.
+
+## Session log — 2026-09-24 (session `arena/01a0d31d-nh-dw-2-0`, post-merge review): PR #48 shared-writer cleanup regression fixed
+
+Mandatory review of the merged PR #48 diff found one real regression the PR's
+own eight-defect pass had missed, plus three dead-code nits. Red-first as
+required.
+
+### The defect (reproducible, fixed)
+
+In merged mode (`downloadSeparately: false`) every gallery shares ONE
+`StreamingZipWriter`. PR #48 added `zip.cleanup()` to `Downloader`'s catch —
+correct for an owned writer, but intermediate merged galleries have
+`downloadName === null` and a SHARED writer. A gallery failing inside the
+Downloader (image errors; per-row Cancel → abort → throw) therefore wiped
+pages already collected from earlier titles while their central-directory
+records stayed behind → `JSZip.loadAsync` reported `Corrupted zip: missing N
+bytes` on the final archive. Metadata failures never reached the Downloader,
+and every cancel/separate e2e phase forced `downloadSeparately: true`, so the
+suite stayed green (false negative).
+
+**Fix:** catch-path cleanup is now gated on `this.downloadName !== null`
+(the final-save owner or a separate-mode gallery that owns its writer).
+`StreamingZipWriter.cleanup()` also awaits `writeChain` before releasing the
+sink so an in-flight `file()` cannot race the wipe. OPFS delayed unlink +
+orphan sweep unchanged.
+
+**Red-first proof:** new unit case fails on the pre-fix build with
+`Corrupted zip: missing 6153 bytes`; after the fix it asserts gallery-1
+pages survive an intermediate failure byte-for-byte. New e2e phase
+(success 123456 → image-fail 300000 → final save 654321, integer-key order)
+asserts the delivered merged ZIP contains both successful titles' nested
+entries — fails on the pre-fix `js/offscreen.js`, passes after rebuild.
+
+### Dead-code nits (fixed)
+
+- Dropped unused `isGalleryCancelled` import from both `background.ts`
+  (the offscreen host and batch loop are the only production callers).
+- Dropped zero-caller `Downloader.cancel()` alias (both trees).
+- Dropped dead `require("jszip")` from both `offscreen.ts` (StreamingZipWriter
+  replaced it; worker fallback still uses JSZip via `background.ts`).
+
+### Verification
+
+Chrome: tsc 0 · units **521/4** (+2) · smoke 7 · e2e exit 0 **144 PASS** (+1).
+Firefox: tsc 0 · units **597/4** (+2) · smoke 7 · e2e exit 0 **176 PASS** (+1)
+· lint exit 0. Shared files byte-identical across trees; release folder
+exhaustively re-synced (`js/background.js` + `js/offscreen.js`); manifests
+3.9.0 / 1.3.0 / Release 3.9.0 unchanged. Handoff invariant for `cleanup()`
+updated to the ownership rule.
+
+## Session log — 2026-09-25 (session `arena/01a0d31d-nh-dw-2-0`): items 62/63/64 recon + red-first (no implementation)
+
+Recon read the panel Download-tab header (62a), site gallery-page Smart
+Download (62b), the six-site card-selector surface (63), and Select-all +
+title-page select (64) across both trees + all manifests/backgrounds; the
+hitomi listing markup was fetched live (`search.html` + `galleryblock.js` +
+`getGalleryId`) because the homepage capture has no JS-rendered cards. Red
+tests written and verified in **both** trees: `test/list-cards.test.js`
+(new, +mocha list) six-site contract tests; `test/message.test.js`
+("Save offline" direct control beside `buttonBookmark`);
+`test/download-history.test.js` (`partitionKnown` explicit site arg);
+`test/manifest.test.js` (item-63 listing-hosts `content_scripts` block);
+`test/batch-pipeline.test.js` (bare force id composes with the job site). A
+compiling `src/utils/listCards.ts` **stub** (NOT IMPLEMENTED) was added so the
+`list-cards` tests fail cleanly instead of crashing the mocha run.
+`scripts/e2e-list-controls.js` (both trees) gained multi-site `makeDocument`
+fixtures, a `location` in the sandbox, and 3 assertion flips (item-64a bar
+visible while cards exist; composite `bookmarkRemove`; `sourceUrl` = page URL).
+
+**Verified red baseline (this is the intentional end-state of this PR):**
+Chrome `npm test` **536 pass / 8 red**; Firefox **612 pass / 8 red** (the 8
+reds per tree are all new: 4 `list-cards` + manifest + `partitionKnown` +
+message + batch-pipeline); both `node scripts/e2e-list-controls.js` red at the
+item-64a bar assert. No crashes. **No production logic for 62/63/64 exists
+yet** — the next session must debug-review this merged partial state (missing
+logic / misaligned cross-tree code / broken code) before implementing.
+`WORKLIST.md` items 62/63/64 marked **partial**; scope note: the
+`getGalleries.ts` panel-listing port is **out of scope** for 63.
+
+## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
+
+| Item | Title | Status |
+|---|---|---|
+| 60 | Side-panel query-wash / view-reload bug — **fixed 2026-09-24**: `updatePreviewAsync` only paints `invalidPage` over a placeholder, never a live `#action` view; red-first e2e Chrome phase 9 / FF phase 13 | done |
+| 61 | Download-tab auto-fetch fill (page-range v1) | done — range block + dual actions both trees, e2e green, Release synced |
+| 62 | Smart Download control (direct + open form) beside Bookmark | **partial** — red-first (no impl yet), 2026-09-25; label locked "save offline"; red: `message.test.js` Save-offline control. See handoff "Next session" |
+| 63 | Card Select/Bookmark/Download on all six sites | **partial** — red-first (no impl yet), 2026-09-25; red: `list-cards` table + `manifest` listing-hosts + `partitionKnown` site + `batch-pipeline` job-site + multi-site e2e; `listCards.ts` = compiling NOT-IMPLEMENTED stub; `getGalleries` port out of scope |
+| 64 | Select-all on listings + title-page select into `allIds` | **partial** — red-first (no impl yet), 2026-09-25; red: `e2e-list-controls` item-64a "bar visible while cards exist" flip |
+| 65 | Rename Queue tab → Bookmark tab (UI-only) | open |
+| 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | confirmed — with 65 |
+| 67 | On-page cart — **badge + expandable mini-cart** (owner pick, elaboration 1 closed 2026-09-24) | confirmed — after 65/68 |
+| 68 | Bookmark list load management + **green-check already-downloaded** (true success only, never fail-midway; works with/without search/filter) | open — after 65 |
+| 69 | Bookmark thumbnails — **viewport-lazy + GC both** (distance while scrolling + idle ~15–30s sweep; purge all on close/site-group switch; cross-site search keeps GC for dedupe/batch prep) (owner pick, elaboration 3 closed 2026-09-24) | confirmed — with 67/68 |
+| 70 | Live-session auto-fetch (twitter-style phase 2) | open — after 61 |
+| 71 | Demote panel Download-all where on-page Select exists | open — after 63/64 |
+
+Do not allocate these numbers to anything else.

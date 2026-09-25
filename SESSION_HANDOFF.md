@@ -1,7 +1,10 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-24 (session `arena/01a0cdce-nh-dw-2-0`). Chrome **3.9.0**,
-Firefox **1.3.0**, PR #48 open (items 39/45/51 + review fixes, CI green).
+**Updated:** 2026-09-25 (session `arena/01a0d31d-nh-dw-2-0`). Chrome **3.9.0**,
+Firefox **1.3.0** (items 39/45/51 + 60/61 shipped on main). This session: items
+**62/63/64 recon + red-first** — 8 red unit tests per tree + `e2e-list-controls`
+multi-site fixtures + a compiling `listCards.ts` stub; **no production logic
+yet**. Read the **"Next session"** section before implementing.
 
 **This file was deliberately slimmed on 2026-09-24.** It used to carry every
 session's full narrative (192 KB). It now carries only what a fresh session
@@ -43,6 +46,13 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   PASS**), lint **0 errors / 0 notices / 31 advisories**, package
   `nhentai_downloader-1.3.0.zip`. CI (`extension-tests`, Node 22) green on both
   jobs.
+- **In progress (this branch, NOT shipped):** items **62/63/64** are in
+  **red-first** state — full recon done, red tests written in **both** trees
+  (8 red unit tests each + `e2e-list-controls` red at the item-64a bar
+  assert), and a compiling `src/utils/listCards.ts` **stub** marked NOT
+  IMPLEMENTED. **No production logic for 62/63/64 exists yet.** The "Next
+  session" section below carries the mandatory debug-review ask + the full
+  remaining-work list + the card-selector table.
 - **Captures sanitized 2026-09-24** (owner request): gallery titles, artists,
   tags and CJK text in `5 website page source`, `captures/*` text files and the
   hitomi HAR were replaced with `DUMMY_*`/`[CJK]`/`[FILTERED]` tokens and ad
@@ -120,6 +130,91 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   synchronous reply; (7) READMEs contradicted their own PR; (8) the silently
   ignored DEFLATE request is now documented instead of pretended. Full table
   with evidence: `IMPROVEMENT_BACKLOG.md`, session log 2026-09-24.
+- **Items 62/63/64 recon + red-first (2026-09-25, this session):** full recon
+  of the panel Download-tab header (62a), the site gallery-page Smart Download
+  (62b), the six-site card-selector table (63), and Select-all + title-page
+  select (64); hitomi listing markup fetched live (`search.html` +
+  `galleryblock.js` + `getGalleryId`). Red tests written and verified in both
+  trees: **8 red unit tests per tree** (`manifest` listing-hosts block,
+  `partitionKnown` explicit-site arg, `message` "Save offline" control,
+  `batch-pipeline` bare-force-id × job-site composition, and 4 `list-cards`
+  contract tests against a compiling NOT-IMPLEMENTED stub) plus
+  `e2e-list-controls` multi-site fixtures + a `location` in the sandbox + 3
+  assertion flips, red at the item-64a "bar visible while cards exist" assert.
+  Nothing implemented yet — see the "Next session" section.
+
+## Next session (2026-09-25) — items 62/63/64: debug-review first, then implement
+
+**Mandatory first step — debug-review the merged PR.** This PR is a
+**partial, red-first state by design**. Before writing implementation, review
+the merged diff for:
+- **missing logic** — `listCards.ts` is a NOT-IMPLEMENTED stub; the 8 red
+  unit tests per tree + the 3 `e2e-list-controls` flips are the spec.
+- **misaligned code** — cross-tree consistency. Chrome `NHDW_Extension_v3.0.0`
+  vs Firefox `NHDW_Firefox_v1.0.0` must stay in lockstep on the shared files.
+  **Gotcha:** in both trees' `test/manifest.test.js`, `sourceManifest` /
+  `releaseManifest` point at the **Chrome** manifests; only `firefoxManifest`
+  (FF tree) is the FF one. Never assert an FF-only script (e.g. `siteUi.js`)
+  against the Chrome manifests.
+- **broken code** — baseline before implementing: `npm test` in both trees
+  (expect **exactly** 8 reds each, all new, no crashes) and
+  `node scripts/e2e-list-controls.js` (expect red at the item-64a bar assert).
+
+**Done — do not redo:** recon; the 5 red test files (both trees); the
+`listCards.ts` stub (both trees); `e2e-list-controls.js` multi-site fixtures +
+`location` + 3 flips (both trees); verified red baseline (Chrome 536/8,
+FF 612/8).
+
+**Locked design decisions (from recon — do not re-litigate):**
+1. **62a (panel header):** primary "Save offline" = direct single-gallery
+   download with list-mode format/template (`readListSettings`), history guard
+   ON (fresh `readHistory` + `toGalleryKey(id, source.site)` → confirm →
+   `redownloadIds:[id]`); secondary (Alt) = focus `#downloadFormat` to open the
+   existing form. Label **"Save offline"** (must NOT match `DOWNLOAD_TEXT_RE`,
+   which starts with "download"). Wire in `message.ts` `downloadInfo` beside
+   `buttonBookmark` + a handler beside popup `#button` (:678).
+2. **62b (site gallery page):** second button after Bookmark via
+   `titleBookmark.ts` `insertAfter` + extend the single `inject` (:355) into
+   per-attr guards. Primary = same `downloadAllDoujinshis` message from the
+   content script (FF background :1333 already forwards `request.site`);
+   secondary = open the panel (FF: `openPanelPage(sender.tab.id)`; Chrome:
+   `chrome.sidePanel.open` only — do NOT port `PANEL_SOURCE_TAB_KEY`). Add
+   `nhdw-title-save` to `OWN_UI_CLASSES` (:51) + rules in `css/titleBookmark.css`.
+3. **63 (card selectors):** real `listCards.ts` per-site table (table below);
+   `listControls.ts` `findCards` (:306) dispatches on
+   `getSourceForUrl(location.href).site` (harness default nhentai). Pass the
+   **site** to history (`partitionKnown(..., site)`, `toGalleryKey(id, site)`)
+   and to `bookmarkAdd`/`bookmarkRemove` (composite key). Manifest: new
+   `content_scripts` block for the 5 non-nhentai listing hosts carrying
+   `content.js` + `listControls.js` + `css/content.css` (allIds-wipe parity).
+   **`getGalleries.ts` port is OUT of scope for 63** (panel listing view).
+4. **64a (Select all):** `#nhdw-select-all` in `buildActionBar` (:490) beside
+   Clear; the bar is **visible whenever listing cards exist** (not only when
+   something is selected) — that is exactly why the item-64a assert is red.
+5. **64b (title-page select):** gallery-page Select writes the **bare** id into
+   the same `chrome.storage.local.allIds` + repaint on `onChanged`. Make the
+   `content.ts`/`preview.ts` `allIds` wipe (`lastUrl != location.href`)
+   **site-scoped** so a selection survives same-site navigation — standing
+   constraint: never cost a persistent temp list or bookmark storage.
+
+**63 card-selector table (from captures + live hitomi fetch):**
+
+| site | mode | container | cover / link | title | id source |
+|---|---|---|---|---|---|
+| nhentai | link | `a[href*="/g/"]` | (link is the card) | `.caption` (inside) | `/g/(\d+)/` |
+| hentaifox | card | `.thumb` | `.inner_thumb a[href*="/gallery/"]` | `.caption .g_title a` | `/gallery/(\d+)/` |
+| imhentai | card | `.thumb` | `.inner_thumb a[href*="/gallery/"]` | `.caption .gallery_title a` | `/gallery/(\d+)/` |
+| hentaiera | card | `.thumb` | `.thumbnail a.inner_thumb.img_box` | `.g_text .gallery_title a` | `/gallery/(\d+)/` (pages in `.inside_p`) |
+| hentaienvy | card | `article.hnv-gallery-card` | `.hnv-gallery-card__cover` | `.hnv-gallery-card__title a` | `/gallery/(\d+)/` |
+| hitomi | content | `.gallery-content` (blocks) | `img [data-src]` | `h1 a` (pretty `/<type>/<slug>-<id>.html`) | trailing number (`getGalleryId`) |
+
+**Still to implement (the actual work), both trees:** real `listCards.ts`;
+62a `message.ts`+popup; 62b `titleBookmark.ts`+label consts+CSS; 63
+`findCards` per-site + site-aware history/bookmark + manifest blocks +
+per-site `e2e-list-controls` phases; 64a `#nhdw-select-all` + bar-visible;
+64b title-page Select + site-scoped wipe. Then `npm run build`, exhaustive
+Release sync, full `npm test` green both trees, `npm run lint:firefox`,
+`test:e2e` green.
 
 ## Structural invariants (what the shipped code depends on — do not re-derive)
 
@@ -180,7 +275,14 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   `MemoryZipSink` otherwise; peak RAM O(one page); production archives are
   STORE (image payloads are pre-compressed; the Downloader's generateAsync
   DEFLATE request is documented-ignored). `cleanup()` is called by the
-  Downloader on success AND in its catch.
+  Downloader after a successful final save AND in its catch **only when
+  `downloadName !== null`** (this instance owns the writer: the merged-batch
+  final save, or a separate-mode gallery with its own writer). Intermediate
+  merged galleries share one writer with `downloadName === null` and must
+  never clean it up — a mid-batch failure/cancel used to wipe pages already
+  collected and corrupt the final archive (fixed 2026-09-24, session
+  `arena/01a0d31d-nh-dw-2-0`). `StreamingZipWriter.cleanup()` also awaits
+  the write chain before releasing the sink.
 - Session-only pause/resume — no durable restart resume; do not claim it.
 - The source gallery tab must stay open (may be backgrounded) until its job
   completes; tab-context fetches prefer its Cloudflare-cleared session.

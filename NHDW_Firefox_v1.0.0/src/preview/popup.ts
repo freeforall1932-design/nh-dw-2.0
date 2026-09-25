@@ -21,6 +21,8 @@ import { toGalleryKey } from "../utils/siteKeys"
 import { BookmarkState, emptyBookmarkState, findBookmark, normalizeBookmarkState, readBookmarks, thumbnailUrlFromGallery, bookmarkTogglePresentation } from "../utils/bookmarkQueue"
 import { PendingFailure, groupRetryMessages } from "../utils/failedGalleries"
 import { confirmPdfMerge } from "./pdfMergeWarning"
+import { parsePageRange, listingUrlForPage } from "../utils/pageRange"
+import { parseGalleryCardsFromHtml } from "../parsing/CardParsing"
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
@@ -73,6 +75,37 @@ function sendBookmarkAction(message: any): Promise<any> {
             resolve(null);
         }
     });
+}
+
+/**
+ * Fetch one listing page's HTML for the range bookmark walk (item 61).
+ * Prefer the open tab's session (Cloudflare treats extension-origin fetches
+ * as bots); fall back to a direct credentials fetch, same as the batch path.
+ */
+async function fetchListingHtml(tabId: number | undefined, url: string): Promise<string | null> {
+    if (typeof tabId === "number") {
+        try {
+            const viaTab = await executeInTab(tabId, async (u: string) => {
+                try {
+                    const resp = await fetch(u, { credentials: "include", cache: "no-store" });
+                    if (resp && resp.ok) {
+                        return await resp.text();
+                    }
+                } catch (_) { /* fall through */ }
+                return null;
+            }, [url]);
+            if (typeof viaTab === "string" && viaTab !== "") {
+                return viaTab;
+            }
+        } catch (_) { /* no scripting in this context */ }
+    }
+    try {
+        const resp = await fetch(url, { credentials: "include", cache: "no-store" });
+        if (resp && resp.ok) {
+            return await resp.text();
+        }
+    } catch (_) { /* listing page unavailable */ }
+    return null;
 }
 
 /** Paint one bookmark toggle button; used by both panel-preview surfaces. */
@@ -456,7 +489,20 @@ export default class Popup
         } else if (source !== null) {
             executeActiveTabScript("js/getGalleries.js");
         } else {
-            document.getElementById('action')!.innerHTML =  message.invalidPage();
+            // Item 60 (side-panel wash): following the active tab onto an
+            // unsupported origin must NOT replace a live Download-tab view
+            // (half-typed query, listing, progress) with the invalid-page
+            // notice. Only the initial placeholder — or an already-shown
+            // notice — is (re)painted here. First open on an unsupported
+            // page still shows the notice (index.html starts at "Loading...").
+            const actionEl = document.getElementById('action');
+            const current = actionEl ? actionEl.innerHTML : "";
+            const isPlaceholder = !current
+                || current === "Loading..."
+                || current.indexOf("must be used on a page") !== -1;
+            if (isPlaceholder && actionEl) {
+                actionEl.innerHTML = message.invalidPage();
+            }
         }
     }
 
@@ -867,7 +913,23 @@ export default class Popup
             + '<input type="button" id="button" value="Download selected"/>';
         if (maxPage > 0 && currPage > 0) {
             nbDownload = maxPage - currPage + 1;
-            html += '<br/><input type="button" id="buttonAll" value="Download all (' + nbDownload + ' pages)"/><br/><input type="text" id="downloadInput"/><input type="button" id="buttonHelp" value="?"/>';
+            // Item 61: the empty space becomes an explicit range block —
+            // current/max page, a 1-5 style input, and the dual actions
+            // (download the range now / collect it into Bookmark).
+            html += '<div id="rangeBlock" class="rangeBlock">'
+                + '<div class="rangeBlockHeader">Listing pages · page <b id="rangeCurrentPage">'
+                + currPage + '</b> / <b id="rangeMaxPage">' + maxPage + '</b></div>'
+                + '<div class="rangeBlockRow">'
+                + '<input type="text" id="downloadInput" aria-label="Page range" placeholder="1-5"/>'
+                + '<input type="button" id="buttonHelp" value="?"/>'
+                + '<span id="rangeCount" class="rangeCount"></span>'
+                + '</div>'
+                + '<div class="rangeBlockActions">'
+                + '<input type="button" id="buttonAll" value="Download range now"/>'
+                + '<input type="button" id="buttonRangeBookmark" value="Add range to Bookmark"/>'
+                + '</div>'
+                + '<div id="rangeStatus" class="rangeStatus"></div>'
+                + '</div>';
         }
         document.getElementById('action')!.innerHTML = html;
         // Merged re-runs of the same listing would reuse one base name; the
@@ -881,9 +943,17 @@ export default class Popup
         pathInput.value = defaultBatchName;
         if (maxPage > 0 && currPage > 0) {
             (document.getElementById('downloadInput') as HTMLInputElement).value = currPage + "-" + maxPage;
+            {
+                const countEl = document.getElementById('rangeCount');
+                const initial = self.#parseDownloadAll(maxPage);
+                if (countEl && typeof initial !== "string") {
+                    countEl.textContent = initial.length + " page" + (initial.length === 1 ? "" : "s");
+                }
+            }
             document.getElementById('buttonHelp')!.addEventListener('click', function() {
-                alert("Input the pages you want to download for the \"Download all\" feature\nWrite your pages separated by comma ',', you can also write range of number by separating them by a dash '-'\n"
-                + "Example: 2,4,6-10 will download the pages 2, 4 and 6 to 10 (included)");
+                alert("Pages to fetch for this listing range (items 61):\nWrite pages separated by comma ',', or a range with a dash '-'\n"
+                + "Example: 2,4,6-10 means pages 2, 4 and 6 to 10 (included).\n"
+                + "\"Download range now\" starts the download; \"Add range to Bookmark\" collects those listing pages into the Bookmark tab.");
             });
         }
 
@@ -1219,13 +1289,89 @@ export default class Popup
                 const downloadInput = document.getElementById('downloadInput');
                 if (downloadInput) {
                     downloadInput.addEventListener('change', function() {
-                        let pages = self.#parseDownloadAll(maxPage);
-                        if (pages.length !== 0) {
-                            const buttonAll = document.getElementById("buttonAll") as HTMLInputElement;
-                            if (buttonAll) {
-                                buttonAll.value = 'Download all (' + pages.length + ' pages)';
+                        const pages = self.#parseDownloadAll(maxPage);
+                        const countEl = document.getElementById('rangeCount');
+                        if (typeof pages === "string") {
+                            if (countEl) countEl.textContent = "";
+                            return;
+                        }
+                        if (countEl) {
+                            countEl.textContent = pages.length + " page" + (pages.length === 1 ? "" : "s");
+                        }
+                    });
+                }
+            }, 0);
+
+            // Item 61: "Add range to Bookmark" walks the selected listing
+            // pages (current page from the live list; others fetched through
+            // the open tab like the batch pipeline) and bookmarkAdds them.
+            setTimeout(() => {
+                const rangeBookmarkBtn = document.getElementById('buttonRangeBookmark') as HTMLInputElement | null;
+                if (rangeBookmarkBtn) {
+                    rangeBookmarkBtn.addEventListener('click', async function() {
+                        const pages = self.#parseDownloadAll(maxPage);
+                        const statusEl = document.getElementById('rangeStatus');
+                        const setStatus = (text: string) => { if (statusEl) statusEl.textContent = text; };
+                        if (typeof pages === "string") {
+                            setStatus(pages);
+                            return;
+                        }
+                        rangeBookmarkBtn.disabled = true;
+                        setStatus("Fetching " + pages.length + " listing page" + (pages.length === 1 ? "" : "s") + "...");
+                        const source = getSourceForUrl(self.url) || clearnetSource;
+                        const tabId = await getActiveTabId();
+                        const seen = new Set<string>();
+                        const items: any[] = [];
+                        const failedPages: number[] = [];
+                        for (const page of pages) {
+                            let cards: Array<{ id: string; title: string }>;
+                            if (page === currPage) {
+                                cards = galleries;
+                            } else {
+                                const pageUrl = listingUrlForPage(self.url, page);
+                                const html = await fetchListingHtml(tabId, pageUrl);
+                                if (html === null) {
+                                    failedPages.push(page);
+                                    continue;
+                                }
+                                cards = parseGalleryCardsFromHtml(html);
+                            }
+                            for (const card of cards) {
+                                if (seen.has(card.id)) continue;
+                                seen.add(card.id);
+                                items.push({
+                                    id: card.id,
+                                    site: source.site,
+                                    title: card.title,
+                                    thumbnail: "",
+                                    pages: 0,
+                                    source: "card",
+                                    sourceUrl: listingUrlForPage(self.url, page)
+                                });
                             }
                         }
+                        if (items.length === 0) {
+                            rangeBookmarkBtn.disabled = false;
+                            setStatus(failedPages.length > 0
+                                ? "Could not read listing page" + (failedPages.length === 1 ? "" : "s") + " " + failedPages.join(", ") + "."
+                                : "No galleries found in that range.");
+                            return;
+                        }
+                        const response = await sendBookmarkAction({ action: "bookmarkAdd", items: items });
+                        if (!response || response.result !== "success") {
+                            rangeBookmarkBtn.disabled = false;
+                            setStatus("Could not save the bookmark list.");
+                            return;
+                        }
+                        // Fill page counts / thumbnails the listing HTML does not carry.
+                        await sendBookmarkAction({ action: "bookmarkEnrich", ids: items.map((item) => item.id) });
+                        rangeBookmarkBtn.disabled = false;
+                        setStatus("Added " + items.length + " title" + (items.length === 1 ? "" : "s")
+                            + " from " + pages.length + " page" + (pages.length === 1 ? "" : "s")
+                            + " to Bookmark"
+                            + (failedPages.length > 0
+                                ? " (failed: page " + failedPages.join(", ") + ")"
+                                : "") + ".");
                     });
                 }
             }, 0);
@@ -1375,42 +1521,20 @@ export default class Popup
     }
 
     #parseDownloadAll(maxPage: number) : Array<number> | string {
-        let pages: Array<number> = []
-        let pageText = (document.getElementById('downloadInput') as HTMLInputElement).value;
-        pageText.split(',').forEach(function(e: string) {
-            let elem = e.trim();
-            let dash = elem.split('-');
-            if (dash.length > 1) { // There is a dash in the number (ex: 1-5)
-                let lower = dash[0].trim();
-                let upper = dash[1].trim();
-                let lowerNb = parseInt(lower);
-                let upperNb = parseInt(upper);
-                if (lower !== '' + lowerNb || upper !== '' + upperNb) {
-                    return message.invalidSyntax();
-                }
-                if (lowerNb < 0 || upperNb < 0 || lowerNb > maxPage || upperNb > maxPage) {
-                    return message.invalidPageNumber(maxPage);
-                }
-                if (upperNb <= lowerNb) {
-                    return message.invalidBounds();
-                }
-                for (let i = lowerNb; i <= upperNb; i++) {
-                    if (!pages.includes(i)) pages.push(i);
-                }
-            }
-            else
-            {
-                let pageNb = parseInt(elem);
-                if (elem !== '' + pageNb) {
-                    return message.invalidSyntax();
-                }
-                if (pageNb < 0 || pageNb > maxPage) {
-                    return message.invalidPageNumber(maxPage);
-                }
-                if (!pages.includes(pageNb)) pages.push(pageNb);
-            }
-        });
-        return pages;
+        // Item 61: one pure parser (pageRange.ts) shared with the unit tests;
+        // this wrapper only maps the error code onto the panel's messages.
+        const pageText = (document.getElementById('downloadInput') as HTMLInputElement).value;
+        const result = parsePageRange(pageText, maxPage);
+        if (result.ok) {
+            return result.pages;
+        }
+        if (result.error === "syntax") {
+            return message.invalidSyntax();
+        }
+        if (result.error === "pageNumber") {
+            return message.invalidPageNumber(maxPage);
+        }
+        return message.invalidBounds();
     }
     //#endregion "multiple download"
 

@@ -158,6 +158,11 @@ const GALLERY_ID = 123456;
 const MEDIA_ID = 987654;
 const GALLERY_ID2 = 654321;
 const MEDIA_ID2 = 456789;
+// Middle gallery of the merged mid-batch failure phase: integer-like key must
+// sit BETWEEN GALLERY_ID and GALLERY_ID2 so JS key ordering runs
+// success → image-failure → final-save.
+const GALLERY_ID_MID = 300000;
+const MEDIA_ID_MID = 111222;
 
 const galleryJson = {
     id: GALLERY_ID,
@@ -175,8 +180,17 @@ const galleryJson2 = {
     tags: []
 };
 
+const galleryJsonMid = {
+    id: GALLERY_ID_MID,
+    media_id: MEDIA_ID_MID,
+    title: { english: "Mid Fail", japanese: "", pretty: "Mid Fail" },
+    images: { pages: [{ t: "j" }, { t: "j" }] },
+    tags: []
+};
+
 const galleryById = {
     [GALLERY_ID]: galleryJson,
+    [GALLERY_ID_MID]: galleryJsonMid,
     [GALLERY_ID2]: galleryJson2
 };
 
@@ -590,6 +604,64 @@ function askOffscreen(message) {
         fail("batchProgress must be sent before each gallery");
     }
     console.log("PASS: batch continues after a gallery failure and reports 1/1/2");
+
+    // ---- Merged mid-batch failure must not corrupt the shared ZIP ----------
+    // PR #48 regression guard: in merged mode every gallery shares ONE
+    // StreamingZipWriter. A gallery that fails INSIDE the Downloader (image
+    // errors here — metadata failures never reach it) used to call
+    // zip.cleanup() from its catch and wipe pages already collected from
+    // earlier titles, leaving dangling central-directory records. Key order
+    // is success (123456) → image-fail (300000) → final save (654321).
+    sentMessages.length = 0;
+    downloads.length = 0;
+    anchorDownloads.length = 0;
+    fetchedUrls.length = 0;
+    failImages = false;
+    failMediaIds.clear();
+    failMediaIds.add(String(MEDIA_ID_MID));
+    const mergeFailStart = await askOffscreen({
+        action: "downloadAllDoujinshis",
+        allDoujinshis: {
+            [GALLERY_ID]: "Test",
+            [GALLERY_ID_MID]: "Mid Fail",
+            [GALLERY_ID2]: "Test Two"
+        },
+        finalName: "Downloads/MergedMidFail",
+        options: relayedOptions
+    });
+    if (!mergeFailStart || mergeFailStart.result !== "started") {
+        fail("merged mid-fail batch did not answer {result:'started'}, got " + JSON.stringify(mergeFailStart));
+    }
+    await waitFor(
+        () => sentMessages.some((m) => m.action === "batchSummary"),
+        "no batchSummary was sent for the merged mid-fail batch"
+    );
+    failMediaIds.clear();
+    const mergeFailSummary = sentMessages.find((m) => m.action === "batchSummary");
+    if (!mergeFailSummary || mergeFailSummary.succeeded !== 2 || mergeFailSummary.failed !== 1 || mergeFailSummary.total !== 3) {
+        fail("merged mid-fail summary must report 2/1/3, got " + JSON.stringify(mergeFailSummary));
+    }
+    if (anchorDownloads.length !== 1) {
+        fail("merged mid-fail must deliver exactly one final archive, got " + anchorDownloads.length);
+    }
+    const mergeFailBuf = Buffer.from(await objectBlobs[anchorDownloads[0].href].arrayBuffer());
+    let mergeFailNames;
+    try {
+        const mergeFailZip = await JSZip.loadAsync(mergeFailBuf);
+        mergeFailNames = Object.keys(mergeFailZip.files).filter((n) => !mergeFailZip.files[n].dir).sort();
+    } catch (zipErr) {
+        fail("final merged archive is corrupt after a mid-batch Downloader failure: " + zipErr.message);
+    }
+    // replaceSpaces:true → "Test Two" becomes Test_Two on disk.
+    const mergeFailExpected = [
+        "Test/001.jpg", "Test/002.png", "Test/003.jpg",
+        "Test_Two/001.jpg", "Test_Two/002.jpg", "Test_Two/003.jpg"
+    ].sort();
+    if (JSON.stringify(mergeFailNames) !== JSON.stringify(mergeFailExpected)) {
+        fail("merged mid-fail ZIP entries mismatch (early gallery wiped by shared-writer cleanup?). Expected "
+            + JSON.stringify(mergeFailExpected) + " got " + JSON.stringify(mergeFailNames));
+    }
+    console.log("PASS: mid-batch Downloader failure leaves the shared merged ZIP intact");
 
     // ---- Persistent history: already-downloaded ids are skipped, zero API ---
     // The worker relays the recorded ID list with the job (the offscreen

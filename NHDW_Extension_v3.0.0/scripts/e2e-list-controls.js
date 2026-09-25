@@ -171,8 +171,12 @@ function queryAll(root, selector) {
     return current;
 }
 
-// Build a listing document with N nhentai-style cards.
-function makeDocument(ids) {
+// Build a listing document with N cards. `site` selects the captured markup
+// shape (item 63): nhentai keeps the caption-inside-the-link layout the bundle
+// was born with; the other rows mirror the capture blocks in "5 website page
+// source" / the live hitomi search fetch.
+function makeDocument(ids, site) {
+    site = site || "nhentai";
     const html = makeEl("html");
     const body = makeEl("body");
     const container = makeEl("div", { class: "container" });
@@ -180,7 +184,7 @@ function makeDocument(ids) {
     body.appendChild(container);
     html.appendChild(body);
 
-    const addCard = (id, title, pages) => {
+    const addNhentaiCard = (id, title, pages) => {
         const gallery = makeEl("div");
         gallery.className = "gallery";
         const cover = makeEl("a", { href: "/g/" + id + "/" });
@@ -199,6 +203,116 @@ function makeDocument(ids) {
         container.appendChild(gallery);
         return gallery;
     };
+
+    // hentaifox / imhentai shape: div.thumb > inner_thumb > cover link, with
+    // the title in a sibling .caption (title link shares the href).
+    const addThumbCard = (id, title) => {
+        const thumb = makeEl("div");
+        thumb.className = "thumb";
+        const inner = makeEl("div");
+        inner.className = "inner_thumb";
+        const cover = makeEl("a", { href: "/gallery/" + id + "/" });
+        cover.className = "cover";
+        const img = makeEl("img");
+        img.setAttribute("data-src", "https://cdn.example/thumb/" + id + ".jpg");
+        img.setAttribute("src", "data:image/gif;base64,placeholder");
+        cover.appendChild(img);
+        inner.appendChild(cover);
+        thumb.appendChild(inner);
+        const caption = makeEl("div");
+        caption.className = "caption";
+        const heading = makeEl("h2");
+        heading.className = "g_title";
+        const titleLink = makeEl("a", { href: "/gallery/" + id + "/" });
+        titleLink.textContent = title;
+        heading.appendChild(titleLink);
+        caption.appendChild(heading);
+        thumb.appendChild(caption);
+        container.appendChild(thumb);
+        return thumb;
+    };
+
+    // hentaiera shape: div.thumb > a.inner_thumb cover, title in div.g_text.
+    const addEraCard = (id, title) => {
+        const thumb = makeEl("div");
+        thumb.className = "thumb";
+        const cover = makeEl("a", { href: "/gallery/" + id + "/" });
+        cover.className = "inner_thumb img_box";
+        const img = makeEl("img");
+        img.setAttribute("data-src", "https://hentaiera.site/galleries/" + id + "/thumb.webp");
+        img.setAttribute("src", "data:image/gif;base64,placeholder");
+        cover.appendChild(img);
+        thumb.appendChild(cover);
+        const gText = makeEl("div");
+        gText.className = "g_text";
+        const heading = makeEl("h2");
+        heading.className = "gallery_title";
+        const titleLink = makeEl("a", { href: "/gallery/" + id + "/" });
+        titleLink.textContent = title;
+        heading.appendChild(titleLink);
+        gText.appendChild(heading);
+        thumb.appendChild(gText);
+        container.appendChild(thumb);
+        return thumb;
+    };
+
+    // hentaienvy shape: article.hnv-gallery-card with cover in the media div
+    // and the title in the footer.
+    const addEnvyCard = (id, title) => {
+        const article = makeEl("article");
+        article.className = "hnv-gallery-card";
+        const media = makeEl("div");
+        media.className = "hnv-gallery-card__media thumb";
+        const cover = makeEl("a", { href: "/gallery/" + id + "/" });
+        cover.className = "hnv-gallery-card__cover";
+        const img = makeEl("img");
+        img.setAttribute("src", "https://m11.hentaienvy.com/033/thumb/" + id + ".jpg");
+        cover.appendChild(img);
+        media.appendChild(cover);
+        article.appendChild(media);
+        const footer = makeEl("footer");
+        footer.className = "hnv-gallery-card__caption";
+        const heading = makeEl("h2");
+        heading.className = "hnv-gallery-card__title";
+        const titleLink = makeEl("a", { href: "/gallery/" + id + "/" });
+        titleLink.textContent = title;
+        heading.appendChild(titleLink);
+        footer.appendChild(heading);
+        article.appendChild(footer);
+        container.appendChild(article);
+        return article;
+    };
+
+    // hitomi shape: .gallery-content > block div > h1 > a (live search.html +
+    // galleryblock.js evidence). The grid is created once, on the first card —
+    // a closure var, because the harness nodes expose parentElement (and a
+    // fresh makeEl node's parentElement is null while detached).
+    let hitomiGrid = null;
+    const addHitomiCard = (id, title) => {
+        if (hitomiGrid === null) {
+            hitomiGrid = makeEl("div");
+            hitomiGrid.className = "gallery-content";
+            container.appendChild(hitomiGrid);
+        }
+        const block = makeEl("div");
+        const heading = makeEl("h1");
+        const titleLink = makeEl("a", { href: "https://hitomi.la/galleries/" + id + ".html" });
+        titleLink.textContent = title;
+        heading.appendChild(titleLink);
+        block.appendChild(heading);
+        const img = makeEl("img");
+        img.setAttribute("data-src", "https://tn.gold-usergeneratedcontent.net/thumb/" + id + ".webp");
+        img.setAttribute("src", "data:image/gif;base64,placeholder");
+        block.appendChild(img);
+        hitomiGrid.appendChild(block);
+        return block;
+    };
+
+    const addCard = site === "hentaifox" || site === "imhentai" ? addThumbCard
+        : site === "hentaiera" ? addEraCard
+        : site === "hentaienvy" ? addEnvyCard
+        : site === "hitomi" ? addHitomiCard
+        : addNhentaiCard;
     ids.forEach((id, index) => addCard(id, "Title " + (index + 1), 71 + index));
 
     const document = {
@@ -235,7 +349,7 @@ function run(options) {
     const sentMessages = [];
     const syncChangeCallbacks = [];
     const confirmAnswers = options.confirmAnswers || [];
-    const dom = makeDocument(options.ids || ["111111", "222222", "333333"]);
+    const dom = makeDocument(options.ids || ["111111", "222222", "333333"], options.site);
     const mutationCallbacks = [];
 
     class MutationObserverStub {
@@ -276,6 +390,9 @@ function run(options) {
         clearTimeout,
         document: dom.document,
         MutationObserver: MutationObserverStub,
+        // Item 63: card discovery dispatches on the page's own site, so the
+        // fixture must be able to point the bundle at each supported host.
+        location: { href: options.location || "https://nhentai.net/" },
         window: {
             confirm() {
                 return confirmAnswers.length > 0 ? confirmAnswers.shift() : true;
@@ -335,8 +452,16 @@ function wait(ms) {
         }
         const bar = ctx.dom.document.getElementById("nhdw-action-bar");
         if (!bar) fail("the floating action bar was not added");
-        if (!bar.classList.contains("nhdw-hidden")) {
-            fail("the action bar must stay hidden while nothing is selected");
+        // Item 64a: Select all must be reachable with NOTHING selected, so the
+        // bar shows whenever listing cards exist (it used to hide until the
+        // first selection, which made Select-all dead on arrival).
+        if (bar.classList.contains("nhdw-hidden")) {
+            fail("the action bar must be visible while listing cards exist (item 64a)");
+        }
+        // The harness DOM has no #id querySelector — look the control up by id
+        // through the document, exactly like the other bar asserts do.
+        if (!ctx.dom.document.getElementById("nhdw-select-all")) {
+            fail("the floating action bar must offer Select all (item 64a)");
         }
         console.log("PASS: every listing card gets a Download button and a Select box");
 
@@ -715,16 +840,18 @@ function wait(ms) {
         if (item.pages !== 71) {
             fail("the bookmark must carry the caption's page count, got " + item.pages);
         }
-        if (item.source !== "card" || item.sourceUrl !== "") {
-            fail("a manual card bookmark must report source=card, got " + JSON.stringify(item));
+        if (item.source !== "card" || item.sourceUrl !== "https://nhentai.net/") {
+            fail("a manual card bookmark must report source=card and the page URL, got " + JSON.stringify(item));
         }
         console.log("PASS: the bookmark button sends the card's id, title, page count and cover thumbnail");
 
         // It is a toggle: it is the only un-bookmark affordance on the page.
+        // The wire carries the COMPOSITE key (item 63): a bare id would only
+        // ever remove the default site's row.
         controls[0].querySelector(".nhdw-bookmark").dispatch("click");
         const remove = ctx.sentMessages[ctx.sentMessages.length - 1];
-        if (!remove || remove.action !== "bookmarkRemove" || String(remove.ids[0]) !== "111111") {
-            fail("clicking a filled bookmark button must send bookmarkRemove for that id, got " + JSON.stringify(remove));
+        if (!remove || remove.action !== "bookmarkRemove" || String(remove.ids[0]) !== "nhentai:111111") {
+            fail("clicking a filled bookmark button must send the composite key, got " + JSON.stringify(remove));
         }
         console.log("PASS: clicking a filled bookmark button takes the title off the list");
     }

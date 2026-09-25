@@ -17,7 +17,6 @@ import {
     historyRecords
 } from "../utils/downloadHistory";
 import { StreamingZipWriter } from "../utils/streamingZip";
-var JSZip = require("jszip");
 
 // This offscreen document runs the actual download pipeline.
 //

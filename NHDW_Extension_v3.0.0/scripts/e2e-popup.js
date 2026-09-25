@@ -22,7 +22,15 @@
 //   7. an explicit token tick still saves - the fix must not make the section
 //      read-only;
 //   8. with no listFormat key set, the list-mode format shown is the inherited
-//      single-title one, i.e. the format that will actually be used.
+//      single-title one, i.e. the format that will actually be used;
+//   9. side-panel wash (item 60): a same-URL onActivated/onUpdated must NOT
+//      clear #action, and following the active tab onto an UNSUPPORTED origin
+//      must NOT replace a live Download-tab view (half-typed query/paste) with
+//      the invalid-page notice.
+//  10. listing range block (item 61): a paginated getGalleries paints
+//      #rangeBlock with current/max page, the default 1-N input, a live
+//      count, and both dual actions (Download range now / Add range to
+//      Bookmark); an invalid range must not wash #action.
 //
 // THREE STUB TRAPS, each of which silently tests the wrong thing (all cost a
 // debugging round; keep them if you port this harness to the Firefox folder):
@@ -35,7 +43,9 @@
 //     checkboxes that way and then looks them up by id - without it the panel
 //     reads back fresh unchecked boxes instead of the ones it just built.
 // chrome.storage.sync is stateful here and logs every write to syncWrites, so
-// "must not write" is assertable.
+// "must not write" is assertable. tabs.query is driven by activeTabUrl so
+// phase 9 can simulate switching the panel onto another origin; onUpdated /
+// onActivated listeners are captured (item 60).
 //
 // Usage:  node scripts/e2e-popup.js [path/to/js/preview.js]
 // Exit code 0 = all phases passed.
@@ -176,6 +186,10 @@ let retryAnswer = { result: "started" };
 // chrome.storage.sync as the panel sees it, plus every write it makes.
 const syncStore = {};
 const syncWrites = [];
+// Mutable active-tab URL + captured tab listeners for the item-60 wash phase.
+let activeTabUrl = "https://nhentai.net/g/123456/";
+const updatedListeners = [];
+const activatedListeners = [];
 
 const chromeStub = {
     runtime: {
@@ -224,9 +238,9 @@ const chromeStub = {
         session: { get(_key, cb) { cb({}); }, set(_items, cb) { if (cb) cb(); }, remove(_key, cb) { if (cb) cb(); } }
     },
     tabs: {
-        query(_q, cb) { cb([{ id: 7, url: "https://nhentai.net/g/123456/" }]); },
-        onUpdated: { addListener() {} },
-        onActivated: { addListener() {} }
+        query(_q, cb) { cb([{ id: 7, url: activeTabUrl, active: true }]); },
+        onUpdated: { addListener(fn) { updatedListeners.push(fn); } },
+        onActivated: { addListener(fn) { activatedListeners.push(fn); } }
     },
     action: { setIcon() {}, setPopup() {} },
     sidePanel: undefined,
@@ -468,6 +482,124 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("the list-mode example must use the inherited format, got " + listPreview.textContent);
     }
     console.log("PASS phase 8: the list-mode format shown is the one that will be used");
+
+    // ---- Phase 9: side-panel wash / view-reload (item 60) ------------------
+    // The panel document stays open across tab switches. A same-URL tab event
+    // must be a no-op; following the active tab onto an unsupported origin
+    // must keep a live Download-tab view (the owner's "100-line query wipe").
+    if (updatedListeners.length === 0 || activatedListeners.length === 0) {
+        fail("the panel must register tabs.onUpdated and tabs.onActivated listeners");
+    }
+    const draftMarker = "DRAFT_QUERY_MARKER_100_LINES";
+    byId("action").innerHTML = draftMarker;
+
+    // Same-URL activation: rebootstrapIfUrlChanged must bail on lastBootstrappedUrl.
+    activeTabUrl = "https://nhentai.net/g/123456/";
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(50);
+    if (byId("action").innerHTML.indexOf(draftMarker) === -1) {
+        fail("a same-URL onActivated must not clear #action, got " + byId("action").innerHTML);
+    }
+    console.log("PASS phase 9a: same-URL tab activation leaves the Download-tab view alone");
+
+    // Same-URL status=complete storm (Chrome fires this after soft loads).
+    for (const listener of updatedListeners) {
+        listener(7, { status: "complete", url: activeTabUrl }, { id: 7, url: activeTabUrl, active: true });
+    }
+    await wait(50);
+    if (byId("action").innerHTML.indexOf(draftMarker) === -1) {
+        fail("a same-URL onUpdated complete must not clear #action, got " + byId("action").innerHTML);
+    }
+    console.log("PASS phase 9b: same-URL onUpdated complete leaves the Download-tab view alone");
+
+    // Follow onto an unsupported origin: the live view must survive (item 60).
+    // First open on an unsupported page may still show invalidPage — this is
+    // about NOT washing content that is already on screen.
+    activeTabUrl = "https://example.com/unrelated-page";
+    for (const listener of updatedListeners) {
+        listener(7, { status: "complete", url: activeTabUrl }, { id: 7, url: activeTabUrl, active: true });
+    }
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(80);
+    const afterUnsupported = byId("action").innerHTML;
+    if (afterUnsupported.indexOf(draftMarker) === -1) {
+        fail("switching to an unsupported origin must not wash #action (item 60), got " + afterUnsupported);
+    }
+    if (afterUnsupported.indexOf("must be used on a page") !== -1) {
+        fail("the invalid-page notice must not replace a live Download-tab view, got " + afterUnsupported);
+    }
+    console.log("PASS phase 9c: unsupported-origin follow keeps the live Download-tab view (item 60)");
+
+    // Returning to a supported gallery URL may re-render (tab-follow must still work).
+    activeTabUrl = "https://nhentai.net/g/123456/";
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(80);
+    if (byId("action").innerHTML.indexOf("must be used on a page") !== -1) {
+        fail("returning to a supported gallery must not show the unsupported-page notice");
+    }
+    console.log("PASS phase 9d: returning to a supported gallery URL still follows the tab");
+
+
+    // ---- Phase 10: listing page-range block (item 61) ---------------------
+    // A getGalleries with pagination must paint a dedicated range block with
+    // current/max page, the default 1-N input, and BOTH dual actions
+    // (Download range now / Add range to Bookmark) — not the old one-button row.
+    activeTabUrl = "https://nhentai.net/?page=2";
+    deliver({
+        action: "getGalleries",
+        galleries: [
+            { id: "111111", title: "First Title" },
+            { id: "222222", title: "Second Title" }
+        ],
+        currentPage: 2,
+        maxPage: 7
+    });
+    await wait(80);
+    const rangeHtml = byId("action").innerHTML;
+    if (rangeHtml.indexOf('id="rangeBlock"') === -1) {
+        fail("a paginated listing must render #rangeBlock (item 61), got " + rangeHtml.slice(0, 400));
+    }
+    if (rangeHtml.indexOf('id="rangeCurrentPage"') === -1 || rangeHtml.indexOf('id="rangeMaxPage"') === -1) {
+        fail("the range block must show current and max page markers, got " + rangeHtml);
+    }
+    if (rangeHtml.indexOf("2") === -1 || rangeHtml.indexOf("7") === -1) {
+        fail("the range block must show page 2 / 7, got " + rangeHtml);
+    }
+    if (rangeHtml.indexOf('id="buttonRangeBookmark"') === -1) {
+        fail("the range block must offer Add range to Bookmark (item 61)");
+    }
+    if (rangeHtml.indexOf("Download range now") === -1) {
+        fail("the range block must offer Download range now (item 61), got " + rangeHtml);
+    }
+    if (rangeHtml.indexOf('id="downloadInput"') === -1) {
+        fail("the range block must keep a #downloadInput field");
+    }
+    // Default input value + live count + both handlers wired on the vivified nodes.
+    await wait(40);
+    if (byId("downloadInput").value !== "2-7") {
+        fail("the default range must be currentPage-maxPage (2-7), got " + JSON.stringify(byId("downloadInput").value));
+    }
+    if (!byId("buttonRangeBookmark")._listeners.click || byId("buttonRangeBookmark")._listeners.click.length === 0) {
+        fail("Add range to Bookmark must register a click handler");
+    }
+    if (!byId("buttonAll")._listeners.click || byId("buttonAll")._listeners.click.length === 0) {
+        fail("Download range now must register a click handler");
+    }
+    // Live count: type a narrower range and fire change.
+    byId("downloadInput").value = "2-4";
+    byId("downloadInput").dispatch("change");
+    if (!/3 pages?/.test(byId("rangeCount").textContent || "")) {
+        fail("changing the range must update the page count, got " + JSON.stringify(byId("rangeCount").textContent));
+    }
+    // Invalid bounds must not wash the list view (status lives in #rangeStatus).
+    const beforeInvalid = byId("action").innerHTML;
+    byId("downloadInput").value = "7-2";
+    byId("downloadInput").dispatch("change");
+    await wait(10);
+    if (byId("action").innerHTML !== beforeInvalid) {
+        fail("an invalid range must not rewrite #action (item 61)");
+    }
+    console.log("PASS phase 10: listing range block shows pages and dual actions (item 61)");
 
     console.log("PASS: popup message layer behaves correctly in a window-less context.");
     process.exit(0);
