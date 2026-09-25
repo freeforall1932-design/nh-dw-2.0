@@ -346,7 +346,9 @@ function makeDocument(ids, site) {
 function run(options) {
     const settings = structuredClone(options.settings || {});
     // Persistent download-history fixture (chrome.storage.local "downloadHistory").
-    const localStore = Object.assign({ allIds: [] }, options.history || {});
+    // `store` seeds the transient selection keys (allIds / allIdsSite) so a
+    // fixture can prove which of them a reader actually asked storage for.
+    const localStore = Object.assign({ allIds: [] }, options.history || {}, options.store || {});
     const syncWrites = [];
     const localWrites = [];
     const sentMessages = [];
@@ -1077,6 +1079,26 @@ function wait(ms) {
         if (cardControls(offSite.dom).length !== 0) {
             fail("a fixture whose location disagrees with its markup must not decorate cards");
         }
+
+        // A single-gallery page on a supported host is a TITLE page. Its
+        // related-gallery cards match the site's listing selectors exactly (the
+        // hentaiera capture: div.thumb > a.inner_thumb.img_box with a sibling
+        // .gallery_title), so discovery must honour the documented listing-only
+        // contract instead of trusting that no card-shaped markup exists there.
+        const galleryPage = run({
+            site: "hentaiera",
+            location: "https://hentaiera.to/gallery/694133/",
+            ids: ["250717", "401339"]
+        });
+        await wait(0);
+        if (cardControls(galleryPage.dom).length !== 0) {
+            fail("a gallery page's related-gallery cards must not be decorated as a listing (item 63)");
+        }
+        const galleryBar = galleryPage.dom.document.getElementById("nhdw-action-bar");
+        if (galleryBar && !galleryBar.classList.contains("nhdw-hidden")) {
+            fail("the floating bar must stay hidden on a gallery page - there are no listing cards");
+        }
+        console.log("PASS: a gallery page's related cards are never decorated as a listing (item 63)");
     }
 
     // --- N+5. Select all (item 64a) ---------------------------------------
@@ -1123,6 +1145,28 @@ function wait(ms) {
             }
         }
         console.log("PASS: Clear still empties the shared selection");
+    }
+
+    // --- 14. a foreign site's selection is never read (item 64b review) -----
+    // allIdsSite namespaces the transient selection. StorageArea.get answers
+    // ONLY the keys a caller names, so reading allIdsSite without requesting it
+    // leaves the guard dead: this fixture stores a hentaifox selection and
+    // loads a nhentai page, which must therefore show NOTHING selected (the
+    // sibling scripts - content.ts, preview.ts, titleBookmark.ts - all ask for
+    // the key explicitly).
+    {
+        const ctx = run({ store: { allIds: ["173098"], allIdsSite: "hentaifox" } });
+        await wait(0);
+        const count = ctx.dom.document.getElementById("nhdw-count");
+        if (!count || count.textContent !== "0 selected") {
+            fail("another site's selection must not appear on this page, got " + (count && count.textContent));
+        }
+        for (const box of cardControls(ctx.dom)) {
+            if (box.querySelector(".nhdw-select-box").checked) {
+                fail("no card may start ticked from another site's selection");
+            }
+        }
+        console.log("PASS: a selection stamped with another site is never read here (item 64b)");
     }
 
     console.log("PASS: in-page listing card controls behave correctly.");

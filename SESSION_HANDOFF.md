@@ -1,21 +1,26 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-25 (session `arena/01a0d7b8-nh-dw-2-0`). Chrome **3.10.0**,
-Firefox **1.4.0**. This session shipped items **62/63/64** (per-site card
-controls, Smart Download beside Bookmark, Select all + title-page select) on
-top of the previous session's red tests, and closed a review finding: **item
-59's saved-list-format fix existed only in the Firefox tree** and has been
-ported into Chrome (see "Current state" + the review log in
-`IMPROVEMENT_BACKLOG.md`). Read the **"Next session"** section before starting
+**Updated:** 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`). Chrome **3.10.1**,
+Firefox **1.4.1**. This session ran the mandatory review pass on the merged
+3.10.0 work (PR #50) and found **three defects**, each fixed under a test that
+failed on the pre-fix build: **F1** the tested listing-only guard
+(`resolveListCardPage()`) had no production caller, so gallery pages whose
+related-gallery cards match the listing selectors were decorated and the
+floating bar appeared over title pages; **F2** `listControls.readSelection()`
+read `allIdsSite` without requesting it, leaving the cross-site selection guard
+dead (item 59's class); **F3** the legacy nhentai caption checkbox ran on the
+five added hosts. Full detail: the 2026-09-26 review log in
+`IMPROVEMENT_BACKLOG.md`. Read the **"Next session"** section before starting
 new work.
 
-**MERGED — this session is complete.** The branch landed on **main** as
+**The 3.10.0 work is on main.** The previous session's branch landed as
 **PR #50** (merge commit; CI green on both jobs: *Offline suites (fixtures +
-window-less VM bundles)* and *Firefox snapshot (offline suites)*). A fresh
-session starts from `main`, not from this branch. The docs listed under
-"Document map" were refreshed in the same commit (status lines, the site-#7
-checklists in `ADAPTER_WIRING_PLAN.md` §6 / `CANDIDATE_SITES.md` §5 /
-`CAPTURE_GUIDE.md`, and the `MULTISITE_V4_PLAN.md` status).
+window-less VM bundles)* and *Firefox snapshot (offline suites)*). This session
+starts from that merge and carries the review fixes as Chrome **3.10.1** /
+Firefox **1.4.1** (patch bump: the loadable package's bytes changed after
+3.10.0 merged; revert the three manifest lines if the owner prefers to fold the
+fixes into a later version). The docs under "Document map" describe the merged
+3.10.0 state plus this branch's fixes.
 
 **This file was deliberately slimmed on 2026-09-24.** It used to carry every
 session's full narrative (192 KB). It now carries only what a fresh session
@@ -45,7 +50,8 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Current state
 
-- **Chrome 3.10.0 / Firefox 1.4.0**, six sites shipped end to end: nhentai,
+- **Chrome 3.10.1 / Firefox 1.4.1** (3.10.0/1.4.0 = PR #50; the patch = this
+  branch's 2026-09-26 review fixes), six sites shipped end to end: nhentai,
   hentaiera, imhentai, hentaienvy, hentaifox, hitomi (+ `cin.*` paste shapes).
   Card controls (Select + Bookmark + Download) and the floating bar now run on
   all six listing shapes; every gallery page and the panel preview carry a
@@ -62,8 +68,18 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   `UNSAFE_VAR_ASSIGNMENT`, 3 `UNSUPPORTED_API` sidePanel/offscreen, 1
   `DANGEROUS_EVAL`, plus 1 new `UNSAFE_VAR_ASSIGNMENT` from the legacy
   checkbox `innerHTML` — same class as the panel's), package
-  `nhentai_downloader-1.4.0.zip`. CI green on both jobs; **PR #50 merged to
-  main**.
+  `nhentai_downloader-1.4.1.zip`. CI green on both jobs; **PR #50 merged to
+  main**. Re-run 2026-09-26 after the review fixes: same unit counts, smoke and
+  e2e exit 0, FF lint unchanged (32 warnings).
+- **Review pass (2026-09-26, this branch):** three defects in the merged 3.10.0
+  work, fixed red-first in both trees — `findCards()` now resolves the page
+  through `resolveListCardPage()` (gallery/reader pages decorate nothing and
+  the bar stays hidden there); `listControls.readSelection()` requests
+  `allIdsSite` explicitly, so a foreign site's selection is never read;
+  `content.ts` gates the legacy nhentai caption checkbox to `pageSite ===
+  "nhentai"`. New e2e coverage: `e2e-list-controls` gallery-page +
+  foreign-site phases, `e2e-content` hentaifox phase. Details:
+  `IMPROVEMENT_BACKLOG.md` session log 2026-09-26.
 - **Shipped on this branch (2026-09-25):** items **62/63/64**, implemented in
   **both** trees behind the previous session's red tests (all 8 per-tree unit
   reds + the 3 `e2e-list-controls` flips are green). `src/utils/listCards.ts`
@@ -119,7 +135,24 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   3 failing tests). Check-run **annotations** + jobs/steps APIs are readable
   from the sandbox; raw log downloads are not.
 
-## Latest work (2026-09-23/24) — one paragraph per pass
+## Latest work (2026-09-23/26) — one paragraph per pass
+
+- **PR #50 review pass (2026-09-26, this branch):** three defects, fixed
+  red-first in both trees. (F1) `utils/listCards.ts`'s `resolveListCardPage()` —
+  the listing-only guard `test/list-cards.test.js` pins — had **no production
+  caller**: `findCards()` went straight to `getSourceForUrl()` +
+  `listCardTargetForSite()`, so a gallery page's related-gallery cards
+  (hentaiera capture: 10 × `div.thumb > a.inner_thumb.img_box`; hitomi:
+  `#related-content.gallery-content` with `h1.lillie > a`) were decorated and
+  the floating bar (Select all) showed over title pages. `findCards()` now
+  resolves through the guard. (F2) `listControls.readSelection()` read
+  `elems.allIdsSite` from a `get({allIds: []})` — which never returns it — so
+  `storedSite` fell back to the current page and the cross-site guard was dead
+  (item 59's class); the read now requests the key. (F3) `content.ts`'s legacy
+  nhentai caption checkbox — injected on the five added hosts by item 63's
+  manifest block — is gated to `pageSite === "nhentai"`. Chrome 587 / FF 620
+  unit, both e2e suites green, FF lint unchanged (32 warnings), release folder
+  re-synced, versions bumped to Chrome **3.10.1** / Firefox **1.4.1**.
 
 - **Merge + doc refresh (2026-09-25, end of session):** PR #50 → main as
   a merge commit (CI green on both jobs). Every doc that carries next-session
@@ -205,15 +238,25 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 writing code** (`WORKLIST.md` "Mandatory first step"). The 2026-09-25 review
 pass is the proof it pays: it found that item 59's list-format fix shipped
 **Firefox-only** and that the Chrome fixture that should have caught it was a
-whole-store merge stub.
+whole-store merge stub; the 2026-09-26 pass found three more (the dead
+listing-only guard, the unrequested `allIdsSite`, the nhentai legacy checkbox
+on the five added hosts).
 
-**Items 62/63/64 are DONE** (both trees, all previously-red tests green). What
-they left open, in the order I would take it:
+**Items 62/63/64 are DONE** (both trees, all previously-red tests green) and
+the 2026-09-26 review pass closed its three follow-up defects. What they left
+open, in the order I would take it (**65 before 71** — the backlog's §F order;
+the merge-refresh left this list the other way round. Item 71 is a
+verification/close-out, not a build: item 61's range block already replaced the
+blanket "Download all (N pages)" entry, so confirm that and close it rather
+than adding UI):
 
-1. **Item 71** (demote the panel's blanket "Download all (N pages)" where
-   on-page Select + Select-all exist) — unblocked now that 63/64 are real.
-2. **Item 65** (rename the Queue tab to **Bookmark tab**, UI-only) — storage
-   key, message actions and export format stay as-is.
+1. **Item 65** (rename the Queue tab to **Bookmark tab**, UI-only) — storage
+   key, message actions and export format stay as-is; no test asserts the
+   literal label, and item 66 (per-site filter) lands as the same header unit.
+2. **Item 71** (demote the panel's blanket "Download all (N pages)" where
+   on-page Select + Select-all exist) — verify-and-close: item 61's range block
+   replaced that entry, so the remaining work is the decision + doc/test
+   alignment, plus the latent default-site history gap in backlog §E.
 3. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
    offline-feasible backlog item left, and the reason the panel **Save
    offline** *click handler* (62a) has no offline coverage: the handler is
@@ -281,7 +324,9 @@ they left open, in the order I would take it:
   only when the site namespace changes (`allIdsSite` != the current page's
   adapter site), so a selection survives same-site navigation and is dropped
   when the user moves to another site. It must never be persisted as history,
-  bookmarks or any other durable store.
+  bookmarks or any other durable store. **Every reader must ask storage for
+  `allIdsSite`** — the bar reader (`listControls.readSelection`) once did not,
+  which left the cross-site guard dead until the 2026-09-26 review fixed it.
 - `effectiveSeparate = downloadSeparately || format === "raw"`; raw can never
   merge. `archiveLayout`: `flat` (single-title: pages at the archive root,
   `<clean title>.zip`) vs `nested` (shared batch archive: one folder per
@@ -586,7 +631,8 @@ byte-identical — keep them in sync on any future change).
 - Do not discover cards with one global selector: `findCards()` dispatches through `utils/listCards.ts` on the page's own adapter site, and every card carries that site.
 - Do not compare a non-nhentai card's id against history/bookmarks without the site (`toGalleryKey(id, site)`, `partitionKnown(history, ids, forced, site)`), and never send a card/bar job without `site:` — a hentaifox id would be fetched through nhentai.
 - Do not hide the floating action bar while the page still has listing cards: **Select all** lives there and would be unreachable. Hide it only when `findCards()` finds nothing.
-- Do not let `allIds` cross sites: stamp it with `allIdsSite` and wipe it when the namespace changes (cards, panel and the gallery-page Select all share it).
+- Do not decorate gallery or reader pages: `findCards()` resolves the page through `resolveListCardPage()` (site + target). A site's related-gallery markup matches its listing selectors (hentaiera `div.thumb > a.inner_thumb.img_box` with `.gallery_title`, hitomi `#related-content.gallery-content` with `h1.lillie > a`), so the tested guard — not the absence of card-shaped markup — is what keeps the controls on listings.
+- Do not let `allIds` cross sites: stamp it with `allIdsSite` and wipe it when the namespace changes (cards, panel and the gallery-page Select all share it). Do not read `allIdsSite` without requesting it — object-form `get` answers only the named keys, so request it with an empty default exactly like `content.ts` / `preview.ts` / `titleBookmark.ts` / `listControls.ts` now do.
 - Do not label the Smart Download control with anything starting with "download" (`DOWNLOAD_TEXT_RE` owns that wording and the anchor search); the label is **"Save offline"**, and its primary action must stay a single, always-separate job.
 
 **Pipeline & downloads**
@@ -661,11 +707,14 @@ byte-identical — keep them in sync on any future change).
   **3.10.0** (PR #50, merged 2026-09-25) items **62/63/64** — per-site listing
   card controls (`utils/listCards.ts`), panel **Save offline**, gallery-page
   **Save offline** + **Select**, **Select all**, `allIdsSite` wipe — plus the
-  Chrome port of item 59 (saved list format).
+  Chrome port of item 59 (saved list format). **3.10.1** (2026-09-26, this
+  branch) the PR #50 review pass: live listing-only guard, `allIdsSite`
+  requested by the bar reader, nhentai-only legacy checkbox.
 - **Firefox:** 1.0.0 Android snapshot → 1.1.0 parity elevation (rebase onto
   Chrome src + audited delta) → 1.2.0 website-embedded UI (items 56/57, PR #44
   review) → 1.3.0 Chrome-3.9.0 backport → **1.4.0** Chrome-3.10.0 backport
-  (62/63/64 card controls, Save offline, Select all). Items 38 (options
+  (62/63/64 card controls, Save offline, Select all) → **1.4.1** the
+  2026-09-26 review fixes, same as Chrome 3.10.1. Items 38 (options
   harness) and 59 (list-format readers) were Firefox-scoped fixes — 59 is now
   also in Chrome. `PORTING_AUDIT.md` +
   `FIREFOX_PARITY_PLAN.md` in the Firefox folder are the port's own records.

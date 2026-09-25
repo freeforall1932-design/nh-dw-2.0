@@ -2692,6 +2692,100 @@ offline-feasible backlog item, and the reason the panel Save-offline *handler*
 has no offline coverage); (5) owner-only **42/58** (real-browser + Android
 passes, then signing).
 
+## Session log — 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`, review pass): PR #50 reviewed — three defects fixed, Chrome 3.10.1 / Firefox 1.4.1
+
+The mandatory first step was taken literally: the merged **PR #50** diff
+(`gh pr diff 50`, 5436 lines) was read end to end before any code was written.
+Three defects came out of it, each in the shipped 3.10.0 work, each fixed
+**red-first** (the failing assertion was run against the pre-fix build at
+`/tmp/prefix-listControls.js` / `/tmp/prefix-content.js` before the fix).
+
+### A. Findings
+
+- **F1 — the listing-only guard had no production caller** (`missing logic`).
+  `utils/listCards.ts` exports `resolveListCardPage()`, the site+target guard
+  pinned by `test/list-cards.test.js` (and by the `rows`/`modes`
+  link/card/content table). `listControls.findCards()` never called it: it went
+  straight to `getSourceForUrl()` + `listCardTargetForSite()`. On a gallery
+  page whose related-gallery markup matches the listing selectors — hentaiera's
+  capture is 10 × `div.thumb > a.inner_thumb.img_box` carrying
+  `.gallery_title`; hitomi's live `#related-content.gallery-content` carries
+  `h1.lillie > a` — the controls were injected and the floating bar (with
+  **Select all**) appeared over the title page. Fix: `findCards()` resolves
+  `resolveListCardPage(location.href)` (null → `[]`; card rows carry the
+  resolved `site`).
+- **F2 — a guard read a key it never requested** (`misaligned code`, item 59's
+  class). `listControls.readSelection()` did
+  `chrome.storage.local.get({ allIds: [] })` and then read `elems.allIdsSite`.
+  A key-scoped `get` (the shape the new
+  `scripts/test-support/storage.js::readStorage` enforces) answers only the
+  named keys, so `allIdsSite` was always `undefined`, `storedSite` fell back to
+  `currentSite()`, and the `storedSite === site` guard was **vacuously true** —
+  another site's selection could be adopted as selected. Fix: request the key
+  with an empty default.
+- **F3 — a guard in one path but not its sibling** (`misaligned code`).
+  `content.ts`'s legacy nhentai caption checkbox walked every listing page;
+  3.10.0's manifest `content_scripts` block added five non-nhentai hosts, so it
+  injected on all of them (hentaifox capture: 3 caption checkboxes). Fix:
+  `if (pageSite !== "nhentai") return;` first.
+- **Noted minor (open, low risk):** `popup.ts`'s `allIds` writers (1157, 1246,
+  1265, 1559/1562) set `allIds` without `allIdsSite`. Safe by construction
+  today: the preview bootstrap re-stamps `allIdsSite` from the tab URL on every
+  popup open/tab change, and it clears `allIds` when the site namespace moved.
+  Fold into whatever touches the selection next.
+
+### B. Red-first evidence (all three failed on pre-fix builds)
+
+- F1 → `e2e-list-controls` aborts at the new hentaiera gallery-page phase:
+  `FAIL: the floating bar must stay hidden on a gallery page - there are no
+  listing cards`.
+- F2 → a neutralized copy of the harness (F1 asserts commented out, `fail()`
+  aborts on first failure) printing
+  `FAIL: another site's selection must not appear on this page, got 1 selected`.
+- F3 → `e2e-content` on the hentaifox fixture:
+  `FAIL: legacy checkbox was injected on a hentaifox listing (3 caption(s))`.
+
+New permanent coverage, both trees: `e2e-list-controls` gained a gallery-page
+phase (hentaiera related cards) and a foreign-selection phase; `e2e-content`
+gained the hentaifox legacy-checkbox phase. Both harnesses learned to seed
+`options.store` (`e2e-list-controls`) and to take `runBundle(code, doc,
+settings, locationHref)` (`e2e-content`).
+
+### C. Verification
+
+- Chrome: **587 unit / 4 pending**, smoke PASS, `test:e2e` **exit 0** (263
+  checks; new PASS lines *a gallery page's related cards are never decorated as
+  a listing (item 63)* and *a selection stamped with another site is never read
+  here (item 64b)*); `node scripts/e2e-content.js` standalone exit 0.
+- Firefox: **620 unit / 4 pending**, smoke PASS, `test:e2e` exit 0 (263
+  checks), `lint:firefox` **0 errors / 0 notices / 32 warnings** (unchanged).
+- Webpack clean in both trees; `NHDW_Release_v3.0.0` re-synced
+  (`js/content.js` + `js/listControls.js`; `diff -rq` leaves only `README.md`,
+  which is intentionally its own).
+
+### D. Versions + docs
+
+- Manifests bumped **Chrome 3.10.1 / Release 3.10.1 / Firefox 1.4.1** (patch
+  bump: the merged loadable bytes changed after 3.10.0 went out). No test or
+  script asserts a version string, and manifests are not bundled, so no rebuild
+  was needed for the bump itself.
+- READMEs updated: root badges + a **3.10.1** history row; Chrome README
+  header; Firefox README (1.4.1 paragraph + header); Release README wording
+  ("listing pages only since 3.10.1", Firefox `(v1.4.1)`).
+- `WORKLIST.md` / `SESSION_HANDOFF.md` refreshed; the merged-docs queue
+  **71 → 65 → 40** was reconciled to this file's **65 → 71 → 40** (see E).
+
+### E. Next
+
+1. Item **65** — Queue tab → **Bookmark tab** (UI-only).
+2. Item **71** — now **verify-and-close**, not a build: item 61's range block
+   already took the slot the blanket entry held (no control labelled "Download
+   all (N pages)" remains in either tree; `#buttonAll` is "Download range
+   now"), so what is left is the decision (range block alone vs. a pointer to
+   on-page Select) plus the §E latent default-site history gap.
+3. Item **40** — bootstrap a listing page in `scripts/e2e-popup.js`.
+4. Owner-only **42/58**.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
@@ -2707,6 +2801,6 @@ passes, then signing).
 | 68 | Bookmark list load management + **green-check already-downloaded** (true success only, never fail-midway; works with/without search/filter) | open — after 65 |
 | 69 | Bookmark thumbnails — **viewport-lazy + GC both** (distance while scrolling + idle ~15–30s sweep; purge all on close/site-group switch; cross-site search keeps GC for dedupe/batch prep) (owner pick, elaboration 3 closed 2026-09-24) | confirmed — with 67/68 |
 | 70 | Live-session auto-fetch (twitter-style phase 2) | open — after 61 |
-| 71 | Demote panel Download-all where on-page Select exists | open — after 63/64 |
+| 71 | Demote panel Download-all where on-page Select exists | **verify-and-close** 2026-09-26: item 61's range block already replaced the blanket "Download all (N pages)" entry in both trees (no such label remains; `#buttonAll` = "Download range now") — left: the range-block-alone vs. on-page-pointer decision + the §E default-site history gap |
 
 Do not allocate these numbers to anything else.

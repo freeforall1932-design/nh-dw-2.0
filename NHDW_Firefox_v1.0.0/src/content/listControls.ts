@@ -36,7 +36,7 @@ import {
 import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 import { toGalleryKey } from "../utils/siteKeys";
 import { getSourceForUrl } from "../sources/index";
-import { ListCardTarget, cardIdFromHref, listCardTargetForSite } from "../utils/listCards";
+import { ListCardTarget, cardIdFromHref, resolveListCardPage } from "../utils/listCards";
 // Bookmark queue: the persistent "titles I clicked Bookmark on" list. The
 // content script only READS the stored list directly (to render the on/off
 // icon) — every WRITE goes through the worker, which is the single writer, so
@@ -241,7 +241,12 @@ function refreshBookmarkButtons(): void {
 function readSelection(): Promise<void> {
     return new Promise((resolve) => {
         try {
-            chrome.storage.local.get({ allIds: [] }, (elems: any) => {
+            // allIdsSite namespaces the transient selection and has no concrete
+            // default, but storage.get answers ONLY the keys named here - the
+            // sibling readers (content.ts, preview.ts, titleBookmark.ts) request
+            // it for exactly this reason. Without asking, the stored site is
+            // invisible and the guard below can never reject a foreign list.
+            chrome.storage.local.get({ allIds: [], allIdsSite: "" }, (elems: any) => {
                 selected.clear();
                 const storedSite = String(elems && elems.allIdsSite ? elems.allIdsSite : currentSite());
                 const site = currentSite();
@@ -379,14 +384,18 @@ function cardTitle(node: Element | null, fallback: string): string {
 // duplicate or cross-site rows by accident.
 function findCards(): CardInfo[] {
     const cards: CardInfo[] = [];
-    const source = getSourceForUrl(typeof location === "undefined" ? "" : location.href);
-    if (source === null) {
+    // Item 63's listing-only contract lives in resolveListCardPage(): it
+    // refuses every supported site's single-gallery and reader URLs. A gallery
+    // page's related-gallery cards match the same selectors as its listings
+    // (hentaiera: div.thumb > a.inner_thumb.img_box with a .gallery_title;
+    // hitomi: .gallery-content h1 a), so the guard - not the absence of
+    // card-shaped markup - is what keeps the controls off title pages.
+    const resolved = resolveListCardPage(typeof location === "undefined" ? "" : location.href);
+    if (resolved === null) {
         return cards;
     }
-    const target = listCardTargetForSite(source.site);
-    if (target === null) {
-        return cards;
-    }
+    const target = resolved.target;
+    const site = resolved.site;
     const seen = new Set<string>();
     const links = querySelectorAllForSelector(target.linkSelector);
     for (const link of links) {
@@ -414,7 +423,7 @@ function findCards(): CardInfo[] {
         seen.add(id);
         const title = cardTitle(titleNode, id);
         titleById[id] = title;
-        cards.push({ id: id, site: source.site, title: title, card: card });
+        cards.push({ id: id, site: site, title: title, card: card });
     }
     return cards;
 }
@@ -967,7 +976,8 @@ function start(): void {
     } catch (_) { /* not fatal */ }
 }
 
-// Single-gallery pages have no listing cards, so nothing is injected there.
+// Gallery and reader pages resolve to no card row (resolveListCardPage), so the
+// controls only ever decorate listing pages.
 if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") {
     readSettings().then((enabled) => {
         if (!enabled) {

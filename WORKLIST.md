@@ -1,6 +1,18 @@
 # Worklist — nh-dw-2.0
 
-**Live, ordered. Updated 2026-09-25** (session
+**Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
+**PR #50 review pass** — three defects found on the merged 3.10.0 work and
+fixed red-first in both trees: (F1) `resolveListCardPage()`, the listing-only
+guard the unit test pins, had **no production caller**, so gallery pages whose
+related cards match the listing selectors got card controls + the floating bar
+over the title page; (F2) `listControls.readSelection()` read `allIdsSite`
+without requesting it, leaving the cross-site selection guard dead (item 59's
+class); (F3) the legacy nhentai caption checkbox ran on the five added hosts.
+Chrome **3.10.1** / Firefox **1.4.1**, unit 587/620, all offline e2e green,
+release re-synced. **Open queue unchanged: 65 → 71 → 40**, then owner-only
+42/58.)
+
+Previous session
 `arena/01a0d7b8-nh-dw-2-0`: **items 62/63/64 implemented** on top of the
 previous session's red tests — real `listCards.ts` per-site selector table,
 site-aware card discovery/history/bookmark identity, the listing-host
@@ -82,14 +94,20 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-25, after 62/63/64 merged):** **71** (demote the
-panel's blanket "Download all (N pages)" now that on-page Select + Select-all
-exist — unblocked by 63/64), then **65** (rename the Queue tab to **Bookmark
-tab**, UI-only — storage key, message actions and the export format stay
-as-is), then **40** (bootstrap a listing page in `scripts/e2e-popup.js`; the
-only offline-feasible backlog item, and the reason the panel **Save offline**
-click handler still has no offline coverage). Items **42/58** (real-browser + Android
-passes, then signing) stay owner-only and outrank all of these in value.
+**Top of the queue (2026-09-26, reconciled after the PR #50 review):** **65**
+(rename the Queue tab to **Bookmark tab**, UI-only — storage key, message
+actions and the export format stay as-is; no test asserts the literal label),
+then **71** (verify-and-close: item 61's range block already occupies the slot
+the blanket "Download all (N pages)" entry held — nowhere in either tree is
+a control labelled that any more; what remains is the owner decision on
+whether the range block alone is enough or a pointer to on-page Select should
+be added, plus the latent default-site history gap in
+`IMPROVEMENT_BACKLOG.md` §E), then **40** (bootstrap a listing page in
+`scripts/e2e-popup.js`; the only offline-feasible backlog item, and the reason
+the panel **Save offline** click handler still has no offline coverage). This
+is the **backlog §F order (65 → 71 → 40)**; the 2026-09-25 merge refresh had
+it the other way round. Items **42/58** (real-browser + Android passes, then
+signing) stay owner-only and outrank all of these in value.
 
 ### Owner roadmap 2026-09-24 — panel rewrite, site parity, auto-fetch (items 60–71)
 
@@ -350,6 +368,15 @@ workflows are still only covered by the content-script harnesses
 ---
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
+
+- **PR #50 review pass (2026-09-26):** three defects in the merged 3.10.0 work,
+  each fixed under a test that failed on the pre-fix build — the listing-only
+  guard is now the production path in `findCards()` (gallery/reader pages
+  decorate nothing, bar hidden there); the bar's `allIdsSite` read requests the
+  key (a foreign selection can no longer appear selected); the legacy nhentai
+  caption checkbox is gated to nhentai. New `e2e-list-controls` phases
+  (gallery page, foreign site) + an `e2e-content` hentaifox phase, both trees;
+  Chrome 3.10.1 / FF 1.4.1.
 
 - **62/63/64 — per-site card controls, Smart Download, Select all (2026-09-25,
   this session):** real `listCards.ts` per-site selector table + site-aware

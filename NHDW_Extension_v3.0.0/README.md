@@ -1,7 +1,7 @@
 # NHDW_Extension_v3.0.0 — Chrome MV3 source tree
 
 This folder is the **TypeScript source of truth** for the Chrome/Edge/Brave
-build of NHentai Downloader (v3.10.0). It is not the installable package —
+build of NHentai Downloader (v3.10.1). It is not the installable package —
 users load `NHDW_Release_v3.0.0/` (built output, kept byte-synced with this
 tree's `js/`, `css/`, HTML and manifest).
 

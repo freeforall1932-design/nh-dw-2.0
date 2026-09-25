@@ -38,6 +38,12 @@ chrome.storage.sync.get({
         allIds: [],
         allIdsSite: pageSite
     }, function(elemsLocal: any) {
+        // The legacy caption checkbox is nhentai's fallback UI: its ids feed the
+        // nhentai-shaped panel listing and its label names nhentai. This script
+        // also runs on the five added listing hosts now, whose cards share the
+        // .caption class (hentaifox, imhentai), so injection is gated to the
+        // site the affordance belongs to.
+        if (pageSite !== "nhentai") return;
         if (!elems.displayCheckbox || String(elemsLocal.allIdsSite || pageSite) !== pageSite) return;
 
         const captions = document.getElementsByClassName("caption");

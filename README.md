@@ -6,8 +6,8 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.10.0-blue)
-![Firefox](https://img.shields.io/badge/Firefox-1.4.0-orange)
+![Version](https://img.shields.io/badge/version-3.10.1-blue)
+![Firefox](https://img.shields.io/badge/Firefox-1.4.1-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -107,7 +107,7 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 ## ⚠️ Known limitations
 
 - **Download history is local** — it lives in this browser profile, starts empty, and never syncs via browser cloud accounts. Use **Export / Import backup** in the Queue tab to migrate history between machines.
-- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.4.0 build with Queue, the bookmark icon, list controls, per-site card controls and multi-site download support; offline checks do not replace the desktop/Android release gate (58).
+- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.4.1 build with Queue, the bookmark icon, list controls, per-site card controls and multi-site download support; offline checks do not replace the desktop/Android release gate (58).
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
@@ -176,6 +176,7 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| **3.10.1** | Review pass on the 3.10.0 work: listing card controls honour the tested listing-only guard (`resolveListCardPage`), so a gallery page's related-gallery cards are never decorated and the floating bar stays hidden there; the bar's `allIdsSite` read asks storage for the key, so another site's selection can no longer appear selected; the legacy nhentai caption checkbox is gated to nhentai instead of also firing on the five added hosts. |
 | **3.10.0** | Card controls on all six sites (item 63): per-site listing-card selector table, site-aware history skip and composite bookmark identity; Smart **Save offline** control in the panel preview and beside the gallery-page Bookmark (62), Alt = open the existing form; **Select all** in the floating bar and a gallery-page **Select** feeding the shared selection (64); the boolean side of the floating bar stays visible while cards exist; item 59's saved-list-format fix ported from Firefox into Chrome. Merged to
 main in **PR #50** (2026-09-25). |
 | **3.9.0** | Per-site jobs & multi-site download pipeline (item 48): non-nhentai rows downloadable across 6 sites (nhentai, hentaiera, imhentai, hentaienvy, hentaifox, hitomi); real bookmark SVG icon on cards (was ☆); blue **Bookmark** button on every gallery page of all six sites; panel & similar bookmark toggles (43); drag-and-drop queue reordering (44); queue + history export/import JSON (52); template odd-separator gate (41); empty-token filename cleanup (39); per-row Cancel of an in-flight download (45); constant-memory streaming ZIP writer via OPFS (51). |
