@@ -1,10 +1,13 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-25 (session `arena/01a0d31d-nh-dw-2-0`). Chrome **3.9.0**,
-Firefox **1.3.0** (items 39/45/51 + 60/61 shipped on main). This session: items
-**62/63/64 recon + red-first** — 8 red unit tests per tree + `e2e-list-controls`
-multi-site fixtures + a compiling `listCards.ts` stub; **no production logic
-yet**. Read the **"Next session"** section before implementing.
+**Updated:** 2026-09-25 (session `arena/01a0d7b8-nh-dw-2-0`). Chrome **3.10.0**,
+Firefox **1.4.0**. This session shipped items **62/63/64** (per-site card
+controls, Smart Download beside Bookmark, Select all + title-page select) on
+top of the previous session's red tests, and closed a review finding: **item
+59's saved-list-format fix existed only in the Firefox tree** and has been
+ported into Chrome (see "Current state" + the review log in
+`IMPROVEMENT_BACKLOG.md`). Read the **"Next session"** section before starting
+new work.
 
 **This file was deliberately slimmed on 2026-09-24.** It used to carry every
 session's full narrative (192 KB). It now carries only what a fresh session
@@ -34,8 +37,11 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Current state
 
-- **Chrome 3.9.0 / Firefox 1.3.0**, six sites shipped end to end: nhentai,
+- **Chrome 3.10.0 / Firefox 1.4.0**, six sites shipped end to end: nhentai,
   hentaiera, imhentai, hentaienvy, hentaifox, hitomi (+ `cin.*` paste shapes).
+  Card controls (Select + Bookmark + Download) and the floating bar now run on
+  all six listing shapes; every gallery page and the panel preview carry a
+  **Save offline** control; the bar offers **Select all**.
 - **PR #48** (branch `arena/01a0cdce-nh-dw-2-0` → main) carries items 39
   (empty-token filename cleanup), 45 (per-row cancel) and 51 (streaming ZIP
   writer via OPFS), plus this session's review pass that found and fixed eight
@@ -46,13 +52,22 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   PASS**), lint **0 errors / 0 notices / 31 advisories**, package
   `nhentai_downloader-1.3.0.zip`. CI (`extension-tests`, Node 22) green on both
   jobs.
-- **In progress (this branch, NOT shipped):** items **62/63/64** are in
-  **red-first** state — full recon done, red tests written in **both** trees
-  (8 red unit tests each + `e2e-list-controls` red at the item-64a bar
-  assert), and a compiling `src/utils/listCards.ts` **stub** marked NOT
-  IMPLEMENTED. **No production logic for 62/63/64 exists yet.** The "Next
-  session" section below carries the mandatory debug-review ask + the full
-  remaining-work list + the card-selector table.
+- **Shipped on this branch (2026-09-25):** items **62/63/64**, implemented in
+  **both** trees behind the previous session's red tests (all 8 per-tree unit
+  reds + the 3 `e2e-list-controls` flips are green). `src/utils/listCards.ts`
+  is now the real per-site table (no stub left). Plus the item-59 port below.
+- **Review finding closed (2026-09-25):** item 59 ("saved list format wins,
+  unset inherits") had landed **Firefox-only** on 2026-09-21. Three Chrome
+  readers — `utils/listSettings.ts` `readListSettings()`, `options/options.ts`
+  and `preview/popupSettings.ts` — plus Chrome's `content/listControls.ts`
+  never asked storage for the optional `listFormat` key, so a saved list format
+  was ignored everywhere in Chrome (the panel advertised ZIP while list
+  downloads used CBZ, etc.). Chrome's `test/list-mode.test.js` used a
+  **whole-store merge stub** (`Object.assign({}, defaults, store)`) that
+  returns unrequested keys, which is precisely why the defect stayed hidden.
+  Fixed in all four readers; the key-scoped `scripts/test-support/storage.js`
+  helper, the 36-case `list-format-cases.js` matrix and the item-59 e2e phase
+  are now in both trees.
 - **Captures sanitized 2026-09-24** (owner request): gallery titles, artists,
   tags and CJK text in `5 website page source`, `captures/*` text files and the
   hitomi HAR were replaced with `DUMMY_*`/`[CJK]`/`[FILTERED]` tokens and ad
@@ -130,7 +145,27 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   synchronous reply; (7) READMEs contradicted their own PR; (8) the silently
   ignored DEFLATE request is now documented instead of pretended. Full table
   with evidence: `IMPROVEMENT_BACKLOG.md`, session log 2026-09-24.
-- **Items 62/63/64 recon + red-first (2026-09-25, this session):** full recon
+- **Items 62/63/64 implemented (2026-09-25, session `arena/01a0d7b8`):** the
+  previous session's red tests are green in both trees. `utils/listCards.ts` is
+  the real per-site selector table; `findCards()` returns a site with every
+  card, so history, bookmark identity and the job payload are site-aware; the
+  manifest gained the five-host listing `content_scripts` block; the panel
+  preview and every gallery page carry **Save offline** (Alt = open the
+  existing form); the floating bar gained **Select all** and stays visible
+  while cards exist; the gallery page's **Select** feeds the shared `allIds`,
+  now stamped with `allIdsSite` and wiped per site. New coverage:
+  `e2e-list-controls` per-site discovery + Select all, `e2e-title-bookmark`
+  phase 10 (per-site Smart Download, Alt route, history guard, Select,
+  cross-site wipe) — 146 → 263 checks.
+- **Review pass (2026-09-25): item 59 was Firefox-only.** Chrome never asked
+  storage for the optional `listFormat` key in `readListSettings()`,
+  `options.ts`, `popupSettings.ts` or `listControls.ts`, so a saved list format
+  was silently ignored while the UI advertised the inherited one. The Chrome
+  unit fixture returned the whole store merged over defaults, which is exactly
+  what hid it; it now uses the shared key-scoped
+  `scripts/test-support/storage.js` (both trees) and the 36-case matrix runs
+  against the real reader and the built card/bar controls.
+- **Items 62/63/64 recon + red-first (2026-09-25, previous session):** full recon
   of the panel Download-tab header (62a), the site gallery-page Smart Download
   (62b), the six-site card-selector table (63), and Select-all + title-page
   select (64); hitomi listing markup fetched live (`search.html` +
@@ -143,78 +178,70 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   assertion flips, red at the item-64a "bar visible while cards exist" assert.
   Nothing implemented yet — see the "Next session" section.
 
-## Next session (2026-09-25) — items 62/63/64: debug-review first, then implement
+## Next session (2026-09-25) — what is left after 62/63/64
 
-**Mandatory first step — debug-review the merged PR.** This PR is a
-**partial, red-first state by design**. Before writing implementation, review
-the merged diff for:
-- **missing logic** — `listCards.ts` is a NOT-IMPLEMENTED stub; the 8 red
-  unit tests per tree + the 3 `e2e-list-controls` flips are the spec.
-- **misaligned code** — cross-tree consistency. Chrome `NHDW_Extension_v3.0.0`
-  vs Firefox `NHDW_Firefox_v1.0.0` must stay in lockstep on the shared files.
-  **Gotcha:** in both trees' `test/manifest.test.js`, `sourceManifest` /
-  `releaseManifest` point at the **Chrome** manifests; only `firefoxManifest`
-  (FF tree) is the FF one. Never assert an FF-only script (e.g. `siteUi.js`)
-  against the Chrome manifests.
-- **broken code** — baseline before implementing: `npm test` in both trees
-  (expect **exactly** 8 reds each, all new, no crashes) and
-  `node scripts/e2e-list-controls.js` (expect red at the item-64a bar assert).
+**Mandatory first step, unchanged: review the previous session's diff before
+writing code** (`WORKLIST.md` "Mandatory first step"). The 2026-09-25 review
+pass is the proof it pays: it found that item 59's list-format fix shipped
+**Firefox-only** and that the Chrome fixture that should have caught it was a
+whole-store merge stub.
 
-**Done — do not redo:** recon; the 5 red test files (both trees); the
-`listCards.ts` stub (both trees); `e2e-list-controls.js` multi-site fixtures +
-`location` + 3 flips (both trees); verified red baseline (Chrome 536/8,
-FF 612/8).
+**Items 62/63/64 are DONE** (both trees, all previously-red tests green). What
+they left open, in the order I would take it:
 
-**Locked design decisions (from recon — do not re-litigate):**
+1. **Item 71** (demote the panel's blanket "Download all (N pages)" where
+   on-page Select + Select-all exist) — unblocked now that 63/64 are real.
+2. **Item 65** (rename the Queue tab to **Bookmark tab**, UI-only) — storage
+   key, message actions and export format stay as-is.
+3. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
+   offline-feasible backlog item left, and the reason the panel **Save
+   offline** *click handler* (62a) has no offline coverage: the handler is
+   registered inside `updatePreviewAsync`, which the harness cannot reach. The
+   markup and the gallery-page twin (62b) ARE covered offline.
+4. **Items 42/58** — real-browser pass. New checks added by 62/63/64 are
+   listed in `WORKLIST.md` under the 42/58 heading (per-site card controls on
+   real listings, the hitomi block-boundary evidence flag, the gallery-page
+   button's placement, the panel Save-offline click, `allIdsSite` behaviour).
+
+**Locked design decisions (kept from the 62/63/64 recon — do not re-litigate):**
 1. **62a (panel header):** primary "Save offline" = direct single-gallery
    download with list-mode format/template (`readListSettings`), history guard
    ON (fresh `readHistory` + `toGalleryKey(id, source.site)` → confirm →
-   `redownloadIds:[id]`); secondary (Alt) = focus `#downloadFormat` to open the
-   existing form. Label **"Save offline"** (must NOT match `DOWNLOAD_TEXT_RE`,
-   which starts with "download"). Wire in `message.ts` `downloadInfo` beside
-   `buttonBookmark` + a handler beside popup `#button` (:678).
-2. **62b (site gallery page):** second button after Bookmark via
-   `titleBookmark.ts` `insertAfter` + extend the single `inject` (:355) into
-   per-attr guards. Primary = same `downloadAllDoujinshis` message from the
-   content script (FF background :1333 already forwards `request.site`);
-   secondary = open the panel (FF: `openPanelPage(sender.tab.id)`; Chrome:
-   `chrome.sidePanel.open` only — do NOT port `PANEL_SOURCE_TAB_KEY`). Add
-   `nhdw-title-save` to `OWN_UI_CLASSES` (:51) + rules in `css/titleBookmark.css`.
-3. **63 (card selectors):** real `listCards.ts` per-site table (table below);
-   `listControls.ts` `findCards` (:306) dispatches on
-   `getSourceForUrl(location.href).site` (harness default nhentai). Pass the
-   **site** to history (`partitionKnown(..., site)`, `toGalleryKey(id, site)`)
-   and to `bookmarkAdd`/`bookmarkRemove` (composite key). Manifest: new
-   `content_scripts` block for the 5 non-nhentai listing hosts carrying
-   `content.js` + `listControls.js` + `css/content.css` (allIds-wipe parity).
-   **`getGalleries.ts` port is OUT of scope for 63** (panel listing view).
-4. **64a (Select all):** `#nhdw-select-all` in `buildActionBar` (:490) beside
-   Clear; the bar is **visible whenever listing cards exist** (not only when
-   something is selected) — that is exactly why the item-64a assert is red.
-5. **64b (title-page select):** gallery-page Select writes the **bare** id into
-   the same `chrome.storage.local.allIds` + repaint on `onChanged`. Make the
-   `content.ts`/`preview.ts` `allIds` wipe (`lastUrl != location.href`)
-   **site-scoped** so a selection survives same-site navigation — standing
-   constraint: never cost a persistent temp list or bookmark storage.
+   `redownloadIds:[id]`), always `separate: true`; secondary (Alt) = focus
+   `#downloadFormat` to open the existing form. Label **"Save offline"** (must
+   NOT match `DOWNLOAD_TEXT_RE`, which starts with "download").
+2. **62b (site gallery page):** the second control after Bookmark
+   (`nhdw-title-save`), wired with a per-attribute guard so a re-run cannot
+   double-inject; `nhdw-title-save`/`nhdw-title-select` are in
+   `OWN_UI_CLASSES`; rules in `css/titleBookmark.css`. Primary = the same
+   `downloadAllDoujinshis` message with `site:`; secondary asks the worker to
+   open the panel (`siteUiOpenPanel` — handled in BOTH trees now: the Firefox
+   worker opens a panel tab, the Chrome worker calls `chrome.sidePanel.open`
+   because a content script has no `chrome.sidePanel`). Do NOT port
+   `PANEL_SOURCE_TAB_KEY` to Chrome.
+3. **63 (card selectors):** `utils/listCards.ts` is the per-site table;
+   `findCards()` dispatches on `getSourceForUrl(location.href).site` and
+   returns a site with every card, so history (`partitionKnown(..., site)`,
+   `toGalleryKey(id, site)`), bookmark writes (`site` + composite key) and the
+   job payload (`site:`) are site-aware everywhere. The manifest carries a
+   second `content_scripts` block for the five non-nhentai listing hosts.
+   **`getGalleries.ts` (panel listing view) is OUT of scope for 63.**
+4. **64a (Select all):** `#nhdw-select-all` beside Clear; the bar is visible
+   whenever the page HAS listing cards.
+5. **64b (title-page select):** the gallery page writes the BARE id into the
+   same `chrome.storage.local.allIds`, stamped with a new **`allIdsSite`**
+   key, and the wipe is site-scoped (never a persistent temp list).
 
-**63 card-selector table (from captures + live hitomi fetch):**
+**63 card-selector table (shipped — mirrors `src/utils/listCards.ts`):**
 
 | site | mode | container | cover / link | title | id source |
 |---|---|---|---|---|---|
-| nhentai | link | `a[href*="/g/"]` | (link is the card) | `.caption` (inside) | `/g/(\d+)/` |
-| hentaifox | card | `.thumb` | `.inner_thumb a[href*="/gallery/"]` | `.caption .g_title a` | `/gallery/(\d+)/` |
-| imhentai | card | `.thumb` | `.inner_thumb a[href*="/gallery/"]` | `.caption .gallery_title a` | `/gallery/(\d+)/` |
-| hentaiera | card | `.thumb` | `.thumbnail a.inner_thumb.img_box` | `.g_text .gallery_title a` | `/gallery/(\d+)/` (pages in `.inside_p`) |
-| hentaienvy | card | `article.hnv-gallery-card` | `.hnv-gallery-card__cover` | `.hnv-gallery-card__title a` | `/gallery/(\d+)/` |
-| hitomi | content | `.gallery-content` (blocks) | `img [data-src]` | `h1 a` (pretty `/<type>/<slug>-<id>.html`) | trailing number (`getGalleryId`) |
-
-**Still to implement (the actual work), both trees:** real `listCards.ts`;
-62a `message.ts`+popup; 62b `titleBookmark.ts`+label consts+CSS; 63
-`findCards` per-site + site-aware history/bookmark + manifest blocks +
-per-site `e2e-list-controls` phases; 64a `#nhdw-select-all` + bar-visible;
-64b title-page Select + site-scoped wipe. Then `npm run build`, exhaustive
-Release sync, full `npm test` green both trees, `npm run lint:firefox`,
-`test:e2e` green.
+| nhentai | link | (link's parent) | `a[href*="/g/"]` | `.caption` (inside the link) | `/g/(\d+)/` |
+| hentaifox | card | `.thumb` | `a[href*="/gallery/"]` | `.caption` | `/gallery/(\d+)/` |
+| imhentai | card | `.thumb` | `a[href*="/gallery/"]` | `.caption` | `/gallery/(\d+)/` |
+| hentaiera | card | `.thumb` | `a.inner_thumb.img_box` | `.gallery_title` | `/gallery/(\d+)/` |
+| hentaienvy | card | `article.hnv-gallery-card` | `.hnv-gallery-card__cover` | `.hnv-gallery-card__title` | `/gallery/(\d+)/` |
+| hitomi | content | block inside `.gallery-content` | `h1 a` | `h1` | trailing number in `/<type>/<slug>-<id>.html` |
 
 ## Structural invariants (what the shipped code depends on — do not re-derive)
 
@@ -227,6 +254,13 @@ Release sync, full `npm test` green both trees, `npm run lint:firefox`,
   `chrome.storage.get` default (unset = inherit the single-title format) but
   every reader must request the key explicitly (object-form gets only return
   keys named in defaults).
+- **`allIds` is a transient selection, namespaced by `allIdsSite`** (3.10.0).
+  The cards, the panel and a gallery page's **Select** all write BARE gallery
+  ids into `chrome.storage.local.allIds`; `content.ts` and `preview.ts` wipe it
+  only when the site namespace changes (`allIdsSite` != the current page's
+  adapter site), so a selection survives same-site navigation and is dropped
+  when the user moves to another site. It must never be persisted as history,
+  bookmarks or any other durable store.
 - `effectiveSeparate = downloadSeparately || format === "raw"`; raw can never
   merge. `archiveLayout`: `flat` (single-title: pages at the archive root,
   `<clean title>.zip`) vs `nested` (shared batch archive: one folder per
@@ -437,6 +471,23 @@ infinite-scroll page (including mid-page enable); bookmark icon survives
 nhentai re-renders without duplicating; the gallery-page Bookmark button is
 never injected twice.
 
+**62/63/64 additions (new, 2026-09-25):** card controls + the floating bar on a
+REAL listing of each of the five non-nhentai sites (Select box, bookmark icon,
+Download button; **Select all** selects the page and the bar is visible before
+anything is ticked). Start with the hitomi row — it is the only one with no
+captured sample, so verify the `.gallery-content` block boundary and the id
+parse before trusting the others. Then: a card **Download** on hentaifox /
+imhentai / hentaienvy / hentaiera / hitomi really resolves and fetches through
+that site's adapter (the job carries `site`, the file keeps the bare-id name);
+the **bookmark icon** on a non-nhentai card bookmarks with that site (Queue row
+shows the right site, and the same number on two sites stays two rows); the
+gallery page's **Save offline** sits after our Bookmark in the site's own row
+and does not inherit the site's Download styling; the panel's **Save offline**
+click (NOT covered offline — see item 40) downloads with the list-mode format;
+**Alt**-click opens/reveals the existing form (Chrome: the side panel; Firefox:
+a panel tab); a listing selection survives opening a title on the same site and
+is dropped when you switch to another site (`allIdsSite`).
+
 **PR #48 additions (new):** per-row Cancel actually stops one gallery mid-batch
 (others continue; the row shows Cancelled; **Retry then works**); a late cancel
 after completion leaves the row `done`; OPFS streaming path on a large gallery
@@ -501,12 +552,21 @@ byte-identical — keep them in sync on any future change).
 
 **Session discipline**
 - Do not switch branches or push to a branch other than the current session branch.
+- Do not read an optional storage key without requesting it. Object-form `chrome.storage.get(defaults)` answers ONLY the keys named in `defaults`, so a key with no default (e.g. `listFormat`) must be appended explicitly (`Object.keys(defaults).concat("listFormat")`); the reader then sees `undefined` and the documented inheritance stays observable. Item 59 shipped Firefox-only for four days because three Chrome readers skipped this.
+- Do not write a storage stub that merges the whole store over the caller's defaults (`Object.assign({}, defaults, store)`) — it hides the rule above and hid the same defect. Use the shared key-scoped `scripts/test-support/storage.js` (both trees).
 - Do not edit `.github/workflows/**` from an agent session (whole-push rejection); use `ci/pending-workflows/`.
 - Do not `git show`/`git cat-file` the pre-sanitization capture commits in an agent session — the original titles trip content filters (working tree is sanitized; history is not).
 - Do not add a `test/*.test.js` file without appending it to the explicit mocha list in `package.json`'s `test` script (a new file silently runs nothing and the suite still reports success).
 - Do not run bare `npx mocha test/x.test.js` for verification — it uses a stale `build/test/`; only `npm test` runs `build:test` first.
 - Do not let a settings pane write on render (`popupSettings.ts`, `options.ts`): only explicit `change` handlers write.
 - Do not run `npm audit fix --force`, suppress deprecation warnings, or fork Mozilla's validator to silence the two remaining upstream warnings (`DEPENDENCY_MAINTENANCE.md`).
+
+**Listing card controls, Smart Download, Select all (62/63/64)**
+- Do not discover cards with one global selector: `findCards()` dispatches through `utils/listCards.ts` on the page's own adapter site, and every card carries that site.
+- Do not compare a non-nhentai card's id against history/bookmarks without the site (`toGalleryKey(id, site)`, `partitionKnown(history, ids, forced, site)`), and never send a card/bar job without `site:` — a hentaifox id would be fetched through nhentai.
+- Do not hide the floating action bar while the page still has listing cards: **Select all** lives there and would be unreachable. Hide it only when `findCards()` finds nothing.
+- Do not let `allIds` cross sites: stamp it with `allIdsSite` and wipe it when the namespace changes (cards, panel and the gallery-page Select all share it).
+- Do not label the Smart Download control with anything starting with "download" (`DOWNLOAD_TEXT_RE` owns that wording and the anchor search); the label is **"Save offline"**, and its primary action must stay a single, always-separate job.
 
 **Pipeline & downloads**
 - Do not treat `chrome.downloads.download()`'s callback as "file saved" — use `startTrackedDownload`/`awaitDownloadCompletion` or the offscreen relay; never hold one `awaitDownload` message open longer than `AWAIT_DOWNLOAD_SLICE_MS`.

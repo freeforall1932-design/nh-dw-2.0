@@ -369,7 +369,10 @@ function run(options) {
         Number: Number,
         RegExp: RegExp,
         JSON: JSON,
-        Math: Math
+        Math: Math,
+        // The gallery-page Smart Download asks before re-downloading a recorded
+        // title, so the sandbox needs a window the way a real page has one.
+        window: options.window || { confirm: () => true }
     };
     vm.createContext(sandbox);
     vm.runInContext(code, sandbox, { filename: bundlePath });
@@ -964,6 +967,148 @@ async function main() {
             'a title published only in a hidden <input value> is still picked up, got ' + JSON.stringify(inputAdd.items[0].title));
     }
     pass("the button copies the site button's own presentational classes, and never its behavior hooks");
+
+
+    // --- 10. Smart Download + Select on the gallery page (items 62b / 64b) --
+    // The gallery page is where every site puts its OWN Download button, so
+    // ours has to be visually and verbally distinct, and it has to know which
+    // site it is on: a job sent from hentaifox must never be fetched through
+    // the nhentai route.
+    {
+        const listSettings = {
+            listFormat: 'cbz',
+            listOutputMode: 'batch',
+            listMasterFolder: true,
+            rawMasterFolder: 'NHDW',
+            listDownloadName: '{pretty}'
+        };
+        for (const site of Object.keys(SITES)) {
+            const fixture = SITES[site];
+            const context = run({ url: fixture.url, build: fixture.build, settings: Object.assign({}, listSettings) });
+            await flush();
+            const save = context.document.querySelector('[data-nhdw-title-save]');
+            ok(save !== null, site + ': a Smart Download control is injected on the gallery page (item 62b)');
+            ok(save.textContent === 'Save offline',
+                site + ': the control is labelled "Save offline" (never the site\'s own "Download"), got ' + JSON.stringify(save.textContent));
+            ok(save.classList.contains('nhdw-title-save'), site + ': the Smart Download control is namespaced');
+            const bookmark = buttonIn(context.document);
+            ok(save.parentElement === bookmark.parentElement,
+                site + ': the control joins the site\'s own button row');
+            ok(save.parentElement.children.indexOf(save) === save.parentElement.children.indexOf(bookmark) + 1,
+                site + ': Save offline sits directly after Bookmark');
+            for (const name of save.className.split(/\s+/)) {
+                ok(!/_btn$|^js[-_]|-trigger$/i.test(name),
+                    site + ': the site behavior hook "' + name + '" must not be copied onto our control');
+            }
+            save.dispatch('click');
+            await flush();
+            const job = context.chrome.sent.filter((m) => m.action === 'downloadAllDoujinshis').pop();
+            ok(job !== undefined, site + ': clicking Save offline sends downloadAllDoujinshis');
+            ok(job.site === site, site + ': the job names its site, got ' + JSON.stringify(job && job.site));
+            ok(Object.keys(job.allDoujinshis).length === 1,
+                site + ': a Smart Download is one gallery, got ' + JSON.stringify(job.allDoujinshis));
+            ok(job.formatOverride === 'cbz', site + ': the list-mode format travels with the job, got ' + job.formatOverride);
+            ok(job.separate === true, site + ': one title is always one artifact (never a merged batch)');
+            ok(job.masterFolder === 'NHDW', site + ': the optional master folder travels with the job, got ' + job.masterFolder);
+            ok(typeof job.nameTemplate === 'string' && job.nameTemplate !== '',
+                site + ': the list-mode name template travels with the job');
+            ok(Array.isArray(job.redownloadIds) && job.redownloadIds.length === 0,
+                site + ': nothing is force-re-downloaded without a history hit');
+        }
+        pass('every gallery page gets a site-aware "Save offline" control beside Bookmark (item 62b)');
+
+        // Alt-click opens the existing download form instead of downloading.
+        {
+            const context = run({ url: SITES.nhentai.url, build: SITES.nhentai.build, settings: Object.assign({}, listSettings) });
+            await flush();
+            const save = context.document.querySelector('[data-nhdw-title-save]');
+            save.dispatch('click');
+            await flush();
+            const before = context.chrome.sent.length;
+            save.dispatch('click', { altKey: true });
+            await flush();
+            const sent = context.chrome.sent.slice(before);
+            ok(sent.filter((m) => m.action === 'downloadAllDoujinshis').length === 0,
+                'Alt-clicking Save offline starts no download (it opens the existing form)');
+            ok(sent.filter((m) => m.action === 'siteUiOpenPanel').length === 1,
+                'Alt-click asks the worker to open the panel: a content script has no chrome.sidePanel');
+            ok(save.disabled === false, 'the control stays usable after the secondary affordance');
+        }
+        pass('the secondary affordance opens the download form instead of downloading');
+
+        // History guard: an already-downloaded title asks before re-fetching.
+        {
+            const store = { downloadHistory: { 'nhentai:683215': { filename: 'Old/One.cbz', when: 1 } } };
+            const declined = run({
+                url: SITES.nhentai.url, build: SITES.nhentai.build,
+                settings: Object.assign({}, listSettings),
+                store: Object.assign({}, store),
+                window: { confirm: () => false }
+            });
+            await flush();
+            declined.document.querySelector('[data-nhdw-title-save]').dispatch('click');
+            await flush();
+            ok(declined.chrome.sent.filter((m) => m.action === 'downloadAllDoujinshis').length === 0,
+                'declining the re-download question sends nothing');
+            const confirmed = run({
+                url: SITES.nhentai.url, build: SITES.nhentai.build,
+                settings: Object.assign({}, listSettings),
+                store: Object.assign({}, store),
+                window: { confirm: () => true }
+            });
+            await flush();
+            confirmed.document.querySelector('[data-nhdw-title-save]').dispatch('click');
+            await flush();
+            const job = confirmed.chrome.sent.filter((m) => m.action === 'downloadAllDoujinshis').pop();
+            ok(job !== undefined, 'confirming the re-download question sends the job');
+            ok(job.redownloadIds.join(',') === '683215',
+                'the confirmed id travels as redownloadIds, got ' + JSON.stringify(job.redownloadIds));
+        }
+        pass('Save offline keeps the history guard: it asks before re-downloading a recorded title');
+
+        // Select: the gallery page writes the SAME shared list the cards use.
+        {
+            const context = run({
+                url: SITES.nhentai.url, build: SITES.nhentai.build,
+                settings: Object.assign({}, listSettings), store: {}
+            });
+            await flush();
+            const select = context.document.querySelector('[data-nhdw-title-select]');
+            ok(select !== null, 'a Select control is injected beside Save offline (item 64b)');
+            ok(select.textContent === 'Select', 'the control starts unselected, got ' + JSON.stringify(select.textContent));
+            select.dispatch('click');
+            await flush();
+            ok((context.chrome.store.allIds || []).join(',') === '683215',
+                'Select writes the bare gallery id into the shared allIds list, got ' + JSON.stringify(context.chrome.store.allIds));
+            ok(context.chrome.store.allIdsSite === 'nhentai',
+                'the selection is namespaced by site, got ' + String(context.chrome.store.allIdsSite));
+            ok(select.textContent === 'Selected', 'the control reads "Selected" once selected');
+            ok(select.getAttribute('aria-pressed') === 'true', 'aria-pressed follows the selection');
+            select.dispatch('click');
+            await flush();
+            ok((context.chrome.store.allIds || []).length === 0,
+                'clicking again takes the title back out of the shared list, got ' + JSON.stringify(context.chrome.store.allIds));
+            ok(select.textContent === 'Select', 'the control returns to "Select"');
+        }
+        pass('the gallery-page Select writes into the same shared selection as the cards (item 64b)');
+
+        // A selection made on another site must not survive onto this one.
+        {
+            const context = run({
+                url: SITES.nhentai.url, build: SITES.nhentai.build,
+                settings: Object.assign({}, listSettings),
+                store: { allIds: ['173098'], allIdsSite: 'hentaifox' }
+            });
+            await flush();
+            ok((context.chrome.store.allIds || []).length === 0,
+                'a hentaifox selection is dropped on a nhentai page, got ' + JSON.stringify(context.chrome.store.allIds));
+            ok(context.chrome.store.allIdsSite === 'nhentai',
+                'the page re-stamps the selection with its own site, got ' + String(context.chrome.store.allIdsSite));
+            const select = context.document.querySelector('[data-nhdw-title-select]');
+            ok(select !== null && select.textContent === 'Select', 'the control renders unselected for the other site\'s ids');
+        }
+        pass('a selection never follows the user across sites');
+    }
 
     console.log('');
     console.log(checks + ' checks passed.');

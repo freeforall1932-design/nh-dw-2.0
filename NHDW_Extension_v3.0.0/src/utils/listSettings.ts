@@ -83,7 +83,11 @@ export function readListSettings(): Promise<ListModeSettings> {
         let synced: any = SYNC_DEFAULTS;
         const done = (dismissed: boolean) => resolve(buildListSettings(synced, dismissed));
         try {
-            chrome.storage.sync.get(SYNC_DEFAULTS, (elems: any) => {
+            // listFormat has NO default on purpose (an unset key means "follow
+            // the single-title format"), but storage.get only answers the keys
+            // a caller asks for — so it must be requested explicitly or a saved
+            // list choice is invisible and every read silently inherits.
+            chrome.storage.sync.get(Object.keys(SYNC_DEFAULTS).concat("listFormat"), (elems: any) => {
                 synced = elems || SYNC_DEFAULTS;
                 try {
                     // The dismissal flag is a local UI preference, not a synced

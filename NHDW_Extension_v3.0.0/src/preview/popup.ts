@@ -15,7 +15,7 @@ import {
     outputModeToSeparate,
     shouldWarnPdfMerge
 } from "../utils/downloadFormats"
-import { ListModeSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
+import { ListModeSettings, readListSettings, resolveMasterFolder, saveListSettings } from "../utils/listSettings"
 import { readHistory, partitionKnown, applyBatchDate, DownloadHistory, FailedGallery } from "../utils/downloadHistory"
 import { toGalleryKey } from "../utils/siteKeys"
 import { BookmarkState, emptyBookmarkState, findBookmark, normalizeBookmarkState, readBookmarks, thumbnailUrlFromGallery, bookmarkTogglePresentation } from "../utils/bookmarkQueue"
@@ -624,7 +624,7 @@ export default class Popup
                 let alreadyNote: string = "";
                 try {
                     const history: DownloadHistory = await readHistory();
-                    const rec = history[toGalleryKey(id)];
+                    const rec = history[toGalleryKey(id, source.site)];
                     if (rec) {
                         alreadyNote = escapeHtml(rec.filename) + (rec.when ? " (" + new Date(rec.when).toLocaleDateString() + ")" : "");
                     }
@@ -672,6 +672,71 @@ export default class Popup
                                 bookmarkedState = await readBookmarks().catch(() => bookmarkedState);
                             }
                             paintBookmarkButton(bookmarkButton, isBookmarked());
+                        });
+                    }
+
+                    const saveOfflineButton = document.getElementById('buttonSaveOffline') as HTMLInputElement | null;
+                    if (saveOfflineButton) {
+                        saveOfflineButton.addEventListener('click', async (event: Event) => {
+                            // The secondary affordance deliberately opens the
+                            // existing form instead of silently changing a
+                            // format or name behind the user's back.
+                            if ((event as MouseEvent).altKey) {
+                                const format = document.getElementById('downloadFormat') as HTMLSelectElement | null;
+                                if (format) {
+                                    format.focus();
+                                }
+                                return;
+                            }
+                            saveOfflineButton.disabled = true;
+                            try {
+                                const listSettings = await readListSettings();
+                                // This is intentionally a fresh read, not the
+                                // cosmetic note rendered during bootstrap: a
+                                // Queue download may have settled meanwhile.
+                                const freshHistory = await readHistory();
+                                const record = freshHistory[toGalleryKey(id, source.site)];
+                                const redownloadIds: string[] = [];
+                                if (record) {
+                                    const again = window.confirm(
+                                        "Already downloaded as:\\n" + record.filename +
+                                        "\\n\\nSave it again with the list-mode settings?");
+                                    if (!again) {
+                                        saveOfflineButton.disabled = false;
+                                        return;
+                                    }
+                                    redownloadIds.push(id);
+                                }
+                                const tabId = await getActiveTabId();
+                                chrome.runtime.sendMessage({
+                                    action: "downloadAllDoujinshis",
+                                    allDoujinshis: { [id]: title },
+                                    galleryMetadata: { [id]: json },
+                                    finalName: title,
+                                    tabId: tabId,
+                                    site: source.site,
+                                    formatOverride: listSettings.format,
+                                    // A Smart Download is one gallery, so it is
+                                    // always one separate artifact even when
+                                    // the list-mode default is a merged batch.
+                                    separate: true,
+                                    masterFolder: resolveMasterFolder(listSettings),
+                                    nameTemplate: listSettings.template,
+                                    redownloadIds: redownloadIds
+                                }, (response: any) => {
+                                    try { void chrome.runtime.lastError; } catch (_) { /* worker restarting */ }
+                                    if (response && response.result === "queued") {
+                                        document.getElementById('action')!.innerHTML =
+                                            "Save offline queued at position " + response.position + ".";
+                                    } else if (!response || response.result === "error") {
+                                        saveOfflineButton.disabled = false;
+                                    } else {
+                                        self.updateProgress(0, title, false);
+                                    }
+                                });
+                            } catch (_) {
+                                saveOfflineButton.disabled = false;
+                            }
                         });
                     }
 
@@ -841,6 +906,8 @@ export default class Popup
     // same pipeline as a single-title download, so the two cannot drift.
     async updatePreviewAll(galleries: Array<{ id: string; title: string }>, currentPage: number, maxPage: number, listSettings: ListModeSettings) {
         let self = Popup.getInstance();
+        const pageSource = getSourceForUrl(self.url) || clearnetSource;
+        const pageSite = pageSource.site;
 
         if (galleries.length === 0) {
             document.getElementById('action')!.innerHTML = message.invalidPage();
@@ -884,7 +951,7 @@ export default class Popup
             }
             titleById[card.id] = tmpName;
             finalHtml += '<input id="' + card.id + '" type="checkbox"/>' + escapeHtml(tmpName) + '<br/>';
-            const rec = history[toGalleryKey(card.id)];
+            const rec = history[toGalleryKey(card.id, pageSite)];
             if (rec) {
                 finalHtml += '<small class="nhdwAlready" id="done_' + card.id + '">&#10003; Already downloaded: '
                     + escapeHtml(rec.filename)
@@ -976,7 +1043,7 @@ export default class Popup
                 const box = document.getElementById(id) as HTMLInputElement | null;
                 return !!(box && box.checked);
             });
-            const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id)]);
+            const alreadySelected = selectedIds.filter((id) => !!history[toGalleryKey(id, pageSite)]);
             const skipped = alreadySelected.filter((id) => !forceIds.has(id));
             const summary = document.getElementById('downloadedSummary');
             const mode = effectiveOutputMode(settings.format, settings.outputMode);
@@ -1221,7 +1288,7 @@ export default class Popup
                     // keeps every title (one file needs them all).
                     const batchBeforeWarning = effectiveOutputMode(settings.format, settings.outputMode) === "batch";
                     if (!batchBeforeWarning) {
-                        const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                        const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds), pageSite).download;
                         const filtered: Record<string, string> = {};
                         for (const id of toDownload) {
                             filtered[id] = allDoujinshis[id];
@@ -1242,7 +1309,7 @@ export default class Popup
                                 // galleries BEFORE their metadata is resolved
                                 // (skipped ids must cost zero API calls) and
                                 // before any count is reported to the user.
-                                const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                                const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds), pageSite).download;
                                 const refiltered: Record<string, string> = {};
                                 for (const id of keep) {
                                     refiltered[id] = allDoujinshis[id];
@@ -1274,6 +1341,7 @@ export default class Popup
                                 separate: job.separate,
                                 masterFolder: job.masterFolder,
                                 nameTemplate: job.nameTemplate,
+                                site: pageSite,
                                 redownloadIds: Array.from(forceIds)
                             });
                         }
@@ -1395,7 +1463,7 @@ export default class Popup
                         // keeps every title.
                         const batchBeforeWarning = effectiveOutputMode(settings.format, settings.outputMode) === "batch";
                         if (!batchBeforeWarning) {
-                            const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                            const toDownload = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds), pageSite).download;
                             const filtered: Record<string, string> = {};
                             for (const id of toDownload) {
                                 filtered[id] = allDoujinshis[id];
@@ -1431,7 +1499,7 @@ export default class Popup
                                         // set is fine here - other pages may still
                                         // have work, and the pipeline re-parses each
                                         // page itself.
-                                        const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds)).download;
+                                        const keep = partitionKnown(history, Object.keys(allDoujinshis), Array.from(forceIds), pageSite).download;
                                         const refiltered: Record<string, string> = {};
                                         for (const id of keep) {
                                             refiltered[id] = allDoujinshis[id];
@@ -1469,6 +1537,7 @@ export default class Popup
                                         separate: job.separate,
                                         masterFolder: job.masterFolder,
                                         nameTemplate: job.nameTemplate,
+                                        site: pageSite,
                                         redownloadIds: Array.from(forceIds)
                                     });
                                 }

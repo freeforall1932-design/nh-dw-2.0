@@ -1,4 +1,4 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.3.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.0)
 
 **Updated:** 2026-09-23 · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
@@ -31,7 +31,7 @@ Review fixes include working embedded settings, shared Settings/Queue layout
 CSS, safe reattachment/live updates, and a Full panel tab bound to the nhentai
 page that opened it (including retries and pasted-bookmark metadata). Offline
 tests cover these paths; this is **not** a claim of Firefox/Android device
-verification. Manifest is 1.3.0 (the 1.3.0 change is the bookmark icon, the gallery-page Bookmark button and the Queue-tab extras backported from Chrome 3.9.0); no signing run has been performed.
+verification. Manifest is 1.4.0 (the 1.4.0 change is the per-site listing card controls, the gallery-page Save offline / Select controls and Select all, backported from Chrome 3.10.0); no signing run has been performed.
 
 Item 38 adds **33 offline options-page tests**, using the actual HTML and built
 bundle. Options now restore saved list formats, display legacy PDF values,

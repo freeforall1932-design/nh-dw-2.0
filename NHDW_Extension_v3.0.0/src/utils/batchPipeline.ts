@@ -457,10 +457,10 @@ export async function runBatchDownload(args: {
     // entry ("366224") reads as the default site, exactly like the history
     // that produced it.
     const alreadySet = new Set<string>(
-        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map((id: string) => toGalleryKey(id)) : []
+        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map((id: string) => toGalleryKey(id, jobSite)) : []
     );
     const redownloadSet = new Set<string>(
-        Array.isArray(options.redownloadIds) ? options.redownloadIds.map((id: string) => toGalleryKey(id)) : []
+        Array.isArray(options.redownloadIds) ? options.redownloadIds.map((id: string) => toGalleryKey(id, jobSite)) : []
     );
     const records: Array<{ id: string; filename: string }> = [];
     const batchKeys: string[] = [];

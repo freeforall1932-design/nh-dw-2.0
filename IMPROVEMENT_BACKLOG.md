@@ -2542,6 +2542,122 @@ logic / misaligned cross-tree code / broken code) before implementing.
 `WORKLIST.md` items 62/63/64 marked **partial**; scope note: the
 `getGalleries.ts` panel-listing port is **out of scope** for 63.
 
+## Session log — 2026-09-25 (session `arena/01a0d7b8-nh-dw-2-0`): items 62/63/64 implemented + the item-59 review finding
+
+**Started from a deliberately partial state.** The previous session merged
+recon + **8 red unit tests per tree** and an `e2e-list-controls` fixture set,
+with `src/utils/listCards.ts` as a compiling NOT-IMPLEMENTED stub. The mandated
+first step was the debug-review of that merged partial state; it found a
+**fifth** instance of the pattern the rule exists for (see below).
+
+### A. Debug review of the merged red-first state
+
+Verified baseline before touching code: Chrome `npm test` **536 pass / 8 red**,
+Firefox **612 pass / 8 red**, both `e2e-list-controls` red at the item-64a bar
+assert — exactly the documented red set, no crashes, no hidden failures. The 8
+reds were the spec; every one of them is now green in both trees.
+
+Cross-tree audit of the shared files found no missing sender/handler pair in
+the new code, but it did surface three things worth recording:
+
+1. **The relay path dropped `request.site` for `downloadAllPages`** while the
+   worker-fallback path carried it inside its overrides — the same asymmetry
+   class as PR #48's defect 1 (a guard in one path but not its sibling). Fixed
+   in both trees (`site: request.site` on the relay, `site?: string` on the
+   paged fallback signature, `site: pageSite` on the panel payload).
+2. **A content script cannot call `chrome.sidePanel.open`**, so the gallery
+   page's Alt-click had no receiver in Chrome: the message action had a sender
+   and no handler. Chrome's worker now answers `siteUiOpenPanel` (the Firefox
+   tree already did, by opening a panel tab).
+3. **Item 59 shipped Firefox-only** — the big one, below.
+
+### B. Review finding: item 59's saved-list-format fix never reached Chrome
+
+`chrome.storage.get({...defaults})` answers ONLY the keys named in the defaults
+object. `listSettings.readListSettings()`, `options/options.ts`,
+`preview/popupSettings.ts` and Chrome's `content/listControls.ts` all computed
+`resolveListFormat(elems.listFormat, elems.useZip)` **without ever requesting
+`listFormat`**, so the key was always `undefined`: a saved list format was
+ignored everywhere and the UI advertised the inherited single-title one. The
+Firefox tree had the fix (2026-09-21, "three shared readers"); the Chrome tree
+— the source of truth — never got it.
+
+Why no test caught it: Chrome's `test/list-mode.test.js` stubbed storage as
+`Object.assign({}, defaults, store)` — a whole-store merge that returns
+unrequested keys, i.e. the exact trap the harness notes warn about ("a
+whole-store merge mock once hid the item-59 defect"). It hid it again, for four
+days, one tree over.
+
+Fix and coverage (both trees now identical):
+- the four Chrome readers request the key explicitly, with no default
+  (`Object.keys(defaults).concat("listFormat")`);
+- `scripts/test-support/storage.js` (key-scoped, cloning, async) and
+  `scripts/test-support/list-format-cases.js` (36-case matrix) are shared;
+- `test/list-mode.test.js` uses the key-scoped store (80 assertions on the real
+  reader) — **20 of them were red before the fix**;
+- `e2e-list-controls.js` gained the item-59 phase: every case drives the real
+  bundle's card + bar jobs and asserts no storage writes on open.
+
+### C. Items 62/63/64 — what shipped
+
+**63 — card controls on all six sites.** `src/utils/listCards.ts` is a real
+declarative table (`mode`, `linkSelector`, `linkPattern`, container/title/
+caption selectors, hitomi's `containerAncestorClass`) with
+`listCardTargetForSite()`, `resolveListCardPage()` (an adapter-owned URL that is
+NOT a gallery page) and `cardIdFromHref()`. `findCards()` returns
+`{id, site, title, card}`; the site then flows into the history lookup
+(`toGalleryKey(id, info.site)`), the skip pre-check
+(`partitionKnown(history, ids, forced, site)`), bookmarkAdd (`site:`) /
+bookmarkRemove (composite key, and the bookmark mirror is now a composite-key
+set) and the job payload (`site:`). The manifest gained a `content_scripts`
+block covering the five non-nhentai listing hosts with `content.js` +
+`listControls.js` + `css/content.css`.
+
+**62 — Smart Download.** Panel: `#buttonSaveOffline` in
+`message.downloadInfo`, wired in `popup.ts` to a single-gallery
+`downloadAllDoujinshis` built from `readListSettings()` (format, template,
+master folder, always `separate: true`), with a **fresh** `readHistory()` guard
+— the bootstrap-time note is cosmetic and may be stale — that asks before
+re-downloading and then sends `redownloadIds:[id]`; Alt focuses
+`#downloadFormat`. Gallery page: `nhdw-title-save` inserted after the Bookmark
+button with the same presentational-class copy, plus `nhdw-title-select`
+(64b); both are in `OWN_UI_CLASSES` so the anchor search never mistakes them
+for the site's buttons.
+
+**64 — Select all + title-page select.** `#nhdw-select-all` beside Clear; the
+bar is visible whenever the page HAS cards (`findCards().length > 0`) instead of
+only once something is ticked. The gallery page's Select writes the bare id into
+the shared `allIds`, and the wipe is now **site-scoped** through a new
+`allIdsSite` key (`content.ts` + `preview.ts`) so a selection survives opening a
+title on the same site and is dropped when the namespace changes.
+
+### D. Verification
+
+- Chrome **587 unit passing / 4 pending / 0 failing**; Firefox **620 / 4 / 0**.
+- `e2e-list-controls` (both trees): every phase green, including the new
+  per-site discovery (6 sites × 3 cards), Select all / Clear, and the 36-case
+  item-59 matrix.
+- `e2e-title-bookmark` (both trees): **146 → 263 checks**, new phase 10 covers
+  the per-site Save offline job, the Alt route, the history guard and the
+  Select/cross-site wipe.
+- `e2e-worker`, `e2e-offscreen`, `e2e-relay`, `e2e-content`,
+  `e2e-bookmark-panel`, `e2e-popup` green in Chrome; Firefox additionally runs
+  `e2e-options`, `e2e-site-ui`, `e2e-embedded-toolbar` green.
+- Versions: Chrome **3.10.0** (source + release manifests in sync, exhaustive
+  release-folder sync re-run), Firefox **1.4.0**.
+
+### E. Known gaps (recorded, not fixed)
+
+- The panel **Save offline** *click handler* has no offline coverage: it is
+  registered inside `updatePreviewAsync`, which `scripts/e2e-popup.js` cannot
+  reach (item 40). It is on the 42/58 real-browser list.
+- The hitomi card row still has no captured listing sample (evidence came from
+  a live `search.html` fetch): verify the block boundary in a browser first.
+- `runPagedBatchDownload` records history with the default site for
+  non-nhentai page walks; `downloadAllPages` only ever runs for nhentai today
+  (the `getGalleries` content script is nhentai-only), so this is latent, not
+  live — worth folding into item 71/70 rather than a silent fix.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
@@ -2549,8 +2665,8 @@ logic / misaligned cross-tree code / broken code) before implementing.
 | 60 | Side-panel query-wash / view-reload bug — **fixed 2026-09-24**: `updatePreviewAsync` only paints `invalidPage` over a placeholder, never a live `#action` view; red-first e2e Chrome phase 9 / FF phase 13 | done |
 | 61 | Download-tab auto-fetch fill (page-range v1) | done — range block + dual actions both trees, e2e green, Release synced |
 | 62 | Smart Download control (direct + open form) beside Bookmark | **partial** — red-first (no impl yet), 2026-09-25; label locked "save offline"; red: `message.test.js` Save-offline control. See handoff "Next session" |
-| 63 | Card Select/Bookmark/Download on all six sites | **partial** — red-first (no impl yet), 2026-09-25; red: `list-cards` table + `manifest` listing-hosts + `partitionKnown` site + `batch-pipeline` job-site + multi-site e2e; `listCards.ts` = compiling NOT-IMPLEMENTED stub; `getGalleries` port out of scope |
-| 64 | Select-all on listings + title-page select into `allIds` | **partial** — red-first (no impl yet), 2026-09-25; red: `e2e-list-controls` item-64a "bar visible while cards exist" flip |
+| 63 | Card Select/Bookmark/Download on all six sites | **done 2026-09-25** — real `utils/listCards.ts` table + `findCards()` per-site dispatch (cards carry their site), site-aware history (`partitionKnown(..., site)`), composite bookmark identity, `site:` on every card/bar job, listing-host `content_scripts` block for the five non-nhentai hosts, per-site e2e discovery; `getGalleries` port out of scope |
+| 64 | Select-all on listings + title-page select into `allIds` | **done 2026-09-25** — `#nhdw-select-all` beside Clear with the bar visible whenever `findCards()` finds cards; gallery-page `nhdw-title-select` writes the bare id into the shared `allIds`; `allIdsSite` makes the wipe site-scoped (selection survives same-site navigation, dropped across sites) |
 | 65 | Rename Queue tab → Bookmark tab (UI-only) | open |
 | 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | confirmed — with 65 |
 | 67 | On-page cart — **badge + expandable mini-cart** (owner pick, elaboration 1 closed 2026-09-24) | confirmed — after 65/68 |
