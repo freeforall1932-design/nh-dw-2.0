@@ -352,6 +352,54 @@ describe('runBatchDownload', () => {
         assert.strictEqual(host.downloads.length, 2);
     });
 
+    it('a bare redownload override composes with the JOB site (item 63)', async () => {
+        // Cards on hentaifox send BARE force ids plus site:"hentaifox"; the
+        // skip/force comparison must compose both sides with the job's site or
+        // a confirmed fox re-download is still swallowed by the skip.
+        const host = makeHost({
+            fetchImpl: async () => { throw new Error('must not fetch skipped galleries'); }
+        });
+        const outcome = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { '1': 'One', '2': 'Two' },
+            finalName: 'FoxForce',
+            downloadAtEnd: true,
+            galleryMetadata: { '1': gallery(1, 'One'), '2': gallery(2, 'Two') },
+            options: {
+                useZip: 'zip',
+                downloadSeparately: true,
+                site: 'hentaifox',
+                alreadyDownloadedIds: ['hentaifox:1'],
+                redownloadIds: ['1']
+            },
+            host: host
+        });
+        assert.strictEqual(outcome.skipped, 0,
+            'the bare force id must defeat the fox-site skip');
+        assert.strictEqual(host.downloads.length, 2);
+        // And without the override the same job still skips the recorded gallery.
+        const host2 = makeHost({
+            fetchImpl: async () => { throw new Error('must not fetch skipped galleries'); }
+        });
+        const outcome2 = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { '1': 'One', '2': 'Two' },
+            finalName: 'FoxSkip',
+            downloadAtEnd: true,
+            galleryMetadata: { '1': gallery(1, 'One'), '2': gallery(2, 'Two') },
+            options: {
+                useZip: 'zip',
+                downloadSeparately: true,
+                site: 'hentaifox',
+                alreadyDownloadedIds: ['hentaifox:1']
+            },
+            host: host2
+        });
+        assert.strictEqual(outcome2.skipped, 1);
+        assert.strictEqual(host2.downloads.length, 1);
+        assert.strictEqual(host2.downloads[0].json.id, 2);
+    });
+
     it('records the resolved format (not a silent zip default)', async () => {
         const host = makeHost();
         const outcome = await runBatchDownload({

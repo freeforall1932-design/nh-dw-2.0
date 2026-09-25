@@ -437,6 +437,11 @@ export class StreamingZipWriter {
     }
 
     async cleanup(): Promise<void> {
+        // Let queued entry writes settle (or fail) before releasing the sink,
+        // so cleanup never races an in-flight file() on the write chain.
+        try {
+            await this.writeChain;
+        } catch (_) { /* a rejected entry must not block releasing the sink */ }
         if (this.sink && typeof this.sink.cleanup === "function") {
             await this.sink.cleanup();
         }

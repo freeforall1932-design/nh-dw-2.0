@@ -103,6 +103,26 @@ describe('MV3 manifest', () => {
         }
     });
 
+    it('injects the card controls on every supported site\'s listing hosts (item 63)', () => {
+        const hosts = ['hentaifox.com', 'hentaiera.com', 'imhentai.xxx',
+            'hentaienvy.com', 'hitomi.la'];
+        for (const manifest of [sourceManifest, releaseManifest]) {
+            const block = manifest.content_scripts.find((entry) =>
+                (entry.js || []).includes('js/listControls.js') &&
+                (entry.matches || []).some((pattern) => pattern.includes('hentaifox.com')));
+            assert.ok(block,
+                'a content_scripts block must cover the non-nhentai listing hosts with listControls.js');
+            for (const host of hosts) {
+                assert.ok((block.matches || []).some((pattern) => pattern.includes(host)),
+                    'listing matches must include ' + host + ', got ' + JSON.stringify(block.matches));
+            }
+            assert.ok((block.js || []).includes('js/content.js'),
+                'the new block carries content.js too (allIds wipe parity across sites)');
+            assert.ok((block.css || []).includes('css/content.css'),
+                'the new block carries content.css (card controls + action bar styling)');
+        }
+    });
+
     it('declares default_icon so the toolbar has an icon before setIcon runs', () => {
         assert.strictEqual(sourceManifest.action.default_icon['64'], 'Icon.png');
         assert.strictEqual(sourceManifest.action.default_icon['128'], 'Icon.png');

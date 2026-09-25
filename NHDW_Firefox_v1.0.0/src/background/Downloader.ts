@@ -67,9 +67,6 @@ export default class Downloader
         this.currentProgress = 100;
         this.resume();
     }
-    cancel() {
-        this.abort();
-    }
     get galleryId(): string {
         return this.#json && this.#json.id !== undefined ? String(this.#json.id) : "";
     }
@@ -415,7 +412,16 @@ export default class Downloader
         catch (error)
         {
             this.currentProgress = 100;
-            if (this.#zip && typeof (this.#zip as any).cleanup === "function") {
+            // Cleanup ONLY a writer this Downloader is responsible for
+            // finalizing. In a merged batch every intermediate gallery shares
+            // ONE StreamingZipWriter (downloadName === null means "contribute
+            // pages only") — calling cleanup there wiped pages already
+            // collected from earlier galleries while leaving their
+            // central-directory records dangling (PR #48 regression: corrupt
+            // final archive after a mid-batch failure or cancel). The final
+            // save (downloadName set) and separate-mode galleries (each owns
+            // its writer) still clean up on failure.
+            if (this.downloadName !== null && this.#zip && typeof (this.#zip as any).cleanup === "function") {
                 try { await (this.#zip as any).cleanup(); } catch (_) {}
             }
             // A user cancellation is not an error: the popup already reset the

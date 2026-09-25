@@ -101,4 +101,21 @@ describe('message.bookmarkButtonHtml (item 43)', () => {
         assert.ok(/nhdwBookmarkOn/.test(info), 'the row was already bookmarked, so it opens in the on state');
         assert.ok(/value="Bookmarked"/.test(info), info);
     });
+
+    it('carries the smart Save offline control beside Bookmark (item 62)', () => {
+        const info = message.downloadInfo('Some Title', 12, 'cbz', 'zip', '', false);
+        assert.ok(/id="buttonSaveOffline"/.test(info),
+            'the preview row carries the smart download control: ' + info);
+        assert.ok(/value="Save offline"/.test(info),
+            'the smart control is labelled "Save offline" (never the site\'s Download wording): ' + info);
+        // The label must not collide with the Download form button or the
+        // site's own Download wording (DOWNLOAD_TEXT_RE starts with "download").
+        assert.ok(!/^download/i.test('Save offline'), 'label stays distinct from Download');
+        const smartAt = info.indexOf('id="buttonSaveOffline"');
+        const bookmarkAt = info.indexOf('id="buttonBookmark"');
+        assert.ok(smartAt !== -1 && bookmarkAt !== -1 && Math.abs(smartAt - bookmarkAt) < 400,
+            'the smart control sits beside the Bookmark toggle in the same row: ' + info);
+        assert.ok(/Alt/i.test(info) || /alt/i.test((info.match(/title="[^"]*"/g) || []).join(' ')),
+            'the smart control documents its secondary (Alt) affordance: ' + info);
+    });
 });

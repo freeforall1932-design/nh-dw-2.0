@@ -1038,3 +1038,90 @@ describe('Downloader (object URL delivery, offscreen document)', () => {
         assert.deepStrictEqual(revoked, ['blob:nhtest/1']);
     });
 });
+
+describe('Downloader (shared merged-batch writer — PR #48 cleanup regression)', () => {
+    const { StreamingZipWriter, MemoryZipSink } = require('../build/test/utils/streamingZip.js');
+    const gallery3 = {
+        id: 654321,
+        media_id: 456789,
+        title: { english: 'Two', japanese: '', pretty: 'Two' },
+        images: { pages: [{ t: 'j' }, { t: 'j' }] },
+        tags: []
+    };
+
+    let chrome;
+    let fetchStub;
+
+    beforeEach(() => {
+        chrome = makeChromeStub('zip');
+        fetchStub = makeFetchStub();
+        globalThis.chrome = chrome;
+        globalThis.fetch = fetchStub;
+        globalThis.URL = undefined;
+        globalThis.FileReader = FileReaderStub;
+        globalThis.__NHDW_SILENT_RETRY_LOGS__ = true;
+    });
+
+    afterEach(() => {
+        delete globalThis.chrome;
+        delete globalThis.fetch;
+        delete globalThis.URL;
+        delete globalThis.FileReader;
+        delete globalThis.__NHDW_SILENT_RETRY_LOGS__;
+    });
+
+    it('a failing intermediate gallery must not wipe pages already in the shared writer', async () => {
+        const sink = new MemoryZipSink();
+        const shared = new StreamingZipWriter(sink, { preferOpfs: false });
+
+        // Gallery 1 of the merged job: intermediate (downloadName === null),
+        // succeeds and leaves its pages in the SHARED writer.
+        const first = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/One', () => {}, () => {}, 'One', shared, null);
+        first.retryBackoffMs = 0;
+        first.revokeObjectUrlDelayMs = 10;
+        await first.startAsync();
+        assert.ok(sink.bytesWritten > 0, 'first gallery must have written pages into the shared sink');
+
+        // Gallery 2: intermediate (downloadName === null), every image 404s.
+        // Pre-fix, Downloader.catch called zip.cleanup() on the SHARED writer
+        // and wiped gallery 1's bytes while leaving its central-directory
+        // records dangling → corrupt final archive.
+        const failing = makeFetchStub(['https://']); // fail every image URL
+        globalThis.fetch = failing;
+        const second = new Downloader(JSON.parse(JSON.stringify(gallery3)), 'Downloads/Two', () => {}, () => {}, 'Two', shared, null);
+        second.retryBackoffMs = 0;
+        await assert.rejects(() => second.startAsync());
+
+        // Gallery 3 (final save owner) would generateAsync on the same writer.
+        globalThis.fetch = fetchStub;
+        const blob = await shared.generateAsync({ type: 'blob' });
+        const buf = Buffer.from(await blob.arrayBuffer());
+        const zip = await JSZip.loadAsync(buf);
+        const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
+        assert.deepStrictEqual(names, [
+            'Downloads/One/001.jpg',
+            'Downloads/One/002.png',
+            'Downloads/One/003.jpg'
+        ], 'gallery 1 pages must survive an intermediate gallery failure');
+        for (const name of names) {
+            const content = new Uint8Array(await zip.file(name).async('uint8array'));
+            const idx = names.indexOf(name);
+            const want = pageBytes[idx];
+            assert.strictEqual(content.length, want.length, name + ' length');
+            assert.ok(want.every((b, j) => content[j] === b), name + ' bytes intact');
+        }
+        await shared.cleanup();
+    });
+
+    it('the final-save owner still cleans up its own writer on failure', async () => {
+        const sink = new MemoryZipSink();
+        const owned = new StreamingZipWriter(sink, { preferOpfs: false });
+        const failing = makeFetchStub(['https://']);
+        globalThis.fetch = failing;
+        const finalGallery = new Downloader(JSON.parse(JSON.stringify(gallery)), 'Downloads/Final', () => {}, () => {}, 'Final', owned, 'Downloads/Final');
+        finalGallery.retryBackoffMs = 0;
+        await assert.rejects(() => finalGallery.startAsync());
+        assert.strictEqual(sink.bytesWritten, 0, 'an owned writer must still be cleaned up on failure');
+        await owned.cleanup();
+    });
+});

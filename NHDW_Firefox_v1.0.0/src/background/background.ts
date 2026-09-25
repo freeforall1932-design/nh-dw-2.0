@@ -7,7 +7,7 @@ import { getSourceForUrl } from "../sources";
 import { executeInTab, panelSourceTabId } from "../preview/activeTabGallery";
 import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
-import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, isGalleryCancelled, consumeGalleryCancellation } from "../utils/batchPipeline";
+import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";

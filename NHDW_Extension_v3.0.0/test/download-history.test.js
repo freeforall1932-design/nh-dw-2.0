@@ -339,4 +339,39 @@ describe('composite site keys (item 47)', () => {
         const mixed = normalizeHistory({ "hitomi:111": { filename: "B.zip", when: 3 } });
         assert.deepStrictEqual(partitionKnown(mixed, ["111"]), { download: ["111"], skip: [] });
     });
+
+    // Item 63: cards now run on five more sites. The skip pre-check must
+    // compose keys with the PAGE's site, or a recorded hentaifox gallery reads
+    // as an unrecorded nhentai id and gets re-downloaded.
+    it('partitionKnown composes keys with an explicit site (item 63)', () => {
+        const history = {
+            'hentaifox:111': { filename: 'fox.zip', when: 1 },
+            'nhentai:222': { filename: 'nh.zip', when: 2 }
+        };
+        // Skips under the given site...
+        assert.deepStrictEqual(
+            partitionKnown(history, ['111'], [], 'hentaifox'),
+            { download: [], skip: ['111'] });
+        assert.deepStrictEqual(
+            partitionKnown(history, ['222'], [], 'nhentai'),
+            { download: [], skip: ['222'] });
+        // ...never under another site's key space.
+        assert.deepStrictEqual(
+            partitionKnown(history, ['111'], [], 'nhentai'),
+            { download: ['111'], skip: [] });
+        assert.deepStrictEqual(
+            partitionKnown(history, ['222'], [], 'hentaifox'),
+            { download: ['222'], skip: [] });
+        // Force ids compose with the same site (composite passes through).
+        assert.deepStrictEqual(
+            partitionKnown(history, ['111'], ['111'], 'hentaifox'),
+            { download: ['111'], skip: [] });
+        assert.deepStrictEqual(
+            partitionKnown(history, ['111'], ['hentaifox:111'], 'hentaifox'),
+            { download: ['111'], skip: [] });
+        // Default-site behaviour is unchanged when no site is given.
+        assert.deepStrictEqual(
+            partitionKnown(history, ['111', '222'], []),
+            { download: ['111'], skip: ['222'] });
+    });
 });
