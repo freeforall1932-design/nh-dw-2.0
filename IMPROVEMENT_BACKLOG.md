@@ -2653,10 +2653,21 @@ title on the same site and is dropped when the namespace changes.
   reach (item 40). It is on the 42/58 real-browser list.
 - The hitomi card row still has no captured listing sample (evidence came from
   a live `search.html` fetch): verify the block boundary in a browser first.
-- `runPagedBatchDownload` records history with the default site for
+- ~~`runPagedBatchDownload` records history with the default site for
   non-nhentai page walks; `downloadAllPages` only ever runs for nhentai today
   (the `getGalleries` content script is nhentai-only), so this is latent, not
-  live — worth folding into item 71/70 rather than a silent fix.
+  live — worth folding into item 71/70 rather than a silent fix.~~
+  **CLOSED 2026-09-26 (item 71).** Re-checked while doing item 71: the
+  *recording* side already carried the job site (both the relay and the worker
+  fallback pass `site` into the pipeline options, and `storeKey` composites with
+  it), but the *guard* side was wrong — `alreadySet` composed the **recorded**
+  ids with the job's site, so a bare (pre-3.8.0 nhentai) record masked a
+  same-numbered gallery on another site and skipped the download. Fixed in
+  `batchPipeline.ts` (`toGalleryKey(id)` for recorded ids; the site-relative
+  `redownloadIds` list is untouched) and pinned by two new cases in
+  `test/batch-pipeline.test.js` (both red on the pre-fix build). The nhentai-only
+  reach of the paged walk itself is unchanged and still recorded in
+  `getGalleries.ts`'s scope note.
 
 ## F. Merge + next-session handoff (end of 2026-09-25)
 
@@ -2849,6 +2860,88 @@ feature — one compact `<select>` at the list header (All sites | nhentai |
 hitomi | hentaiera | imhentai | hentaienvy | hentaifox), live counts when
 cheap, remembering the last choice across unselect/close — not a copy change.
 
+## Session log — 2026-09-26 (same session, item 71): panel list actions vs on-page Select — verified, pointed, and one live identity defect fixed
+
+Item 71 was queued as "demote the panel's blanket *Download all (N pages)*
+where on-page Select + Select-all exist". Verification first: **item 61 had
+already retired that control** — nothing in either tree renders a "Download
+all" button, `#buttonAll` is "Download range now", and the range block is the
+panel's only multi-page path. So the item's remaining half was the *replacement
+pointer* the spec named, plus the §E note the handoff had parked here.
+
+### A. Red-first: the pointer and the hint
+
+- `test/panel-list-actions.test.js` (both trees, added to both mocha lists):
+  2 of its 3 cases red before the change — no `#selectionPointer` element in
+  `popup.ts`, and `popupSettings.ts` still promising "…or with Download all".
+- `scripts/e2e-popup.js` phase 10 (both trees), two assertions: the rendered
+  listing HTML must carry `#selectionPointer` and must not contain
+  "Download all". Pre-fix the harness printed
+  `FAIL: the list must point at the shared on-page selection (item 71)`.
+- Fix: `popup.ts` renders
+  `<div id="selectionPointer">Ticking rows here and ticking cards on the page
+  are the same selection[; for the listing's other pages use the range block
+  below].</div>` — gated on `allIds.length > 0` (a page that really has cards),
+  with the range-block clause only when pagination is known. New
+  `.selectionPointer` rule in `css/style.css` (Chrome + FF + release, with the
+  `#htmlDark` variant). `popupSettings.ts`'s List-mode hint now reads
+  "Defaults used when downloading from a listing page - the in-page card
+  buttons and floating bar, or the Download tab's range block."
+
+### B. Verifying §E found a live defect (the identity fix)
+
+§E said: "*`runPagedBatchDownload` records history with the default site for
+non-nhentai page walks … latent, not live — worth folding into item 71/70*".
+Chasing it showed the *recording* side was already sound (both entry points
+carry `site` into the pipeline options, and `storeKey` composites with it),
+but the **guard** side was inverted:
+
+```ts
+// before (batchPipeline.ts, runBatchDownload)
+const alreadySet = new Set(
+    options.alreadyDownloadedIds.map((id) => toGalleryKey(id, jobSite)));
+```
+
+`alreadyDownloadedIds` is the *stored* history key list (its only producer is
+`attachHistoryOverrides` → `historyIds(history)`), so a bare entry is the
+**default site's** record — pre-3.8.0 history stored bare ids, and the code's
+own comment two lines above said exactly that ("A bare entry reads as the
+default site, exactly like the history that produced it"). Composing it with
+`jobSite` instead made an old nhentai record mask a same-numbered gallery on
+another site. **Live consequence:** with a pre-3.8.0 history, a card click on
+any of the five added hosts whose numerical id collided with a recorded nhentai
+gallery reported "already downloaded" and silently skipped the download.
+
+Red evidence (pre-fix build): two new `batch-pipeline` cases —
+`a bare default-site record must not skip a hitomi gallery` (paged path) and
+`a bare (nhentai) record must not skip a hitomi gallery` (per-site job path,
+the live one). Both green after the fix.
+
+Fix: `toGalleryKey(id)` (no `jobSite`) **for the recorded list only**. The
+`redownloadIds` / force list is deliberately different — it comes from the
+current page, so it IS site-relative and keeps composing with the job site
+(its own test, "a bare redownload override composes with the JOB site (item
+63)", still passes).
+
+### C. Verification
+
+- Chrome **596 unit / 4 pending**, smoke PASS, `test:e2e` exit 0 (**263
+  checks**, including phase 10's new item-71 assertions).
+- Firefox **629 unit / 4 pending**, smoke PASS, `test:e2e` exit 0,
+  `lint:firefox` **0 errors / 0 notices / 32 warnings** (unchanged).
+- Both trees rebuilt (webpack clean); release folder re-synced exhaustively
+  (`js/background.js`, `js/offscreen.js`, `js/preview.js`, `css/style.css`;
+  reverse check clean, only `README.md` differs by design).
+- Versions: Chrome **3.10.3**, Release **3.10.3**, Firefox **1.4.3**. READMEs
+  updated (root badges + a 3.10.3 row, Chrome, Firefox, Release).
+
+### D. §E closed
+
+The latent-gap note is now **closed** (fixed, not just latent): the section E
+bullet is annotated below. Item 71 itself is closed as **verified + pointed**;
+the only thing left of it is an owner taste call (range block alone vs. the
+pointer also naming the floating bar), which is a wording change.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
@@ -2864,6 +2957,6 @@ cheap, remembering the last choice across unselect/close — not a copy change.
 | 68 | Bookmark list load management + **green-check already-downloaded** (true success only, never fail-midway; works with/without search/filter) | open — after 65 |
 | 69 | Bookmark thumbnails — **viewport-lazy + GC both** (distance while scrolling + idle ~15–30s sweep; purge all on close/site-group switch; cross-site search keeps GC for dedupe/batch prep) (owner pick, elaboration 3 closed 2026-09-24) | confirmed — with 67/68 |
 | 70 | Live-session auto-fetch (twitter-style phase 2) | open — after 61 |
-| 71 | Demote panel Download-all where on-page Select exists | **verify-and-close** 2026-09-26: item 61's range block already replaced the blanket "Download all (N pages)" entry in both trees (no such label remains; `#buttonAll` = "Download range now") — left: the range-block-alone vs. on-page-pointer decision + the §E default-site history gap |
+| 71 | Demote panel Download-all where on-page Select exists | **done 2026-09-26 (Chrome 3.10.3 / FF 1.4.3)** — verified the blanket entry was already retired by 61; added the replacement pointer (`#selectionPointer`) + fixed the List-mode hint; the §E identity defect found while verifying is fixed and pinned (bare recorded id = default site). Left: an owner taste call on the pointer's wording only |
 
 Do not allocate these numbers to anything else.

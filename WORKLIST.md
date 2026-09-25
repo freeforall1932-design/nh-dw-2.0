@@ -1,7 +1,18 @@
 # Worklist — nh-dw-2.0
 
 **Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
-**item 65 landed** — the panel's third tab is labelled **Bookmark** and every
+**item 71 landed (verify-and-close + one real defect)** — the blanket "Download
+all (N pages)" entry was already gone (item 61's range block), so the panel now
+also *says* what took its place: a `#selectionPointer` line in the list
+("ticking rows here and ticking cards on the page are the same selection; for
+the listing's other pages use the range block below") and a List-mode settings
+hint that names the range block instead of the retired button. Verifying §E
+turned up a live identity defect: the pipeline's skip guard composed a recorded
+**bare** id with the *job's* site, so a legacy (pre-3.8.0) nhentai record
+masked a same-numbered gallery on another site — a card click on the five added
+hosts could report "already downloaded" and never download. Fixed to read bare
+ids as the default site's, with both directions pinned. Chrome **3.10.3** /
+Firefox **1.4.3**. **Item 65 landed** — the panel's third tab is labelled **Bookmark** and every
 tooltip/hint that called it a "Queue" follows (`listControls` card tooltip,
 the settings auto-capture hint, the side-panel launcher, the Settings fallback
 notice, the two bookmark tooltips); storage key `bookmarkQueue`, ids `#tabQueue`
@@ -100,21 +111,20 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-26, after item 65 landed):** **71**
-(verify-and-close: item 61's range block already occupies the slot
-the blanket "Download all (N pages)" entry held — nowhere in either tree is
-a control labelled that any more; what remains is the owner decision on
-whether the range block alone is enough or a pointer to on-page Select should
-be added, plus the latent default-site history gap in
-`IMPROVEMENT_BACKLOG.md` §E), then **40** (bootstrap a listing page in
-`scripts/e2e-popup.js`; the only offline-feasible backlog item, and the reason
-the panel **Save offline** click handler still has no offline coverage). The
-**66-with-65** question is still open: the owner-confirmed 66 spec says the
-per-site filter ships "as one header unit" with the rename, but the rename has
-now landed alone — the filter is a real feature (dropdown + remember last
-choice), so it needs an explicit go-ahead rather than riding along. Items
+**Top of the queue (2026-09-26, after items 65 and 71 landed):** **40**
+(bootstrap a listing page in `scripts/e2e-popup.js`; the last offline-feasible
+backlog item, and the reason the panel **Save offline** click handler still has
+no offline coverage), then **68** and **70** when the owner opens them. Items
 **42/58** (real-browser + Android passes, then signing) stay owner-only and
 outrank all of these in value.
+
+**Two open questions for the owner (recorded, not started):** (1) **item 66**
+(the Bookmark-tab per-site filter) was specified to build "as one header unit"
+with the 65 rename, but the rename shipped alone — the filter needs its own
+go-ahead; (2) **item 71's remaining UX choice** is narrowed to whether the
+range block alone is enough on a listing page or the button should also point
+at the page's floating bar — the shipped pointer already names on-page
+selection, so either answer is a wording change, not a rebuild.
 
 ### Owner roadmap 2026-09-24 — panel rewrite, site parity, auto-fetch (items 60–71)
 
@@ -293,12 +303,18 @@ open parts until the owner answers).
   scroll and "must survive reload" flows live here. Separate spec pass when
   v1 range fetch has real-browser data.
 
-- [ ] **71. Panel list actions vs on-page Select — after 63/64.**
+- [x] **71. Panel list actions vs on-page Select — DONE 2026-09-26 (3.10.3 / FF 1.4.3).**
   On listing pages where on-page Select + Select-all exist, the panel's
   redundant "Download all (N pages)" multi-page entry is **demoted or
   replaced** by a pointer to the range block (61) + on-page selection.
   Owner intent confirmed; exact UI (hide vs collapse into range block)
-  decided when 61+63 are real.
+  decided when 61+63 are real. Landed as: item 61 had already removed the
+  blanket entry, so nothing needed demoting — the list now carries the pointer
+  (`#selectionPointer`) and the List-mode hint names the range block. Red-first:
+  `test/panel-list-actions.test.js` (2 red) plus 2 assertions in `e2e-popup`'s
+  listing phase (`FAIL: the list must point at the shared on-page selection`).
+  The same pass verified §E and found the guard-identity defect (2 more red
+  tests, fixed) — see the banner and the backlog log.
 
 #### Blocked (record here the moment a site cannot support an item)
 
@@ -380,6 +396,17 @@ workflows are still only covered by the content-script harnesses
 ---
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
+
+- **Item 71 — panel list actions vs on-page Select (2026-09-26):** the blanket
+  entry was already retired by item 61, so the list now points at what replaced
+  it (`#selectionPointer`: rows and cards are one selection, other pages via
+  the range block) and the List-mode hint names the range block. Guard fix
+  found while verifying §E: a recorded **bare** id is the default site's
+  record, never the job's — before it, a legacy nhentai record could mask a
+  same-numbered gallery on another site and skip the download. New coverage:
+  `test/panel-list-actions.test.js`, 2 `e2e-popup` phase-10 assertions, 2
+  `batch-pipeline` cases. Chrome 3.10.3 / FF 1.4.3, 596/629 unit, e2e green,
+  FF lint unchanged.
 
 - **Item 65 — Queue tab → Bookmark tab (2026-09-26):** the panel's third tab is
   labelled **Bookmark**; the card tooltip, the auto-capture hint, the

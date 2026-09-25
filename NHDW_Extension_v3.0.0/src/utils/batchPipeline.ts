@@ -451,13 +451,16 @@ export async function runBatchDownload(args: {
     let failed = 0;
     let skipped = 0;
     const failedKinds: Record<string, number> = {};
-    // Composite keys (siteKeys.ts): the relayed recorded list carries
-    // "site:id" keys, while this pipeline's gallery keys are bare ids, so
-    // both sets normalize through toGalleryKey before any comparison. A bare
-    // entry ("366224") reads as the default site, exactly like the history
-    // that produced it.
+    // Composite keys (siteKeys.ts): the relayed recorded list carries store
+    // keys ("site:id"), while this pipeline's gallery keys are bare ids, so
+    // both sets normalize before any comparison. A recorded bare entry
+    // ("366224") is the DEFAULT site's record - legacy pre-3.8.0 history, or
+    // an nhentai one - so it must normalize WITHOUT the job's site. Composing
+    // it with `jobSite` (as this line did until the item-71 review) let an
+    // old nhentai record mask a same-numbered gallery on another site, which
+    // is the collision the composite keys exist to prevent.
     const alreadySet = new Set<string>(
-        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map((id: string) => toGalleryKey(id, jobSite)) : []
+        Array.isArray(options.alreadyDownloadedIds) ? options.alreadyDownloadedIds.map((id: string) => toGalleryKey(id)) : []
     );
     const redownloadSet = new Set<string>(
         Array.isArray(options.redownloadIds) ? options.redownloadIds.map((id: string) => toGalleryKey(id, jobSite)) : []

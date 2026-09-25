@@ -360,7 +360,7 @@ function renderListModeSection(container: HTMLElement): void {
     section.appendChild(heading);
 
     const hint = el("small");
-    hint.textContent = "Defaults used when downloading from a listing page, from the in-page card buttons, or with Download all.";
+    hint.textContent = "Defaults used when downloading from a listing page - the in-page card buttons and floating bar, or the Download tab's range block.";
     section.appendChild(hint);
 
     const formatRow = el("label");

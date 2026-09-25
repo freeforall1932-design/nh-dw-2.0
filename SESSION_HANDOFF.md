@@ -1,7 +1,7 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`). Chrome **3.10.2**,
-Firefox **1.4.2**. This session ran the mandatory review pass on the merged
+**Updated:** 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`). Chrome **3.10.3**,
+Firefox **1.4.3**. This session ran the mandatory review pass on the merged
 3.10.0 work (PR #50) and found **three defects**, each fixed under a test that
 failed on the pre-fix build: **F1** the tested listing-only guard
 (`resolveListCardPage()`) had no production caller, so gallery pages whose
@@ -12,17 +12,24 @@ dead (item 59's class); **F3** the legacy nhentai caption checkbox ran on the
 five added hosts. It then landed **item 65**: the panel's third tab is labelled
 **Bookmark** (and every tooltip/hint that called it a "Queue" follows) with the
 storage key, element ids, message actions and export format deliberately
-unchanged — locked by a new `test/tab-labels.test.js` in both trees. Full
-detail: the 2026-09-26 logs in `IMPROVEMENT_BACKLOG.md`. Read the
+unchanged — locked by a new `test/tab-labels.test.js` in both trees. It then
+landed **item 71**: the panel list points at what replaced the retired
+"Download all (N pages)" button (`#selectionPointer` — rows and cards are one
+selection; other pages via the range block), the List-mode hint stops naming
+the retired button, and the skip guard's identity defect behind backlog §E is
+fixed (a recorded **bare** id is the default site's record, never the job's, so
+a legacy nhentai record can no longer mask a same-numbered gallery on another
+site). Full detail: the 2026-09-26 logs in `IMPROVEMENT_BACKLOG.md`. Read the
 **"Next session"** section before starting new work.
 
 **The 3.10.0 work is on main.** The previous session's branch landed as
 **PR #50** (merge commit; CI green on both jobs: *Offline suites (fixtures +
 window-less VM bundles)* and *Firefox snapshot (offline suites)*). This session
-starts from that merge and carries the review fixes (**3.10.1 / 1.4.1**) and
-item 65 (**3.10.2 / 1.4.2**) — patch bumps on purpose: the loadable bytes
-changed after 3.10.0 merged. The docs under "Document map" describe the merged
-3.10.0 state plus this branch's fixes and the rename.
+starts from that merge and carries the review fixes (**3.10.1 / 1.4.1**),
+item 65 (**3.10.2 / 1.4.2**) and item 71 (**3.10.3 / 1.4.3**) — patch bumps on
+purpose: the loadable bytes changed after 3.10.0 merged. The docs under
+"Document map" describe the merged 3.10.0 state plus this branch's fixes, the
+rename and the item-71 work.
 
 **This file was deliberately slimmed on 2026-09-24.** It used to carry every
 session's full narrative (192 KB). It now carries only what a fresh session
@@ -52,9 +59,10 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Current state
 
-- **Chrome 3.10.2 / Firefox 1.4.2** (3.10.0/1.4.0 = PR #50; 3.10.1/1.4.1 = this
+- **Chrome 3.10.3 / Firefox 1.4.3** (3.10.0/1.4.0 = PR #50; 3.10.1/1.4.1 = this
   branch's 2026-09-26 review fixes; 3.10.2/1.4.2 = item 65, the Bookmark-tab
-  rename), six sites shipped end to end: nhentai,
+  rename; 3.10.3/1.4.3 = item 71, the shared-selection pointer + the skip-guard
+  identity fix), six sites shipped end to end: nhentai,
   hentaiera, imhentai, hentaienvy, hentaifox, hitomi (+ `cin.*` paste shapes).
   Card controls (Select + Bookmark + Download) and the floating bar now run on
   all six listing shapes; every gallery page and the panel preview carry a
@@ -64,9 +72,10 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   writer via OPFS), plus this session's review pass that found and fixed eight
   defects in them (summary below; full table in `IMPROVEMENT_BACKLOG.md`'s
   2026-09-24 review log).
-- **Suites (after item 65; the review-fix run was 587/620):** Chrome **591 unit
-  / 4 pending**, smoke 7, e2e exit 0 (**263 checks** for `e2e-title-bookmark`,
-  all other e2e green). Firefox **624 unit / 4 pending**, smoke 7, e2e exit 0,
+- **Suites (after item 71; the review-fix run was 587/620, the item-65 run
+  591/624):** Chrome **596 unit / 4 pending**, smoke 7, e2e exit 0 (**263
+  checks** for `e2e-title-bookmark`, all other e2e green). Firefox **629 unit /
+  4 pending**, smoke 7, e2e exit 0,
   lint **0 errors / 0 notices / 32 warnings** (26 pre-existing
   `UNSAFE_VAR_ASSIGNMENT`, 3 `UNSUPPORTED_API` sidePanel/offscreen, 1
   `DANGEROUS_EVAL`, plus 1 new `UNSAFE_VAR_ASSIGNMENT` from the legacy
@@ -74,6 +83,20 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   `nhentai_downloader-1.4.1.zip`. CI green on both jobs; **PR #50 merged to
   main**. Re-run 2026-09-26 after the review fixes: same unit counts, smoke and
   e2e exit 0, FF lint unchanged (32 warnings).
+- **Item 71 landed (2026-09-26, this branch):** verify-and-close first — the
+  blanket "Download all (N pages)" entry was already gone (item 61's range
+  block is the only multi-page path; `#buttonAll` = "Download range now"), so
+  the work was to make the panel *say* it: `#selectionPointer` in the list
+  ("ticking rows here and ticking cards on the page are the same selection …")
+  and a List-mode hint that names the range block. Verifying §E found a **live
+  identity defect**: the pipeline's skip guard built its `alreadySet` with
+  `toGalleryKey(id, jobSite)`, so a recorded **bare** id (legacy pre-3.8.0
+  history — bare ids mean nhentai, as the code's own comment said) was read as
+  the *job's* site and masked a same-numbered gallery on another site: a card
+  click on the five added hosts could report "already downloaded" and never
+  download. Fixed to `toGalleryKey(id)` for that list only (the
+  `redownloadIds`/force list legitimately IS site-relative and keeps composing
+  with the job site). Chrome 3.10.3 / FF 1.4.3.
 - **Item 65 landed (2026-09-26, this branch):** the panel's third tab is
   labelled **Bookmark**. Copy that followed: the card tooltip
   (`listControls.ts`), the auto-capture hint + the side-panel launcher + the
@@ -150,6 +173,17 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Latest work (2026-09-23/26) — one paragraph per pass
 
+- **Item 71 — panel list actions vs on-page Select (2026-09-26, this branch):**
+  red-first: `test/panel-list-actions.test.js` (2 red — no pointer element, and
+  the List-mode hint still promised "Download all") plus two `e2e-popup` phase
+  10 assertions (`FAIL: the list must point at the shared on-page selection`
+  against the pre-fix bundle). Then the §E verification: the guard composed
+  recorded bare ids with the job site; two new `batch-pipeline` cases were red
+  on the pre-fix build (`a bare default-site record must not skip a hitomi
+  gallery`, `a bare (nhentai) record must not skip a hitomi gallery`) and green
+  after the one-line fix. Chrome 596 / FF 629 unit, smoke + e2e green both
+  trees (263 checks), FF lint unchanged (32 warnings), release re-synced,
+  Chrome 3.10.3 / FF 1.4.3.
 - **Item 65 — Queue tab → Bookmark tab (2026-09-26, this branch):** a UI-only
   rename, done red-first. `test/tab-labels.test.js` asserts `#tabQueue` reads
   "Bookmark", that no user-facing string still says "Queue tab"/"Queue panel",
@@ -264,26 +298,26 @@ listing-only guard, the unrequested `allIdsSite`, the nhentai legacy checkbox
 on the five added hosts).
 
 **Items 62/63/64 are DONE** (both trees, all previously-red tests green), the
-2026-09-26 review pass closed its three follow-up defects, and **item 65**
-(Bookmark tab) has landed. What is left, in the order I would take it:
+2026-09-26 review pass closed its three follow-up defects, and **items 65 and
+71** have landed. What is left, in the order I would take it:
 
-0. **Open question first — item 66.** Its owner-confirmed spec says the
-   per-site filter builds "as one header unit" with the 65 rename. The rename
-   shipped alone (it was the requested item), so the filter needs an explicit
-   go-ahead before anyone starts it: one compact `<select>` at the list header
-   (All sites | nhentai | hitomi | hentaiera | imhentai | hentaienvy |
-   hentaifox), remembering the last choice across unselect/close.
-1. **Item 71** (demote the panel's blanket "Download all (N pages)" where
-   on-page Select + Select-all exist) — verify-and-close: item 61's range block
-   already replaced that entry, so the remaining work is the decision + doc/test
-   alignment (the `popupSettings.ts` hint still says "or with Download all"),
-   plus the latent default-site history gap in backlog §E.
-2. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
+0. **Two open questions first — items 66 and 71's UX choice.** (a) Item 66's
+   owner-confirmed spec says the per-site filter builds "as one header unit"
+   with the 65 rename; the rename shipped alone (it was the requested item), so
+   the filter needs an explicit go-ahead before anyone starts it: one compact
+   `<select>` at the list header (All sites | nhentai | hitomi | hentaiera |
+   imhentai | hentaienvy | hentaifox), remembering the last choice across
+   unselect/close. (b) Item 71 shipped the "range block + on-page Select"
+   reading; if the owner wants the range block *alone*, that is a wording
+   change to `#selectionPointer`, not a rebuild.
+1. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
    offline-feasible backlog item left, and the reason the panel **Save
    offline** *click handler* (62a) has no offline coverage: the handler is
    registered inside `updatePreviewAsync`, which the harness cannot reach. The
    markup and the gallery-page twin (62b) ARE covered offline.
-4. **Items 42/58** — real-browser pass. New checks added by 62/63/64 are
+2. **Items 68 / 70** — Bookmark list load management and live-session
+   auto-fetch, when the owner opens them.
+3. **Items 42/58** — real-browser pass. New checks added by 62/63/64 are
    listed in `WORKLIST.md` under the 42/58 heading (per-site card controls on
    real listings, the hitomi block-boundary evidence flag, the gallery-page
    button's placement, the panel Save-offline click, `allIdsSite` behaviour).
@@ -651,6 +685,7 @@ byte-identical — keep them in sync on any future change).
 **Listing card controls, Smart Download, Select all (62/63/64)**
 - Do not discover cards with one global selector: `findCards()` dispatches through `utils/listCards.ts` on the page's own adapter site, and every card carries that site.
 - Do not compare a non-nhentai card's id against history/bookmarks without the site (`toGalleryKey(id, site)`, `partitionKnown(history, ids, forced, site)`), and never send a card/bar job without `site:` — a hentaifox id would be fetched through nhentai.
+- Do not compose a **recorded** history id with the job's site: bare ids mean the default site (legacy pre-3.8.0 history), which is why the pipeline's `alreadySet` normalizes with `toGalleryKey(id)` and not `toGalleryKey(id, jobSite)`. The `redownloadIds`/force list is the opposite — it comes from the current page, so it IS site-relative and keeps composing with the job site. (Both directions are pinned in `test/batch-pipeline.test.js`.)
 - Do not rename the internals behind the Bookmark tab's UI label: the storage key stays `bookmarkQueue`, the ids stay `#tabQueue` / `#queuePane`, the row classes stay `nhdwBm*`, the actions stay `bookmarkGet` / `bookmarkImport`, the export format stays `v1`. The 2026-09-26 item-65 test asserts this.
 - Do not hide the floating action bar while the page still has listing cards: **Select all** lives there and would be unreachable. Hide it only when `findCards()` finds nothing.
 - Do not decorate gallery or reader pages: `findCards()` resolves the page through `resolveListCardPage()` (site + target). A site's related-gallery markup matches its listing selectors (hentaiera `div.thumb > a.inner_thumb.img_box` with `.gallery_title`, hitomi `#related-content.gallery-content` with `h1.lillie > a`), so the tested guard — not the absence of card-shaped markup — is what keeps the controls on listings.
@@ -733,13 +768,16 @@ byte-identical — keep them in sync on any future change).
   branch) the PR #50 review pass: live listing-only guard, `allIdsSite`
   requested by the bar reader, nhentai-only legacy checkbox. **3.10.2**
   (2026-09-26, this branch) item 65: the third panel tab is **Bookmark** —
-  UI copy only.
+  UI copy only. **3.10.3** (2026-09-26, this branch) item 71: the list's
+  shared-selection pointer + the List-mode hint, and the skip-guard identity
+  fix (bare recorded id = default site).
 - **Firefox:** 1.0.0 Android snapshot → 1.1.0 parity elevation (rebase onto
   Chrome src + audited delta) → 1.2.0 website-embedded UI (items 56/57, PR #44
   review) → 1.3.0 Chrome-3.9.0 backport → **1.4.0** Chrome-3.10.0 backport
   (62/63/64 card controls, Save offline, Select all) → **1.4.1** the
   2026-09-26 review fixes, same as Chrome 3.10.1) → **1.4.2** item 65, the
-  Bookmark-tab rename, same as Chrome 3.10.2. Items 38 (options
+  Bookmark-tab rename, same as Chrome 3.10.2 → **1.4.3** item 71, same as
+  Chrome 3.10.3. Items 38 (options
   harness) and 59 (list-format readers) were Firefox-scoped fixes — 59 is now
   also in Chrome. `PORTING_AUDIT.md` +
   `FIREFOX_PARITY_PLAN.md` in the Firefox folder are the port's own records.

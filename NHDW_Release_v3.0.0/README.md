@@ -113,7 +113,7 @@ With an API key, the extension can ask `POST /api/v2/galleries/<id>/download?for
 
 ### Firefox
 
-Firefox (desktop and Android) is fully supported via the separate `NHDW_Firefox_v1.0.0` package (v1.4.2). It uses Firefox MV3 event pages (`background.scripts`), the website-embedded header UI drawer, and full parity with Chrome's multi-site download pipeline. See [`NHDW_Firefox_v1.0.0/README.md`](../NHDW_Firefox_v1.0.0/README.md).
+Firefox (desktop and Android) is fully supported via the separate `NHDW_Firefox_v1.0.0` package (v1.4.3). It uses Firefox MV3 event pages (`background.scripts`), the website-embedded header UI drawer, and full parity with Chrome's multi-site download pipeline. See [`NHDW_Firefox_v1.0.0/README.md`](../NHDW_Firefox_v1.0.0/README.md).
 
 ---
 

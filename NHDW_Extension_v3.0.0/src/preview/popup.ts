@@ -973,7 +973,18 @@ export default class Popup
         // Add the HTML
         let nbDownload = 0;
         let currPage = currentPage;
+        // Item 71: the blanket "Download all (N pages)" entry is gone (item 61
+        // replaced it with the range block below), so the list states the two
+        // paths that took its place: the page's own cards feed this very
+        // selection (item 64), and other listing pages go through the range
+        // block. Rendered only when the page really has cards.
+        const sharedSelectionPointer = allIds.length > 0
+            ? '<div id="selectionPointer" class="selectionPointer">Ticking rows here and ticking cards on the page are the same selection'
+                + (maxPage > 0 && currPage > 0 ? "; for the listing's other pages use the range block below" : '')
+                + '.</div>'
+            : '';
         let html = '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>'
+            + sharedSelectionPointer
             + '<div class="listGalleries">' + finalHtml + '</div>'
             + '<div id="downloadedSummary" class="nhdwSummary"></div>'
             + '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/>'
