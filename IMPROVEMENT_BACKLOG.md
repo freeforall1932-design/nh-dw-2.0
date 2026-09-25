@@ -2942,6 +2942,73 @@ bullet is annotated below. Item 71 itself is closed as **verified + pointed**;
 the only thing left of it is an owner taste call (range block alone vs. the
 pointer also naming the floating bar), which is a wording change.
 
+## Session log — 2026-09-26 (same session, item 66): the Bookmark tab gets its per-site filter
+
+Item 66 was the last open question from the 2026-09-24 owner roadmap: the panel's
+third tab was specified to build "as one header unit" with the item-65 rename,
+but the rename shipped alone, so the filter waited for its own go-ahead. The
+owner gave it on 2026-09-26 ("yes go-ahead" after the item-71 report) and the
+work landed as **Chrome 3.10.4 / Firefox 1.4.4**.
+
+### What shipped
+
+- **One permanent `<select>`** in the list header (`#nhdwBmSiteFilter`):
+  `All sites` then nhentai | hitomi | hentaiera | imhentai | hentaienvy |
+  hentaifox, one canonical order. Option labels carry live counts while a site
+  has rows ("nhentai (2)"); a site with no rows is still offered, without a
+  count, and picking it explains itself ("No bookmarks for imhentai yet. Pick
+  \"All sites\" to see the other 4 titles.") instead of showing a blank box.
+- **The filter is a VIEW, never a rewrite.** `state.items` stays whole; the
+  header counts line keeps reporting the whole list and a "showing X of Y"
+  line beside the select says how much of it is on screen (hidden for All).
+- **Select all / Select none respect the filter.** With a filter on, the
+  toolbar buttons send `{action:"bookmarkSelect", ids:[…visible composite
+  keys…]}` instead of the whole-list `{all:true}` form, so rows the user cannot
+  see are never ticked (and a following "Download N selected" cannot fetch
+  them). The worker already supported `ids` (`setBookmarkSelected`, composite
+  touch set); the keys are composite ("hitomi:2") because a bare id reads as
+  the default site's.
+- **The choice is remembered** in `chrome.storage.sync` under
+  `bookmarkSiteFilter` (the `uiMode`/`darkMode` neighbourhood), read on every
+  panel open — so the popup, the side panel and Firefox's embedded drawer all
+  restore the last choice, and a missing/corrupt value degrades to All sites.
+  The panel's own storage is deliberately not the worker-owned local store.
+- **CSS in both trees:** plain `.nhdwBmFilter` / `.nhdwBmSiteSelect` /
+  `.nhdwBmFilterInfo` rules in Chrome's `css/style.css`; the same rules under
+  `:where(#queuePane, #nhdwSiteUiQueue)` in Firefox's `css/panelRenderers.css`
+  (the panel renders in the popup AND the website-embedded drawer).
+- **Pure helpers** in `utils/bookmarkQueue.ts` so the core stays Node-testable:
+  `SITE_FILTER_ALL`, `bookmarkFilterSites()`, `bookmarkSiteCounts()`,
+  `filterBookmarksBySite()`, `normalizeBookmarkSiteFilter()`,
+  `bookmarkSelectionKeys()`.
+
+### Red first
+
+- `test/bookmark-queue.test.js` (both trees, byte-identical): a new
+  `describe("bookmark site filter (item 66)")` — 5 cases pinning the canonical
+  site list, per-site counts + the total under `all` (an absent site answers
+  `undefined`, not 0), `filterBookmarksBySite` returning everything for `all`
+  and never mutating, hostile stored values (`"ALL"`, `"nhentai:123"`, `""`,
+  `undefined`, `null`, objects) all reading as `all`, and
+  `bookmarkSelectionKeys` answering composite keys of the visible rows. All
+  five failed before the helpers existed (`TypeError: … is not a function`)
+  and pass after.
+- `scripts/e2e-bookmark-panel.js` (both trees, byte-identical): four new
+  blocks (phases 8a–8d) — the select renders with counted options and restores
+  the remembered value from the sync store, a choice filters the rows and is
+  written to sync (and never to the worker-owned local store), filtered
+  **Select all** sends one `bookmarkSelect` whose `ids` are exactly the visible
+  composite keys (no `all:true`), a filtered-empty site explains itself, and
+  All sites restores the whole list with the unchanged `{all:true}` form. Red
+  before the panel work (`FAIL: the list header needs the per-site filter
+  (item 66)`), green after.
+
+### Verification
+
+Chrome **601** unit / 4 pending, Firefox **634** / 4; smoke green, all offline
+e2e green in both trees, FF lint unchanged (0 errors / 0 notices / 32
+warnings); release folder re-synced; versions bumped to **3.10.4 / 1.4.4**.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |

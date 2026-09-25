@@ -1,4 +1,4 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.3)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.4)
 
 **Updated:** 2026-09-26 · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
@@ -8,7 +8,12 @@ gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
 
-v1.4.3 = the panel list's shared-selection pointer and the List-mode hint
+v1.4.4 = the Bookmark tab's per-site filter (item 66): a permanent header
+`<select>` (All sites | nhentai | hitomi | hentaiera | imhentai | hentaienvy |
+hentaifox) with live counts, remembered in `chrome.storage.sync` and restored
+on every open; the filter is a **view** (stored list untouched) and filtered
+Select all/none send only the visible rows' composite keys. v1.4.3 = the panel
+list's shared-selection pointer and the List-mode hint
 (item 71), plus the skip-guard identity fix (a recorded bare id is the default
 site's record, never this job's). v1.4.2 = the panel's third tab is labelled
 **Bookmark** (item 65, UI-only: the
@@ -42,14 +47,15 @@ Settings → In-page panel.
 
 v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
 plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). The Firefox offline
-suite now has **620** passing / 4 deliberately opt-in live tests pending
+suite now has **634** passing / 4 deliberately opt-in live tests pending
 (including the Item 48 multi-site batch download suite and all 6 site adapters).
 
 Review fixes include working embedded settings, shared Settings/Queue layout
 CSS, safe reattachment/live updates, and a Full panel tab bound to the nhentai
 page that opened it (including retries and pasted-bookmark metadata). Offline
 tests cover these paths; this is **not** a claim of Firefox/Android device
-verification. Manifest is **1.4.3** (1.4.3 = the item-71 pointer + guard fix,
+verification. Manifest is **1.4.4** (1.4.4 = the item-66 per-site filter, same
+as Chrome 3.10.4; 1.4.3 = the item-71 pointer + guard fix,
 same as Chrome 3.10.3; 1.4.2 = the Bookmark-tab rename, same as
 Chrome 3.10.2; 1.4.0 = the per-site listing card controls, the
 gallery-page Save offline / Select controls and Select all, backported from

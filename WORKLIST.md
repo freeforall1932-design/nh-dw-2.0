@@ -1,6 +1,14 @@
 # Worklist — nh-dw-2.0
 
 **Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
+**item 66 landed (the Bookmark tab's per-site filter)** — one permanent
+`<select>` at the list header (All sites | nhentai | hitomi | hentaiera |
+imhentai | hentaienvy | hentaifox) with live counts in the option labels. It
+filters the **view only** (the stored list is never rewritten), it remembers
+the last choice across closes and surfaces (`chrome.storage.sync`, like
+uiMode), and while a filter is on the toolbar's **Select all / Select none**
+send the visible rows' **composite keys** instead of the whole-list form, so
+nothing off screen is silently ticked. Chrome **3.10.4** / Firefox **1.4.4**.
 **item 71 landed (verify-and-close + one real defect)** — the blanket "Download
 all (N pages)" entry was already gone (item 61's range block), so the panel now
 also *says* what took its place: a `#selectionPointer` line in the list
@@ -111,17 +119,15 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-26, after items 65 and 71 landed):** **40**
+**Top of the queue (2026-09-26, after items 65, 66 and 71 landed):** **40**
 (bootstrap a listing page in `scripts/e2e-popup.js`; the last offline-feasible
 backlog item, and the reason the panel **Save offline** click handler still has
 no offline coverage), then **68** and **70** when the owner opens them. Items
 **42/58** (real-browser + Android passes, then signing) stay owner-only and
 outrank all of these in value.
 
-**Two open questions for the owner (recorded, not started):** (1) **item 66**
-(the Bookmark-tab per-site filter) was specified to build "as one header unit"
-with the 65 rename, but the rename shipped alone — the filter needs its own
-go-ahead; (2) **item 71's remaining UX choice** is narrowed to whether the
+**One open question for the owner (recorded, not started):** (1) **item 71's
+remaining UX choice** is narrowed to whether the
 range block alone is enough on a listing page or the button should also point
 at the page's floating bar — the shipped pointer already names on-page
 selection, so either answer is a wording change, not a rebuild.
@@ -263,6 +269,14 @@ open parts until the owner answers).
   e.g. "nhentai (800)"). Keyboard-friendly, one permanent row, trivial to
   render even at 10k+ rows — plays clean with 68's windowed list. No chip
   row, no grouped sections. Builds with 65 (rename) as one header unit.
+  **Landed 2026-09-26 (3.10.4 / FF 1.4.4)** after the owner's go-ahead:
+  `#nhdwBmSiteFilter` in the header, counts as option labels, a "showing X of
+  Y" line (hidden for All), a self-explaining filtered-empty note, the choice
+  remembered in `chrome.storage.sync.bookmarkSiteFilter` (read on every open;
+  corrupt values degrade to All), and filtered Select all/none sending
+  `{bookmarkSelect, ids:[visible composite keys]}`. Red-first: 5 new cases in
+  `test/bookmark-queue.test.js` + phases 8a–8d in `e2e-bookmark-panel.js`
+  (both trees, byte-identical).
 
 - [x] **67. On-page cart — confirmed: badge + expandable mini-cart.**
   Elaboration 1 closed 2026-09-24 (owner chose **B**). Compact count chip
@@ -396,6 +410,19 @@ workflows are still only covered by the content-script harnesses
 ---
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
+
+- **Item 66 — Bookmark-tab per-site filter (2026-09-26):** one permanent
+  `<select>` in the list header (`#nhdwBmSiteFilter`): All sites | nhentai |
+  hitomi | hentaiera | imhentai | hentaienvy | hentaifox, live counts in the
+  labels, remembered in `chrome.storage.sync` and restored on every open. The
+  filter is a **view** — the stored list and the `N bookmarked · N selected ·
+  N done` line stay whole, with "showing X of Y" beside the select — and
+  filtered Select all/none send the visible rows' **composite keys**
+  (`{bookmarkSelect, ids:[…]}`) rather than `{all:true}`, so off-screen rows
+  are never ticked. New helpers in `bookmarkQueue.ts` (canonical site list,
+  counts, filter, tolerant normalizer, selection keys). Red-first: 5 unit
+  cases + 4 harness phases; Chrome 601 / FF 634 unit, e2e green, FF lint
+  unchanged (32 warnings), release re-synced. Chrome 3.10.4 / FF 1.4.4.
 
 - **Item 71 — panel list actions vs on-page Select (2026-09-26):** the blanket
   entry was already retired by item 61, so the list now points at what replaced

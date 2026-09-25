@@ -151,7 +151,7 @@ For Firefox:
 cd NHDW_Firefox_v1.0.0
 npm ci
 npm run build     # webpack -> js/
-npm test          # 620 passing unit tests (Firefox)
+npm test          # 634 passing unit tests (Firefox)
 npm run test:smoke
 npm run test:e2e
 ```

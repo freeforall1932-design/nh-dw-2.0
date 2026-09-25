@@ -24,7 +24,13 @@
 import {
     BookmarkItem,
     BookmarkState,
+    SITE_FILTER_ALL,
+    bookmarkFilterSites,
+    bookmarkSelectionKeys,
+    bookmarkSiteCounts,
     emptyBookmarkState,
+    filterBookmarksBySite,
+    normalizeBookmarkSiteFilter,
     normalizeBookmarkState,
     parseGalleryInput,
     planBookmarkDownload
@@ -67,6 +73,41 @@ let draggingId: string | null = null;
 let built = false;
 let includeAlready = false;
 let noticeTimer: any = null;
+// Item 66: the per-site filter. A VIEW over the list - it never rewrites the
+// stored state - remembered in chrome.storage.sync (like uiMode / darkMode),
+// never in the worker-owned local store.
+const SITE_FILTER_KEY = "bookmarkSiteFilter";
+let siteFilter: string = SITE_FILTER_ALL;
+let selectAllButton: HTMLButtonElement | null = null;
+let selectNoneButton: HTMLButtonElement | null = null;
+
+function readSiteFilter(done: () => void): void {
+    let answered = false;
+    const finish = (value: any) => {
+        if (answered) {
+            return;
+        }
+        answered = true;
+        siteFilter = normalizeBookmarkSiteFilter(value);
+        done();
+    };
+    try {
+        chrome.storage.sync.get({ [SITE_FILTER_KEY]: SITE_FILTER_ALL }, (values: any) => {
+            finish(values ? values[SITE_FILTER_KEY] : SITE_FILTER_ALL);
+        });
+    } catch (_) {
+        // No runtime (or no sync permission): show the whole list.
+        finish(SITE_FILTER_ALL);
+    }
+}
+
+function writeSiteFilter(value: string): void {
+    try {
+        chrome.storage.sync.set({ [SITE_FILTER_KEY]: value }, () => {
+            try { void chrome.runtime.lastError; } catch (_) { /* preference only */ }
+        });
+    } catch (_) { /* preference only */ }
+}
 
 // ---- notices -------------------------------------------------------------
 
@@ -582,6 +623,26 @@ function renderList(): void {
     const doneCount = state.items.filter((item) => item.status === "done").length;
     counts.textContent = total + " bookmarked \u00b7 " + selectedCount + " selected \u00b7 " + doneCount + " done";
 
+    // Item 66: the filter is a view, so the counts line above and the footer
+    // button keep reporting the WHOLE list; the filter line below states how
+    // much of it is on screen.
+    const visible = filterBookmarksBySite(state, siteFilter);
+    syncSiteFilterSelect();
+    const filterInfo = document.getElementById("nhdwBmFilterInfo");
+    if (filterInfo !== null) {
+        filterInfo.textContent = siteFilter === SITE_FILTER_ALL ? "" : "showing " + visible.length + " of " + total;
+    }
+    if (selectAllButton !== null) {
+        selectAllButton.title = siteFilter === SITE_FILTER_ALL
+            ? "Tick every bookmark"
+            : "Tick every " + siteFilter + " bookmark on screen";
+    }
+    if (selectNoneButton !== null) {
+        selectNoneButton.title = siteFilter === SITE_FILTER_ALL
+            ? "Untick every bookmark"
+            : "Untick every " + siteFilter + " bookmark on screen";
+    }
+
     dockButton.textContent = state.collapsed ? "Expand \u25be" : "Minimise \u25b4";
     dockButton.title = state.collapsed
         ? "Show the bookmark list"
@@ -616,9 +677,49 @@ function renderList(): void {
         list.appendChild(empty);
         return;
     }
-    for (const item of state.items) {
+    if (visible.length === 0) {
+        // A filtered-empty list must say why it is empty and how to get out:
+        // "nothing here" and "nothing here for hitomi" are different answers.
+        const empty = el("div");
+        empty.className = "nhdwBmEmpty";
+        empty.textContent = "No bookmarks for " + siteFilter + " yet. Pick \"All sites\" to see the other "
+            + (total === 1 ? "title" : total + " titles") + ".";
+        list.appendChild(empty);
+        return;
+    }
+    for (const item of visible) {
         list.appendChild(buildRow(item));
     }
+}
+
+// Item 66: the <select> keeps its options for the whole life of the panel
+// (rebuilding them would close an open dropdown), so a render only refreshes
+// the counts and the current value. Options are the six known sites plus All
+// sites, in one canonical order - a site with no rows is still offered, and
+// picking it shows the filtered-empty note above.
+function syncSiteFilterSelect(): void {
+    const select = document.getElementById("nhdwBmSiteFilter") as HTMLSelectElement | null;
+    if (select === null) {
+        return;
+    }
+    const counts = bookmarkSiteCounts(state);
+    const sites = [SITE_FILTER_ALL].concat(bookmarkFilterSites());
+    // A real <select> exposes .options; the window-less harness only has the
+    // appended children. Both are indexable, so accept either.
+    const options: any = (select as any).options && (select as any).options.length
+        ? (select as any).options
+        : select.children;
+    for (let i = 0; i < options.length; i++) {
+        const option = options[i] as any;
+        const site = String(option.value);
+        if (sites.indexOf(site) === -1) {
+            continue;
+        }
+        const count = counts[site] || 0;
+        const name = site === SITE_FILTER_ALL ? "All sites" : site;
+        option.textContent = count > 0 ? name + " (" + count + ")" : name;
+    }
+    select.value = siteFilter;
 }
 
 // ---- static chrome -------------------------------------------------------
@@ -675,6 +776,34 @@ function buildChrome(container: HTMLElement): void {
         }
     });
     header.appendChild(openPanel);
+    // Item 66: the per-site filter sits in the header, right after the counts.
+    // The wrapper keeps the select and its "showing X of Y" line together when
+    // the header wraps in a narrow side panel.
+    const filterBox = el("div");
+    filterBox.className = "nhdwBmFilter";
+    const filterSelect = el("select");
+    filterSelect.id = "nhdwBmSiteFilter";
+    filterSelect.className = "nhdwBmSiteSelect";
+    filterSelect.title = "Show only the bookmarks of one site";
+    (filterSelect as any).setAttribute("aria-label", "Filter bookmarks by site");
+    for (const site of [SITE_FILTER_ALL].concat(bookmarkFilterSites())) {
+        const option = el("option");
+        option.value = site;
+        option.textContent = site === SITE_FILTER_ALL ? "All sites" : site;
+        filterSelect.appendChild(option);
+    }
+    filterSelect.value = siteFilter;
+    filterSelect.addEventListener("change", () => {
+        siteFilter = normalizeBookmarkSiteFilter((filterSelect as HTMLSelectElement).value);
+        writeSiteFilter(siteFilter);
+        renderList();
+    });
+    filterBox.appendChild(filterSelect);
+    const filterInfo = el("span");
+    filterInfo.id = "nhdwBmFilterInfo";
+    filterInfo.className = "nhdwBmFilterInfo";
+    filterBox.appendChild(filterInfo);
+    header.appendChild(filterBox);
 
     const toggle = el("button");
     toggle.type = "button";
@@ -755,11 +884,18 @@ function buildChrome(container: HTMLElement): void {
     const toolbar = el("div");
     toolbar.className = "nhdwBmToolbar";
 
+    // Item 66: with a filter on, "all" means all of the VISIBLE rows. Sending
+    // the whole-list form would tick rows the user cannot see, and a following
+    // "Download N selected" would then fetch them. The ids travel as composite
+    // keys, because a bare id reads as the default site.
     const selectAll = el("button");
     selectAll.type = "button";
     selectAll.textContent = "Select all";
     selectAll.addEventListener("click", () => {
-        send({ action: "bookmarkSelect", all: true, selected: true }).then((response) => {
+        const message: any = siteFilter === SITE_FILTER_ALL
+            ? { action: "bookmarkSelect", all: true, selected: true }
+            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(filterBookmarksBySite(state, siteFilter)), selected: true };
+        send(message).then((response) => {
             if (response && response.state) {
                 state = normalizeBookmarkState(response.state);
                 renderList();
@@ -767,12 +903,16 @@ function buildChrome(container: HTMLElement): void {
         });
     });
     toolbar.appendChild(selectAll);
+    selectAllButton = selectAll;
 
     const selectNone = el("button");
     selectNone.type = "button";
     selectNone.textContent = "Select none";
     selectNone.addEventListener("click", () => {
-        send({ action: "bookmarkSelect", all: true, selected: false }).then((response) => {
+        const message: any = siteFilter === SITE_FILTER_ALL
+            ? { action: "bookmarkSelect", all: true, selected: false }
+            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(filterBookmarksBySite(state, siteFilter)), selected: false };
+        send(message).then((response) => {
             if (response && response.state) {
                 state = normalizeBookmarkState(response.state);
                 renderList();
@@ -780,6 +920,7 @@ function buildChrome(container: HTMLElement): void {
         });
     });
     toolbar.appendChild(selectNone);
+    selectNoneButton = selectNone;
 
     const includeLabel = el("label");
     includeLabel.className = "nhdwBmCheck";
@@ -880,9 +1021,14 @@ export function renderBookmarks(container: HTMLElement): void {
         buildChrome(container);
         built = true;
     }
-    send({ action: "bookmarkGet" }).then((response) => {
-        state = response && response.state ? normalizeBookmarkState(response.state) : emptyBookmarkState();
-        renderList();
+    // Item 66: the remembered filter is read first, so the very first paint is
+    // already filtered (and re-read on every open, so a change made in the
+    // other surface - popup vs side panel vs the site drawer - is picked up).
+    readSiteFilter(() => {
+        send({ action: "bookmarkGet" }).then((response) => {
+            state = response && response.state ? normalizeBookmarkState(response.state) : emptyBookmarkState();
+            renderList();
+        });
     });
 }
 

@@ -126,6 +126,31 @@
     opacity: 0.8;
 }
 
+/* ---- per-site filter (item 66) ----
+   One compact row in the header: the select plus its "showing X of Y" line.
+   The header wraps rather than squashing when the panel is narrow. */
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmHeader {
+    flex-wrap: wrap;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmFilter {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmSiteSelect {
+    max-width: 140px;
+    font-size: 12px;
+}
+
+:where(#queuePane, #nhdwSiteUiQueue) .nhdwBmFilterInfo {
+    font-size: 11px;
+    opacity: 0.8;
+    white-space: nowrap;
+}
+
 :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmToggle {
     border: 1px solid #e31b53;
     background: transparent;

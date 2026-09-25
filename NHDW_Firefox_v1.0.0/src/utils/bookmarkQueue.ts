@@ -28,7 +28,7 @@
 //   * Tolerant parsing everywhere: a corrupt or legacy record degrades to an
 //     empty list rather than throwing inside the panel.
 
-import { toGalleryKey, normalizeSite } from "./siteKeys";
+import { DEFAULT_SITE, toGalleryKey, normalizeSite } from "./siteKeys";
 
 export const BOOKMARK_QUEUE_KEY = "bookmarkQueue";
 export const BOOKMARK_QUEUE_VERSION = 1;
@@ -476,13 +476,83 @@ export function setBookmarkSelected(state: BookmarkState, ids: Array<string | nu
     };
 }
 
-/** Select all / none across the whole list (the list has no filter of its own). */
+/**
+ * Select all / none across the whole list. The panel's per-site filter (item
+ * 66) is a VIEW: it never rewrites the list, so a filtered "Select all" sends
+ * the visible rows' composite keys through setBookmarkSelected instead of
+ * coming here.
+ */
 export function setAllBookmarksSelected(state: BookmarkState, selected: boolean): BookmarkState {
     return {
         v: state.v,
         items: state.items.map((item) => Object.assign({}, item, { selected: selected })),
         collapsed: state.collapsed
     };
+}
+
+// ---- item 66: the per-site filter (a VIEW over the list, never a rewrite) ----
+
+/** The filter value that means "show everything". */
+export const SITE_FILTER_ALL = "all";
+
+/**
+ * The sites the filter offers, in one canonical order (nhentai first, then the
+ * multi-site roster of 3.9.0). Options are permanent: the dropdown never
+ * changes shape as rows come and go, so a remembered choice keeps its meaning
+ * and a zero-row site can still be selected - and then explains itself.
+ */
+export function bookmarkFilterSites(): string[] {
+    return [DEFAULT_SITE, "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox"];
+}
+
+/**
+ * Tolerant read of a stored filter value: anything that is not one of the
+ * known sites reads as "all", so a corrupt or older value can never blank the
+ * list with no way back.
+ */
+export function normalizeBookmarkSiteFilter(value: any): string {
+    if (typeof value !== "string") {
+        return SITE_FILTER_ALL;
+    }
+    const raw = value.trim().toLowerCase();
+    if (raw === SITE_FILTER_ALL) {
+        return SITE_FILTER_ALL;
+    }
+    return bookmarkFilterSites().indexOf(raw) !== -1 ? raw : SITE_FILTER_ALL;
+}
+
+/**
+ * Rows per site, plus the total under SITE_FILTER_ALL. Counts are what the
+ * option labels show, and they are computed from the loaded state - no extra
+ * storage read, no message.
+ */
+export function bookmarkSiteCounts(state: BookmarkState): Record<string, number> {
+    const counts: Record<string, number> = {};
+    counts[SITE_FILTER_ALL] = state.items.length;
+    for (const item of state.items) {
+        const site = normalizeSite(item.site);
+        counts[site] = (counts[site] || 0) + 1;
+    }
+    return counts;
+}
+
+/** The rows a filter shows. Order is preserved: it is the download order. */
+export function filterBookmarksBySite(state: BookmarkState, site: string): BookmarkItem[] {
+    const wanted = normalizeBookmarkSiteFilter(site);
+    if (wanted === SITE_FILTER_ALL) {
+        return state.items.slice();
+    }
+    return state.items.filter((item) => normalizeSite(item.site) === wanted);
+}
+
+/**
+ * Composite keys of the given rows. Selecting a filtered slice must send
+ * keys, not bare ids: a bare id reads as the default site (setBookmarkSelected
+ * uses toGalleryKey), so a same-numbered gallery on another site would be the
+ * one that got ticked.
+ */
+export function bookmarkSelectionKeys(items: BookmarkItem[]): string[] {
+    return (items || []).map((item) => itemKey(item));
 }
 
 export function setBookmarksCollapsed(state: BookmarkState, collapsed: boolean): BookmarkState {
