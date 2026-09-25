@@ -676,7 +676,7 @@ export function bookmarkTogglePresentation(on: boolean): { label: string; title:
         label: on ? "Bookmarked" : "Bookmark",
         title: on
             ? "On the bookmark queue - click to take it off again (nothing is un-downloaded)"
-            : "Add this title to the persistent bookmark queue (Queue tab). It survives a browser restart.",
+            : "Add this title to the persistent bookmark queue (Bookmark tab). It survives a browser restart.",
         className: on ? "nhdwBookmarkToggle nhdwBookmarkOn" : "nhdwBookmarkToggle"
     };
 }

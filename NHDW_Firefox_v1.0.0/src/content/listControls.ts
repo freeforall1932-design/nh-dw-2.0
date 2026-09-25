@@ -213,7 +213,7 @@ function applyBookmarkButton(button: HTMLElement, id: string, site: string = cur
     button.className = "nhdw-bookmark" + (on ? " nhdw-bookmark-on" : "");
     button.title = on
         ? "Bookmarked - click to take it off the bookmark list"
-        : "Bookmark this title: it waits in the Queue panel and survives a browser restart";
+        : "Bookmark this title: it waits in the Bookmark panel and survives a browser restart";
     button.setAttribute("aria-pressed", on ? "true" : "false");
     const glyph = button.querySelector("svg.nhdw-bookmark-glyph path");
     if (glyph !== null) {

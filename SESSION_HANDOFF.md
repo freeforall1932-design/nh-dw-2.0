@@ -1,7 +1,7 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`). Chrome **3.10.1**,
-Firefox **1.4.1**. This session ran the mandatory review pass on the merged
+**Updated:** 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`). Chrome **3.10.2**,
+Firefox **1.4.2**. This session ran the mandatory review pass on the merged
 3.10.0 work (PR #50) and found **three defects**, each fixed under a test that
 failed on the pre-fix build: **F1** the tested listing-only guard
 (`resolveListCardPage()`) had no production caller, so gallery pages whose
@@ -9,18 +9,20 @@ related-gallery cards match the listing selectors were decorated and the
 floating bar appeared over title pages; **F2** `listControls.readSelection()`
 read `allIdsSite` without requesting it, leaving the cross-site selection guard
 dead (item 59's class); **F3** the legacy nhentai caption checkbox ran on the
-five added hosts. Full detail: the 2026-09-26 review log in
-`IMPROVEMENT_BACKLOG.md`. Read the **"Next session"** section before starting
-new work.
+five added hosts. It then landed **item 65**: the panel's third tab is labelled
+**Bookmark** (and every tooltip/hint that called it a "Queue" follows) with the
+storage key, element ids, message actions and export format deliberately
+unchanged — locked by a new `test/tab-labels.test.js` in both trees. Full
+detail: the 2026-09-26 logs in `IMPROVEMENT_BACKLOG.md`. Read the
+**"Next session"** section before starting new work.
 
 **The 3.10.0 work is on main.** The previous session's branch landed as
 **PR #50** (merge commit; CI green on both jobs: *Offline suites (fixtures +
 window-less VM bundles)* and *Firefox snapshot (offline suites)*). This session
-starts from that merge and carries the review fixes as Chrome **3.10.1** /
-Firefox **1.4.1** (patch bump: the loadable package's bytes changed after
-3.10.0 merged; revert the three manifest lines if the owner prefers to fold the
-fixes into a later version). The docs under "Document map" describe the merged
-3.10.0 state plus this branch's fixes.
+starts from that merge and carries the review fixes (**3.10.1 / 1.4.1**) and
+item 65 (**3.10.2 / 1.4.2**) — patch bumps on purpose: the loadable bytes
+changed after 3.10.0 merged. The docs under "Document map" describe the merged
+3.10.0 state plus this branch's fixes and the rename.
 
 **This file was deliberately slimmed on 2026-09-24.** It used to carry every
 session's full narrative (192 KB). It now carries only what a fresh session
@@ -50,8 +52,9 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Current state
 
-- **Chrome 3.10.1 / Firefox 1.4.1** (3.10.0/1.4.0 = PR #50; the patch = this
-  branch's 2026-09-26 review fixes), six sites shipped end to end: nhentai,
+- **Chrome 3.10.2 / Firefox 1.4.2** (3.10.0/1.4.0 = PR #50; 3.10.1/1.4.1 = this
+  branch's 2026-09-26 review fixes; 3.10.2/1.4.2 = item 65, the Bookmark-tab
+  rename), six sites shipped end to end: nhentai,
   hentaiera, imhentai, hentaienvy, hentaifox, hitomi (+ `cin.*` paste shapes).
   Card controls (Select + Bookmark + Download) and the floating bar now run on
   all six listing shapes; every gallery page and the panel preview carry a
@@ -61,9 +64,9 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   writer via OPFS), plus this session's review pass that found and fixed eight
   defects in them (summary below; full table in `IMPROVEMENT_BACKLOG.md`'s
   2026-09-24 review log).
-- **Suites (after 62/63/64 + the item-59 port):** Chrome **587 unit / 4
-  pending**, smoke 7, e2e exit 0 (**263 PASS** for `e2e-title-bookmark`, all
-  other e2e green). Firefox **620 unit / 4 pending**, smoke 7, e2e exit 0,
+- **Suites (after item 65; the review-fix run was 587/620):** Chrome **591 unit
+  / 4 pending**, smoke 7, e2e exit 0 (**263 checks** for `e2e-title-bookmark`,
+  all other e2e green). Firefox **624 unit / 4 pending**, smoke 7, e2e exit 0,
   lint **0 errors / 0 notices / 32 warnings** (26 pre-existing
   `UNSAFE_VAR_ASSIGNMENT`, 3 `UNSUPPORTED_API` sidePanel/offscreen, 1
   `DANGEROUS_EVAL`, plus 1 new `UNSAFE_VAR_ASSIGNMENT` from the legacy
@@ -71,6 +74,16 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   `nhentai_downloader-1.4.1.zip`. CI green on both jobs; **PR #50 merged to
   main**. Re-run 2026-09-26 after the review fixes: same unit counts, smoke and
   e2e exit 0, FF lint unchanged (32 warnings).
+- **Item 65 landed (2026-09-26, this branch):** the panel's third tab is
+  labelled **Bookmark**. Copy that followed: the card tooltip
+  (`listControls.ts`), the auto-capture hint + the side-panel launcher + the
+  no-side-panel fallback notice (`popupSettings.ts`), and the two bookmark
+  tooltips (`bookmarkQueue.ts`, `titleBookmark.ts`). Deliberately unchanged:
+  the `bookmarkQueue` key, `#tabQueue` / `#queuePane` ids, `nhdwBm*` classes,
+  `bookmarkGet` / `bookmarkImport` actions, the export format. New
+  `test/tab-labels.test.js` in both trees locks both halves and was **red**
+  before the change (tab read "Queue"; four copy strings said "Queue").
+  Chrome 3.10.2 / FF 1.4.2.
 - **Review pass (2026-09-26, this branch):** three defects in the merged 3.10.0
   work, fixed red-first in both trees — `findCards()` now resolves the page
   through `resolveListCardPage()` (gallery/reader pages decorate nothing and
@@ -137,6 +150,14 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Latest work (2026-09-23/26) — one paragraph per pass
 
+- **Item 65 — Queue tab → Bookmark tab (2026-09-26, this branch):** a UI-only
+  rename, done red-first. `test/tab-labels.test.js` asserts `#tabQueue` reads
+  "Bookmark", that no user-facing string still says "Queue tab"/"Queue panel",
+  that the replacements are actually present, and that the internals a future
+  cleanup might be tempted to rename (the `bookmarkQueue` storage key, the
+  `#tabQueue` / `#queuePane` ids) stay put. Red before the change (3 failing),
+  green after; Chrome 591 / FF 624 unit, smoke + e2e green both trees,
+  FF lint unchanged. Chrome 3.10.2 / FF 1.4.2, release folder re-synced.
 - **PR #50 review pass (2026-09-26, this branch):** three defects, fixed
   red-first in both trees. (F1) `utils/listCards.ts`'s `resolveListCardPage()` —
   the listing-only guard `test/list-cards.test.js` pins — had **no production
@@ -242,22 +263,22 @@ whole-store merge stub; the 2026-09-26 pass found three more (the dead
 listing-only guard, the unrequested `allIdsSite`, the nhentai legacy checkbox
 on the five added hosts).
 
-**Items 62/63/64 are DONE** (both trees, all previously-red tests green) and
-the 2026-09-26 review pass closed its three follow-up defects. What they left
-open, in the order I would take it (**65 before 71** — the backlog's §F order;
-the merge-refresh left this list the other way round. Item 71 is a
-verification/close-out, not a build: item 61's range block already replaced the
-blanket "Download all (N pages)" entry, so confirm that and close it rather
-than adding UI):
+**Items 62/63/64 are DONE** (both trees, all previously-red tests green), the
+2026-09-26 review pass closed its three follow-up defects, and **item 65**
+(Bookmark tab) has landed. What is left, in the order I would take it:
 
-1. **Item 65** (rename the Queue tab to **Bookmark tab**, UI-only) — storage
-   key, message actions and export format stay as-is; no test asserts the
-   literal label, and item 66 (per-site filter) lands as the same header unit.
-2. **Item 71** (demote the panel's blanket "Download all (N pages)" where
+0. **Open question first — item 66.** Its owner-confirmed spec says the
+   per-site filter builds "as one header unit" with the 65 rename. The rename
+   shipped alone (it was the requested item), so the filter needs an explicit
+   go-ahead before anyone starts it: one compact `<select>` at the list header
+   (All sites | nhentai | hitomi | hentaiera | imhentai | hentaienvy |
+   hentaifox), remembering the last choice across unselect/close.
+1. **Item 71** (demote the panel's blanket "Download all (N pages)" where
    on-page Select + Select-all exist) — verify-and-close: item 61's range block
-   replaced that entry, so the remaining work is the decision + doc/test
-   alignment, plus the latent default-site history gap in backlog §E.
-3. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
+   already replaced that entry, so the remaining work is the decision + doc/test
+   alignment (the `popupSettings.ts` hint still says "or with Download all"),
+   plus the latent default-site history gap in backlog §E.
+2. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
    offline-feasible backlog item left, and the reason the panel **Save
    offline** *click handler* (62a) has no offline coverage: the handler is
    registered inside `updatePreviewAsync`, which the harness cannot reach. The
@@ -424,7 +445,7 @@ than adding UI):
   `reconcileBookmarksAfterRestart` runs once per worker lifetime
   (`downloading`→`saved`; `done` re-checked against history; `failed` keeps its
   reason; order/selection/thumbnails/dock untouched).
-- The Queue tab always downloads `separate: true`; format/master folder/
+- The Bookmark tab always downloads `separate: true`; format/master folder/
   template come from the list-mode settings (one source, no disagreement).
 - Rows carry `site`; row identity is the composite key; the drag handle
   (`span.nhdwBmDrag`) is the only draggable element; array order = download
@@ -436,7 +457,7 @@ than adding UI):
   appended, **nothing ever deleted**; queue via `bookmarkImport`, history via
   `historyImport` → `writeHistory()` (serialized write chain).
 - `getActiveNhentaiTabId()` is mandatory for any tab lookup outside the
-  preview flow (the Queue tab can be open on any website); enrichment reports
+  preview flow (the Bookmark tab can be open on any website); enrichment reports
   `{resolved, skipped}` honestly.
 
 **Multi-site (3.8.0/3.9.0)**
@@ -630,6 +651,7 @@ byte-identical — keep them in sync on any future change).
 **Listing card controls, Smart Download, Select all (62/63/64)**
 - Do not discover cards with one global selector: `findCards()` dispatches through `utils/listCards.ts` on the page's own adapter site, and every card carries that site.
 - Do not compare a non-nhentai card's id against history/bookmarks without the site (`toGalleryKey(id, site)`, `partitionKnown(history, ids, forced, site)`), and never send a card/bar job without `site:` — a hentaifox id would be fetched through nhentai.
+- Do not rename the internals behind the Bookmark tab's UI label: the storage key stays `bookmarkQueue`, the ids stay `#tabQueue` / `#queuePane`, the row classes stay `nhdwBm*`, the actions stay `bookmarkGet` / `bookmarkImport`, the export format stays `v1`. The 2026-09-26 item-65 test asserts this.
 - Do not hide the floating action bar while the page still has listing cards: **Select all** lives there and would be unreachable. Hide it only when `findCards()` finds nothing.
 - Do not decorate gallery or reader pages: `findCards()` resolves the page through `resolveListCardPage()` (site + target). A site's related-gallery markup matches its listing selectors (hentaiera `div.thumb > a.inner_thumb.img_box` with `.gallery_title`, hitomi `#related-content.gallery-content` with `h1.lillie > a`), so the tested guard — not the absence of card-shaped markup — is what keeps the controls on listings.
 - Do not let `allIds` cross sites: stamp it with `allIdsSite` and wipe it when the namespace changes (cards, panel and the gallery-page Select all share it). Do not read `allIdsSite` without requesting it — object-form `get` answers only the named keys, so request it with an empty default exactly like `content.ts` / `preview.ts` / `titleBookmark.ts` / `listControls.ts` now do.
@@ -677,9 +699,9 @@ byte-identical — keep them in sync on any future change).
 - Do not call `getActiveTabId()` from outside the preview flow — use `getActiveNhentaiTabId()`; a permission error is not a guard.
 - Do not route a bookmark thumbnail into the download path (`t.nhentai.net` is display-only, deliberately absent from host permissions).
 - Do not add a destructive import (union, local wins, append-only — a wrong file cannot wipe a queue).
-- Do not let the Queue tab write the queue or the history itself (worker single writer; `bookmarkImport` / `historyImport` → `writeHistory()`).
+- Do not let the Bookmark tab write the queue or the history itself (worker single writer; `bookmarkImport` / `historyImport` → `writeHistory()`).
 - Do not move a similar row's bookmark button inside its `<label>` (a click would also tick the download checkbox), and do not give the drag-reorder row itself `draggable` (only `span.nhdwBmDrag`).
-- Do not make the Queue tab download in merged mode (always `separate: true`).
+- Do not make the Bookmark tab download in merged mode (always `separate: true`).
 - Do not send a queue group whose rows are all skipped (`download: []` produces no job).
 - Do not re-add `bookmarkSetStatus` (removed as a handler with no sender).
 - Do not re-add a second copy of an item-44/45 CSS block: exactly one definition per selector per tree, and the two trees compute the same declarations.
@@ -709,12 +731,15 @@ byte-identical — keep them in sync on any future change).
   **Save offline** + **Select**, **Select all**, `allIdsSite` wipe — plus the
   Chrome port of item 59 (saved list format). **3.10.1** (2026-09-26, this
   branch) the PR #50 review pass: live listing-only guard, `allIdsSite`
-  requested by the bar reader, nhentai-only legacy checkbox.
+  requested by the bar reader, nhentai-only legacy checkbox. **3.10.2**
+  (2026-09-26, this branch) item 65: the third panel tab is **Bookmark** —
+  UI copy only.
 - **Firefox:** 1.0.0 Android snapshot → 1.1.0 parity elevation (rebase onto
   Chrome src + audited delta) → 1.2.0 website-embedded UI (items 56/57, PR #44
   review) → 1.3.0 Chrome-3.9.0 backport → **1.4.0** Chrome-3.10.0 backport
   (62/63/64 card controls, Save offline, Select all) → **1.4.1** the
-  2026-09-26 review fixes, same as Chrome 3.10.1. Items 38 (options
+  2026-09-26 review fixes, same as Chrome 3.10.1) → **1.4.2** item 65, the
+  Bookmark-tab rename, same as Chrome 3.10.2. Items 38 (options
   harness) and 59 (list-format readers) were Firefox-scoped fixes — 59 is now
   also in Chrome. `PORTING_AUDIT.md` +
   `FIREFOX_PARITY_PLAN.md` in the Firefox folder are the port's own records.

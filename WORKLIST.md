@@ -1,7 +1,13 @@
 # Worklist — nh-dw-2.0
 
 **Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
-**PR #50 review pass** — three defects found on the merged 3.10.0 work and
+**item 65 landed** — the panel's third tab is labelled **Bookmark** and every
+tooltip/hint that called it a "Queue" follows (`listControls` card tooltip,
+the settings auto-capture hint, the side-panel launcher, the Settings fallback
+notice, the two bookmark tooltips); storage key `bookmarkQueue`, ids `#tabQueue`
+/ `#queuePane`, message actions and the export format are unchanged, and a new
+`test/tab-labels.test.js` (both trees) locks both halves. Chrome **3.10.2** /
+Firefox **1.4.2**. **PR #50 review pass** — three defects found on the merged 3.10.0 work and
 fixed red-first in both trees: (F1) `resolveListCardPage()`, the listing-only
 guard the unit test pins, had **no production caller**, so gallery pages whose
 related cards match the listing selectors got card controls + the floating bar
@@ -94,20 +100,21 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-26, reconciled after the PR #50 review):** **65**
-(rename the Queue tab to **Bookmark tab**, UI-only — storage key, message
-actions and the export format stay as-is; no test asserts the literal label),
-then **71** (verify-and-close: item 61's range block already occupies the slot
+**Top of the queue (2026-09-26, after item 65 landed):** **71**
+(verify-and-close: item 61's range block already occupies the slot
 the blanket "Download all (N pages)" entry held — nowhere in either tree is
 a control labelled that any more; what remains is the owner decision on
 whether the range block alone is enough or a pointer to on-page Select should
 be added, plus the latent default-site history gap in
 `IMPROVEMENT_BACKLOG.md` §E), then **40** (bootstrap a listing page in
 `scripts/e2e-popup.js`; the only offline-feasible backlog item, and the reason
-the panel **Save offline** click handler still has no offline coverage). This
-is the **backlog §F order (65 → 71 → 40)**; the 2026-09-25 merge refresh had
-it the other way round. Items **42/58** (real-browser + Android passes, then
-signing) stay owner-only and outrank all of these in value.
+the panel **Save offline** click handler still has no offline coverage). The
+**66-with-65** question is still open: the owner-confirmed 66 spec says the
+per-site filter ships "as one header unit" with the rename, but the rename has
+now landed alone — the filter is a real feature (dropdown + remember last
+choice), so it needs an explicit go-ahead rather than riding along. Items
+**42/58** (real-browser + Android passes, then signing) stay owner-only and
+outrank all of these in value.
 
 ### Owner roadmap 2026-09-24 — panel rewrite, site parity, auto-fetch (items 60–71)
 
@@ -132,6 +139,7 @@ open parts until the owner answers).
   offline"** — shipped in 3.10.0 / FF 1.4.0, item 62).
 - **Queue tab → renamed Bookmark tab** (storage key `bookmarkQueue` and
   message actions stay as-is — rename is UI-only; see Do-not in handoff).
+  **Landed 2026-09-26 as item 65** — UI copy + tab label only.
 - Bookmark list must stay **persistent across full browser restart** (already
   true) and gain **load management** for very large lists (title search;
   tag/artist/date filters — engine details in a later open topic).
@@ -225,11 +233,15 @@ open parts until the owner answers).
   into the same `allIds` selection set used on listings, so card + panel
   agree. Invert/Clear already exist in the panel list — keep them consistent.
 
-- [ ] **65. Rename Queue tab → Bookmark tab (UI-only) — after 60, can parallel 61.**
+- [x] **65. Rename Queue tab → Bookmark tab (UI-only) — DONE 2026-09-26 (3.10.2 / FF 1.4.2).**
   Tab label, pane copy, tooltips, README/handoff user-facing strings.
   Storage key, message actions, and export format **unchanged** (handoff
   Do-not: no store rename). Firefox drawer copy follows (byte-identical
-  shared files rule).
+  shared files rule). Red test: `test/tab-labels.test.js` (both trees) —
+  it read "Queue" in `index.html` and the old wording in four copy strings
+  before the rename, and now also locks the internal names against a
+  future "cleanup". Code comments keep their old wording on purpose (they
+  describe the concept, and `bookmarkPanel.ts` stays byte-identical).
 
 - [x] **66. Bookmark tab per-site filter — confirmed: dropdown select + remember last selection.**
   Elaboration 2 closed 2026-09-24 (owner chose **A** + free-text note:
@@ -311,7 +323,7 @@ _(format: `item · site · architecture reason · capture reference`)_
 
 ### 42/58. Real-browser + Android device passes, then signing — **owner-only, top of the queue**
 
-The only unverifiable-here claims left. Chrome: the Queue-tab checklist, the
+The only unverifiable-here claims left. Chrome: the Bookmark-tab checklist, the
 naming-guard probes (0A–0E), list-mode/formats steps and the new PR #48 items
 (per-row Cancel mid-batch + retry-after-cancel, late-cancel done guard, real
 OPFS streaming on a large gallery). Firefox desktop pass + Android matrix,
@@ -368,6 +380,15 @@ workflows are still only covered by the content-script harnesses
 ---
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
+
+- **Item 65 — Queue tab → Bookmark tab (2026-09-26):** the panel's third tab is
+  labelled **Bookmark**; the card tooltip, the auto-capture hint, the
+  side-panel launcher, the no-side-panel fallback notice and both bookmark
+  tooltips follow. UI-only: `bookmarkQueue`, `#tabQueue` / `#queuePane`,
+  message actions and the export format untouched. New
+  `test/tab-labels.test.js` in both trees (red before the rename: the tab read
+  "Queue" and four copy strings said "Queue"); Chrome 591 / FF 624 unit, e2e
+  green both trees, FF lint unchanged. Chrome 3.10.2 / FF 1.4.2.
 
 - **PR #50 review pass (2026-09-26):** three defects in the merged 3.10.0 work,
   each fixed under a test that failed on the pre-fix build — the listing-only

@@ -6,8 +6,8 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.10.1-blue)
-![Firefox](https://img.shields.io/badge/Firefox-1.4.1-orange)
+![Version](https://img.shields.io/badge/version-3.10.2-blue)
+![Firefox](https://img.shields.io/badge/Firefox-1.4.2-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -69,7 +69,7 @@ Open a gallery page → click the extension icon → edit the save name if you l
 - Tick **Select** on several cards → the floating bar shows `N selected · M already downloaded · K will download` → pick format → **Download**.
 - Or do the same from the side panel, which lists every gallery on the page and can walk all result pages.
 
-### The Queue tab
+### The Bookmark tab
 - **Bookmark** any card from its icon, any gallery page from its blue **Bookmark** button, or paste ids/links into the box and **Add to queue** / **Download now**.
 - Tick rows → **Download N selected** → one file per title, in list order, named by the list-mode template.
 - **Auto-capture** (Settings, off by default) bookmarks every card as you scroll.
@@ -106,8 +106,8 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 
 ## ⚠️ Known limitations
 
-- **Download history is local** — it lives in this browser profile, starts empty, and never syncs via browser cloud accounts. Use **Export / Import backup** in the Queue tab to migrate history between machines.
-- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.4.1 build with Queue, the bookmark icon, list controls, per-site card controls and multi-site download support; offline checks do not replace the desktop/Android release gate (58).
+- **Download history is local** — it lives in this browser profile, starts empty, and never syncs via browser cloud accounts. Use **Export / Import backup** in the Bookmark tab to migrate history between machines.
+- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.4.2 build with the **Bookmark** tab, the bookmark icon, list controls, per-site card controls and multi-site download support; offline checks do not replace the desktop/Android release gate (58).
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
@@ -176,6 +176,7 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| **3.10.2** | Item 65: the panel's third tab is labelled **Bookmark** and every tooltip/hint that called it a "Queue" follows (storage key `bookmarkQueue`, `#tabQueue` id, message actions and the export format are unchanged on purpose); Firefox 1.4.2 carries the same rename. Ships in **PR #51** together with the **3.10.1** review fixes below. |
 | **3.10.1** | Review pass on the 3.10.0 work: listing card controls honour the tested listing-only guard (`resolveListCardPage`), so a gallery page's related-gallery cards are never decorated and the floating bar stays hidden there; the bar's `allIdsSite` read asks storage for the key, so another site's selection can no longer appear selected; the legacy nhentai caption checkbox is gated to nhentai instead of also firing on the five added hosts. |
 | **3.10.0** | Card controls on all six sites (item 63): per-site listing-card selector table, site-aware history skip and composite bookmark identity; Smart **Save offline** control in the panel preview and beside the gallery-page Bookmark (62), Alt = open the existing form; **Select all** in the floating bar and a gallery-page **Select** feeding the shared selection (64); the boolean side of the floating bar stays visible while cards exist; item 59's saved-list-format fix ported from Firefox into Chrome. Merged to
 main in **PR #50** (2026-09-25). |

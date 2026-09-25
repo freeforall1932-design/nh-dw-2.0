@@ -2786,6 +2786,69 @@ settings, locationHref)` (`e2e-content`).
 3. Item **40** — bootstrap a listing page in `scripts/e2e-popup.js`.
 4. Owner-only **42/58**.
 
+## Session log — 2026-09-26 (same session, item 65): the Queue tab is now the Bookmark tab
+
+UI-only rename, done red-first on top of the review fixes above. Item 65's
+scope was "tab label, pane copy, tooltips, README/handoff user-facing strings",
+with the storage key, message actions and export format explicitly unchanged —
+the handoff's Do-not list forbids a store rename.
+
+### A. Red test first
+
+New `test/tab-labels.test.js` (copied into both trees, added to both mocha
+lists — Chrome 587 → 591, Firefox 620 → 624 passing). It asserts:
+
+- `#tabQueue` in `index.html` reads exactly **Bookmark**;
+- the internals stay put: `#tabQueue` / `#queuePane` ids and the literal
+  `"bookmarkQueue"` storage key;
+- no user-facing copy still says "Queue tab" / "Queue panel" (the card
+  tooltip, the auto-capture hint, the side-panel launcher, the no-side-panel
+  fallback notice, both bookmark tooltips);
+- the replacements are actually present (so deleting the copy is not a pass).
+
+Pre-fix run: **1 passing, 3 failing** (the tab read "Queue"; the copy checks
+failed). Post-fix: 4 passing. `Queued` / `Clear queue` (the *download* queue)
+are deliberately untouched.
+
+### B. What changed
+
+| File (both trees) | Before → after |
+|---|---|
+| `index.html` | tab `Queue` → `Bookmark` (+ the tabs comment) |
+| `src/content/listControls.ts` | card tooltip "waits in the Queue panel" → "Bookmark panel" |
+| `src/preview/popupSettings.ts` | auto-capture hint "into the Queue tab" → "Bookmark tab"; "Open the dockable Queue panel" → "Bookmark panel"; no-side-panel notice "The Queue tab here still works" → "The Bookmark tab here still works" |
+| `src/utils/bookmarkQueue.ts`, `src/utils/titleBookmark.ts` | "(Queue tab)" → "(Bookmark tab)" |
+
+Code comments that say "Queue tab" were left alone on purpose: they name the
+concept (the persistent bookmark list) and `bookmarkPanel.ts` is byte-identical
+across both trees, so a comment-only edit there would be pure churn.
+
+Deliberately unchanged: `bookmarkQueue` key, `#tabQueue` / `#queuePane` ids,
+`nhdwBm*` classes, `bookmarkGet` / `bookmarkAdd` / `bookmarkImport` /
+`historyImport` actions, the export format, `separate: true` downloads.
+
+### C. Verification
+
+- Chrome **591 unit / 4 pending**, smoke PASS, `test:e2e` exit 0 (263 checks).
+- Firefox **624 unit / 4 pending**, smoke PASS, `test:e2e` exit 0,
+  `lint:firefox` **0 errors / 0 notices / 32 warnings** (unchanged).
+- Both trees rebuilt (webpack clean); `NHDW_Release_v3.0.0` re-synced
+  exhaustively — `js/listControls.js`, `js/preview.js`, `js/titleBookmark.js`
+  and `index.html`; reverse check clean, only `README.md` differs by design.
+- Versions: Chrome **3.10.2**, Release **3.10.2**, Firefox **1.4.2** (patch
+  bumps; no test asserts a version string). READMEs updated (root badges +
+  a 3.10.2 history row and the "Bookmark tab" section heading, Chrome, Firefox,
+  Release).
+
+### D. Open question recorded, not acted on
+
+Item **66** (Bookmark-tab per-site filter) is owner-confirmed and its spec says
+it "builds with 65 as one header unit". The rename shipped alone because it was
+the requested item, so the filter now needs its own go-ahead. It is a real
+feature — one compact `<select>` at the list header (All sites | nhentai |
+hitomi | hentaiera | imhentai | hentaienvy | hentaifox), live counts when
+cheap, remembering the last choice across unselect/close — not a copy change.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
@@ -2795,8 +2858,8 @@ settings, locationHref)` (`e2e-content`).
 | 62 | Smart Download control (direct + open form) beside Bookmark | **done 2026-09-25 (merged, PR #50)** — label **"Save offline"**: panel preview header (`#buttonSaveOffline`, 62a) and the site gallery page (`nhdw-title-save`, 62b), both trees; primary = one-gallery `downloadAllDoujinshis` with `readListSettings()` format/template, `separate:true`, fresh-history guard → confirm → `redownloadIds:[id]`; secondary (Alt) = focus `#downloadFormat` / open the panel via `siteUiOpenPanel` |
 | 63 | Card Select/Bookmark/Download on all six sites | **done 2026-09-25 (merged, PR #50)** — real `utils/listCards.ts` table + `findCards()` per-site dispatch (cards carry their site), site-aware history (`partitionKnown(..., site)`), composite bookmark identity, `site:` on every card/bar job, listing-host `content_scripts` block for the five non-nhentai hosts, per-site e2e discovery; `getGalleries` port out of scope |
 | 64 | Select-all on listings + title-page select into `allIds` | **done 2026-09-25 (merged, PR #50)** — `#nhdw-select-all` beside Clear with the bar visible whenever `findCards()` finds cards; gallery-page `nhdw-title-select` writes the bare id into the shared `allIds`; `allIdsSite` makes the wipe site-scoped (selection survives same-site navigation, dropped across sites) |
-| 65 | Rename Queue tab → Bookmark tab (UI-only) | open |
-| 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | confirmed — with 65 |
+| 65 | Rename Queue tab → Bookmark tab (UI-only) | **done 2026-09-26 (Chrome 3.10.2 / FF 1.4.2)** — tab label + 5 copy strings; `test/tab-labels.test.js` in both trees locks the new label and the unchanged `bookmarkQueue` key / `#tabQueue` / `#queuePane` ids / actions / export format |
+| 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | confirmed — **needs a go-ahead**: 65 (the rename) landed alone on 2026-09-26, so the "one header unit" pairing no longer applies automatically |
 | 67 | On-page cart — **badge + expandable mini-cart** (owner pick, elaboration 1 closed 2026-09-24) | confirmed — after 65/68 |
 | 68 | Bookmark list load management + **green-check already-downloaded** (true success only, never fail-midway; works with/without search/filter) | open — after 65 |
 | 69 | Bookmark thumbnails — **viewport-lazy + GC both** (distance while scrolling + idle ~15–30s sweep; purge all on close/site-group switch; cross-site search keeps GC for dedupe/batch prep) (owner pick, elaboration 3 closed 2026-09-24) | confirmed — with 67/68 |

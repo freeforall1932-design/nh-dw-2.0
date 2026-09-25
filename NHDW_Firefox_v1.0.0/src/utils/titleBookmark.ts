@@ -69,7 +69,7 @@ export const TITLE_BOOKMARK_LABEL_CLASS = "nhdw-title-bookmark-label";
 export const TITLE_BOOKMARK_LABEL = "Bookmark";
 export const TITLE_BOOKMARK_LABEL_ON = "Bookmarked";
 export const TITLE_BOOKMARK_TITLE_OFF =
-    "Add this gallery to the persistent bookmark queue (Queue tab). It survives a browser restart.";
+    "Add this gallery to the persistent bookmark queue (Bookmark tab). It survives a browser restart.";
 export const TITLE_BOOKMARK_TITLE_ON =
     "On the bookmark list — click to take it off again (nothing is un-downloaded).";
 
