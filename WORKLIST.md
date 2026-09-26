@@ -1,6 +1,17 @@
 # Worklist — nh-dw-2.0
 
 **Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
+**items 68 + 70 landed (owner-directed best-effort)** — the Bookmark tab gained
+load management (item 68: search, state/date filters, a bounded window and the
+already-downloaded marks) and listing pages gained the live-session harvest
+(item 70: read what the tab rendered, keep collecting through the observer,
+Stop, optional bounded auto-scroll, survive a reload). Both landed **without**
+the spec pass they had been waiting on, on the owner's instruction
+("implement it the best you can ... how do I test it later if there's nothing
+to test"), so every assumed default a spec pass would have settled is written
+down in `IMPROVEMENT_BACKLOG.md` → "Items 68 + 70 (2026-09-26)". Chrome
+**3.10.5** / Firefox **1.4.5**; 616 / 649 unit tests, smoke + all offline e2e
+green, FF lint unchanged (32 warnings).
 **item 40 landed (the popup harness now bootstraps a listing page)** — test-only,
 so no version bump: `scripts/e2e-popup.js` in both trees grew the two stubs the
 item asked for (the injected `js/getGalleries.js` answer, and `executeInTab`
@@ -299,7 +310,7 @@ open parts until the owner answers).
   view. Side panel remains the full Bookmark tab. Not floating-drawer (A)
   and not idle-fade hybrid (C).
 
-- [ ] **68. Bookmark list load management + already-downloaded marks — after 65.**
+- [x] **68. Bookmark list load management + already-downloaded marks — DONE 2026-09-26 (3.10.5 / FF 1.4.5).**
   Title search box; filter by tag / artist / date; combined queries. Target
   scale: tens of thousands of rows without jank — windowed rendering or
   equivalent required (cap raise for `MAX_BOOKMARK_ITEMS` is a separate
@@ -309,6 +320,30 @@ open parts until the owner answers).
   simplicity, or group differently) so re-downloads are obvious before you
   run the batch. **Green check only on true success** — never mark a row
   that failed midway as done.
+  **Landed 2026-09-26 (3.10.5 / FF 1.4.5), owner-directed best-effort** — no
+  spec pass, so the assumed defaults are recorded in `IMPROVEMENT_BACKLOG.md`.
+  The list header gained `#nhdwBmSearch` (title, id and tags; every typed word
+  must match), `#nhdwBmStatusFilter` (any · not downloaded · ticked · done ·
+  failed · downloading) and `#nhdwBmDateFilter` (today · last 7 days · last 30
+  days · older), all composing with item 66's site select as **one view** —
+  the stored list is never rewritten and the counts line stays whole-list.
+  Rendering is windowed: 200 rows (`BOOKMARK_PAGE_SIZE`) plus a full-width
+  **Show more (N of M)** control, so the DOM stays small at tens of thousands
+  of rows; `MAX_BOOKMARK_ITEMS` was **not** raised (explicitly a separate owner
+  decision). The already-downloaded mark is a green ✓ whose tooltip is the
+  recorded filename, drawn from the download history by site-aware composite
+  key and **never** from `item.status` — a row that merely claims "done" is not
+  marked, and a row whose retry failed after an earlier success keeps its mark
+  because the artifact is still on disk. A `#nhdwBmHistoryInfo` counter ("N
+  already downloaded") sits beside the "showing X of Y" line, and the Download
+  button's tooltip says how many of the rows on screen are already on disk
+  *before* the batch runs. `bookmarkQueue.ts` learned the optional `tags[]`
+  (normalized: strings only, trimmed, deduped) that the search reads. **Select
+  all / Select none follow the whole query** (composite keys of every matching
+  row; `{all:true}` only when nothing is filtered). Pure helpers in
+  `src/utils/bookmarkFilters.ts`. The query is deliberately **not** persisted —
+  a forgotten search that hides rows is a nastier surprise than retyping one —
+  while the site select keeps its own remembered value.
 
 - [x] **69. Thumbnail opt-in + GC — confirmed: viewport-lazy + garbage collection (fragile).**
   Elaboration 3 closed 2026-09-24 (owner custom). **Never persisted**
@@ -321,12 +356,33 @@ open parts until the owner answers).
   dedupe / batch-download prep flow) keep timer/distance GC active.
   Text-only remains the resting state.
 
-- [ ] **70. Live-session auto-fetch (phase 2 of 61) — after 61 ships.**
+- [x] **70. Live-session auto-fetch (phase 2 of 61) — DONE 2026-09-26 (3.10.5 / FF 1.4.5).**
   Port the twitter-batch-download *ideas* (shallow read of what the tab
   already rendered; MutationObserver harvest so rows aren't lost; run-token
   Stop; optional auto-scroll) onto these six sites' listing/DOM. Infinite
   scroll and "must survive reload" flows live here. Separate spec pass when
-  v1 range fetch has real-browser data.
+  v1 range fetch has real-browser data — **landed best-effort while that data
+  is still missing** (owner's call), so the defaults above are the ones to
+  re-open if the real-browser pass wants different bounds.
+  **Landed 2026-09-26 (3.10.5 / FF 1.4.5), owner-directed best-effort** (the
+  spec pass the item asked for is still welcome; the assumed bounds are listed
+  in `IMPROVEMENT_BACKLOG.md`). The floating bar gained `#nhdw-harvest`
+  (**Harvest** → **Stop harvest**), `#nhdw-harvest-scroll` ("Scroll for me",
+  remembered in `chrome.storage.sync.bookmarkHarvestAutoScroll`) and
+  `#nhdw-harvest-status` ("N collected", plus "· stopped", "· reached the end
+  of the page", "· item limit reached", "· stopped at the scroll limit"). A run
+  reads what the tab has already rendered (`findCards()`), dedupes by composite
+  key in page order, ticks the cards into the same shared selection the bar
+  downloads, and keeps collecting through the existing MutationObserver while
+  it is live — so a card an infinite-scroll site renders after the click is not
+  lost. Auto-scroll is bounded (700 ms rounds, 40 rounds, 2000 items) and stops
+  itself at the page bottom; **Stop** is authoritative through a run token, and
+  a stopped run never resumes. The harvest persists to
+  `chrome.storage.local.listHarvest` as an **always-inactive** copy and is
+  merged back into the selection on the next load — filtered to this page's
+  site, by composite key, without duplicates (the merge order is the harvest's
+  own, because `allIds` is the download order). Pure core in
+  `src/utils/listHarvest.ts`.
 
 - [x] **71. Panel list actions vs on-page Select — DONE 2026-09-26 (3.10.3 / FF 1.4.3).**
   On listing pages where on-page Select + Select-all exist, the panel's
@@ -384,6 +440,17 @@ test:browser` has never run in any agent sandbox.
   click (the handler itself is only reachable from a bootstrapped preview, so
   it is NOT covered offline); (5) a selection surviving same-site navigation
   and being dropped across sites (`allIdsSite`).
+
+  **Added by items 68/70 (2026-09-26).** The Bookmark-tab checklist grows:
+  type into the search box on a real 1000+-row list (typing stays responsive;
+  the window stays 200 rows and **Show more** grows it), confirm the ✓ appears
+  only where the file is really on disk (delete one → the mark is gone on the
+  next open, while a "done" row with no history record is never marked), and
+  that **Select all** under a search downloads exactly the searched rows. On a
+  real listing: **Harvest** on a site with infinite scroll (cards appended
+  while scrolling are collected exactly once), the **Scroll for me** box's
+  remembered state, **Stop** mid-run, and a reload after a harvest (collected
+  titles still ticked, nothing duplicated, the run does not restart itself).
 
 ### 40. Popup harness does not bootstrap a listing page — DONE 2026-09-26 (test-only)
 

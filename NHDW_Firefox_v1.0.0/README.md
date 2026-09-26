@@ -1,4 +1,4 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.4)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.5)
 
 **Updated:** 2026-09-26 · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
@@ -8,7 +8,17 @@ gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
 
-v1.4.4 = the Bookmark tab's per-site filter (item 66): a permanent header
+v1.4.5 = the Bookmark tab's **search/state/date query** with a 200-row window
+and **Show more**, the **already-downloaded ✓** read from the download history
+(its tooltip is the saved file name; a row that only claims "done" is never
+marked) and query-scoped **Select all** (item 68); plus the listing pages'
+**harvest** (item 70) — **Harvest** / **Stop harvest**, a remembered "Scroll for
+me" box with bounded rounds, MutationObserver collection of cards the site
+renders later, and an always-inactive `listHarvest` in local storage that is
+merged back into the selection after a reload. Both landed best-effort on
+recorded assumed defaults, because the owner asked for implementations to test
+rather than another spec pass. v1.4.4 = the Bookmark tab's per-site filter
+(item 66): a permanent header
 `<select>` (All sites | nhentai | hitomi | hentaiera | imhentai | hentaienvy |
 hentaifox) with live counts, remembered in `chrome.storage.sync` and restored
 on every open; the filter is a **view** (stored list untouched) and filtered
@@ -47,7 +57,7 @@ Settings → In-page panel.
 
 v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
 plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). The Firefox offline
-suite now has **634** passing / 4 deliberately opt-in live tests pending
+suite now has **649** passing / 4 deliberately opt-in live tests pending
 (including the Item 48 multi-site batch download suite and all 6 site adapters).
 
 Review fixes include working embedded settings, shared Settings/Queue layout

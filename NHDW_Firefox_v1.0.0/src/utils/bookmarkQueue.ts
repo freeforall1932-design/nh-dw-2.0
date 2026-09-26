@@ -66,6 +66,13 @@ export interface BookmarkItem {
     error: string;
     /** Artifact name from the download history once the row completed. */
     filename: string;
+    /**
+     * Tags known at add time (item 68), e.g. "artist:someone". Optional by
+     * design: card bookmarks have no metadata, so a row added from a card
+     * carries none and only the preview/paste paths can fill it in. The
+     * Bookmark tab's search reads them; nothing depends on them being there.
+     */
+    tags?: string[];
 }
 
 export interface BookmarkState {
@@ -121,8 +128,27 @@ function normalizeItem(raw: any): BookmarkItem | null {
         selected: !!raw.selected,
         status: normalizeStatus(raw.status),
         error: typeof raw.error === "string" ? raw.error : "",
-        filename: typeof raw.filename === "string" ? raw.filename : ""
+        filename: typeof raw.filename === "string" ? raw.filename : "",
+        tags: normalizeTags(raw.tags)
     };
+}
+
+/** Tags are display/search text: keep strings, drop blanks and duplicates. */
+function normalizeTags(raw: any): string[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const tags: string[] = [];
+    for (const entry of raw) {
+        if (typeof entry !== "string") {
+            continue;
+        }
+        const tag = entry.trim();
+        if (tag !== "" && tags.indexOf(tag) === -1) {
+            tags.push(tag);
+        }
+    }
+    return tags;
 }
 
 /**
@@ -355,6 +381,8 @@ export function pagesFromGallery(gallery: any): number {
 // ---- mutations (all pure: they return a new state) -----------------------
 
 export interface BookmarkCandidate {
+    /** Tags known at add time (item 68); optional, "" when there are none. */
+    tags?: string[];
     id: string | number;
     /** Source site slug; absent means the default site (siteKeys.ts). */
     site?: string;
@@ -415,7 +443,8 @@ export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate
             selected: true,
             status: "saved",
             error: "",
-            filename: ""
+            filename: "",
+            tags: normalizeTags((candidate as any).tags)
         });
     }
 

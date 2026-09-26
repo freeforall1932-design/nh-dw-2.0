@@ -36,6 +36,10 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 
 - 🗂️ **Four output formats** — `ZIP`, `CBZ`, `PDF`, or raw numbered pages (`001.jpg`…) in a titled folder under one master folder.
 - 🖱️ **Works in the page — on all six sites** — every gallery card gets its own **Download** button, **Select** box and bookmark icon, and the floating bar batches your selection (*Select all* included). No popup round-trips needed.
+- 🎯 **Bookmark search & re-download marks** — the Bookmark tab has a **search box** (title / id / tag, all words must match) plus **state** and **date added** filters that stack with the per-site view; the list renders a **200-row window with Show more**, so huge queues stay smooth. Rows the **download history** records carry a **green ✓** (tooltip: the saved file name) and a "N already downloaded" counter, so a re-download is obvious **before** you run the batch — and only a real file earns the mark.
+
+- 🧲 **Live harvest on listings** — one **Harvest** click in the floating bar collects every card the page has already rendered and keeps collecting as the site appends more (each card once), with an optional remembered **Scroll for me** that stops at the page's end, a **Stop harvest** that always wins, and a collected list that survives a reload without duplicating.
+
 - ⚡ **Smart Download** — the panel preview and every gallery page carry a **Save offline** control that downloads straight away with your list-mode format, template and folder; hold **Alt** (or use the panel form) to review name/format first. On gallery pages it sits beside our blue **Bookmark**, visually and verbally distinct from the site's own Download button.
 - 🚀 **Large-gallery safe** — archives are handed to Chrome through an MV3 *offscreen document*, and a constant-memory **streaming ZIP writer** streams pages straight to disk (OPFS), so even 1 GB-class galleries never pile up in RAM.
 - ⭐ **Bookmark queue across 6 sites** — click the bookmark icon on any card, or the blue **Bookmark** button on a gallery page (next to the site's own Favorite/Download buttons, all six supported sites), and the title waits in the **Queue** tab with its cover and page count. Survives closing the browser and restarting the PC. Collapses to a taskbar-style dock.
@@ -140,7 +144,7 @@ installs under npm 10.9.8 and 12.0.2.
 cd NHDW_Extension_v3.0.0
 npm ci
 npm run build     # webpack -> js/ (copy changed bundles to the release folder)
-npm test          # 587 passing unit tests (Chrome)
+npm test          # 616 passing unit tests (Chrome)
 npm run test:smoke
 npm run test:e2e   # offline e2e suites against the built bundles
 npm audit
@@ -151,7 +155,7 @@ For Firefox:
 cd NHDW_Firefox_v1.0.0
 npm ci
 npm run build     # webpack -> js/
-npm test          # 634 passing unit tests (Firefox)
+npm test          # 649 passing unit tests (Firefox)
 npm run test:smoke
 npm run test:e2e
 ```

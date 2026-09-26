@@ -34,7 +34,7 @@ import {
     PDF_MERGE_WARNING_KEY
 } from "../utils/downloadFormats";
 import { readHistory, partitionKnown, DownloadHistory, DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
-import { toGalleryKey } from "../utils/siteKeys";
+import { splitGalleryKey, toGalleryKey } from "../utils/siteKeys";
 import { getSourceForUrl } from "../sources/index";
 import { ListCardTarget, cardIdFromHref, resolveListCardPage } from "../utils/listCards";
 // Bookmark queue: the persistent "titles I clicked Bookmark on" list. The
@@ -46,6 +46,28 @@ import { BOOKMARK_QUEUE_KEY, BookmarkState, normalizeBookmarkState } from "../ut
 // js/titleBookmark.js): one icon definition, so both affordances always look
 // like the same control.
 import { BOOKMARK_ICON_OUTLINE_PATH, BOOKMARK_ICON_PATH, BOOKMARK_ICON_VIEWBOX } from "../utils/titleBookmark";
+// Item 70: the live-session harvest - read what the tab already rendered, keep
+// collecting as the page mutates, and let one click stop it. The pure core is
+// shared with the unit tests; this file is only the DOM adapter.
+import {
+    HARVEST_INTERVAL_MS,
+    HARVEST_MAX_ITEMS,
+    HARVEST_MAX_ROUNDS,
+    HARVEST_STORAGE_KEY,
+    HarvestState,
+    HarvestStopReason,
+    emptyHarvestState,
+    harvestAddCards,
+    harvestShouldContinue,
+    harvestSummary,
+    isHarvestRun,
+    mergeHarvestIntoSelection,
+    nextHarvestRound,
+    normalizeHarvestState,
+    selectionKeyMatchesSite,
+    startHarvest,
+    stopHarvest
+} from "../utils/listHarvest";
 
 
 interface CardInfo {
@@ -68,7 +90,11 @@ let settings = {
     // Auto-capture: while on, every listing card found is bookmarked without a
     // click. Default OFF — on a 60-card search page it would silently build a
     // 60-item list the user never asked for. One click turns it on.
-    bookmarkAutoCapture: false
+    bookmarkAutoCapture: false,
+    // Item 70: the harvest's optional auto-scroll. Default OFF (item 70's own
+    // wording): a page that starts scrolling itself uninvited is alarming, so
+    // it is a remembered choice the user turns on once.
+    harvestAutoScroll: false
 };
 
 const selected = new Set<string>();
@@ -80,6 +106,13 @@ const titleById: Record<string, string> = {};
 let history: DownloadHistory = {};
 const forcedIds = new Set<string>();
 let includeAlready = false;
+
+// Item 70: the harvest run. `harvestToken` mirrors harvest.run while a run is
+// live, and every callback checks it before writing - that is what makes Stop
+// authoritative even though a timer may already be in flight.
+let harvest: HarvestState = emptyHarvestState();
+let harvestToken = 0;
+let harvestTimer: any = null;
 
 function readHistoryState(): Promise<void> {
     return readHistory().then((stored) => {
@@ -284,7 +317,10 @@ function readSettings(): Promise<boolean> {
             downloadName: "{pretty}",
             rawMasterFolder: "NHDW",
             inPageControls: true,
-            bookmarkAutoCapture: false
+            bookmarkAutoCapture: false,
+            // Requested explicitly so a remembered choice is visible: a
+            // key-scoped get answers only what the caller asks for (item 59).
+            bookmarkHarvestAutoScroll: false
         }, LIST_MODE_DEFAULTS);
         try {
             // listFormat has no concrete default (unset means inherit), but
@@ -297,6 +333,7 @@ function readSettings(): Promise<boolean> {
                 settings.masterFolderName = String(stored.rawMasterFolder === undefined ? "NHDW" : stored.rawMasterFolder);
                 settings.template = resolveListTemplate(stored.listDownloadName, String(stored.downloadName || "{pretty}"));
                 settings.bookmarkAutoCapture = !!stored.bookmarkAutoCapture;
+                settings.harvestAutoScroll = !!stored.bookmarkHarvestAutoScroll;
                 const enabled = stored.inPageControls === undefined ? true : !!stored.inPageControls;
                 try {
                     const localDefaults: any = {};
@@ -718,7 +755,264 @@ function buildActionBar(): HTMLElement {
     });
     bar.appendChild(clearButton);
 
+    // Item 70: the harvest. It sits with the bulk controls because it is one:
+    // it collects every card the page renders, including the ones that appear
+    // while the user reads, and feeds the very same selection.
+    const harvestButton = document.createElement("button");
+    harvestButton.type = "button";
+    harvestButton.id = "nhdw-harvest";
+    harvestButton.textContent = "Harvest";
+    harvestButton.title = "Collect the cards this page has already rendered, and keep collecting as the page loads more";
+    harvestButton.addEventListener("click", () => {
+        if (harvest.active) {
+            stopHarvestRun("stopped");
+            return;
+        }
+        startHarvestRun();
+    });
+    bar.appendChild(harvestButton);
+
+    const harvestScrollRow = document.createElement("label");
+    harvestScrollRow.className = "nhdw-harvest-scroll-row";
+    harvestScrollRow.id = "nhdw-harvest-scroll-row";
+    const harvestScrollBox = document.createElement("input");
+    harvestScrollBox.type = "checkbox";
+    harvestScrollBox.id = "nhdw-harvest-scroll";
+    harvestScrollBox.title = "Scroll the page for me while harvesting (bounded: it stops at the end or after " + HARVEST_MAX_ROUNDS + " steps)";
+    harvestScrollBox.addEventListener("change", () => {
+        settings.harvestAutoScroll = harvestScrollBox.checked;
+        saveListSetting({ bookmarkHarvestAutoScroll: harvestScrollBox.checked });
+        renderActionBar();
+    });
+    harvestScrollRow.appendChild(harvestScrollBox);
+    harvestScrollRow.appendChild(document.createTextNode(" Scroll for me"));
+    bar.appendChild(harvestScrollRow);
+
+    const harvestStatus = document.createElement("span");
+    harvestStatus.className = "nhdw-harvest-status";
+    harvestStatus.id = "nhdw-harvest-status";
+    bar.appendChild(harvestStatus);
+
     return bar;
+}
+
+// ---- live-session harvest (item 70) -------------------------------------
+
+/** The cards this page has rendered right now, in page order. */
+function harvestCards(): Array<{ id: string; site: string; title: string }> {
+    const site = currentSite();
+    return findCards().map((info) => ({
+        id: info.id,
+        site: site,
+        title: titleById[info.id] || info.title || ""
+    }));
+}
+
+function persistHarvest(): void {
+    try {
+        // Persisted INACTIVE: a reload cannot resume the old page's scrolling,
+        // and a stored "active" flag nobody can stop would be a lie.
+        const record: any = Object.assign({}, harvest, { active: false });
+        chrome.storage.local.set({ [HARVEST_STORAGE_KEY]: record });
+    } catch (_) { /* the harvest is a convenience; never break the page for it */ }
+}
+
+function renderHarvestBar(): void {
+    const button = document.getElementById("nhdw-harvest") as HTMLButtonElement | null;
+    if (button) {
+        button.textContent = harvest.active ? "Stop harvest" : "Harvest";
+        button.title = harvest.active
+            ? "Stop collecting. Everything already collected stays in the selection."
+            : "Collect the cards this page has already rendered, and keep collecting as the page loads more";
+    }
+    const box = document.getElementById("nhdw-harvest-scroll") as HTMLInputElement | null;
+    if (box) {
+        box.checked = !!settings.harvestAutoScroll;
+        box.disabled = harvest.active;
+    }
+    const status = document.getElementById("nhdw-harvest-status");
+    if (status) {
+        const visible = harvest.active || harvest.cards.length > 0;
+        status.textContent = visible ? harvestSummary(harvest) : "";
+    }
+}
+
+/**
+ * The bare ids this harvest adds to the page's selection, in merge order.
+ *
+ * The ORDER is the shared core's (`mergeHarvestIntoSelection`): harvest order
+ * first, then whatever was already ticked, never a duplicate. That is not
+ * cosmetic - `allIds` IS the download order, so the titles the user watched
+ * collect stay in front. The page's selection is stamped with one site and
+ * holds bare ids, so composite keys are filtered by site (the same number on
+ * another site is a different title) and stripped back to ids.
+ */
+function harvestSelectionIds(): string[] {
+    const site = currentSite();
+    const ticked = Array.from(selected).map((id) => toGalleryKey(id, site));
+    return mergeHarvestIntoSelection(harvest, ticked)
+        .filter((key) => selectionKeyMatchesSite(key, site))
+        .map((key) => splitGalleryKey(key).id);
+}
+
+/** Tick the harvested gallery ids into the shared selection. */
+function applyHarvestToSelection(): void {
+    const ids = harvestSelectionIds();
+    selected.clear();
+    for (const id of ids) {
+        selected.add(id);
+        syncLegacyCheckbox(id, true);
+    }
+    // The harvest's contract is "collect everything on this page", so every
+    // decorated card is ticked - exactly what the bar's Select all does.
+    document.querySelectorAll<HTMLInputElement>("." + CONTROL_CLASS + " .nhdw-select-box").forEach((box) => {
+        box.checked = true;
+    });
+    persistSelection();
+}
+
+function collectHarvest(): void {
+    if (!isHarvestRun(harvest, harvestToken)) {
+        return;
+    }
+    const result = harvestAddCards(harvest, harvestCards());
+    harvest = result.state;
+    if (result.added > 0) {
+        applyHarvestToSelection();
+    }
+    persistHarvest();
+}
+
+function pageScrollState(): { top: number; height: number; viewport: number } {
+    const doc: any = typeof document === "undefined" ? null : document.documentElement;
+    const body: any = typeof document === "undefined" ? null : document.body;
+    const top = Math.max(Number(doc && doc.scrollTop) || 0, Number(body && body.scrollTop) || 0);
+    const height = Math.max(Number(doc && doc.scrollHeight) || 0, Number(body && body.scrollHeight) || 0);
+    const viewport = Number(typeof window === "undefined" ? 0 : (window as any).innerHeight) || 0;
+    return { top: top, height: height, viewport: viewport };
+}
+
+/** True when the page cannot scroll any further, so the run should end. */
+function atPageBottom(): boolean {
+    const state = pageScrollState();
+    if (state.height <= 0 || state.viewport <= 0) {
+        return false;
+    }
+    return state.top + state.viewport >= state.height - 24;
+}
+
+/** One auto-scroll step. False when this page cannot be scrolled at all. */
+function scrollPageStep(): boolean {
+    try {
+        const win: any = typeof window === "undefined" ? null : window;
+        if (win === null) {
+            return false;
+        }
+        const viewport = Number(win.innerHeight) || 0;
+        if (typeof win.scrollBy === "function") {
+            win.scrollBy(0, Math.max(400, viewport));
+            return true;
+        }
+        if (typeof win.scrollTo === "function") {
+            const state = pageScrollState();
+            if (state.height > 0) {
+                win.scrollTo(0, state.height);
+                return true;
+            }
+        }
+    } catch (_) { /* a page that refuses to scroll just ends the run */ }
+    return false;
+}
+
+function stopHarvestRun(reason: HarvestStopReason): void {
+    harvest = stopHarvest(harvest, reason);
+    if (harvestTimer !== null) {
+        clearTimeout(harvestTimer);
+        harvestTimer = null;
+    }
+    persistHarvest();
+    renderActionBar();
+}
+
+/**
+ * One auto-scroll round: collect what is there, count the round, and stop for a
+ * named reason instead of scrolling a site forever. The observer covers the
+ * non-auto-scroll case (the user scrolls, the site renders, we collect), so the
+ * timer only exists while auto-scroll is on.
+ */
+function harvestTick(): void {
+    harvestTimer = null;
+    if (!isHarvestRun(harvest, harvestToken)) {
+        return;
+    }
+    collectHarvest();
+    harvest = nextHarvestRound(harvest, Date.now());
+    harvestToken = harvest.run;
+    persistHarvest();
+    if (!harvestShouldContinue(harvest)) {
+        // Both caps land here; the reason tells the user which one.
+        stopHarvestRun(harvest.cards.length >= HARVEST_MAX_ITEMS ? "limit" : "rounds");
+        return;
+    }
+    if (atPageBottom()) {
+        stopHarvestRun("bottom");
+        return;
+    }
+    if (!scrollPageStep()) {
+        stopHarvestRun("stopped");
+        return;
+    }
+    renderActionBar();
+    scheduleHarvestTick();
+}
+
+function scheduleHarvestTick(): void {
+    if (harvestTimer !== null) {
+        clearTimeout(harvestTimer);
+    }
+    harvestTimer = setTimeout(harvestTick, HARVEST_INTERVAL_MS);
+}
+
+function startHarvestRun(): void {
+    harvest = startHarvest(harvest, !!settings.harvestAutoScroll);
+    harvestToken = harvest.run;
+    collectHarvest();
+    renderActionBar();
+    if (harvest.autoScroll && harvest.active) {
+        scheduleHarvestTick();
+    }
+}
+
+/** Restore the persisted harvest and merge it into the selection (item 70). */
+function readHarvestState(): Promise<void> {
+    return new Promise((resolve) => {
+        try {
+            const defaults: any = {};
+            defaults[HARVEST_STORAGE_KEY] = null;
+            chrome.storage.local.get(defaults, (elems: any) => {
+                harvest = normalizeHarvestState(elems && elems[HARVEST_STORAGE_KEY]);
+                if (harvest.cards.length > 0) {
+                    // Only this page's own namespace: the same gallery number
+                    // on another site is a different title (item 48's lesson).
+                    const merged = harvestSelectionIds();
+                    const before = Array.from(selected).join(",");
+                    selected.clear();
+                    for (const id of merged) {
+                        selected.add(id);
+                    }
+                    if (Array.from(selected).join(",") !== before) {
+                        persistSelection();
+                    }
+                    // Write the normalized, inactive copy back so the stored
+                    // shape is always the one this version understands.
+                    persistHarvest();
+                }
+                resolve();
+            });
+        } catch (_) {
+            resolve();
+        }
+    });
 }
 
 function renderActionBar(): void {
@@ -761,6 +1055,7 @@ function renderActionBar(): void {
         modeSelect.disabled = settings.format === "raw";
         modeSelect.value = effectiveOutputMode(settings.format, settings.outputMode);
     }
+    renderHarvestBar();
     // Select-all is useful before anything is checked, so the bar is a listing
     // affordance rather than a selection-only affordance. Hide it only when a
     // page has no discoverable cards at all.
@@ -921,6 +1216,11 @@ function start(): void {
             pending = null;
             injectCardControls();
             autoCaptureCards();
+            // Item 70: the site rendered more cards (infinite scroll,
+            // pagination, a late chunk) - a live harvest takes them.
+            if (harvest.active) {
+                collectHarvest();
+            }
             renderActionBar();
         }, 150);
     });
@@ -984,13 +1284,15 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") 
             return;
         }
         readSelection().then(() => {
-            readHistoryState().then(() => {
-                readBookmarkState().then(() => {
-                    if (document.readyState === "loading") {
-                        document.addEventListener("DOMContentLoaded", start);
-                    } else {
-                        start();
-                    }
+            readHarvestState().then(() => {
+                readHistoryState().then(() => {
+                    readBookmarkState().then(() => {
+                        if (document.readyState === "loading") {
+                            document.addEventListener("DOMContentLoaded", start);
+                        } else {
+                            start();
+                        }
+                    });
                 });
             });
         });

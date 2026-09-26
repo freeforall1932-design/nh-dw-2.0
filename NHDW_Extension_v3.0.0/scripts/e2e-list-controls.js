@@ -391,6 +391,16 @@ function run(options) {
         }
     };
 
+    // Item 70: the auto-scroll fixture. A listing that grows as it is scrolled
+    // is what infinite scroll IS, so the stub appends one queued card per scroll
+    // step and grows the page - that is what makes the harvest's scroll loop
+    // reach a real "end of the page" instead of spinning to its round cap.
+    const scrollQueue = (options.scrollCards || []).slice();
+    const pageRoot = dom.document.documentElement;
+    pageRoot.scrollTop = 0;
+    pageRoot.scrollHeight = options.pageHeight || 2000;
+    const scrollSteps = [];
+
     const sandbox = {
         chrome: chromeStub,
         console,
@@ -402,8 +412,19 @@ function run(options) {
         // fixture must be able to point the bundle at each supported host.
         location: { href: options.location || "https://nhentai.net/" },
         window: {
+            innerHeight: 800,
             confirm() {
                 return confirmAnswers.length > 0 ? confirmAnswers.shift() : true;
+            },
+            scrollBy(_x, y) {
+                const step = Number(y) || 0;
+                scrollSteps.push(step);
+                pageRoot.scrollTop = (pageRoot.scrollTop || 0) + step;
+                const next = scrollQueue.shift();
+                if (next) {
+                    dom.addCard(next.id, next.title || ("Title " + next.id));
+                    pageRoot.scrollHeight = (pageRoot.scrollHeight || 0) + 200;
+                }
             }
         }
     };
@@ -420,7 +441,8 @@ function run(options) {
         syncChangeCallbacks: syncChangeCallbacks,
         localWrites: localWrites,
         sentMessages: sentMessages,
-        mutationCallbacks: mutationCallbacks
+        mutationCallbacks: mutationCallbacks,
+        scrollSteps: scrollSteps
     };
 }
 
@@ -1167,6 +1189,115 @@ function wait(ms) {
             }
         }
         console.log("PASS: a selection stamped with another site is never read here (item 64b)");
+    }
+
+    // --- Item 70: live-session harvest --------------------------------------
+    // Item 61 fetches listing pages from the panel; this reads what the tab has
+    // ALREADY rendered, keeps collecting as the page mutates itself, and stops
+    // on request. The fixtures below therefore drive the real thing: cards are
+    // appended to the DOM (infinite scroll) and the observer callbacks fire.
+    const bar = (ctx) => ctx.dom.document.getElementById("nhdw-harvest");
+    const statusLine = (ctx) => ctx.dom.document.getElementById("nhdw-harvest-status");
+    // Array.from runs in THIS realm, so the result is a strict-equality match
+    // for the expected literals: allIds is built inside the sandboxed bundle.
+    const selectedIds = (ctx) => Array.from(ctx.localStore.allIds || [], (id) => String(id));
+    const storedHarvest = (ctx) => ctx.localStore.listHarvest || null;
+    const storedHarvestIds = (ctx) => Array.from((storedHarvest(ctx) && storedHarvest(ctx).cards) || [], (card) => String(card.id));
+    {
+        const ctx = run({ ids: ["111111", "222222", "333333"] });
+        await wait(80);
+        assert.ok(bar(ctx), "the floating bar must offer a harvest control (item 70)");
+        assert.ok(statusLine(ctx), "the harvest must be able to say what it is doing (item 70)");
+        assert.equal(bar(ctx).textContent, "Harvest", "the control starts a harvest");
+        bar(ctx).dispatch("click");
+        await wait(80);
+        assert.deepEqual(selectedIds(ctx), ["111111", "222222", "333333"],
+            "starting a harvest collects the cards the page had already rendered");
+        assert.ok(/^3 collected/.test(statusLine(ctx).textContent),
+            "the status line reports the harvest, got " + JSON.stringify(statusLine(ctx).textContent));
+        assert.deepEqual(storedHarvestIds(ctx), ["111111", "222222", "333333"],
+            "the harvest is persisted so a reload cannot lose it");
+        assert.equal(storedHarvest(ctx).active, false,
+            "the persisted copy is never active: a reload cannot resume a dead run's scrolling");
+
+        // A card the SITE renders later (infinite scroll, pagination) is picked
+        // up by the observer - and only once, however often it fires.
+        ctx.dom.addCard("666666", "Title 6");
+        for (const callback of ctx.mutationCallbacks) callback([]);
+        await wait(250);
+        assert.ok(selectedIds(ctx).indexOf("666666") !== -1,
+            "a card rendered after the harvest started is collected, got " + JSON.stringify(selectedIds(ctx)));
+        for (const callback of ctx.mutationCallbacks) callback([]);
+        await wait(250);
+        assert.equal(selectedIds(ctx).filter((id) => id === "666666").length, 1,
+            "the harvest never collects the same card twice");
+        assert.ok(/^4 collected/.test(statusLine(ctx).textContent),
+            "the status line follows the collection, got " + JSON.stringify(statusLine(ctx).textContent));
+
+        // Stop: the run ends, says so, and a card rendered afterwards stays out.
+        assert.equal(bar(ctx).textContent, "Stop harvest", "the control toggles while a run is live");
+        bar(ctx).dispatch("click");
+        await wait(80);
+        assert.equal(bar(ctx).textContent, "Harvest", "stopping returns the control to its idle label");
+        assert.ok(/4 collected . stopped$/.test(statusLine(ctx).textContent),
+            "the status line names the stop, got " + JSON.stringify(statusLine(ctx).textContent));
+        ctx.dom.addCard("777777", "Title 7");
+        for (const callback of ctx.mutationCallbacks) callback([]);
+        await wait(250);
+        assert.equal(selectedIds(ctx).indexOf("777777"), -1,
+            "a stopped harvest must not keep collecting, got " + JSON.stringify(selectedIds(ctx)));
+        assert.equal(selectedIds(ctx).length, 4, "stopping keeps what was collected");
+        console.log("PASS: a harvest collects rendered and late-rendered cards once each, and Stop ends it (item 70)");
+    }
+    {
+        // Optional auto-scroll: the run steps the page itself, bounded, and stops
+        // at the end of the listing instead of scrolling forever. The fixture
+        // appends one card per step, so this is the infinite-scroll flow.
+        const ctx = run({
+            ids: ["111111", "222222", "333333"],
+            settings: { bookmarkHarvestAutoScroll: true },
+            scrollCards: [{ id: "444444", title: "Title 4" }, { id: "555555", title: "Title 5" }]
+        });
+        await wait(80);
+        const scrollBox = ctx.dom.document.getElementById("nhdw-harvest-scroll");
+        assert.ok(scrollBox, "the bar must offer the optional auto-scroll (item 70)");
+        assert.equal(scrollBox.checked, true, "the remembered auto-scroll preference is restored");
+        bar(ctx).dispatch("click");
+        await wait(3400);
+        assert.deepEqual(selectedIds(ctx), ["111111", "222222", "333333", "444444", "555555"],
+            "auto-scroll harvests the cards the page loads while it scrolls, got " + JSON.stringify(selectedIds(ctx)));
+        assert.ok(ctx.scrollSteps.length >= 2, "auto-scroll really moved the page, got " + JSON.stringify(ctx.scrollSteps));
+        assert.ok(/5 collected . reached the end of the page$/.test(statusLine(ctx).textContent),
+            "the run stops at the end of the listing and says so, got " + JSON.stringify(statusLine(ctx).textContent));
+        assert.equal(bar(ctx).textContent, "Harvest", "the control is idle again once the run stops itself");
+        console.log("PASS: optional auto-scroll harvests as it scrolls and stops at the end of the page (item 70)");
+    }
+    {
+        // Reload survival: the collected cards come back with the page, are
+        // merged into the selection by composite key, and a resumed copy is
+        // never left claiming to be active. Another site's cards stay out.
+        const ctx = run({
+            ids: ["111111", "222222"],
+            store: {
+                listHarvest: {
+                    v: 1, run: 2, active: true, autoScroll: true, round: 5, stopReason: "",
+                    cards: [
+                        { id: "111111", site: "nhentai", title: "Title 1" },
+                        { id: "999999", site: "nhentai", title: "Gone From The Page" },
+                        { id: "42", site: "hitomi", title: "Another Site" }
+                    ]
+                }
+            }
+        });
+        await wait(120);
+        assert.ok(selectedIds(ctx).indexOf("999999") !== -1,
+            "a harvest survives a reload: the collected id is back in the selection, got " + JSON.stringify(selectedIds(ctx)));
+        assert.equal(selectedIds(ctx).indexOf("42"), -1, "cards from another site are never merged into this page's selection");
+        assert.equal(selectedIds(ctx).filter((id) => id === "111111").length, 1, "the merge never duplicates an id");
+        assert.ok(/3 collected/.test(statusLine(ctx).textContent),
+            "the restored harvest reports what it holds, got " + JSON.stringify(statusLine(ctx).textContent));
+        assert.equal(storedHarvest(ctx).active, false, "the resumed copy is stored inactive");
+        console.log("PASS: a harvest survives a reload and merges by composite key (item 70)");
     }
 
     console.log("PASS: in-page listing card controls behave correctly.");

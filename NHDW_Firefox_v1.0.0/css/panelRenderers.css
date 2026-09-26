@@ -145,6 +145,65 @@
     font-size: 12px;
 }
 
+/* Item 68: search, state/date filters and the count of what is already on
+   disk. The search grows with the row, the two selects stay compact, and
+   "Show more" is a full-width row so a long list never looks like it ended. */
+.nhdwBmSearch {
+    flex: 1 1 180px;
+    min-width: 140px;
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+}
+
+.nhdwBmQuerySelect {
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 5px 6px;
+    font-size: 12px;
+}
+
+.nhdwBmHistoryInfo {
+    font-size: 11px;
+    opacity: 0.75;
+}
+
+.nhdwBmMore {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    border: 1px solid #999;
+    background: transparent;
+    color: inherit;
+    border-radius: 4px;
+    padding: 6px 8px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.nhdwBmMore:hover {
+    border-color: #e31b53;
+    color: #e31b53;
+}
+
+/* The already-downloaded check sits with the title: a green tick means the
+   history records a finished artifact for this row, and only that. */
+.nhdwBmAlready {
+    float: right;
+    color: #2e9e4f;
+    font-weight: bold;
+    font-size: 14px;
+    line-height: 1;
+    padding-left: 6px;
+    cursor: help;
+}
+
+
 :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmFilterInfo {
     font-size: 11px;
     opacity: 0.8;

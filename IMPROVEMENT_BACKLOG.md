@@ -3072,6 +3072,133 @@ and `--full-panel` modes (209 PASS lines, +8), `lint:firefox` still 0 errors /
 PDF-merge warning path and the similar-galleries panel are still covered only by
 the content-script harnesses; the new stubs make each a small follow-up.
 
+## Items 68 + 70 — 2026-09-26 (owner-directed best-effort)
+
+The owner's instruction, verbatim: *"for 68 and 70 i know that you dont
+implement blindly but if you dont implement it how do i test it later if theres
+nothing to test so for now implement it the best you can for those 2 task"*.
+
+Both items had been parked behind **"needs an owner spec pass"** — item 68's
+open forks were the search semantics, the date buckets, the window size and the
+source of the already-downloaded mark; item 70's were the harvest's bounds, its
+auto-scroll default and exactly what survives a page reload. They are therefore
+shipped on **explicit assumed defaults**, listed below. Each one is small and
+local: a spec pass can flip any of them without re-architecting anything.
+Versions **Chrome 3.10.5 / Firefox 1.4.5**.
+
+### Item 68 — what landed
+
+- **Query = one view over four fields** (`src/utils/bookmarkFilters.ts`:
+  `BookmarkQuery`, `normalizeBookmarkQuery`, `queryBookmarks`,
+  `isDefaultBookmarkQuery`). `#nhdwBmSearch` matches **title, id and tags**
+  (case-insensitive substring; **every typed word must match** — `bulk 250`
+  finds exactly the row that carries both). `#nhdwBmStatusFilter` is
+  any · not downloaded (saved) · ticked (selected) · done · failed ·
+  downloading. `#nhdwBmDateFilter` is any · today · last 7 days · last 30 days
+  · older, on the row's `addedAt`. The item-66 site select is the query's
+  fourth field, always in sync with `bookmarkSiteFilter`.
+- **Windowed rendering**: `chunkBookmarkRows` + `nextBookmarkChunkSize` render
+  `BOOKMARK_PAGE_SIZE` = 200 rows and a full-width **Show more (N of M)**
+  control; every query change (and the site select) resets the window to the
+  first page. `MAX_BOOKMARK_ITEMS` is untouched — the item says a cap raise is a
+  separate owner decision.
+- **The green ✓ is the download history, never the row**:
+  `bookmarkIsDownloaded(item, historyKeys)` compares the row's **site-aware
+  composite key** against the history record, and `bookmarkHistoryName` puts the
+  recorded filename in the tooltip. A row whose `status` merely says `done` but
+  has no history record is **not** marked (pinned); a row whose retry failed
+  keeps its mark while the artifact is on disk. The panel re-reads history on
+  open and on `chrome.storage.onChanged` (local), so a download that settles
+  while the tab is open ticks its row — the same record the batch skip trusts.
+- **The batch is pre-announced**: `bookmarkQuerySummary` feeds
+  `#nhdwBmHistoryInfo` ("N already downloaded", beside the item-66 "showing X of
+  Y" line) and the Download button's tooltip, so re-downloads are obvious BEFORE
+  the job runs — with or without a query active (the counters are computed from
+  the **whole stored list**, not just the visible window).
+- **Select all / Select none follow the whole query** (site + text + state +
+  date): composite keys of every matching row; the whole-list `{all:true}` form
+  is used only when nothing is filtered. The header counts line stays
+  whole-list, which is what item 66 established.
+- **`tags[]` on the queue**: `bookmarkQueue.ts` gained an optional
+  `BookmarkItem.tags` + `normalizeTags` (strings only, trimmed, deduped) and the
+  add path passes a candidate's tags through, so the search has something to
+  match on; rows added without tags simply do not match tag text.
+
+### Item 70 — what landed
+
+- **`src/utils/listHarvest.ts`** is the pure core: `HARVEST_MAX_ITEMS` = 2000,
+  `HARVEST_INTERVAL_MS` = 700, `HARVEST_MAX_ROUNDS` = 40,
+  `HARVEST_STORAGE_KEY` = `listHarvest`; `startHarvest` (run token),
+  `stopHarvest` + `HarvestStopReason` (`stopped` / `rounds` / `limit` /
+  `bottom`), `isHarvestRun` (only the newest run may write), `harvestAddCards`
+  (dedupe by composite key, first-seen order), `nextHarvestRound`,
+  `harvestShouldContinue`, `harvestSummary` (the status line),
+  `mergeHarvestIntoSelection` (harvest order first, then the existing
+  selection, no duplicates — `allIds` IS the download order) and
+  `selectionKeyMatchesSite` (the page's own namespace).
+- **The bar** (`src/content/listControls.ts`): `#nhdw-harvest`
+  (**Harvest** → **Stop harvest**), `#nhdw-harvest-scroll` ("Scroll for me",
+  remembered in `chrome.storage.sync.bookmarkHarvestAutoScroll`, disabled while
+  a run is live) and `#nhdw-harvest-status`.
+- **Collection**: a run reads what the tab has already rendered
+  (`findCards()`), then the existing 150 ms MutationObserver debounce collects
+  again while `harvest.active` — so an infinite-scroll site's late cards land in
+  the run, exactly once each. Harvested cards are ticked into the **same shared
+  selection** the bar downloads (`mergeHarvestIntoSelection` order).
+- **Bounds + Stop**: auto-scroll steps by a viewport every 700 ms, ends at the
+  page bottom, and the run stops itself at 40 rounds or 2000 items — each with
+  its own status wording. Stop is authoritative via the run token, and a stopped
+  run never resumes (a fresh Harvest starts a new token).
+- **Reload**: the state is persisted on every collect/round as an
+  **always-inactive** copy (a reload cannot resume the old page's scrolling),
+  and on the next load it is normalized and merged back into the selection —
+  filtered to this page's site, by composite key, without duplicates.
+
+### Red evidence
+
+Tests first, as usual:
+
+- The unit layer was red before the modules existed (`MODULE_NOT_FOUND` for
+  `build/test/utils/bookmarkFilters.js` / `listHarvest.js`), then green:
+  **+15 cases** (`test/bookmark-filters.test.js` 10, `test/list-harvest.test.js`
+  5 — both trees, sources byte-identical), including the summary arithmetic
+  (`{matched, alreadyDownloaded, selected, downloadNow}` — a row that is both
+  ticked and already recorded is not "download now"), the query-composition
+  pins, the run-token/Stop contract and the storage-vs-live `active` rule.
+- The harness phases were red **before the wiring**: `e2e-bookmark-panel.js`
+  stopped at `FAIL: the list needs a search box (item 68)`, and
+  `e2e-list-controls.js` at `the floating bar must offer a harvest control
+  (item 70)`. After the wiring: phase 9a–9d (Chrome and Firefox) and the three
+  harvest phases pass.
+- **Mutation proof** (both reverted, trees re-verified): marking a row from
+  `item.status === "done"` instead of the history record fails phase 9a
+  (`a row that merely says done must not carry the downloaded mark`);
+  dropping the observer's `collectHarvest()` fails the item-70 phase (`a card
+  rendered after the harvest started is collected`).
+
+### Notes for the next session
+
+- **The search haystack includes the id.** The first draft of phase 9c asserted
+  that `Bulk 1` re-windows to 111 rows and measured 133: with "every word must
+  match" over title **and** id, a numeric term matches more rows than the titles
+  suggest. The phase (not the code) was wrong; it now pins the AND semantics
+  positively (`bulk` → 200 of 250, `bulk 250` → exactly 1).
+- **Sandbox-created arrays do not compare equal under
+  `node:assert/strict`.** `ctx.localStore.allIds` is built inside the
+  window-less bundle's realm, so `deepStrictEqual` against a harness literal
+  fails on prototype identity even when the contents match. The harness helpers
+  now normalize with `Array.from(...)` in the harness's own realm; anyone
+  comparing a sandbox value to a literal should do the same.
+- **`mergeHarvestIntoSelection` and `selectionKeyMatchesSite` drive production**, not
+  just tests: the DOM adapter merges through the core so the shipped order and
+  the pinned order cannot drift (this was also a deliberate cleanup — the first
+  draft had a production-only `harvestIdsForSite` with no test and an exported
+  helper with no caller).
+- Items 68/70 were implemented **without** the spec pass both items asked for.
+  If the owner re-opens any default above, the change is local to
+  `bookmarkFilters.ts` / `listHarvest.ts` plus the labels in `bookmarkPanel.ts`
+  / `listControls.ts`.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
@@ -3082,11 +3209,11 @@ the content-script harnesses; the new stubs make each a small follow-up.
 | 63 | Card Select/Bookmark/Download on all six sites | **done 2026-09-25 (merged, PR #50)** — real `utils/listCards.ts` table + `findCards()` per-site dispatch (cards carry their site), site-aware history (`partitionKnown(..., site)`), composite bookmark identity, `site:` on every card/bar job, listing-host `content_scripts` block for the five non-nhentai hosts, per-site e2e discovery; `getGalleries` port out of scope |
 | 64 | Select-all on listings + title-page select into `allIds` | **done 2026-09-25 (merged, PR #50)** — `#nhdw-select-all` beside Clear with the bar visible whenever `findCards()` finds cards; gallery-page `nhdw-title-select` writes the bare id into the shared `allIds`; `allIdsSite` makes the wipe site-scoped (selection survives same-site navigation, dropped across sites) |
 | 65 | Rename Queue tab → Bookmark tab (UI-only) | **done 2026-09-26 (Chrome 3.10.2 / FF 1.4.2)** — tab label + 5 copy strings; `test/tab-labels.test.js` in both trees locks the new label and the unchanged `bookmarkQueue` key / `#tabQueue` / `#queuePane` ids / actions / export format |
-| 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | confirmed — **needs a go-ahead**: 65 (the rename) landed alone on 2026-09-26, so the "one header unit" pairing no longer applies automatically |
+| 66 | Bookmark tab per-site filter — **dropdown select + remember last selection** (owner pick, elaboration 2 closed 2026-09-24; free-text: restore last choice after unselect/close) | **done 2026-09-26 (Chrome 3.10.4 / FF 1.4.4)** — `#nhdwBmSiteFilter`, live counts, view-only + remembered, filtered Select all by composite keys |
 | 67 | On-page cart — **badge + expandable mini-cart** (owner pick, elaboration 1 closed 2026-09-24) | confirmed — after 65/68 |
-| 68 | Bookmark list load management + **green-check already-downloaded** (true success only, never fail-midway; works with/without search/filter) | open — after 65 |
+| 68 | Bookmark list load management + **green-check already-downloaded** (true success only, never fail-midway; works with/without search/filter) | **done 2026-09-26 best-effort (Chrome 3.10.5 / FF 1.4.5)** — search/state/date query, 200-row window + Show more, history-sourced ✓ with the filename, "N already downloaded", query-scoped Select all; assumed defaults in the log above |
 | 69 | Bookmark thumbnails — **viewport-lazy + GC both** (distance while scrolling + idle ~15–30s sweep; purge all on close/site-group switch; cross-site search keeps GC for dedupe/batch prep) (owner pick, elaboration 3 closed 2026-09-24) | confirmed — with 67/68 |
-| 70 | Live-session auto-fetch (twitter-style phase 2) | open — after 61 |
+| 70 | Live-session auto-fetch (twitter-style phase 2) | **done 2026-09-26 best-effort (Chrome 3.10.5 / FF 1.4.5)** — `#nhdw-harvest` + status + remembered "Scroll for me", observer collection of late cards, run-token Stop, persisted always-inactive `listHarvest` merged into the next selection; assumed defaults in the log above |
 | 71 | Demote panel Download-all where on-page Select exists | **done 2026-09-26 (Chrome 3.10.3 / FF 1.4.3)** — verified the blanket entry was already retired by 61; added the replacement pointer (`#selectionPointer`) + fixed the List-mode hint; the §E identity defect found while verifying is fixed and pinned (bare recorded id = default site). Left: an owner taste call on the pointer's wording only |
 
 Do not allocate these numbers to anything else.
