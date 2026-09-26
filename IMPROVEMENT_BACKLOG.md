@@ -1,5 +1,10 @@
 # NHentai Downloader Improvement Backlog
 
+> Current layout (2026-09-26): historic references to the checked-in
+> `NHDW_Release_v3.0.0/` describe the old two-folder distribution. Chrome now
+> loads from `NHDW_Extension_v3.0.0/`; `npm run package:chrome` makes an
+> ignored runtime ZIP. See `ASSET_PLAN.md` for the proposed visual work.
+
 This document tracks future work for the NHentai Downloader extension. Items are grouped by priority and should be completed in small, reviewable changes.
 
 ## Current status

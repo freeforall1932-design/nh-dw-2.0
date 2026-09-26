@@ -123,21 +123,34 @@ function readSiteFilter(done: () => void): void {
 // query changes, so a freshly typed search can never hide behind a stale
 // "shown" count - and the history is refreshed on open and whenever storage
 // reports a change, because the mark means "this file is on disk" and comes
-// from the same record the batch skip trusts.
+// from the same disk verification the batch skip trusts.
 let bookmarkQuery: BookmarkQuery = Object.assign({}, BOOKMARK_QUERY_DEFAULTS);
 let shownRows: number = BOOKMARK_PAGE_SIZE;
 let historyKeys: string[] = [];
 let historyMap: any = {};
 let watchingHistory = false;
+let historyRefresh = 0;
 
 async function refreshHistory(): Promise<void> {
+    const refresh = ++historyRefresh;
     try {
-        const stored: any = await readHistory();
-        historyKeys = historyIds(stored);
-        historyMap = stored || {};
+        const stored = await readHistory();
+        // The history record only says a download once succeeded. A user may
+        // have deleted the file since then. Ask the worker (which has the
+        // downloads API even when this panel runs inside a content-script
+        // drawer) for the SAME on-disk check used by the download skip guard.
+        const reply = await send({ action: "historyPresent" });
+        if (refresh !== historyRefresh) {
+            return; // a later storage event/open has already begun a new read
+        }
+        historyKeys = reply && reply.result === "success" && Array.isArray(reply.ids)
+            ? reply.ids.filter((id: any) => typeof id === "string" && Object.prototype.hasOwnProperty.call(stored, id))
+            : []; // worker unreachable: never claim a file exists
+        historyMap = stored;
     } catch (_) {
-        // A failed read means "nothing is known to be on disk". It must never
-        // invent a mark, and it must never break the list.
+        if (refresh !== historyRefresh) {
+            return;
+        }
         historyKeys = [];
         historyMap = {};
     }
@@ -715,7 +728,7 @@ function renderList(): void {
             ? querySummary.alreadyDownloaded + " already downloaded"
             : "";
         historyInfo.title = querySummary.alreadyDownloaded > 0
-            ? "The history records an artifact for these rows. Ticking \"include already downloaded\" re-fetches them."
+            ? "The browser confirms saved files for these rows. Ticking \"include already downloaded\" re-fetches them."
             : "";
     }
     if (selectAllButton !== null) {
@@ -742,7 +755,7 @@ function renderList(): void {
     // note: re-downloads must be obvious before you commit to the job).
     downloadButton.title = querySummary.alreadyDownloaded > 0
         ? "Download every ticked title, one file each. " + querySummary.alreadyDownloaded
-            + " of the rows on screen are already on disk - tick \"include already downloaded\" to fetch them again."
+            + " of the rows matching this view are already on disk - tick \"include already downloaded\" to fetch them again."
         : "Download every ticked title, one file each, using the list-mode settings";
 
     const body = document.getElementById("nhdwBmBody");

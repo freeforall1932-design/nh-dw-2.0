@@ -1,4 +1,4 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.5)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.6)
 
 **Updated:** 2026-09-26 · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
@@ -8,7 +8,12 @@ gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
 
-v1.4.5 = the Bookmark tab's **search/state/date query** with a 200-row window
+v1.4.6 = the Bookmark ✓ now checks on-disk presence via the worker, not
+just a stored history record; backup history import also reaches Firefox's
+no-offscreen worker; Harvest avoids a no-op DOM observer feedback loop and its
+wider bar is wrapped/bounded and the Bookmark search is sized for a
+phone keyboard on coarse-pointer viewports. Offline tests pass, but Android device verification
+and signing are still pending. v1.4.5 = the Bookmark tab's **search/state/date query** with a 200-row window
 and **Show more**, the **already-downloaded ✓** read from the download history
 (its tooltip is the saved file name; a row that only claims "done" is never
 marked) and query-scoped **Select all** (item 68); plus the listing pages'

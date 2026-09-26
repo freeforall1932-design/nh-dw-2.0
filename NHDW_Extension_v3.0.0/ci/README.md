@@ -47,52 +47,17 @@ matches it, the copy here is redundant — leave it in place as the readable
 mirror of what CI runs, and update it in the same commit whenever the real
 workflow changes.
 
-## Currently pending
+## Currently pending — one Chrome folder / future runtime assets
 
-### `pending-workflows/extension-tests.yml` — broaden the trigger paths
+The live workflow still contains a path for the removed
+`NHDW_Release_v3.0.0/**`. The complete intended replacement is in
+`ci/pending-workflows/extension-tests.yml`. It removes that stale trigger and
+adds paths for `NHDW_Extension_v3.0.0/js/**`, `assets/**` and `Icon*.png` so a
+future icon or background-only change runs CI. All previously working source,
+test, manifest, CSS and Firefox triggers remain unchanged. **The current live
+workflow still runs on the existing source/test paths; only asset-only changes
+may not trigger it until the owner applies this mirror manually.**
 
-Queued 2026-09-04, during the 3.4.0 list-mode parity work (PR #33).
-
-`on.push.paths` currently only lists `NHDW_Release_v3.0.0/**` and the
-`scripts/`, `test/` and `src/` subtrees of the extension. That means a commit
-that changes only, say, `manifest.json`, `index.html`, `options.html` or
-`css/**` does **not** trigger CI — and those are exactly the files that the
-side-panel registration, the panel markup and the in-page card styling live in.
-A broken manifest or a missing stylesheet could reach `main` with a green (i.e.
-never-run) status.
-
-The pending copy adds:
-
-| Added path | Why it matters |
-| --- | --- |
-| `NHDW_Extension_v3.0.0/manifest.json` | `test/manifest.test.js` asserts permissions, `side_panel.default_path`, content-script registration and web-accessible resources |
-| `NHDW_Extension_v3.0.0/package.json` | changes the test scripts themselves (`test:e2e` gained a 5th script) |
-| `NHDW_Extension_v3.0.0/package-lock.json` | `npm ci` resolves against it |
-| `NHDW_Extension_v3.0.0/index.html` | the popup/side-panel DOM contract `popup.ts` depends on |
-| `NHDW_Extension_v3.0.0/options.html` | the settings DOM contract `options.ts` depends on |
-| `NHDW_Extension_v3.0.0/offscreen.html` | hosts the offscreen document the packaging pipeline runs in |
-| `NHDW_Extension_v3.0.0/css/**` | `style.css` (panel/list/modal) and `content.css` (card controls) |
-| `NHDW_Extension_v3.0.0/webpack.config.js` | defines every bundle entry point |
-| `NHDW_Extension_v3.0.0/tsconfig*.json` | drives both the build and `tsc --noEmit` |
-
-Nothing else about the workflow changes: same single `unit` job, same Node 22,
-same five steps, same `workflow_dispatch`.
-
-**Diff against the live workflow** (the only hunk):
-
-```diff
-       - 'NHDW_Extension_v3.0.0/src/**'
-+      - 'NHDW_Extension_v3.0.0/manifest.json'
-+      - 'NHDW_Extension_v3.0.0/package.json'
-+      - 'NHDW_Extension_v3.0.0/package-lock.json'
-+      - 'NHDW_Extension_v3.0.0/index.html'
-+      - 'NHDW_Extension_v3.0.0/options.html'
-+      - 'NHDW_Extension_v3.0.0/offscreen.html'
-+      - 'NHDW_Extension_v3.0.0/css/**'
-+      - 'NHDW_Extension_v3.0.0/webpack.config.js'
-+      - 'NHDW_Extension_v3.0.0/tsconfig*.json'
-       - '.github/workflows/extension-tests.yml'
-```
-
-Verify after applying: push a commit that touches only `css/style.css` and
-confirm the run appears in the Actions tab.
+Do not attempt to edit `.github/workflows/**` in an agent push. The owner must
+apply the pending mirror through their normal GitHub account (as above), then
+verify that an icon-only change starts the offline-suites workflow.

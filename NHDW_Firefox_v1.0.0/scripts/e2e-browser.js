@@ -21,7 +21,7 @@
 // without it those sections are skipped with a hint.
 //
 // Usage:
-//   node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0 [--browser /path/to/chromium] [--nss-libs /dir] [--headed|--headless]
+//   node scripts/e2e-browser.js --extension ../NHDW_Extension_v3.0.0 [--browser /path/to/chromium] [--nss-libs /dir] [--headed|--headless]
 //
 // Environment:
 //   BROWSER_BIN     browser binary (Chrome, Chromium, or Brave)
@@ -51,7 +51,7 @@ function argValue(name) {
     if (i !== -1 && i + 1 < process.argv.length) return process.argv[i + 1];
     return undefined;
 }
-const EXTENSION_DIR = argValue("--extension") || process.env.EXTENSION_DIR || path.join(__dirname, "..", "..", "NHDW_Release_v3.0.0");
+const EXTENSION_DIR = argValue("--extension") || process.env.EXTENSION_DIR || path.join(__dirname, "..", "..", "NHDW_Extension_v3.0.0");
 const BROWSER_ARG = argValue("--browser") || process.env.BROWSER_BIN;
 const NSS_LIBS_ARG = argValue("--nss-libs") || process.env.NSS_LIBS;
 const FORCE_HEADLESS = process.argv.includes("--headless") || process.env.NHDW_BROWSER_HEADLESS === "1";

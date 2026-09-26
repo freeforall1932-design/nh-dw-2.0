@@ -667,3 +667,24 @@
     color: #eee;
     cursor: default;
 }
+
+/* Firefox Android: the Bookmark search is type=search (the popup's older
+   input[type=text] rule misses it). Reserve a full row and avoid focus zoom;
+   the same renderer serves the fallback tab and the website drawer. */
+@media (max-width: 640px) and (pointer: coarse) {
+    :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmSearch {
+        flex: 1 1 100%;
+        min-width: 0;
+        width: 100%;
+        box-sizing: border-box;
+        font-size: 16px;
+        min-height: 44px;
+    }
+
+    :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmQuerySelect,
+    :where(#queuePane, #nhdwSiteUiQueue) .nhdwBmSiteSelect {
+        max-width: 100%;
+        font-size: 16px;
+        min-height: 44px;
+    }
+}

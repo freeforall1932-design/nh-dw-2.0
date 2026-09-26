@@ -1,3 +1,9 @@
+> **Current layout note (2026-09-26):** This is a historical porting audit.
+> Its references to `NHDW_Release_v3.0.0/` describe the former checked-in
+> Chrome runtime copy. Today `NHDW_Extension_v3.0.0/` is the one loadable
+> Chrome folder; Firefox remains a separate package. See `ASSET_PLAN.md` and
+> `SESSION_HANDOFF.md` for current paths.
+
 # Porting audit — NHentai Downloader Chrome → Firefox
 
 **Date:** 2026-09-03

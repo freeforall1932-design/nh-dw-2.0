@@ -1,5 +1,37 @@
 # Worklist — nh-dw-2.0
 
+**Chrome folder consolidation (current session):**
+`NHDW_Extension_v3.0.0/` is now the one checked-in loadable Chrome tree.
+**Migration warning:** an old unpacked install at the former folder path may
+get a new extension ID when reloaded here; export Bookmark/history backup from
+the old installation first, import in the new, and recheck Settings/API key.
+Do not remove an installed old copy until its backup is verified.
+The former `NHDW_Release_v3.0.0/` was a byte-for-byte runtime copy (its
+README was different) and is removed. `npm run package:chrome` generates a
+runtime-only ZIP in ignored `dist/`; `npm run test:browser` targets the same
+source folder. No download behavior or version change. `ASSET_PLAN.md` is the
+repo-aware visual planning brief; no new visuals have been installed. CI's
+asset-path trigger change is pending **owner application** in
+`NHDW_Extension_v3.0.0/ci/pending-workflows/extension-tests.yml` (agent must
+not edit `.github/workflows/`). Android item 58 remains open.
+
+**2026-09-26 Android preflight (this session): device pass STILL OPEN.** No
+Android device/emulator or `adb` is available here; Firefox desktop and phone
+runtime behaviour, including real `downloads.search`, have NOT been observed.
+Review of items 68/70 found and fixed an item-68 discrepancy: the Bookmark ✓
+was derived from a stored history record even after the file had been deleted.
+The worker now verifies the file on disk on open/history change; an unreachable
+worker draws no ✓, and export history is not erased. The new red-first panel
+phase 9e and worker phase 5f-Bookmark pass in both trees. Firefox's backup
+history-import handler was also unreachable on its no-offscreen path; it is now
+shared and tested in worker phase 5f-Import. An item-70 no-op observer pass
+also rewrote bar/card text, feeding its own 150ms MutationObserver loop; the
+red-first `e2e-list-controls` check now pins unchanged DOM text on both trees.
+Android-only CSS bounds/wraps the wider Harvest bar and puts the item-68
+search on its own 16px-text line at phone width (both static guards red-first,
+**not visually verified**). Chrome **3.10.6** / Firefox **1.4.6**. **Do not sign yet**; see
+item 42/58 below for the outstanding device evidence.
+
 **Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
 **items 68 + 70 landed (owner-directed best-effort)** — the Bookmark tab gained
 load management (item 68: search, state/date filters, a bounded window and the
@@ -110,6 +142,7 @@ This is the single place to look for *what to do next*.
 | Document | What it is for |
 |---|---|
 | **`WORKLIST.md`** (this file) | Ordered, statused list of open work. Start here. |
+| **`ASSET_PLAN.md`** | Repo-aware logo/background/animation planning brief, not yet implemented. |
 | **`SESSION_HANDOFF.md`** | Operating rules: current state, structural invariants, real-browser checklists, the full Do-not list. Read before touching code. |
 | **`IMPROVEMENT_BACKLOG.md`** | The improvement log: full specs + session logs for every numbered item. The keeper of completed-work history. |
 | **`MULTISITE_V4_PLAN.md`** | Multi-site decision record, cooldown strategies (C pending owner), bucket list. |
@@ -141,12 +174,10 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-26, after items 65, 66, 71 and 40 landed):**
-**68** and **70** when the owner opens them (both need an owner spec pass),
-then the owner-only **42/58** (real-browser + Android passes, then signing),
-which outrank everything else in value. No offline-feasible backlog item is
-left unstarted: item 40 was the last one, and item 66 the last owner question
-except item 71's wording call (below).
+**Top of the queue (2026-09-26):** items **68/70 landed best-effort**;
+**42/58** remain the real-browser, Firefox Android, and then signing passes.
+The device pass cannot be substituted with the offline suites. Item 71's
+remaining wording choice is recorded below.
 
 **One open question for the owner (recorded, not started):** (1) **item 71's
 remaining UX choice** is narrowed to whether the
@@ -451,6 +482,13 @@ test:browser` has never run in any agent sandbox.
   while scrolling are collected exactly once), the **Scroll for me** box's
   remembered state, **Stop** mid-run, and a reload after a harvest (collected
   titles still ticked, nothing duplicated, the run does not restart itself).
+  **On Firefox Android at ~360px**, check the Bookmark drawer's search/selects
+  while the keyboard is open, and verify every wrapped floating-bar action
+  (especially **Stop harvest** and **Select all**) is visible, scrollable and
+  tappable without horizontal clipping; repeat on a second site and after a
+  device/browser restart. Confirm `downloads.search` reports a deleted file as
+  missing on Android (not just in the offline mock). Record actual device,
+  Firefox version, site URL, and pass/fail for each; no observation here yet.
 
 ### 40. Popup harness does not bootstrap a listing page — DONE 2026-09-26 (test-only)
 
@@ -644,8 +682,10 @@ piece of work".
   Storage stubs must be key-scoped and async (a whole-store merge mock once hid
   the item-59 defect).
 - **`js/` is committed, not ignored.** After any `npm run build`, run the
-  exhaustive release-folder sync loop (`SESSION_HANDOFF.md` → Repository and
-  branch). `test/manifest.test.js` asserts the two manifests' versions match.
+  generated bundles stay in the ONE loadable Chrome folder. For a clean
+  distributable ZIP run `npm run package:chrome`; `test/package-chrome.test.js`
+  checks the runtime-only archive and `test/manifest.test.js` rejects a second
+  tracked Chrome runtime.
 - **`node_modules` does not persist between sessions** — `npm install` first
   in whichever tree you touch.
 - **Captures are sanitized working-tree files.** Do not resurrect original
