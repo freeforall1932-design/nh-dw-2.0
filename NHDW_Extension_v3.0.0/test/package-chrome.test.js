@@ -15,7 +15,10 @@ describe('one Chrome runtime tree / generated release', () => {
             'Icon-grey.png', 'css/content.css', 'js/background.js', 'js/preview.js']) {
             assert.ok(paths.includes(file), 'missing ' + file);
         }
-        assert.ok(paths.every((file) => /^(?:css|js|assets)\/|^(?:manifest\.json|index\.html|options\.html|offscreen\.html|Icon(?:-grey)?\.png|LICENSE)$/.test(file)),
+        // Icon-crow-*.png ride beside Icon.png as owner-requested comparison
+        // candidates (ASSET_PLAN.md family 1: rename to compare in a live
+        // extension, no rebuild).
+        assert.ok(paths.every((file) => /^(?:css|js|assets)\/|^(?:manifest\.json|index\.html|options\.html|offscreen\.html|Icon(?:-grey|-crow-[a-z-]+)?\.png|LICENSE)$/.test(file)),
             'a non-runtime file slipped into the release');
         assert.ok(!paths.some((file) => /\.(?:map|ts)$/.test(file)));
     });

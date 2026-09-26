@@ -6,7 +6,13 @@ const fs = require('fs');
 const path = require('path');
 const JSZip = require('jszip');
 
-const CORE = ['Icon-grey.png', 'Icon.png', 'LICENSE', 'index.html',
+// Icon-crow-*.png are project-master candidates (ASSET_PLAN.md family 1):
+// they ride beside Icon.png so the owner can compare marks by renaming
+// files in the shipped/unpacked extension without any rebuild.
+const CORE = ['Icon-crow-mist-arrow-grey.png', 'Icon-crow-mist-arrow.png',
+    'Icon-crow-mist-grey.png', 'Icon-crow-mist-redeye-grey.png',
+    'Icon-crow-mist-redeye.png', 'Icon-crow-mist.png',
+    'Icon-grey.png', 'Icon.png', 'LICENSE', 'index.html',
     'manifest.json', 'offscreen.html', 'options.html'];
 const RUNTIME_EXT = {
     css: /\.(?:css|png|svg|webp|jpe?g|woff2?)$/i,
