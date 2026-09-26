@@ -412,3 +412,35 @@ describe('full-panel source tab context', () => {
         assert.strictEqual(await getActiveNhentaiTabId(), undefined);
     });
 });
+
+// Preflight for item 70 on a 360px phone: the old desktop action bar was a
+// single unbounded flex row. This only pins CSS intent; a device still needs
+// to confirm real layout, touch targets and the site's viewport behavior.
+describe('Android listing harvest action bar (static guard)', () => {
+    it('wraps the floating bar inside a coarse-pointer phone viewport', () => {
+        const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'css', 'content.css'), 'utf8');
+        const phone = css.match(/@media \(max-width: 640px\) and \(pointer: coarse\) \{([\s\S]*?)\n\}/);
+        assert.ok(phone, 'Android-only content CSS must be gated on width AND coarse pointer');
+        assert.match(phone[1], /\.nhdw-action-bar\s*\{[^}]*flex-wrap:\s*wrap/s,
+            'Harvest, Stop and Select all must not escape a narrow viewport');
+        assert.match(phone[1], /\.nhdw-action-bar\s*\{[^}]*max-height:/s,
+            'a wrapped bar must not take over the entire page');
+        assert.match(phone[1], /\.nhdw-action-bar button\s*\{[^}]*min-height:\s*44px/s,
+            'touch controls must be large enough on Android');
+    });
+});
+
+// The Bookmark search is type=search, not type=text; the old mobile input
+// selector in style.css did not cover it. At 360px it must fill its own line
+// and use 16px text to avoid Android zoom when the keyboard opens.
+describe('Android Bookmark query (static guard)', () => {
+    it('sizes the search and state/date controls for a phone without touching desktop CSS', () => {
+        const css = require('fs').readFileSync(require('path').join(__dirname, '..', 'css', 'panelRenderers.css'), 'utf8');
+        const phone = css.match(/@media \(max-width: 640px\) and \(pointer: coarse\) \{([\s\S]*?)\n\}/);
+        assert.ok(phone, 'Bookmark controls need phone-only CSS');
+        assert.match(phone[1], /\.nhdwBmSearch\s*\{[^}]*flex:\s*1 1 100%/s,
+            'search must occupy its own line at 360px');
+        assert.match(phone[1], /\.nhdwBmSearch\s*\{[^}]*font-size:\s*16px/s,
+            'type=search must not trigger Android focus zoom');
+    });
+});

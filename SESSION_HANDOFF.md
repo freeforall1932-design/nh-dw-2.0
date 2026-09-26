@@ -77,7 +77,32 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Current state
 
-- **Chrome 3.10.4 / Firefox 1.4.4** (3.10.0/1.4.0 = PR #50; 3.10.1/1.4.1 = this
+**Chrome tree consolidation (current session):**
+`NHDW_Extension_v3.0.0/` now IS the unpacked loadable Chrome folder; the
+checked-in `NHDW_Release_v3.0.0/` was redundant and is removed. Builds update
+its committed `js/`; `npm run package:chrome` rebuilds and generates an ignored
+runtime-only ZIP. **Existing old-path installs may change extension ID:**
+export Bookmark/history backup from the old installed folder before switching,
+import in the new one, and recheck settings/API key (not in backup).
+`ASSET_PLAN.md` describes proposed visual assets and preview checks;
+no art or animation has shipped. Firefox remains a separate build; Android
+verification and signing are still pending. CI workflow path change for new
+icons/assets waits for owner application (see `ci/pending-workflows/`).
+
+**2026-09-26 Android preflight:** Android item 58 remains **unverified** (no
+device/emulator/adb in this workspace). Chrome 3.10.6 / Firefox 1.4.6 address
+a red-first item-68 mark mismatch: history alone was shown as "on disk" even
+when a file had been deleted; now the worker verifies disk presence for the
+Bookmark view, without deleting history. Firefox's fallback worker now handles
+historyImport as well. The item-70 observer no longer rewrites unchanged
+bar/card text on every mutation (red-first no-op observer phase). A phone-only
+CSS guards bound/wrap the item-70 floating bar and size the item-68 search for
+a 360px keyboard/viewport (static tests only; real 360px observation still
+required).
+See `WORKLIST.md` item 42/58 for the 68/70 device matrix. **Do not sign based
+on these offline checks.**
+
+- **Chrome 3.10.6 / Firefox 1.4.6** (3.10.0/1.4.0 = PR #50; 3.10.1/1.4.1 = this
   branch's 2026-09-26 review fixes; 3.10.2/1.4.2 = item 65, the Bookmark-tab
   rename; 3.10.3/1.4.3 = item 71, the shared-selection pointer + the skip-guard
   identity fix; 3.10.4/1.4.4 = item 66, the Bookmark tab's per-site filter;
@@ -233,19 +258,17 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
 
 ## Repository and branch
 
-- Checkout layout (three maintained folders + archives):
-  - `NHDW_Extension_v3.0.0/` — Chrome source of truth (TypeScript, tests, e2e harnesses). `js/` is **committed**, not ignored.
-  - `NHDW_Release_v3.0.0/` — the loadable built package users install.
+- Checkout layout (two maintained extension folders + archives):
+  - `NHDW_Extension_v3.0.0/` — Chrome source AND loadable unpacked root (TypeScript, tests, e2e harnesses, runtime manifest/HTML/CSS/icons). `js/` is **committed**, not ignored. Generated release ZIPs go in ignored `dist/`.
   - `NHDW_Firefox_v1.0.0/` — Firefox desktop + Android build = Chrome `src/` + an audited delta (`FIREFOX_PARITY_PLAN.md` §2 is the allowlist).
   - `NHDW_Source_v3.0.0/`, `old deprecated source code/` — inactive historical archives; do not "fix" or update them.
 - **Only use the current session branch** (`git branch --show-current`); never
   push another branch. Historic handoff text may name older branches — ignore.
-- **After every build:** re-sync the release folder with the exhaustive
-  file-by-file loop (never a fixed file list): for every file in
-  `NHDW_Release_v3.0.0` except `README.md`, `cmp` against
-  `NHDW_Extension_v3.0.0` and copy when different; then check the reverse
-  direction for missing files. `test/manifest.test.js` asserts the two
-  manifests' versions match.
+- **After every Chrome build:** the built `js/` lives next to its ONE manifest;
+  no file copying/sync step. Test the source with `npm test`, smoke and offline
+  e2e. `npm run package:chrome` rebuilds and produces a runtime-only ZIP;
+  `test/package-chrome.test.js` checks its contents, and `test/manifest.test.js`
+  guards against reintroducing a second checked-in Chrome tree.
 - **Firefox re-sync rule:** copy the Chrome tree and re-apply the audited
   delta; `diff -rq src` must show only the allowlisted files. Firefox's
   `background.ts` is **not** the Chrome file — patch it surgically.
@@ -659,7 +682,7 @@ on the five added hosts).
 
 Nothing here has EVER run in an agent sandbox; every real-browser claim in
 this repo is an expectation until observed. Reload unpacked
-`NHDW_Release_v3.0.0` (Chrome 116+) / temporary-load the Firefox package.
+`NHDW_Extension_v3.0.0` (Chrome 116+) / temporary-load the Firefox package.
 
 **Naming guard (do FIRST — needs a second downloader extension installed):**
 - 0A. With NHDW idle, another extension's download must not produce the

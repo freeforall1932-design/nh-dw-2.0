@@ -1189,6 +1189,25 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     if (request.from === "offscreen") {
         return handleOffscreenMessage(request, sendResponse);
     }
+    if (request.action === "historyPresent") {
+        // Bookmark marks mean "confirmed on disk", NOT merely "a history
+        // entry exists". Return the verified ids without rewriting the
+        // stored history: export and future retries still need its records.
+        readHistory().then((history) => verifyHistoryOnDisk(history))
+            .then((present) => sendResponse({ result: "success", ids: Array.from(present) }))
+            .catch(() => sendResponse({ result: "error", ids: [] }));
+        return true;
+    }
+    if (request.action === "historyImport") {
+        // Import arrives from the panel with an ALREADY-MERGED map (local
+        // records win: only this machine knows whether the file is still on
+        // disk). Writing here keeps history single-writer like the bookmark
+        // queue, and the panel gets the resulting count back for its notice.
+        historyTransfer.writeHistory(request.history)
+            .then(() => sendResponse({ result: "success", count: Object.keys(request.history || {}).length }))
+            .catch(() => sendResponse({ result: "error", error: "Could not write the import." }));
+        return true;
+    }
     if (USE_OFFSCREEN) {
         // Downloads run in the offscreen document; relay the commands.
         if (request.action === "isDownloadFinished") {
@@ -1344,15 +1363,6 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         };
         if (request.action === "downloadDoujinshi") {
             return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
-        } else if (request.action === "historyImport") {
-            // Import arrives from the panel with an ALREADY-MERGED map (local
-            // records win: only this machine knows whether the file is still on
-            // disk). Writing here keeps history single-writer like the bookmark
-            // queue, and the panel gets the resulting count back for its notice.
-            historyTransfer.writeHistory(request.history)
-                .then(() => sendResponse({ result: "success", count: Object.keys(request.history || {}).length }))
-                .catch(() => sendResponse({ result: "error", error: "Could not write the import." }));
-            return true;
         } else if (request.action === "downloadAllDoujinshis") {
             return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, site: request.site, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "downloadAllPages") {

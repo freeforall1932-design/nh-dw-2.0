@@ -227,6 +227,8 @@ const messageListeners = [];
 const sentMessages = [];
 let bookmarkState = { v: 1, collapsed: false, items: [] };
 let history = {};
+// null = every recorded file exists; a Set simulates deleted files.
+let presentFiles = null;
 // Every write the panel itself makes. It must never write storage directly:
 // the worker is the single writer for the queue, and history goes through the
 // historyImport action for the same reason.
@@ -284,6 +286,11 @@ const chromeStub = {
                 const added = (msg.state.items || []).filter((item) => known.indexOf(item.id + "@" + item.site) === -1);
                 bookmarkState = { v: 1, collapsed: false, items: bookmarkState.items.concat(added) };
                 respond({ result: "success", state: bookmarkState });
+                return;
+            }
+            if (msg.action === "historyPresent") {
+                respond({ result: "success", ids: Object.keys(history).filter((id) =>
+                    presentFiles === null || presentFiles.has(history[id].filename)) });
                 return;
             }
             if (msg.action === "historyImport") {
@@ -963,6 +970,30 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     assertEqual(wholeSelect.length, 1, "Select all still sends one message with no query");
     assertEqual(wholeSelect[0].all, true, "and keeps the unchanged whole-list form");
     console.log("PASS phase 9d: Select all follows the search and sends composite keys (item 68)");
+
+    // Item 68 review: a stored history record is not evidence that the file
+    // still exists. Reopening after deletion must NOT claim "on disk", and
+    // must not destroy the record (export/history are separate concerns).
+    bookmarkState = { v: 1, collapsed: false, items: [stateItem("91"), stateItem("92")] };
+    history = {
+        "nhentai:91": { filename: "keep.cbz", when: 1 },
+        "nhentai:92": { filename: "deleted.cbz", when: 2 }
+    };
+    presentFiles = new Set(["keep.cbz"]);
+    searchBox.value = "";
+    searchBox.dispatch("input");
+    const beforeVerify = sentMessages.length;
+    byId("tabQueue").dispatchLast("click");
+    await wait(50);
+    const verifiedRows = findRows(byId("nhdwBmList"));
+    assertOk(sentMessages.slice(beforeVerify).some((msg) => msg.action === "historyPresent"),
+        "opening Bookmark must ask the worker to verify files, not trust the stored record");
+    assertOk(findDeep(verifiedRows[0], "nhdwBmAlready") !== null, "present file keeps its check");
+    assertOk(findDeep(verifiedRows[1], "nhdwBmAlready") === null, "deleted file loses its check");
+    assertEqual(byId("nhdwBmHistoryInfo").textContent, "1 already downloaded",
+        "downloaded count also tracks verified files, not recorded files");
+    assertEqual(Object.keys(history).length, 2, "display verification must not erase history records");
+    console.log("PASS phase 9e: deleted file loses its mark on reopen; history stays intact (item 68)");
 
     console.log("PASS: the Queue tab's rows, drag-reorder, backup and per-site downloads behave correctly in a window-less context.");
     } catch (error) {

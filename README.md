@@ -6,7 +6,7 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.10.3-blue)
+![Version](https://img.shields.io/badge/version-3.10.6-blue)
 ![Firefox](https://img.shields.io/badge/Firefox-1.4.3-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
@@ -58,9 +58,20 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 
 1. Open `chrome://extensions/` (Chrome / Brave / Edge — any Chromium 109+).
 2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select the **`NHDW_Release_v3.0.0`** folder.
+3. Click **Load unpacked** and select **`NHDW_Extension_v3.0.0`** (the folder containing `manifest.json`).
 4. Pin 📚 **NHentai Downloader** from the puzzle-piece menu.
 
+> **Existing unpacked installs:** Switching from the old
+> `NHDW_Release_v3.0.0/` path to `NHDW_Extension_v3.0.0/` may give Chrome a
+> **different extension ID**. Before removing the old installed extension,
+> open its Bookmark tab and **Export backup**, then Load unpacked from the new
+> folder and **Import backup**. The backup contains bookmarks and download
+> history, **not** all preferences or the API key; check Settings and re-enter
+> the key if needed. Keep the old installation until the imported list is
+> verified. If the old directory is already gone locally, temporarily restore
+> it at its **original absolute path** to perform the export; merely loading
+> the new path does not recover the old local storage.
+>
 > The side panel dock needs Chrome 116+; older builds fall back to the popup automatically.
 
 ## 🎮 Usage
@@ -100,7 +111,7 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 
 | Issue | Fix |
 | :--- | :--- |
-| **"Service worker registration failed"** | Load the `NHDW_Release_v3.0.0` folder itself, not a subfolder. Check the extensions console (F12). |
+| **"Service worker registration failed"** | Load the `NHDW_Extension_v3.0.0` folder itself, not a subfolder. Check the extensions console (F12). |
 | **Popup says "not on nhentai.net"** | The active tab must be on `nhentai.net` when you open it. |
 | **403 / Cloudflare errors** | Open the gallery page itself, complete the challenge, retry. This is not a bypass. |
 | **Empty ZIP / failed pages** | Keep the gallery tab open and retry; disable ad-blockers for the site. |
@@ -128,12 +139,19 @@ One extension, several sites, one shared history. The full plan lives in [`MULTI
 - [x] **Select all + title-page select (Item 64)** — landed in 3.10.0 / FF 1.4.0: the floating bar selects a whole page, and a gallery page's **Select** writes into the same shared selection the cards use.
 - [ ] **Combined device verification & Firefox signing (Items 42/58)** — real-browser and Android checks.
 
+The old `NHDW_Release_v3.0.0/` checked-in copy was identical to the Chrome
+runtime files (except its README) and has been removed. **There is no second
+Chrome folder to sync.** For a distributable ZIP run `npm run package:chrome`
+from the Chrome tree and unzip its `dist/nhdw-chrome-<version>.zip` before
+using **Load unpacked**. The ZIP excludes source, tests and `node_modules`.
+For planned icons/backgrounds/animation and repo context see
+[`ASSET_PLAN.md`](ASSET_PLAN.md); nothing in that plan is installed yet.
+
 ## 🧪 Development
 
 ```
-NHDW_Extension_v3.0.0/   TypeScript source, tests, e2e harnesses
-NHDW_Release_v3.0.0/     The loadable, built package (what you install)
-NHDW_Firefox_v1.0.0/     Firefox desktop/Android build (see its README)
+NHDW_Extension_v3.0.0/   Chrome source AND loadable unpacked folder; js/ contains built bundles
+NHDW_Firefox_v1.0.0/     Separate Firefox desktop/Android build (see its README)
 ```
 
 Use a maintained Node 22/24 LTS installation. The tooling requires
@@ -143,7 +161,8 @@ installs under npm 10.9.8 and 12.0.2.
 ```bash
 cd NHDW_Extension_v3.0.0
 npm ci
-npm run build     # webpack -> js/ (copy changed bundles to the release folder)
+npm run build     # webpack -> committed js/ in the same loadable folder
+npm run package:chrome  # optional: rebuild + runtime-only ZIP in ignored dist/
 npm test          # 616 passing unit tests (Chrome)
 npm run test:smoke
 npm run test:e2e   # offline e2e suites against the built bundles

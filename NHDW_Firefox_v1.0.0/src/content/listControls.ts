@@ -578,13 +578,18 @@ function injectCardControls(): void {
     for (const info of cards) {
         if (info.card.getAttribute(MARKER_ATTR) === info.id) {
             // Already decorated: refresh checkbox AND history-driven label.
+            // Avoid no-op text writes: our MutationObserver sees childList
+            // changes inside cards and the floating bar too.
             const existing = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-select-box") as HTMLInputElement | null;
             if (existing) {
                 existing.checked = selected.has(info.id);
             }
             const existingButton = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-download") as HTMLButtonElement | null;
             if (existingButton) {
-                existingButton.textContent = history[toGalleryKey(info.id, info.site)] ? "Downloaded" : "Download";
+                const label = history[toGalleryKey(info.id, info.site)] ? "Downloaded" : "Download";
+                if (existingButton.textContent !== label) {
+                    existingButton.textContent = label;
+                }
             }
             const existingBookmark = info.card.querySelector("." + CONTROL_CLASS + " .nhdw-bookmark") as HTMLElement | null;
             if (existingBookmark) {
@@ -820,7 +825,10 @@ function persistHarvest(): void {
 function renderHarvestBar(): void {
     const button = document.getElementById("nhdw-harvest") as HTMLButtonElement | null;
     if (button) {
-        button.textContent = harvest.active ? "Stop harvest" : "Harvest";
+        const label = harvest.active ? "Stop harvest" : "Harvest";
+        if (button.textContent !== label) {
+            button.textContent = label;
+        }
         button.title = harvest.active
             ? "Stop collecting. Everything already collected stays in the selection."
             : "Collect the cards this page has already rendered, and keep collecting as the page loads more";
@@ -833,7 +841,10 @@ function renderHarvestBar(): void {
     const status = document.getElementById("nhdw-harvest-status");
     if (status) {
         const visible = harvest.active || harvest.cards.length > 0;
-        status.textContent = visible ? harvestSummary(harvest) : "";
+        const label = visible ? harvestSummary(harvest) : "";
+        if (status.textContent !== label) {
+            status.textContent = label;
+        }
     }
 }
 
@@ -1026,16 +1037,20 @@ function renderActionBar(): void {
     const skipped = alreadySelected.filter((id) => !forcedIds.has(id) && !includeAlready);
     const mode = effectiveOutputMode(settings.format, settings.outputMode);
     if (count) {
+        let label: string;
         if (skipped.length > 0) {
-            count.textContent = mode === "batch"
+            label = mode === "batch"
                 ? selectedIds.length + " selected · " + skipped.length + " already downloaded (merged re-downloads them into one file)"
                 : selectedIds.length + " selected · " + skipped.length + " already downloaded · "
                     + (selectedIds.length - skipped.length) + " will download";
         } else if (alreadySelected.length > 0 && mode === "batch") {
-            count.textContent = selectedIds.length + " selected · " + alreadySelected.length
+            label = selectedIds.length + " selected · " + alreadySelected.length
                 + " already downloaded (merged re-downloads them into one file)";
         } else {
-            count.textContent = selectedIds.length + " selected";
+            label = selectedIds.length + " selected";
+        }
+        if (count.textContent !== label) {
+            count.textContent = label;
         }
     }
     const redownloadRow = document.getElementById("nhdw-redownload-row");

@@ -13,7 +13,7 @@
     "test:e2e": "node scripts/e2e-worker.js && node scripts/e2e-offscreen.js && node scripts/e2e-relay.js && node scripts/e2e-content.js && node scripts/e2e-list-controls.js && node scripts/e2e-title-bookmark.js && node scripts/e2e-bookmark-panel.js && node scripts/e2e-popup.js && node scripts/e2e-popup.js --full-panel && node scripts/e2e-site-ui.js && node scripts/e2e-embedded-toolbar.js && node scripts/e2e-options.js",
     "test:options": "node scripts/e2e-options.js",
     "test:live": "RUN_LIVE_TESTS=1 mocha test/test.js --timeout 30000",
-    "test:browser": "node scripts/e2e-browser.js --extension ../NHDW_Release_v3.0.0",
+    "test:browser": "node scripts/e2e-browser.js --extension ../NHDW_Extension_v3.0.0",
     "lint:firefox": "web-ext lint --ignore-files \"src/**\" \"src\" \"test/**\" \"test\" \"scripts/**\" \"scripts\" \"build/**\" \"build\" \"node_modules/**\" \"node_modules\" \".git/**\" \".git\" \"dist/**\" \"offscreen.html\" \"js/offscreen.js\" \"js/offscreen.js.LICENSE.txt\" \"*.ts\" \"tsconfig*.json\" \"webpack.config.js\" \"package*.json\"",
     "package:firefox": "web-ext build --overwrite-dest --artifacts-dir dist --ignore-files \"src/**\" \"src\" \"test/**\" \"test\" \"scripts/**\" \"scripts\" \"build/**\" \"build\" \"node_modules/**\" \"node_modules\" \".git/**\" \".git\" \"tsconfig*.json\" \"webpack.config.js\" \"package*.json\" \"PORTING_AUDIT.md\" \"*.ts\" \"*.map\" \"dist/**\" \"offscreen.html\" \"js/offscreen.js\" \"js/offscreen.js.LICENSE.txt\"",
     "run:firefox": "web-ext run",

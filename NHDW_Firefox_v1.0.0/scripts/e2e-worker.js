@@ -811,6 +811,43 @@ const historyKeyFor = (id) => "nhentai:" + String(id);
     if (!apiRequestLog.some((r) => r.url.includes("/galleries/" + GALLERY_ID2))) {
         fail("a deleted file must be fetched again: " + JSON.stringify(apiRequestLog));
     }
+    // The Bookmark mark uses the same disk verifier. A stored but deleted
+    // file cannot turn into a green check on next open; neither should this
+    // read-only query erase history or take the verify setting as an opt-out.
+    localSettings.downloadHistory = {
+        [String(GALLERY_ID)]: { filename: "Downloads/Test.zip", when: 1 },
+        [String(GALLERY_ID2)]: { filename: "NHDW/Gone.zip", when: 1 }
+    };
+    syncSettings.verifyDownloadedFiles = false;
+    let presentReply = null;
+    const historyPresentAsync = onMessageHandler({ action: "historyPresent" }, {}, (reply) => { presentReply = reply; });
+    if (historyPresentAsync !== true) fail("historyPresent must keep the worker message channel open");
+    await waitFor(() => presentReply !== null, "historyPresent must answer with disk-verified ids");
+    if (presentReply.result !== "success" || JSON.stringify(presentReply.ids) !== JSON.stringify([historyKeyFor(GALLERY_ID)])) {
+        fail("Bookmark marks must exclude the deleted file, got " + JSON.stringify(presentReply));
+    }
+    if (Object.keys(localSettings.downloadHistory).length !== 2) {
+        fail("verification must not remove download history records");
+    }
+    console.log("PASS phase 5f-Bookmark: mark lookup verifies disk even when skip verification is disabled");
+
+    // The import is a worker message on BOTH platforms. Firefox has no
+    // offscreen document, so this must be reachable outside USE_OFFSCREEN.
+    const beforeImport = localSettings.downloadHistory;
+    let importReply = null;
+    if (onMessageHandler({ action: "historyImport", history: {
+        "nhentai:777777": { filename: "NHDW/import.cbz", when: 7 }
+    } }, {}, (reply) => { importReply = reply; }) !== true) {
+        fail("historyImport must keep the worker message channel open");
+    }
+    await waitFor(() => importReply !== null, "historyImport must answer on this platform");
+    if (importReply.result !== "success" ||
+        !localSettings.downloadHistory || !localSettings.downloadHistory["nhentai:777777"]) {
+        fail("historyImport must write through the worker on this platform: " + JSON.stringify(importReply));
+    }
+    localSettings.downloadHistory = beforeImport;
+    console.log("PASS phase 5f-Import: history import reaches the worker on both offscreen and fallback paths");
+
     console.log("PASS phase 5f: verify-before-skip keeps the file that exists and re-downloads the deleted one");
 
     // ---- Phase 5g: merged date stamp + part numbering + warn-first ---------

@@ -121,6 +121,14 @@ function makeEl(tag, attrs) {
         }
     };
     node.classList = makeClassList(node);
+    // A real DOM textContent assignment emits childList mutations even if
+    // the string is identical. Track them to catch observer self-feedback.
+    let text = node.textContent;
+    node._textWrites = 0;
+    Object.defineProperty(node, "textContent", {
+        get() { return text; },
+        set(value) { text = String(value); node._textWrites++; }
+    });
     return node;
 }
 
@@ -505,6 +513,22 @@ function wait(ms) {
             fail("a card added after load must be decorated exactly once, got " + after.length + " control boxes");
         }
         console.log("PASS: injection is idempotent and survives infinite scroll (MutationObserver)");
+        // The observer also sees mutations produced by our own bar/card text.
+        // A no-op pass must not reassign textContent: in a real browser that
+        // emits childList again and creates a 150ms feedback loop on Android.
+        const watched = [
+            ctx.dom.document.getElementById("nhdw-count"),
+            ctx.dom.document.getElementById("nhdw-harvest"),
+            ctx.dom.document.getElementById("nhdw-harvest-status"),
+            after[0].querySelector(".nhdw-download")
+        ];
+        const writes = watched.map((node) => node._textWrites);
+        for (const callback of ctx.mutationCallbacks) callback([]);
+        await wait(200);
+        assert.deepEqual(watched.map((node) => node._textWrites), writes,
+            "a no-op observer pass must not rewrite UI text (MutationObserver feedback loop)");
+        console.log("PASS: no-op observer pass does not mutate our own action bar/cards");
+
 
         // --- 3. selection syncs with the panel's storage -------------------
         const firstBox = after[0].querySelector(".nhdw-select-box");
