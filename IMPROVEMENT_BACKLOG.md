@@ -3009,6 +3009,69 @@ Chrome **601** unit / 4 pending, Firefox **634** / 4; smoke green, all offline
 e2e green in both trees, FF lint unchanged (0 errors / 0 notices / 32
 warnings); release folder re-synced; versions bumped to **3.10.4 / 1.4.4**.
 
+## Session log — 2026-09-26 (same session, item 40): the popup harness bootstraps a listing page
+
+Item 40 was the last offline-feasible backlog item, and the reason the panel's
+**Save offline** click handler (item 62a) had no offline coverage: the handler is
+registered inside `updatePreviewAsync`, which `scripts/e2e-popup.js` could not
+reach. It is **test-only** — no loadable byte changed, so no version bump (Chrome
+3.10.4 / Firefox 1.4.4 stay) and no release re-sync.
+
+### What the harness can do now
+
+Both trees' `scripts/e2e-popup.js` gained the two stubs the item named, plus four
+phases (11a–11d Chrome, 15a–15d Firefox) that drive the REAL chains instead of
+hand-delivering messages:
+
+- **The injected content script.** `chrome.scripting.executeScript` with
+  `files: ["js/getGalleries.js"]` is the panel's listing bootstrap. The stub
+  records the injection and answers 0ms later with the armed listing payload over
+  the same `deliver()` fan-out the real content script's runtime message reaches —
+  so phase 10/14's listing render now comes from a **tab URL** (rows, count, range
+  block) instead of a test-supplied message.
+- **`executeInTab` / `readGalleryFromTab`.** The polling injected function
+  (`window._gallery`, five attempts spread over ~2.8s) is answered from the armed
+  tab gallery, which is what makes the single-gallery preview reachable: phase
+  (b) asserts the preview carries the **tab's** metadata (3 pages, the tab's title,
+  the name field built through the single-title template), not an extension-origin
+  fetch.
+- **The panel's Save offline handler** (the item's whole point): one
+  `downloadAllDoujinshis` job keyed by the tab's gallery, `site: "nhentai"`,
+  `separate: true`, the active `tabId`, `formatOverride` from the **list-mode**
+  key and `nameTemplate` from the **list-mode** template — the phase deliberately
+  makes single-title and list-mode settings differ, so reading the wrong one
+  fails — plus the "Save offline queued at position N." notice. The
+  already-downloaded case is pinned both ways: the prompt reads a **fresh**
+  history (not the cosmetic preview note), declining sends nothing and gives the
+  button back, accepting puts exactly that id in `redownloadIds`.
+- **A settle step worth knowing about:** the item-60 wash phase leaves the tab on
+  a gallery page and its metadata chain keeps polling for ~2.8s (measured: the
+  late paint lands ~2.5s after the next phase starts), which stomped the first
+  attempt at this phase. `settleStaleTabRead()` arms the tab's gallery and waits
+  for that chain to consume it and die — a documented, bounded (~1.6s worst case)
+  wait rather than a flaky assertion.
+
+### Red evidence for a coverage-only item
+
+There is no failing production behaviour to demonstrate — the change *is* the
+test. So the proof that the new phases bite is mutation-based, in both trees:
+rename the injected script (`js/getGalleriesBroken.js`) → 11a fails; drop
+`separate: true` → 11c fails; drop `redownloadIds.push(id)` → 11d fails; read the
+single-title format for `formatOverride` → 11c fails (Firefox run). Every mutation
+was reverted and the trees re-verified byte-clean (`git status` shows only the two
+harness files).
+
+### Verification
+
+Chrome **601 unit / 4 pending**, smoke green, `npm run test:e2e` exit 0
+(170 PASS lines, +4); Firefox **634 / 4**, smoke green, e2e exit 0 in both normal
+and `--full-panel` modes (209 PASS lines, +8), `lint:firefox` still 0 errors /
+0 notices / 32 warnings.
+
+**Scope note (recorded):** the panel's listing **Download selected** click, the
+PDF-merge warning path and the similar-galleries panel are still covered only by
+the content-script harnesses; the new stubs make each a small follow-up.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |

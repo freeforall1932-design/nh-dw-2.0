@@ -81,9 +81,11 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   writer via OPFS), plus this session's review pass that found and fixed eight
   defects in them (summary below; full table in `IMPROVEMENT_BACKLOG.md`'s
   2026-09-24 review log).
-- **Suites (after item 66; earlier runs: review fixes 587/620, item 65
-  591/624, item 71 596/629):** Chrome **601 unit / 4 pending**, smoke 7, e2e
-  exit 0 (263 checks for `e2e-title-bookmark`, all other e2e green). Firefox
+- **Suites (after item 40; item 40 is test-only, so counts match the item-66
+  run: earlier runs were review fixes 587/620, item 65 591/624, item 71
+  596/629, item 66 601/634):** Chrome **601 unit / 4 pending**, smoke 7, e2e
+  exit 0 (263 checks for `e2e-title-bookmark`, +4 phases in `e2e-popup`, all
+  other e2e green). Firefox
   **634 unit / 4 pending**, smoke 7, e2e exit 0,
   lint **0 errors / 0 notices / 32 warnings** (26 pre-existing
   `UNSAFE_VAR_ASSIGNMENT`, 3 `UNSUPPORTED_API` sidePanel/offscreen, 1
@@ -92,6 +94,25 @@ the backlog's archive note): `BOOKMARK_QUEUE_PLAN.md`, `NEXT_CAPTURE.md`,
   `nhentai_downloader-1.4.1.zip`. CI green on both jobs; **PR #50 merged to
   main**. Re-run 2026-09-26 after the review fixes: same unit counts, smoke and
   e2e exit 0, FF lint unchanged (32 warnings).
+- **Item 40 landed (2026-09-26, this branch):** the last offline-feasible
+  backlog item, and the reason the panel's **Save offline** click handler had no
+  offline coverage. Both trees' `scripts/e2e-popup.js` gained the two stubs the
+  item named — the injected `js/getGalleries.js` answered by an armed listing
+  payload, and `executeInTab` answering `readGalleryFromTab`'s `_gallery` poll
+  from the tab's own page — plus four phases that drive the real chains instead
+  of hand-delivered messages: listing tab URL → rendered listing (rows, count,
+  range block), gallery tab URL → preview from the tab's metadata, **Save
+  offline** → one list-mode job (list-mode format/template/folder, `separate:
+  true`, the active tabId, the queued notice), and the already-downloaded prompt
+  (declining sends nothing; accepting forces exactly that id). The phase opens
+  with a documented `settleStaleTabRead()` step because the item-60 wash phase
+  leaves a metadata chain polling the tab for ~2.8s (measured) and its late
+  paint would otherwise land on the assertions. **Test-only**: no version bump,
+  no release re-sync, so the proof is mutation-based — renaming the injected
+  script, dropping `separate: true`, dropping the forced re-download id, or
+  reading the single-title format for `formatOverride` each fails a new phase
+  with a precise message (all four tried, across both trees). Chrome 601 / FF
+  634 unit, e2e exit 0 (+4 phases each), FF lint unchanged (32 warnings).
 - **Item 66 landed (2026-09-26, this branch):** the Bookmark tab's per-site
   filter — a permanent header `<select>` (`#nhdwBmSiteFilter`) over the six
   canonical sites plus All sites, labels carrying live counts, the choice
@@ -325,26 +346,25 @@ on the five added hosts).
 2026-09-26 review pass closed its three follow-up defects, and **items 65 and
 71** have landed. What is left, in the order I would take it:
 
-0. **Two open questions first — items 66 and 71's UX choice.** (a) Item 66's
-   owner-confirmed spec says the per-site filter builds "as one header unit"
-   with the 65 rename; the rename shipped alone (it was the requested item), so
-   the filter needs an explicit go-ahead before anyone starts it: one compact
-   `<select>` at the list header (All sites | nhentai | hitomi | hentaiera |
-   imhentai | hentaienvy | hentaifox), remembering the last choice across
-   unselect/close. (b) Item 71 shipped the "range block + on-page Select"
-   reading; if the owner wants the range block *alone*, that is a wording
-   change to `#selectionPointer`, not a rebuild.
-1. **Item 40** (bootstrap a listing page in `scripts/e2e-popup.js`) — the only
-   offline-feasible backlog item left, and the reason the panel **Save
-   offline** *click handler* (62a) has no offline coverage: the handler is
-   registered inside `updatePreviewAsync`, which the harness cannot reach. The
-   markup and the gallery-page twin (62b) ARE covered offline.
+0. **One open question first — item 71's UX choice.** Item 71 shipped the
+   "range block + on-page Select" reading; if the owner wants the range block
+   *alone*, that is a wording change to `#selectionPointer`, not a rebuild.
+   (Item 66 needed a go-ahead too; the owner granted it and it landed as
+   3.10.4 / 1.4.4.)
+1. **Item 40 is DONE** (test-only, both trees): `scripts/e2e-popup.js` now
+   bootstraps a listing page and reaches the panel **Save offline** *click
+   handler* (62a) — job payload, queued notice and the already-downloaded
+   prompt are pinned offline. Recorded scope note: the panel's listing
+   **Download selected** click, the PDF-merge warning path and the
+   similar-galleries panel are still content-script-harness-only, each now a
+   small follow-up on top of the same stubs.
 2. **Items 68 / 70** — Bookmark list load management and live-session
-   auto-fetch, when the owner opens them.
+   auto-fetch, when the owner opens them (both need an owner spec pass).
 3. **Items 42/58** — real-browser pass. New checks added by 62/63/64 are
    listed in `WORKLIST.md` under the 42/58 heading (per-site card controls on
    real listings, the hitomi block-boundary evidence flag, the gallery-page
-   button's placement, the panel Save-offline click, `allIdsSite` behaviour).
+   button's placement, `allIdsSite` behaviour); item 40 moved the panel
+   Save-offline *click* off this list.
 
 **Locked design decisions (kept from the 62/63/64 recon — do not re-litigate):**
 1. **62a (panel header):** primary "Save offline" = direct single-gallery

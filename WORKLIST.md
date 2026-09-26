@@ -1,6 +1,17 @@
 # Worklist — nh-dw-2.0
 
 **Live, ordered. Updated 2026-09-26** (session `arena/01a0d976-nh-dw-2-0`:
+**item 40 landed (the popup harness now bootstraps a listing page)** — test-only,
+so no version bump: `scripts/e2e-popup.js` in both trees grew the two stubs the
+item asked for (the injected `js/getGalleries.js` answer, and `executeInTab`
+answering `readGalleryFromTab`'s poll from the tab's own gallery), four new
+phases (11a–11d Chrome / 15a–15d Firefox) and a documented settle step for the
+wash phase's ~2.8s pending tab read. Red evidence comes from mutations instead
+of a red test, since the item adds coverage rather than fixing behaviour: with
+`js/getGalleries.js` renamed, `separate: true` dropped, the forced
+re-download id removed, or `formatOverride` reading the single-title format,
+the new phases fail with precise messages (all four tried, both trees).
+Chrome 601 / FF 634 unit, e2e exit 0 (+4 phases both trees), FF lint unchanged.
 **item 66 landed (the Bookmark tab's per-site filter)** — one permanent
 `<select>` at the list header (All sites | nhentai | hitomi | hentaiera |
 imhentai | hentaienvy | hentaifox) with live counts in the option labels. It
@@ -119,12 +130,12 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-26, after items 65, 66 and 71 landed):** **40**
-(bootstrap a listing page in `scripts/e2e-popup.js`; the last offline-feasible
-backlog item, and the reason the panel **Save offline** click handler still has
-no offline coverage), then **68** and **70** when the owner opens them. Items
-**42/58** (real-browser + Android passes, then signing) stay owner-only and
-outrank all of these in value.
+**Top of the queue (2026-09-26, after items 65, 66, 71 and 40 landed):**
+**68** and **70** when the owner opens them (both need an owner spec pass),
+then the owner-only **42/58** (real-browser + Android passes, then signing),
+which outrank everything else in value. No offline-feasible backlog item is
+left unstarted: item 40 was the last one, and item 66 the last owner question
+except item 71's wording call (below).
 
 **One open question for the owner (recorded, not started):** (1) **item 71's
 remaining UX choice** is narrowed to whether the
@@ -374,13 +385,29 @@ test:browser` has never run in any agent sandbox.
   it is NOT covered offline); (5) a selection surviving same-site navigation
   and being dropped across sites (`allIdsSite`).
 
-### 40. Popup harness does not bootstrap a listing page — offline-feasible
+### 40. Popup harness does not bootstrap a listing page — DONE 2026-09-26 (test-only)
 
-Item 59 delivered `getGalleries` directly to test format rendering, but page
-injection/bootstrap, pagination, listing-job/PDF-merge and similar-gallery
-workflows are still only covered by the content-script harnesses
-(`e2e-list-controls.js`). Extending `scripts/e2e-popup.js` means stubbing
-`getGalleries` + `activeTabGallery` — a real piece of work; both trees.
+**Landed.** `scripts/e2e-popup.js` (both trees) now carries the two stubs the
+item called for — the panel's `js/getGalleries.js` injection is answered by an
+armed listing payload (the content script's role), and `executeInTab` answers
+`readGalleryFromTab`'s `_gallery` poll from the tab's own page — plus four
+phases that drive the REAL chains instead of hand-delivering messages: a
+listing tab URL → bootstrap → injection → listing view (rows, count, range
+block), a gallery tab URL → preview from the tab's metadata, the panel's
+**Save offline** click → one list-mode job (format/template/folder from the
+list-mode keys, `separate: true`, the active tabId, the queued notice), and the
+already-downloaded prompt (declining sends nothing; accepting forces exactly
+that id). A documented `settleStaleTabRead()` step first lets the item-60 wash
+phase's pending tab read finish (~2.8s of five polls) so a late paint cannot
+stomp on the assertions. Red evidence is mutation-based (see the banner): the
+item adds coverage, so the proof is that breaking the production paths makes
+the new phases fail with precise messages.
+
+**Scope note (recorded, not done):** the panel's listing **Download selected**
+click, the PDF-merge warning path and the similar-galleries panel are still
+only covered by the content-script harnesses; the two stubs above are the
+capability they need, so each is now a small follow-up rather than "a real
+piece of work".
 
 ### Pending on the OWNER (nothing here is scheduled until they act)
 
@@ -410,6 +437,15 @@ workflows are still only covered by the content-script harnesses
 ---
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
+
+- **Item 40 — the popup harness bootstraps a listing page (2026-09-26):** the
+  two missing stubs (`js/getGalleries.js` injection answered, `executeInTab`
+  answering the `_gallery` poll) plus phases 11a–11d / 15a–15d, which drive the
+  listing bootstrap, the gallery preview from the tab, the panel's **Save
+  offline** job payload and the already-downloaded prompt — the handler that
+  had no offline coverage. Test-only: no version bump, no release re-sync.
+  Proof is mutation-based (four mutations, both trees). Chrome 601 / FF 634
+  unit, e2e exit 0 (+4 phases each), FF lint unchanged (32 warnings).
 
 - **Item 66 — Bookmark-tab per-site filter (2026-09-26):** one permanent
   `<select>` in the list header (`#nhdwBmSiteFilter`): All sites | nhentai |
