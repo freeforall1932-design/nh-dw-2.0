@@ -5,6 +5,8 @@
 //     (via closest() ancestor lookup, matching the real DOM shape)
 //   - a single-gallery page without caption cards does not crash the script
 //     (regression test for the old captions[0]-undefined bug)
+//   - the nhentai legacy checkbox is NOT injected on the five added hosts,
+//     whose cards share the same .caption class
 //   - updateContent re-syncs the checkbox state from storage
 //
 // Usage:  node scripts/e2e-content.js [path/to/js/content.js] [path/to/js/updateContent.js]
@@ -104,7 +106,7 @@ function makeGalleryDocument() {
     return { document: { getElementsByClassName: () => [] }, captions: [] };
 }
 
-function runBundle(code, doc, settings) {
+function runBundle(code, doc, settings, locationHref) {
     const checkboxById = new Map();
     const chromeStub = {
         storage: {
@@ -123,7 +125,7 @@ function runBundle(code, doc, settings) {
         console,
         setTimeout,
         clearTimeout,
-        location: { href: "https://nhentai.net/" },
+        location: { href: locationHref || "https://nhentai.net/" },
         document: Object.assign(doc.document, {
             getElementById(id) {
                 if (!checkboxById.has(id)) {
@@ -170,6 +172,23 @@ console.log("== content.js ==");
         console.error("FAIL: content script crashed on a single-gallery page: " + e.message);
         process.exit(1);
     }
+}
+
+// The legacy caption checkbox is nhentai's fallback UI: its allIds feed the
+// nhentai-shaped panel listing and its label names nhentai. content.js also
+// runs on the five added hosts now (item 63's listing content_scripts block),
+// and hentaifox / imhentai cards carry the same .caption class - a foreign host
+// must never receive the nhentai checkbox.
+{
+    const { document, captions } = makeListingDocument();
+    runBundle(contentCode, { document }, { displayCheckbox: true }, "https://hentaifox.com/");
+    const injected = captions.filter((caption) => caption.innerHTML.includes("nhdw-legacy-check"));
+    if (injected.length !== 0) {
+        console.error("FAIL: the nhentai legacy checkbox was injected on a hentaifox listing ("
+            + injected.length + " caption(s))");
+        process.exit(1);
+    }
+    console.log("PASS: the legacy nhentai caption checkbox stays off the five added hosts");
 }
 
 // --- getGalleries.js ------------------------------------------------------

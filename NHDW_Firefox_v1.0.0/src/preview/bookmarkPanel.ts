@@ -24,12 +24,30 @@
 import {
     BookmarkItem,
     BookmarkState,
+    SITE_FILTER_ALL,
+    bookmarkFilterSites,
+    bookmarkSelectionKeys,
+    bookmarkSiteCounts,
     emptyBookmarkState,
+    normalizeBookmarkSiteFilter,
     normalizeBookmarkState,
     parseGalleryInput,
     planBookmarkDownload
 } from "../utils/bookmarkQueue";
-import { historyIds, readHistory } from "../utils/downloadHistory";
+import {
+    BOOKMARK_PAGE_SIZE,
+    BOOKMARK_QUERY_DEFAULTS,
+    BookmarkQuery,
+    bookmarkHistoryName,
+    bookmarkIsDownloaded,
+    bookmarkQuerySummary,
+    chunkBookmarkRows,
+    isDefaultBookmarkQuery,
+    nextBookmarkChunkSize,
+    normalizeBookmarkQuery,
+    queryBookmarks
+} from "../utils/bookmarkFilters";
+import { DOWNLOAD_HISTORY_KEY, historyIds, readHistory } from "../utils/downloadHistory";
 import { DEFAULT_SITE, normalizeSite, toGalleryKey } from "../utils/siteKeys";
 import {
     buildTransferPayload,
@@ -67,6 +85,87 @@ let draggingId: string | null = null;
 let built = false;
 let includeAlready = false;
 let noticeTimer: any = null;
+// Item 66: the per-site filter. A VIEW over the list - it never rewrites the
+// stored state - remembered in chrome.storage.sync (like uiMode / darkMode),
+// never in the worker-owned local store.
+const SITE_FILTER_KEY = "bookmarkSiteFilter";
+let siteFilter: string = SITE_FILTER_ALL;
+let selectAllButton: HTMLButtonElement | null = null;
+let selectNoneButton: HTMLButtonElement | null = null;
+
+function readSiteFilter(done: () => void): void {
+    let answered = false;
+    const finish = (value: any) => {
+        if (answered) {
+            return;
+        }
+        answered = true;
+        siteFilter = normalizeBookmarkSiteFilter(value);
+        // Item 68: the site filter is one field of the query, always in sync.
+        bookmarkQuery = normalizeBookmarkQuery(Object.assign({}, bookmarkQuery, { site: siteFilter }));
+        done();
+    };
+    try {
+        chrome.storage.sync.get({ [SITE_FILTER_KEY]: SITE_FILTER_ALL }, (values: any) => {
+            finish(values ? values[SITE_FILTER_KEY] : SITE_FILTER_ALL);
+        });
+    } catch (_) {
+        // No runtime (or no sync permission): show the whole list.
+        finish(SITE_FILTER_ALL);
+    }
+}
+
+// Item 68: the search/filter query, the rendered window, and the history the
+// downloaded mark comes from.
+//
+// The query is deliberately NOT persisted: a forgotten search that hides rows
+// is a nastier surprise than retyping one. The window IS reset whenever the
+// query changes, so a freshly typed search can never hide behind a stale
+// "shown" count - and the history is refreshed on open and whenever storage
+// reports a change, because the mark means "this file is on disk" and comes
+// from the same record the batch skip trusts.
+let bookmarkQuery: BookmarkQuery = Object.assign({}, BOOKMARK_QUERY_DEFAULTS);
+let shownRows: number = BOOKMARK_PAGE_SIZE;
+let historyKeys: string[] = [];
+let historyMap: any = {};
+let watchingHistory = false;
+
+async function refreshHistory(): Promise<void> {
+    try {
+        const stored: any = await readHistory();
+        historyKeys = historyIds(stored);
+        historyMap = stored || {};
+    } catch (_) {
+        // A failed read means "nothing is known to be on disk". It must never
+        // invent a mark, and it must never break the list.
+        historyKeys = [];
+        historyMap = {};
+    }
+}
+
+/** Live marks: the worker records history on success, storage says so. */
+function watchHistoryChanges(): void {
+    if (watchingHistory) {
+        return;
+    }
+    watchingHistory = true;
+    try {
+        (chrome.storage as any).onChanged.addListener((changes: any, area: string) => {
+            if (area !== "local" || !changes || !changes[DOWNLOAD_HISTORY_KEY]) {
+                return;
+            }
+            void refreshHistory().then(() => renderList());
+        });
+    } catch (_) { /* no storage events here: the open-time read still marks rows */ }
+}
+
+function writeSiteFilter(value: string): void {
+    try {
+        chrome.storage.sync.set({ [SITE_FILTER_KEY]: value }, () => {
+            try { void chrome.runtime.lastError; } catch (_) { /* preference only */ }
+        });
+    } catch (_) { /* preference only */ }
+}
 
 // ---- notices -------------------------------------------------------------
 
@@ -487,6 +586,21 @@ function buildRow(item: BookmarkItem): HTMLElement {
     title.title = title.textContent;
     info.appendChild(title);
 
+    // Item 68: the mark is drawn from HISTORY, never from item.status. A row
+    // that only says "done" gets no check (the owner's rule: a green check
+    // means the file is really there), and a row whose retry failed after an
+    // earlier success keeps it, because the artifact is still on disk.
+    if (bookmarkIsDownloaded(item, historyKeys)) {
+        const mark = el("span");
+        mark.className = "nhdwBmAlready";
+        mark.textContent = "\u2713";
+        const artifact = bookmarkHistoryName(item, historyMap);
+        mark.title = artifact !== ""
+            ? "Already downloaded: " + artifact
+            : "Already downloaded (the history records this title)";
+        info.appendChild(mark);
+    }
+
     const meta = el("div");
     meta.className = "nhdwBmMeta";
     const metaBits: string[] = ["#" + item.id];
@@ -582,6 +696,39 @@ function renderList(): void {
     const doneCount = state.items.filter((item) => item.status === "done").length;
     counts.textContent = total + " bookmarked \u00b7 " + selectedCount + " selected \u00b7 " + doneCount + " done";
 
+    // Items 66 + 68: the query (site, text, state, date) is a VIEW, so the
+    // counts line above and the footer button keep reporting the WHOLE list;
+    // the filter line states how much of it the query matches, and the list
+    // below renders a bounded window of those matches.
+    const queryActive = !isDefaultBookmarkQuery(bookmarkQuery);
+    const matched = queryBookmarks(state, bookmarkQuery);
+    const visible = chunkBookmarkRows(matched, shownRows);
+    const querySummary = bookmarkQuerySummary(matched, historyKeys);
+    syncSiteFilterSelect();
+    const filterInfo = document.getElementById("nhdwBmFilterInfo");
+    if (filterInfo !== null) {
+        filterInfo.textContent = queryActive ? "showing " + matched.length + " of " + total : "";
+    }
+    const historyInfo = document.getElementById("nhdwBmHistoryInfo");
+    if (historyInfo !== null) {
+        historyInfo.textContent = querySummary.alreadyDownloaded > 0
+            ? querySummary.alreadyDownloaded + " already downloaded"
+            : "";
+        historyInfo.title = querySummary.alreadyDownloaded > 0
+            ? "The history records an artifact for these rows. Ticking \"include already downloaded\" re-fetches them."
+            : "";
+    }
+    if (selectAllButton !== null) {
+        selectAllButton.title = queryActive
+            ? "Tick every row this search and these filters match (" + matched.length + ")"
+            : "Tick every bookmark";
+    }
+    if (selectNoneButton !== null) {
+        selectNoneButton.title = queryActive
+            ? "Untick every row this search and these filters match (" + matched.length + ")"
+            : "Untick every bookmark";
+    }
+
     dockButton.textContent = state.collapsed ? "Expand \u25be" : "Minimise \u25b4";
     dockButton.title = state.collapsed
         ? "Show the bookmark list"
@@ -591,6 +738,12 @@ function renderList(): void {
     downloadButton.textContent = selectedCount > 0
         ? "Download " + selectedCount + " selected"
         : "Download selected";
+    // Item 68: what the batch would really fetch, BEFORE it runs (the owner's
+    // note: re-downloads must be obvious before you commit to the job).
+    downloadButton.title = querySummary.alreadyDownloaded > 0
+        ? "Download every ticked title, one file each. " + querySummary.alreadyDownloaded
+            + " of the rows on screen are already on disk - tick \"include already downloaded\" to fetch them again."
+        : "Download every ticked title, one file each, using the list-mode settings";
 
     const body = document.getElementById("nhdwBmBody");
     if (body !== null) {
@@ -616,9 +769,68 @@ function renderList(): void {
         list.appendChild(empty);
         return;
     }
-    for (const item of state.items) {
+    if (matched.length === 0) {
+        // A filtered-empty list must say why it is empty and how to get out.
+        // "no result for this search" and "nothing for hitomi" are different
+        // answers, so the notice names the thing that is actually hiding rows.
+        const empty = el("div");
+        empty.className = "nhdwBmEmpty";
+        const narrowed = bookmarkQuery.text !== "" || bookmarkQuery.status !== "all" || bookmarkQuery.date !== "all";
+        empty.textContent = narrowed
+            ? "No bookmark matches this search. Clear the search box, or set the state and date filters back to all, to see the whole list."
+            : "No bookmarks for " + siteFilter + " yet. Pick \"All sites\" to see the other "
+                + (total === 1 ? "title" : total + " titles") + ".";
+        list.appendChild(empty);
+        return;
+    }
+    for (const item of visible) {
         list.appendChild(buildRow(item));
     }
+    // Item 68: a bounded window keeps the DOM small at any list size. "Show
+    // more" grows it by one page; the control states exactly how much is on
+    // screen, so nobody has to guess whether the list is truncated.
+    if (visible.length < matched.length) {
+        const more = el("button");
+        more.type = "button";
+        more.className = "nhdwBmMore";
+        more.textContent = "Show more (" + visible.length + " of " + matched.length + ")";
+        more.title = "Render the next " + BOOKMARK_PAGE_SIZE + " rows. The list stays this size in the page however big the queue gets.";
+        more.addEventListener("click", () => {
+            shownRows = nextBookmarkChunkSize(shownRows, matched.length);
+            renderList();
+        });
+        list.appendChild(more);
+    }
+}
+
+// Item 66: the <select> keeps its options for the whole life of the panel
+// (rebuilding them would close an open dropdown), so a render only refreshes
+// the counts and the current value. Options are the six known sites plus All
+// sites, in one canonical order - a site with no rows is still offered, and
+// picking it shows the filtered-empty note above.
+function syncSiteFilterSelect(): void {
+    const select = document.getElementById("nhdwBmSiteFilter") as HTMLSelectElement | null;
+    if (select === null) {
+        return;
+    }
+    const counts = bookmarkSiteCounts(state);
+    const sites = [SITE_FILTER_ALL].concat(bookmarkFilterSites());
+    // A real <select> exposes .options; the window-less harness only has the
+    // appended children. Both are indexable, so accept either.
+    const options: any = (select as any).options && (select as any).options.length
+        ? (select as any).options
+        : select.children;
+    for (let i = 0; i < options.length; i++) {
+        const option = options[i] as any;
+        const site = String(option.value);
+        if (sites.indexOf(site) === -1) {
+            continue;
+        }
+        const count = counts[site] || 0;
+        const name = site === SITE_FILTER_ALL ? "All sites" : site;
+        option.textContent = count > 0 ? name + " (" + count + ")" : name;
+    }
+    select.value = siteFilter;
 }
 
 // ---- static chrome -------------------------------------------------------
@@ -675,6 +887,42 @@ function buildChrome(container: HTMLElement): void {
         }
     });
     header.appendChild(openPanel);
+    // Item 66: the per-site filter sits in the header, right after the counts.
+    // The wrapper keeps the select and its "showing X of Y" line together when
+    // the header wraps in a narrow side panel.
+    const filterBox = el("div");
+    filterBox.className = "nhdwBmFilter";
+    const filterSelect = el("select");
+    filterSelect.id = "nhdwBmSiteFilter";
+    filterSelect.className = "nhdwBmSiteSelect";
+    filterSelect.title = "Show only the bookmarks of one site";
+    (filterSelect as any).setAttribute("aria-label", "Filter bookmarks by site");
+    for (const site of [SITE_FILTER_ALL].concat(bookmarkFilterSites())) {
+        const option = el("option");
+        option.value = site;
+        option.textContent = site === SITE_FILTER_ALL ? "All sites" : site;
+        filterSelect.appendChild(option);
+    }
+    filterSelect.value = siteFilter;
+    filterSelect.addEventListener("change", () => {
+        siteFilter = normalizeBookmarkSiteFilter((filterSelect as HTMLSelectElement).value);
+        bookmarkQuery.site = siteFilter;
+        shownRows = BOOKMARK_PAGE_SIZE;
+        writeSiteFilter(siteFilter);
+        renderList();
+    });
+    filterBox.appendChild(filterSelect);
+    const filterInfo = el("span");
+    filterInfo.id = "nhdwBmFilterInfo";
+    filterInfo.className = "nhdwBmFilterInfo";
+    filterBox.appendChild(filterInfo);
+    // Item 68: how much of the current view is already on disk. Its own element
+    // so the "showing X of Y" line keeps its exact wording.
+    const historyInfo = el("span");
+    historyInfo.id = "nhdwBmHistoryInfo";
+    historyInfo.className = "nhdwBmHistoryInfo";
+    filterBox.appendChild(historyInfo);
+    header.appendChild(filterBox);
 
     const toggle = el("button");
     toggle.type = "button";
@@ -755,11 +1003,87 @@ function buildChrome(container: HTMLElement): void {
     const toolbar = el("div");
     toolbar.className = "nhdwBmToolbar";
 
+    // Item 68: search and filters. The search is a plain input: this document
+    // is a page, so a <form> would reload the panel on Enter.
+    const search = el("input");
+    search.type = "search";
+    search.id = "nhdwBmSearch";
+    search.className = "nhdwBmSearch";
+    search.placeholder = "Search titles, ids, tags";
+    search.title = "Type part of a title, an id (240001) or a tag (artist:someone). Every word must match.";
+    (search as any).setAttribute("aria-label", "Search bookmarks");
+    search.addEventListener("input", () => {
+        bookmarkQuery = normalizeBookmarkQuery(Object.assign({}, bookmarkQuery, { text: (search as HTMLInputElement).value }));
+        shownRows = BOOKMARK_PAGE_SIZE;
+        renderList();
+    });
+    toolbar.appendChild(search);
+
+    const statusSelect = el("select");
+    statusSelect.id = "nhdwBmStatusFilter";
+    statusSelect.className = "nhdwBmQuerySelect";
+    statusSelect.title = "Show only rows in one recorded state";
+    (statusSelect as any).setAttribute("aria-label", "Filter bookmarks by state");
+    const statusOptions: Array<{ value: string; label: string }> = [
+        { value: "all", label: "Any state" },
+        { value: "saved", label: "Not downloaded" },
+        { value: "selected", label: "Ticked" },
+        { value: "done", label: "Done" },
+        { value: "failed", label: "Failed" },
+        { value: "downloading", label: "Downloading" }
+    ];
+    for (const option of statusOptions) {
+        const node = el("option");
+        node.value = option.value;
+        node.textContent = option.label;
+        statusSelect.appendChild(node);
+    }
+    statusSelect.value = bookmarkQuery.status;
+    statusSelect.addEventListener("change", () => {
+        bookmarkQuery = normalizeBookmarkQuery(Object.assign({}, bookmarkQuery, { status: (statusSelect as HTMLSelectElement).value }));
+        shownRows = BOOKMARK_PAGE_SIZE;
+        renderList();
+    });
+    toolbar.appendChild(statusSelect);
+
+    const dateSelect = el("select");
+    dateSelect.id = "nhdwBmDateFilter";
+    dateSelect.className = "nhdwBmQuerySelect";
+    dateSelect.title = "Show only rows added in one window";
+    (dateSelect as any).setAttribute("aria-label", "Filter bookmarks by date added");
+    const dateOptions: Array<{ value: string; label: string }> = [
+        { value: "all", label: "Any date" },
+        { value: "today", label: "Added today" },
+        { value: "week", label: "Last 7 days" },
+        { value: "month", label: "Last 30 days" },
+        { value: "older", label: "Older than 30 days" }
+    ];
+    for (const option of dateOptions) {
+        const node = el("option");
+        node.value = option.value;
+        node.textContent = option.label;
+        dateSelect.appendChild(node);
+    }
+    dateSelect.value = bookmarkQuery.date;
+    dateSelect.addEventListener("change", () => {
+        bookmarkQuery = normalizeBookmarkQuery(Object.assign({}, bookmarkQuery, { date: (dateSelect as HTMLSelectElement).value }));
+        shownRows = BOOKMARK_PAGE_SIZE;
+        renderList();
+    });
+    toolbar.appendChild(dateSelect);
+
+    // Item 66/68: with a query on, "all" means all of the MATCHING rows. Sending
+    // the whole-list form would tick rows the user cannot see, and a following
+    // "Download N selected" would then fetch them. The ids travel as composite
+    // keys, because a bare id reads as the default site.
     const selectAll = el("button");
     selectAll.type = "button";
     selectAll.textContent = "Select all";
     selectAll.addEventListener("click", () => {
-        send({ action: "bookmarkSelect", all: true, selected: true }).then((response) => {
+        const message: any = isDefaultBookmarkQuery(bookmarkQuery)
+            ? { action: "bookmarkSelect", all: true, selected: true }
+            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(queryBookmarks(state, bookmarkQuery)), selected: true };
+        send(message).then((response) => {
             if (response && response.state) {
                 state = normalizeBookmarkState(response.state);
                 renderList();
@@ -767,12 +1091,16 @@ function buildChrome(container: HTMLElement): void {
         });
     });
     toolbar.appendChild(selectAll);
+    selectAllButton = selectAll;
 
     const selectNone = el("button");
     selectNone.type = "button";
     selectNone.textContent = "Select none";
     selectNone.addEventListener("click", () => {
-        send({ action: "bookmarkSelect", all: true, selected: false }).then((response) => {
+        const message: any = isDefaultBookmarkQuery(bookmarkQuery)
+            ? { action: "bookmarkSelect", all: true, selected: false }
+            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(queryBookmarks(state, bookmarkQuery)), selected: false };
+        send(message).then((response) => {
             if (response && response.state) {
                 state = normalizeBookmarkState(response.state);
                 renderList();
@@ -780,6 +1108,7 @@ function buildChrome(container: HTMLElement): void {
         });
     });
     toolbar.appendChild(selectNone);
+    selectNoneButton = selectNone;
 
     const includeLabel = el("label");
     includeLabel.className = "nhdwBmCheck";
@@ -880,9 +1209,20 @@ export function renderBookmarks(container: HTMLElement): void {
         buildChrome(container);
         built = true;
     }
-    send({ action: "bookmarkGet" }).then((response) => {
-        state = response && response.state ? normalizeBookmarkState(response.state) : emptyBookmarkState();
-        renderList();
+    // Item 66: the remembered filter is read first, so the very first paint is
+    // already filtered (and re-read on every open, so a change made in the
+    // other surface - popup vs side panel vs the site drawer - is picked up).
+    readSiteFilter(() => {
+        // Item 68: the marks are history, so read it before the first paint.
+        // Then keep watching: a download that settles while the tab is open
+        // ticks its row without a reopen.
+        watchHistoryChanges();
+        void refreshHistory().then(() => {
+            send({ action: "bookmarkGet" }).then((response) => {
+                state = response && response.state ? normalizeBookmarkState(response.state) : emptyBookmarkState();
+                renderList();
+            });
+        });
     });
 }
 

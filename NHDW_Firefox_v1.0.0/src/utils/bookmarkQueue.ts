@@ -28,7 +28,7 @@
 //   * Tolerant parsing everywhere: a corrupt or legacy record degrades to an
 //     empty list rather than throwing inside the panel.
 
-import { toGalleryKey, normalizeSite } from "./siteKeys";
+import { DEFAULT_SITE, toGalleryKey, normalizeSite } from "./siteKeys";
 
 export const BOOKMARK_QUEUE_KEY = "bookmarkQueue";
 export const BOOKMARK_QUEUE_VERSION = 1;
@@ -66,6 +66,13 @@ export interface BookmarkItem {
     error: string;
     /** Artifact name from the download history once the row completed. */
     filename: string;
+    /**
+     * Tags known at add time (item 68), e.g. "artist:someone". Optional by
+     * design: card bookmarks have no metadata, so a row added from a card
+     * carries none and only the preview/paste paths can fill it in. The
+     * Bookmark tab's search reads them; nothing depends on them being there.
+     */
+    tags?: string[];
 }
 
 export interface BookmarkState {
@@ -121,8 +128,27 @@ function normalizeItem(raw: any): BookmarkItem | null {
         selected: !!raw.selected,
         status: normalizeStatus(raw.status),
         error: typeof raw.error === "string" ? raw.error : "",
-        filename: typeof raw.filename === "string" ? raw.filename : ""
+        filename: typeof raw.filename === "string" ? raw.filename : "",
+        tags: normalizeTags(raw.tags)
     };
+}
+
+/** Tags are display/search text: keep strings, drop blanks and duplicates. */
+function normalizeTags(raw: any): string[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+    const tags: string[] = [];
+    for (const entry of raw) {
+        if (typeof entry !== "string") {
+            continue;
+        }
+        const tag = entry.trim();
+        if (tag !== "" && tags.indexOf(tag) === -1) {
+            tags.push(tag);
+        }
+    }
+    return tags;
 }
 
 /**
@@ -355,6 +381,8 @@ export function pagesFromGallery(gallery: any): number {
 // ---- mutations (all pure: they return a new state) -----------------------
 
 export interface BookmarkCandidate {
+    /** Tags known at add time (item 68); optional, "" when there are none. */
+    tags?: string[];
     id: string | number;
     /** Source site slug; absent means the default site (siteKeys.ts). */
     site?: string;
@@ -415,7 +443,8 @@ export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate
             selected: true,
             status: "saved",
             error: "",
-            filename: ""
+            filename: "",
+            tags: normalizeTags((candidate as any).tags)
         });
     }
 
@@ -476,13 +505,83 @@ export function setBookmarkSelected(state: BookmarkState, ids: Array<string | nu
     };
 }
 
-/** Select all / none across the whole list (the list has no filter of its own). */
+/**
+ * Select all / none across the whole list. The panel's per-site filter (item
+ * 66) is a VIEW: it never rewrites the list, so a filtered "Select all" sends
+ * the visible rows' composite keys through setBookmarkSelected instead of
+ * coming here.
+ */
 export function setAllBookmarksSelected(state: BookmarkState, selected: boolean): BookmarkState {
     return {
         v: state.v,
         items: state.items.map((item) => Object.assign({}, item, { selected: selected })),
         collapsed: state.collapsed
     };
+}
+
+// ---- item 66: the per-site filter (a VIEW over the list, never a rewrite) ----
+
+/** The filter value that means "show everything". */
+export const SITE_FILTER_ALL = "all";
+
+/**
+ * The sites the filter offers, in one canonical order (nhentai first, then the
+ * multi-site roster of 3.9.0). Options are permanent: the dropdown never
+ * changes shape as rows come and go, so a remembered choice keeps its meaning
+ * and a zero-row site can still be selected - and then explains itself.
+ */
+export function bookmarkFilterSites(): string[] {
+    return [DEFAULT_SITE, "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox"];
+}
+
+/**
+ * Tolerant read of a stored filter value: anything that is not one of the
+ * known sites reads as "all", so a corrupt or older value can never blank the
+ * list with no way back.
+ */
+export function normalizeBookmarkSiteFilter(value: any): string {
+    if (typeof value !== "string") {
+        return SITE_FILTER_ALL;
+    }
+    const raw = value.trim().toLowerCase();
+    if (raw === SITE_FILTER_ALL) {
+        return SITE_FILTER_ALL;
+    }
+    return bookmarkFilterSites().indexOf(raw) !== -1 ? raw : SITE_FILTER_ALL;
+}
+
+/**
+ * Rows per site, plus the total under SITE_FILTER_ALL. Counts are what the
+ * option labels show, and they are computed from the loaded state - no extra
+ * storage read, no message.
+ */
+export function bookmarkSiteCounts(state: BookmarkState): Record<string, number> {
+    const counts: Record<string, number> = {};
+    counts[SITE_FILTER_ALL] = state.items.length;
+    for (const item of state.items) {
+        const site = normalizeSite(item.site);
+        counts[site] = (counts[site] || 0) + 1;
+    }
+    return counts;
+}
+
+/** The rows a filter shows. Order is preserved: it is the download order. */
+export function filterBookmarksBySite(state: BookmarkState, site: string): BookmarkItem[] {
+    const wanted = normalizeBookmarkSiteFilter(site);
+    if (wanted === SITE_FILTER_ALL) {
+        return state.items.slice();
+    }
+    return state.items.filter((item) => normalizeSite(item.site) === wanted);
+}
+
+/**
+ * Composite keys of the given rows. Selecting a filtered slice must send
+ * keys, not bare ids: a bare id reads as the default site (setBookmarkSelected
+ * uses toGalleryKey), so a same-numbered gallery on another site would be the
+ * one that got ticked.
+ */
+export function bookmarkSelectionKeys(items: BookmarkItem[]): string[] {
+    return (items || []).map((item) => itemKey(item));
 }
 
 export function setBookmarksCollapsed(state: BookmarkState, collapsed: boolean): BookmarkState {
@@ -676,7 +775,7 @@ export function bookmarkTogglePresentation(on: boolean): { label: string; title:
         label: on ? "Bookmarked" : "Bookmark",
         title: on
             ? "On the bookmark queue - click to take it off again (nothing is un-downloaded)"
-            : "Add this title to the persistent bookmark queue (Queue tab). It survives a browser restart.",
+            : "Add this title to the persistent bookmark queue (Bookmark tab). It survives a browser restart.",
         className: on ? "nhdwBookmarkToggle nhdwBookmarkOn" : "nhdwBookmarkToggle"
     };
 }

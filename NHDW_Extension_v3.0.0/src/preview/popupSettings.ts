@@ -352,7 +352,7 @@ function renderListModeSection(container: HTMLElement): void {
     section.appendChild(heading);
 
     const hint = el("small");
-    hint.textContent = "Defaults used when downloading from a listing page, from the in-page card buttons, or with Download all.";
+    hint.textContent = "Defaults used when downloading from a listing page - the in-page card buttons and floating bar, or the Download tab's range block.";
     section.appendChild(hint);
 
     const formatRow = el("label");
@@ -577,7 +577,7 @@ function renderInterfaceSection(container: HTMLElement): void {
     section.appendChild(autoLabel);
 
     const autoHint = el("small");
-    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Queue tab without a click per card. Clicking a card's filled bookmark icon always removes it again.";
+    autoHint.textContent = "Off by default: on a 60-card search page it would quietly build a 60-item list you never asked for. With it on, scrolling a listing collects every title into the Bookmark tab without a click per card. Clicking a card's filled bookmark icon always removes it again.";
     section.appendChild(autoHint);
 
     // The "advanced feature" entry point: from the hovering popup there is no
@@ -585,13 +585,13 @@ function renderInterfaceSection(container: HTMLElement): void {
     // chrome.sidePanel.open() needs a user gesture, which this click is.
     const openPanelButton = el("button");
     openPanelButton.type = "button";
-    openPanelButton.textContent = "Open the dockable Queue panel";
+    openPanelButton.textContent = "Open the dockable Bookmark panel";
     openPanelButton.title = "Open the bookmark queue in the resizable side panel, which stays open while you browse";
     const openPanelStatus = el("small");
     openPanelButton.addEventListener("click", () => {
         const sidePanelApi: any = (chrome as any).sidePanel;
         if (!sidePanelApi || typeof sidePanelApi.open !== "function") {
-            openPanelStatus.textContent = "This browser has no side panel (Chrome 116+). The Queue tab here still works - the list is saved either way.";
+            openPanelStatus.textContent = "This browser has no side panel (Chrome 116+). The Bookmark tab here still works - the list is saved either way.";
             return;
         }
         try {

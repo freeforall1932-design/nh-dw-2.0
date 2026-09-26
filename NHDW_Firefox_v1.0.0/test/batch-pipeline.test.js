@@ -551,6 +551,58 @@ describe('runPagedBatchDownload', () => {
         assert.strictEqual(outcome.failedGalleries[0].id, '99');
         assert.ok(/not gallery metadata/.test(outcome.failedGalleries[0].error));
     });
+
+    it('composes the paged-walk history guard with the JOB site (item 71)', async () => {
+        // The paged walk (the panel's range block) is reachable for the default
+        // site only today — getGalleries is nhentai-only — so a wrong identity
+        // here would be latent, not live. Pin it anyway: the skip guard must
+        // compose the job's site, so a "hitomi" walk can never be masked by a
+        // same-numbered default-site record, and a bare recorded id must never
+        // mask a non-default gallery.
+        const listing = '<a href="/g/11/1/"><div class="caption">One</div></a>';
+        const listingHost = () => makeHost({
+            fetchImpl: async () => ({
+                ok: true,
+                status: 200,
+                statusText: 'OK',
+                headers: { get: () => 'text/html' },
+                text: async () => listing
+            })
+        });
+        const composite = listingHost();
+        const skippedOutcome = await runPagedBatchDownload({
+            allDoujinshis: {},
+            pagesArr: [1],
+            path: 'Pages',
+            url: 'https://hitomi.la/search.html?q=test',
+            options: {
+                useZip: 'zip',
+                downloadSeparately: true,
+                site: 'hitomi',
+                alreadyDownloadedIds: ['hitomi:11']
+            },
+            host: composite
+        });
+        assert.strictEqual(skippedOutcome.skipped, 1, 'a hitomi:<id> record skips that hitomi gallery');
+        assert.strictEqual(composite.downloads.length, 0);
+
+        const bare = listingHost();
+        const bareOutcome = await runPagedBatchDownload({
+            allDoujinshis: {},
+            pagesArr: [1],
+            path: 'Pages',
+            url: 'https://hitomi.la/search.html?q=test',
+            options: {
+                useZip: 'zip',
+                downloadSeparately: true,
+                site: 'hitomi',
+                alreadyDownloadedIds: ['11']
+            },
+            host: bare
+        });
+        assert.strictEqual(bareOutcome.skipped, 0,
+            'a bare default-site record must not skip a hitomi gallery');
+    });
 });
 
 // Backlog item 33: the format a job RESOLVES to must be the same value the
@@ -726,6 +778,37 @@ describe('item 48 — a per-site job', () => {
             host: sameSite
         });
         assert.strictEqual(skipped.skipped, 1, 'the hitomi record is the one that skips it');
+    });
+
+    it('reads a recorded bare id as the DEFAULT site, never as this job\'s site (item 71)', async () => {
+        // Legacy (pre-3.8.0) history entries are bare ids, and they mean
+        // nhentai. Composing them with the job's site made an old record mask
+        // a same-numbered gallery on another site - the exact collision the
+        // composite keys exist to prevent, on the live per-site job path.
+        const host = hitomiHost();
+        const legacy = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Hitomi Title' },
+            finalName: 'LegacyBare',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true, site: 'hitomi', alreadyDownloadedIds: [HITOMI_ID] },
+            host: host
+        });
+        assert.strictEqual(legacy.skipped, 0, 'a bare (nhentai) record must not skip a hitomi gallery');
+        assert.strictEqual(host.downloads.length, 1);
+
+        const defaultSite = hitomiHost({ fetchImpl: async () => { throw new Error('must not fetch a skipped gallery'); } });
+        const skipped = await runBatchDownload({
+            zip: {},
+            allDoujinshis: { [HITOMI_ID]: 'Default Title' },
+            finalName: 'DefaultBare',
+            downloadAtEnd: true,
+            galleryMetadata: {},
+            options: { useZip: 'zip', downloadSeparately: true, alreadyDownloadedIds: [HITOMI_ID] },
+            host: defaultSite
+        });
+        assert.strictEqual(skipped.skipped, 1, 'the same bare record still skips the default-site gallery');
     });
 
     it('names the failure with its site, and the retry job remembers it', async () => {

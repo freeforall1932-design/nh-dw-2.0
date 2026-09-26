@@ -1,21 +1,43 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.5)
 
-**Updated:** 2026-09-25 · status: **website-embedded UI + PR #44 review fixes
+**Updated:** 2026-09-26 · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
 Chrome-3.9.0 backport — bookmark icon, gallery-page Bookmark button, Queue-tab
 markup (43), drag-reorder (44), backup import/export (52), canonical-separator
-gate (41) — complete, **plus the Chrome-3.10.0 backport (v1.4.0: per-site
-listing card controls, gallery-page Save offline / Select, Select all, item-59
-list format now in both trees)** — merged to main in PR #50; real-device
-verification + signing remain pending (58)**
+gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
+v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
+PR #50; real-device verification + signing remain pending (58)**
 
-v1.4.0 = the Chrome 3.10.0 listing work, ported: card controls (Select +
-Bookmark + Download) now render on **all six sites'** listing pages from a
-per-site selector table in `src/utils/listCards.ts` (a second `content_scripts`
-block covers the five non-nhentai listing hosts), every gallery page carries a
-**Save offline** button beside Bookmark plus a **Select** control, and the
-floating bar offers **Select all** and stays visible while the page has cards.
-Selection is wiped per-site (new `allIdsSite` key) instead of globally.
+v1.4.5 = the Bookmark tab's **search/state/date query** with a 200-row window
+and **Show more**, the **already-downloaded ✓** read from the download history
+(its tooltip is the saved file name; a row that only claims "done" is never
+marked) and query-scoped **Select all** (item 68); plus the listing pages'
+**harvest** (item 70) — **Harvest** / **Stop harvest**, a remembered "Scroll for
+me" box with bounded rounds, MutationObserver collection of cards the site
+renders later, and an always-inactive `listHarvest` in local storage that is
+merged back into the selection after a reload. Both landed best-effort on
+recorded assumed defaults, because the owner asked for implementations to test
+rather than another spec pass. v1.4.4 = the Bookmark tab's per-site filter
+(item 66): a permanent header
+`<select>` (All sites | nhentai | hitomi | hentaiera | imhentai | hentaienvy |
+hentaifox) with live counts, remembered in `chrome.storage.sync` and restored
+on every open; the filter is a **view** (stored list untouched) and filtered
+Select all/none send only the visible rows' composite keys. v1.4.3 = the panel
+list's shared-selection pointer and the List-mode hint
+(item 71), plus the skip-guard identity fix (a recorded bare id is the default
+site's record, never this job's). v1.4.2 = the panel's third tab is labelled
+**Bookmark** (item 65, UI-only: the
+`bookmarkQueue` storage key, `#tabQueue` / `#queuePane` ids, message actions and
+the export format are unchanged). v1.4.1 = v1.4.0 plus the 2026-09-26 review fixes (listing-only guard for card
+controls, `allIdsSite` requested by the bar reader, nhentai-only legacy
+checkbox). v1.4.0 = the Chrome 3.10.0 listing work, ported: card controls
+(Select + Bookmark + Download) now render on **all six sites'** listing pages
+from a per-site selector table in `src/utils/listCards.ts` (a second
+`content_scripts` block covers the five non-nhentai listing hosts), every
+gallery page carries a **Save offline** button beside Bookmark plus a **Select**
+control, and the floating bar offers **Select all** and stays visible while the
+page has cards. Selection is wiped per-site (new `allIdsSite` key) instead of
+globally.
 
 v1.3.0 = the Chrome 3.9.0 bookmark work, ported: the card control is a real
 bookmark glyph, every single-gallery page (all six sites) carries a blue
@@ -35,14 +57,20 @@ Settings → In-page panel.
 
 v1.1.0 was the parity elevation: this folder equals the current Chrome `src/`
 plus an audited delta (see `FIREFOX_PARITY_PLAN.md`). The Firefox offline
-suite now has **620** passing / 4 deliberately opt-in live tests pending
+suite now has **649** passing / 4 deliberately opt-in live tests pending
 (including the Item 48 multi-site batch download suite and all 6 site adapters).
 
 Review fixes include working embedded settings, shared Settings/Queue layout
 CSS, safe reattachment/live updates, and a Full panel tab bound to the nhentai
 page that opened it (including retries and pasted-bookmark metadata). Offline
 tests cover these paths; this is **not** a claim of Firefox/Android device
-verification. Manifest is 1.4.0 (the 1.4.0 change is the per-site listing card controls, the gallery-page Save offline / Select controls and Select all, backported from Chrome 3.10.0); no signing run has been performed.
+verification. Manifest is **1.4.4** (1.4.4 = the item-66 per-site filter, same
+as Chrome 3.10.4; 1.4.3 = the item-71 pointer + guard fix,
+same as Chrome 3.10.3; 1.4.2 = the Bookmark-tab rename, same as
+Chrome 3.10.2; 1.4.0 = the per-site listing card controls, the
+gallery-page Save offline / Select controls and Select all, backported from
+Chrome 3.10.0; 1.4.1 = the same review fixes as Chrome 3.10.1); no signing run
+has been performed.
 
 Item 38 adds **33 offline options-page tests**, using the actual HTML and built
 bundle. Options now restore saved list formats, display legacy PDF values,

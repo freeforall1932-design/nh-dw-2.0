@@ -1,6 +1,6 @@
 {
   "name": "NHentai Downloader",
-  "version": "1.4.0",
+  "version": "1.4.5",
   "description": "A Firefox extension to download doujinshi from NHentai - Firefox port of the Chrome Manifest V3 extension, with a website-embedded UI on nhentai and a portrait/mobile-ready layout for Firefox for Android",
   "icons": {
     "48": "Icon-48.png",

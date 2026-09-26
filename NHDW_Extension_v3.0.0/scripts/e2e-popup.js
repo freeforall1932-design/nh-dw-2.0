@@ -7,8 +7,9 @@
 // (scripts/e2e-browser.js), which cannot run in CI or in this sandbox, so the
 // message -> UI layer - the layer where "the panel is a dead-end" (item 29) and
 // "the failed list disappeared" (3.6.4) both lived - was untested. This harness
-// is deliberately scoped to that layer: it does NOT bootstrap a listing page
-// (no injected checkboxes, no similar-galleries panel). It proves:
+// covers the message -> UI layer, the listing bootstrap (item 40: a tab URL
+// drives the injected content script's getGalleries answer) and the panel's
+// Save offline handler (item 62a). It proves:
 //
 //   1. an object-shaped error renders as its message, never "[object Object]";
 //   2. a batch-level error still leaves a clickable Go Back (item 29);
@@ -31,6 +32,12 @@
 //      #rangeBlock with current/max page, the default 1-N input, a live
 //      count, and both dual actions (Download range now / Add range to
 //      Bookmark); an invalid range must not wash #action.
+//  11. listing bootstrap + panel Save offline (item 40): a listing TAB URL
+//      drives the real chain (bootstrap -> inject js/getGalleries.js -> the
+//      content script's getGalleries answer -> the listing view) instead of a
+//      hand-delivered message, a gallery tab URL bootstraps the preview from
+//      the tab's own _gallery, and the panel's Save offline handler sends one
+//      list-mode job - asking first when that title is already recorded.
 //
 // THREE STUB TRAPS, each of which silently tests the wrong thing (all cost a
 // debugging round; keep them if you port this harness to the Firefox folder):
@@ -45,7 +52,10 @@
 // chrome.storage.sync is stateful here and logs every write to syncWrites, so
 // "must not write" is assertable. tabs.query is driven by activeTabUrl so
 // phase 9 can simulate switching the panel onto another origin; onUpdated /
-// onActivated listeners are captured (item 60).
+// onActivated listeners are captured (item 60). Since item 40 the scripting
+// stub also answers the two real bootstraps: a js/getGalleries.js injection
+// gets the armed listing payload, and readGalleryFromTab's poll gets the armed
+// tab gallery.
 //
 // Usage:  node scripts/e2e-popup.js [path/to/js/preview.js]
 // Exit code 0 = all phases passed.
@@ -173,6 +183,43 @@ const documentStub = {
     removeEventListener() {}
 };
 
+// Item 40 stubs. listingPayload = what the injected js/getGalleries.js content
+// script answers (the page's own reading of the listing); tabGalleryJson = what
+// the tab's page exposes for readGalleryFromTab (window._gallery). Both stay
+// unarmed (null) until the item-40 phase, so every earlier phase keeps the old
+// behaviour. injectedScripts records what the panel injected.
+let listingPayload = null;
+let tabGalleryJson = null;
+const injectedScripts = [];
+// What window.confirm answers; the item-40 phase flips it for the
+// already-downloaded re-save prompt.
+let confirmAnswer = false;
+
+// Item 40 step 0. The side-panel wash phase above leaves the tab on a gallery
+// page and its metadata chain polls that tab up to five times (sleeps of
+// 400/600/800/1000ms), so it can paint #action long after its own phase ended -
+// measured: ~2.5s later. Arm the tab's gallery (the page it is really on) and
+// wait for that chain to consume the answer and die, so no late render can land
+// on top of this phase's assertions. A dead chain costs only the quiet window.
+async function settleStaleTabRead(gallery) {
+    tabGalleryJson = gallery;
+    await wait(1200);
+    let last = byId("action").innerHTML;
+    for (let i = 0; i < 15; i++) {
+        await wait(100);
+        const now = byId("action").innerHTML;
+        if (now === last) {
+            return;
+        }
+        last = now;
+    }
+}
+
+// Item 40: how the harness answers a listing bootstrap. The injected content
+// script talks to the panel over chrome.runtime; the IIFE below points this at
+// the same fan-out `deliver` uses.
+let notifyGetGalleries = () => {};
+
 // --- chrome stub -----------------------------------------------------------
 // The panel registers TWO onMessage listeners (popup.ts drives the download
 // UI, preview.ts the tab/URL behaviour). Chrome calls every listener, so the
@@ -188,9 +235,17 @@ const syncStore = {};
 const syncWrites = [];
 // Mutable active-tab URL + captured tab listeners for the item-60 wash phase.
 let activeTabUrl = "https://nhentai.net/g/123456/";
+// Item 40: point the panel at a tab URL the way a real navigation does (the
+// harness then fires the captured onActivated listener), and hand the panel a
+// recorded-history entry through the local store.
+function setPreviewTabUrl(url) { activeTabUrl = url; }
+function setStoredHistory(history) { localExtra.downloadHistory = history; }
 const updatedListeners = [];
 const activatedListeners = [];
 
+// Local-storage keys a phase arms for the panel (item 40), merged under the
+// apiKeyGate the earlier phases depend on.
+const localExtra = {};
 const chromeStub = {
     runtime: {
         onMessage: { addListener(fn) { messageListeners.push(fn); } },
@@ -230,9 +285,11 @@ const chromeStub = {
             // apiKeyGate: "skipped" = the first-run gate was already answered,
             // so the panel renders its normal preview instead of the key box
             // (which would overwrite #action under the phases below).
-            get(defaults, cb) { cb(Object.assign({}, defaults, { apiKeyGate: "skipped" })); },
-            set(_items, cb) { if (cb) cb(); },
-            remove(_key, cb) { if (cb) cb(); },
+            // localExtra carries the keys a phase arms (item 40's recorded
+            // history) and absorbs the panel's own writes.
+            get(defaults, cb) { cb(Object.assign({}, defaults, localExtra, { apiKeyGate: "skipped" })); },
+            set(items, cb) { Object.assign(localExtra, items); if (cb) cb(); },
+            remove(key, cb) { delete localExtra[key]; if (cb) cb(); },
             clear(cb) { if (cb) cb(); }
         },
         session: { get(_key, cb) { cb({}); }, set(_items, cb) { if (cb) cb(); }, remove(_key, cb) { if (cb) cb(); } }
@@ -245,7 +302,34 @@ const chromeStub = {
     action: { setIcon() {}, setPopup() {} },
     sidePanel: undefined,
     permissions: { contains(_p, cb) { cb(true); } },
-    scripting: { executeScript(_o, cb) { if (cb) cb([]); } }
+    // Item 40: the injected-script stub answers like the page would.
+    //   * details.files is the panel's own injection - js/getGalleries.js on a
+    //     listing page. In the real extension that content script reads the
+    //     listing and messages the panel back with {action:"getGalleries"};
+    //     here the armed payload answers 0ms later, over the same fan-out.
+    //   * details.func is executeInTab - readGalleryFromTab's poll carries
+    //     window._gallery, so it gets the armed tab gallery as the page's own
+    //     answer (extension-origin fetches to the gallery API are what the
+    //     panel must avoid).
+    // Everything else answers [] exactly as before.
+    scripting: {
+        executeScript(details, cb) {
+            if (details && Array.isArray(details.files)) {
+                injectedScripts.push(details.files.join(","));
+                if (listingPayload !== null && details.files.indexOf("js/getGalleries.js") !== -1) {
+                    const payload = listingPayload;
+                    setTimeout(() => notifyGetGalleries(payload), 0);
+                }
+                if (cb) cb([]);
+                return;
+            }
+            const source = details && typeof details.func === "function" ? String(details.func) : "";
+            const result = tabGalleryJson !== null && source.indexOf("_gallery") !== -1
+                ? { gallery: tabGalleryJson, scripts: [], html: "" }
+                : null;
+            if (cb) cb(result === null ? [] : [{ result: result }]);
+        }
+    }
 };
 
 const sandbox = {
@@ -260,7 +344,7 @@ const sandbox = {
     TextEncoder: TextEncoder,
     TextDecoder: TextDecoder,
     fetch: () => Promise.reject(new Error("no network in the popup harness")),
-    confirm: () => false,
+    confirm: () => confirmAnswer,
     alert: () => {},
     navigator: { userAgent: "popup-harness" },
     location: { href: "https://nhentai.net/g/123456/" }
@@ -288,6 +372,10 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
             fn(msg, {}, () => {});
         }
     };
+
+    // Item 40: the injected content script's answer reaches the panel exactly
+    // like any other runtime message.
+    notifyGetGalleries = (payload) => deliver(Object.assign({ action: "getGalleries" }, payload));
 
     // ---- Phase 1: object-shaped error renders its message -------------------
     // The worker sends errorMessage(error) today, so this is latent - but the
@@ -574,6 +662,15 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     if (rangeHtml.indexOf('id="downloadInput"') === -1) {
         fail("the range block must keep a #downloadInput field");
     }
+    // Item 71: the range block is the panel's ONLY multi-page entry (the
+    // blanket "Download all (N pages)" button was retired by item 61), and the
+    // list must say that its rows and the page's cards are one selection.
+    if (rangeHtml.indexOf("Download all") !== -1) {
+        fail("the retired blanket \"Download all\" entry must not render (item 71), got " + rangeHtml.slice(0, 400));
+    }
+    if (rangeHtml.indexOf('id="selectionPointer"') === -1) {
+        fail("the list must point at the shared on-page selection (item 71), got " + rangeHtml.slice(0, 400));
+    }
     // Default input value + live count + both handlers wired on the vivified nodes.
     await wait(40);
     if (byId("downloadInput").value !== "2-7") {
@@ -600,6 +697,155 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("an invalid range must not rewrite #action (item 61)");
     }
     console.log("PASS phase 10: listing range block shows pages and dual actions (item 61)");
+
+    // ---- Phase 11: listing bootstrap + panel Save offline (item 40) --------
+    // Until now this harness could not reach either path: a listing view only
+    // appeared because a phase HAND-DELIVERED {action:"getGalleries"}, and the
+    // panel's Save offline click handler (item 62a) was unreachable because no
+    // phase ever bootstrapped a gallery preview from the tab. This phase drives
+    // the real chain instead:
+    //   tab URL -> bootstrap -> updatePreviewAsync -> inject js/getGalleries.js
+    //   -> the content script's getGalleries answer -> the listing view
+    // and then
+    //   tab URL -> bootstrap -> readGalleryFromTab (the tab's own _gallery)
+    //   -> the single-gallery preview -> the Save offline handler.
+    // Nothing here hand-delivers a message: the injected-script stub answers.
+    //
+    // Known settings for this phase, with single-title and list-mode values
+    // DELIBERATELY different: the phases above left their own behind, and the
+    // assertions below must show WHICH reader produced what. Save offline saves
+    // with the list-mode settings while the panel's own name field follows the
+    // single-title template - that is the item-62a contract.
+    syncStore.useZip = "zip";
+    syncStore.listFormat = "cbz";
+    syncStore.downloadName = "{pretty} - {id}";
+    syncStore.listDownloadName = "{pretty}";
+    syncStore.replaceSpaces = true;
+    syncStore.listOutputMode = "separate";
+    syncStore.listMasterFolder = true;
+    syncStore.rawMasterFolder = "NHDW";
+    await settleStaleTabRead({
+        media_id: "999001",
+        title: { pretty: "Tabbed Gallery", english: "Tabbed Gallery", japanese: "" },
+        images: {
+            pages: [{ t: "j" }, { t: "j" }, { t: "j" }],
+            cover: { t: "j" },
+            thumbnail: { t: "j" }
+        },
+        tags: []
+    });
+    listingPayload = {
+        galleries: [
+            { id: "111111", title: "First Title" },
+            { id: "222222", title: "Second Title" }
+        ],
+        currentPage: 2,
+        maxPage: 7
+    };
+    injectedScripts.length = 0;
+    setPreviewTabUrl("https://nhentai.net/?page=2");
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(150);
+    if (injectedScripts.indexOf("js/getGalleries.js") === -1) {
+        fail("a listing page must make the panel inject js/getGalleries.js (item 40), got " + JSON.stringify(injectedScripts));
+    }
+    const listingHtml = byId("action").innerHTML;
+    if (listingHtml.indexOf('id="rangeBlock"') === -1 || listingHtml.indexOf('id="downloadInput"') === -1) {
+        fail("the injected listing answer must render the listing view (item 40), got " + listingHtml.slice(0, 400));
+    }
+    if (listingHtml.indexOf('id="111111"') === -1 || listingHtml.indexOf('id="222222"') === -1) {
+        fail("the listing view must carry the injected rows (item 40), got " + listingHtml.slice(0, 400));
+    }
+    if (listingHtml.indexOf("2 doujinshis found") === -1) {
+        fail("the listing view must count the injected rows (item 40), got " + listingHtml.slice(0, 400));
+    }
+    console.log("PASS phase 11a: a listing tab URL bootstraps the view through the injected content script (item 40)");
+
+    // A gallery page bootstraps its own preview from the tab's metadata, and
+    // the panel must use the metadata the tab already carries rather than
+    // re-fetching it from the extension origin (what Cloudflare 403s).
+    setPreviewTabUrl("https://nhentai.net/g/777001/");
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(200);
+    const previewHtml = byId("action").innerHTML;
+    if (previewHtml.indexOf('id="buttonSaveOffline"') === -1) {
+        fail("a gallery tab URL must bootstrap the preview with its Save offline button (item 62a), got " + previewHtml.slice(0, 400));
+    }
+    if (previewHtml.indexOf("(3 pages)") === -1) {
+        fail("the preview must read the gallery from the tab (3 pages), got " + previewHtml.slice(0, 400));
+    }
+    if (byId("path").value !== "Tabbed_Gallery_-_777001") {
+        fail("the preview name must come from the tab's gallery through the single-title template, got "
+            + JSON.stringify(byId("path").value));
+    }
+    console.log("PASS phase 11b: a gallery tab URL bootstraps the preview from the tab's own metadata (items 40/62a)");
+
+    // Save offline sends ONE gallery job built from the list-mode settings (not
+    // the single-title defaults), for the gallery the tab showed, and reports
+    // the worker's queued answer instead of a generic progress line.
+    retryAnswer = { result: "queued", position: 3 };
+    const jobsBefore = sentMessages.filter((msg) => msg.action === "downloadAllDoujinshis").length;
+    byId("buttonSaveOffline").dispatchLast("click");
+    await wait(150);
+    const jobs = sentMessages.filter((msg) => msg.action === "downloadAllDoujinshis");
+    if (jobs.length !== jobsBefore + 1) {
+        fail("Save offline must send exactly one downloadAllDoujinshis job, got " + (jobs.length - jobsBefore));
+    }
+    const job = jobs[jobs.length - 1];
+    if (job.allDoujinshis["777001"] !== "Tabbed Gallery - 777001") {
+        fail("the job must be keyed by the tab's gallery and carry the name the panel showed, got "
+            + JSON.stringify(job.allDoujinshis));
+    }
+    if (!job.galleryMetadata || job.galleryMetadata["777001"] !== tabGalleryJson) {
+        fail("the job must carry the metadata already read from the tab, not fetch it again");
+    }
+    if (job.site !== "nhentai" || job.separate !== true || job.tabId !== 7) {
+        fail("the job must be one separate nhentai artifact for the active tab, got " + JSON.stringify({
+            site: job.site, separate: job.separate, tabId: job.tabId
+        }));
+    }
+    if (job.formatOverride !== "cbz" || job.nameTemplate !== "{pretty}" || job.masterFolder !== "NHDW") {
+        fail("the job must carry the list-mode settings, got " + JSON.stringify({
+            formatOverride: job.formatOverride, nameTemplate: job.nameTemplate, masterFolder: job.masterFolder
+        }));
+    }
+    if (JSON.stringify(job.redownloadIds) !== "[]") {
+        fail("an unrecorded title must not force a re-download, got " + JSON.stringify(job.redownloadIds));
+    }
+    if (byId("action").innerHTML.indexOf("Save offline queued at position 3.") === -1) {
+        fail("a queued answer must be reported to the user, got " + byId("action").innerHTML.slice(0, 200));
+    }
+    console.log("PASS phase 11c: the panel's Save offline sends one list-mode job for the tabbed gallery (item 62a)");
+
+    // An already-recorded title is asked about, from a FRESH history read (the
+    // cosmetic note in the preview is not the guard): declining sends nothing
+    // and gives the button back, accepting forces exactly that one gallery so
+    // the worker does not skip it.
+    setStoredHistory({ "nhentai:777001": { filename: "NHDW/Tabbed Gallery.zip", when: 1700000000000 } });
+    setPreviewTabUrl("https://nhentai.net/g/777001/1/");
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(200);
+    if (byId("action").innerHTML.indexOf("Already downloaded") === -1) {
+        fail("a recorded title must say so in the preview, got " + byId("action").innerHTML.slice(0, 300));
+    }
+    confirmAnswer = false;
+    const jobsBeforeDecline = sentMessages.filter((msg) => msg.action === "downloadAllDoujinshis").length;
+    byId("buttonSaveOffline").dispatchLast("click");
+    await wait(150);
+    if (sentMessages.filter((msg) => msg.action === "downloadAllDoujinshis").length !== jobsBeforeDecline) {
+        fail("declining the already-downloaded confirm must not send a job");
+    }
+    if (byId("buttonSaveOffline").disabled !== false) {
+        fail("declining the confirm must give the Save offline button back");
+    }
+    confirmAnswer = true;
+    byId("buttonSaveOffline").dispatchLast("click");
+    await wait(150);
+    const forced = sentMessages.filter((msg) => msg.action === "downloadAllDoujinshis").pop();
+    if (JSON.stringify(forced.redownloadIds) !== '["777001"]') {
+        fail("accepting the confirm must force that one gallery, got " + JSON.stringify(forced.redownloadIds));
+    }
+    console.log("PASS phase 11d: Save offline asks before re-saving a recorded title and forces exactly that gallery");
 
     console.log("PASS: popup message layer behaves correctly in a window-less context.");
     process.exit(0);

@@ -549,3 +549,26 @@ input[type="checkbox"] {
         min-height: 42px;
     }
 }
+
+/* Item 70: the harvest controls live in the same bar as the bulk buttons.
+   The checkbox row is a label so the text is a hit target, and the status
+   line is a plain span so "3 collected" reads as part of the bar. */
+.nhdw-action-bar .nhdw-harvest-scroll-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    font-size: 12px;
+    opacity: 0.85;
+    cursor: pointer;
+}
+
+.nhdw-action-bar .nhdw-harvest-scroll-row input:disabled {
+    cursor: default;
+}
+
+.nhdw-action-bar .nhdw-harvest-status {
+    white-space: nowrap;
+    font-size: 12px;
+    opacity: 0.85;
+}

@@ -29,6 +29,12 @@ const {
     planBookmarkDownload,
     countBookmarks,
     countSelectedBookmarks,
+    SITE_FILTER_ALL,
+    bookmarkFilterSites,
+    bookmarkSiteCounts,
+    filterBookmarksBySite,
+    normalizeBookmarkSiteFilter,
+    bookmarkSelectionKeys,
     findBookmark,
     readBookmarks,
     mutateBookmarks,
@@ -640,5 +646,65 @@ describe('paste box: viewer mirror family (any cin.* TLD)', () => {
             '366224'
         ]);
         assert.deepStrictEqual(parsed.rejected, []);
+    });
+});
+
+// Item 66: the Bookmark tab's per-site filter. Pure helpers only - the panel
+// wiring (the <select>, the remembered choice, the filtered Select all) is
+// driven by scripts/e2e-bookmark-panel.js against the built bundle.
+describe('bookmark site filter (item 66)', () => {
+    function mixedState() {
+        return addBookmarks(emptyBookmarkState(), [
+            { id: '1', site: 'nhentai' },
+            { id: '2', site: 'hitomi' },
+            { id: '3', site: 'nhentai' },
+            { id: '4', site: 'hentaifox' }
+        ]).state;
+    }
+
+    it('lists the canonical option order with All sites first', () => {
+        assert.deepStrictEqual(bookmarkFilterSites(), [
+            'nhentai', 'hitomi', 'hentaiera', 'imhentai', 'hentaienvy', 'hentaifox'
+        ]);
+        assert.strictEqual(SITE_FILTER_ALL, 'all');
+    });
+
+    it('counts rows per site, leaving an absent site without a count', () => {
+        const counts = bookmarkSiteCounts(mixedState());
+        assert.strictEqual(counts.nhentai, 2);
+        assert.strictEqual(counts.hitomi, 1);
+        assert.strictEqual(counts.hentaifox, 1);
+        assert.strictEqual(counts.hentaienvy, undefined);
+        assert.strictEqual(counts[SITE_FILTER_ALL], 4);
+    });
+
+    it('filters to one site and passes "all" through untouched', () => {
+        const state = mixedState();
+        assert.strictEqual(filterBookmarksBySite(state, SITE_FILTER_ALL).length, 4);
+        const hitomi = filterBookmarksBySite(state, 'hitomi');
+        assert.strictEqual(hitomi.length, 1);
+        assert.strictEqual(hitomi[0].id, '2');
+        assert.strictEqual(filterBookmarksBySite(state, 'imhentai').length, 0);
+        // The filter is a view: it must never rewrite the stored list.
+        assert.strictEqual(state.items.length, 4);
+    });
+
+    it('normalizes an unknown, empty or hostile value to All sites', () => {
+        assert.strictEqual(normalizeBookmarkSiteFilter('hitomi'), 'hitomi');
+        assert.strictEqual(normalizeBookmarkSiteFilter('ALL'), SITE_FILTER_ALL);
+        assert.strictEqual(normalizeBookmarkSiteFilter('nhentai:123'), SITE_FILTER_ALL);
+        assert.strictEqual(normalizeBookmarkSiteFilter(''), SITE_FILTER_ALL);
+        assert.strictEqual(normalizeBookmarkSiteFilter(undefined), SITE_FILTER_ALL);
+        assert.strictEqual(normalizeBookmarkSiteFilter(null), SITE_FILTER_ALL);
+        assert.strictEqual(normalizeBookmarkSiteFilter({ site: 'hitomi' }), SITE_FILTER_ALL);
+    });
+
+    it('answers composite keys for the visible rows, so a filtered Select all cannot touch another site', () => {
+        const state = mixedState();
+        assert.deepStrictEqual(bookmarkSelectionKeys(filterBookmarksBySite(state, 'hitomi')), ['hitomi:2']);
+        // addBookmarks prepends, so the newest row is first - the filter keeps
+        // the stored order, because that order is the download order.
+        assert.deepStrictEqual(bookmarkSelectionKeys(filterBookmarksBySite(state, 'nhentai')), ['nhentai:3', 'nhentai:1']);
+        assert.deepStrictEqual(bookmarkSelectionKeys(filterBookmarksBySite(state, 'imhentai')), []);
     });
 });

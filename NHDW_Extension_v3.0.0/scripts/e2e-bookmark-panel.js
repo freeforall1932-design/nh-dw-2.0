@@ -194,6 +194,20 @@ function findDeep(node, className) {
     return null;
 }
 
+// A leaf node addressed by the text it shows - the toolbar buttons have no ids.
+function findByText(node, text) {
+    for (const child of node.children || []) {
+        if (child.textContent === text && (child.children || []).length === 0) {
+            return child;
+        }
+        const nested = findByText(child, text);
+        if (nested !== null) {
+            return nested;
+        }
+    }
+    return null;
+}
+
 const bodyNode = makeNode("body");
 const documentStub = {
     body: bodyNode,
@@ -217,6 +231,10 @@ let history = {};
 // the worker is the single writer for the queue, and history goes through the
 // historyImport action for the same reason.
 const localWrites = [];
+// Item 66: the sync store the panel's own preferences live in, plus every
+// write, so a phase can assert what was remembered and where.
+const syncStore = {};
+const syncWrites = [];
 const createdUrls = [];
 const revokedUrls = [];
 const clickedLinks = [];
@@ -288,9 +306,12 @@ const chromeStub = {
     },
     storage: {
         sync: {
-            get(defaults, cb) { cb(Object.assign({}, defaults)); },
-            set(_items, cb) { if (cb) cb(); },
-            remove(_key, cb) { if (cb) cb(); }
+            // Item 66: the per-site filter preference lives here (like uiMode
+            // and darkMode), so the stub records writes and replays them - that
+            // is what proves "close the panel, reopen it, the filter is back".
+            get(defaults, cb) { cb(Object.assign({}, defaults, syncStore)); },
+            set(items, cb) { Object.assign(syncStore, items); syncWrites.push(Object.assign({}, items)); if (cb) cb(); },
+            remove(key, cb) { delete syncStore[key]; if (cb) cb(); }
         },
         local: {
             get(defaults, cb) {
@@ -692,7 +713,258 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         assertEqual(cancelMsgs[0].site, "hitomi", "the cancel carries the row's own site");
         console.log("PASS phase 7d: a downloading row cancels per row, carrying its site (item 45)");
 
-        console.log("PASS: the Queue tab's rows, drag-reorder, backup and per-site downloads behave correctly in a window-less context.");
+        // ---- Phase 8: per-site filter (item 66) ------------------------------
+        // The dropdown is permanent, its options carry live counts, the chosen
+        // site is remembered in chrome.storage.sync (never in the worker-owned
+        // local store), and while a filter is on, Select all touches only the
+        // visible rows - each by its composite key, so a same-numbered gallery
+        // on another site can never be selected by accident.
+        syncStore.bookmarkSiteFilter = "hentaifox";
+        history = {};
+        bookmarkState = {
+            v: 1,
+            collapsed: false,
+            items: [
+                stateItem("1"),
+                stateItem("2", "hitomi", { selected: false }),
+                stateItem("3"),
+                stateItem("4", "hentaifox")
+            ]
+        };
+        byId("tabQueue").dispatchLast("click");
+        await wait(30);
+
+        assertOk(nodes.get("nhdwBmSiteFilter") !== undefined, "the list header needs the per-site filter (item 66)");
+        const filterSelect = nodes.get("nhdwBmSiteFilter");
+        assertEqual(filterSelect.tagName, "SELECT", "the filter is a <select>");
+        const optionValues = (filterSelect.children || []).map((option) => option.value);
+        assertDeepEqual(optionValues, ["all", "nhentai", "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox"],
+            "the options are All sites plus the six known sites, in one canonical order");
+        const optionLabels = (filterSelect.children || []).map((option) => option.textContent);
+        assertEqual(optionLabels[0], "All sites (4)", "the All sites option carries the total count");
+        assertEqual(optionLabels[1], "nhentai (2)", "a site with rows carries its own count");
+        assertEqual(optionLabels[4], "imhentai", "a site with no rows is still offered, without a count");
+        // The stub had the preference stored BEFORE this render, so restoring it
+        // is the storage path, not a leftover module variable.
+        assertEqual(filterSelect.value, "hentaifox", "the remembered site filter is restored on reopen");
+        assertEqual(findRows(byId("nhdwBmList")).length, 1, "only the filtered site's rows render");
+        assertEqual(byId("nhdwBmFilterInfo").textContent, "showing 1 of 4",
+            "the filter line says how much of the list is visible");
+        console.log("PASS phase 8a: the per-site filter renders, counts and restores the remembered choice (item 66)");
+
+        filterSelect.value = "hitomi";
+        filterSelect.dispatch("change");
+        await wait(30);
+        assertEqual(syncStore.bookmarkSiteFilter, "hitomi", "choosing a site stores the preference in sync storage");
+        assertEqual(syncWrites[syncWrites.length - 1].bookmarkSiteFilter, "hitomi", "the write carries the chosen site");
+        assertEqual(localWrites.some((write) => "bookmarkSiteFilter" in write), false,
+            "the preference must never enter the worker-owned local store");
+        const filteredRows = findRows(byId("nhdwBmList"));
+        assertEqual(filteredRows.length, 1, "switching the filter re-renders only that site's rows");
+        assertEqual(findOne(filteredRows[0], "nhdwBmSelect").checked, false, "the hitomi row is the one on screen");
+        assertEqual(byId("nhdwBmCounts").textContent, "4 bookmarked \u00b7 3 selected \u00b7 0 done",
+            "the counts line keeps reporting the whole list, not the visible slice");
+        console.log("PASS phase 8b: choosing a site filters the rows and remembers the choice (item 66)");
+
+        const beforeSelectAll = sentMessages.length;
+        const selectAllButton = findByText(byId("queuePane"), "Select all");
+        assertOk(selectAllButton !== null, "the toolbar keeps Select all");
+        selectAllButton.dispatchLast("click");
+        await wait(30);
+        const selectAllMsgs = sentMessages.slice(beforeSelectAll).filter((msg) => msg.action === "bookmarkSelect");
+        assertEqual(selectAllMsgs.length, 1, "Select all sends one bookmarkSelect message");
+        assertDeepEqual(selectAllMsgs[0].ids, ["hitomi:2"],
+            "with a filter on, Select all names only the visible rows, by composite key");
+        assertEqual(selectAllMsgs[0].all, undefined, "and it does not fall back to the whole-list form");
+        console.log("PASS phase 8c: Select all respects the filter and sends composite keys (item 66)");
+
+        filterSelect.value = "imhentai";
+        filterSelect.dispatch("change");
+        await wait(30);
+        assertEqual(findRows(byId("nhdwBmList")).length, 0, "a site with no rows renders no rows");
+        assertOk(findDeep(byId("nhdwBmList"), "nhdwBmEmpty") !== null,
+            "a filtered-empty list explains itself instead of showing a blank box");
+        filterSelect.value = "all";
+        filterSelect.dispatch("change");
+        await wait(30);
+        assertEqual(findRows(byId("nhdwBmList")).length, 4, "All sites brings the whole list back");
+        assertEqual(byId("nhdwBmFilterInfo").textContent, "", "the filter line disappears when nothing is filtered");
+        const beforeSelectNone = sentMessages.length;
+        const selectNoneButton = findByText(byId("queuePane"), "Select none");
+        assertOk(selectNoneButton !== null, "the toolbar keeps Select none");
+        selectNoneButton.dispatchLast("click");
+        await wait(30);
+        const selectNoneMsgs = sentMessages.slice(beforeSelectNone).filter((msg) => msg.action === "bookmarkSelect");
+        assertEqual(selectNoneMsgs.length, 1, "Select none sends one bookmarkSelect message");
+        assertEqual(selectNoneMsgs[0].all, true,
+            "with no filter, Select none keeps the unchanged whole-list message");
+        assertEqual(selectNoneMsgs[0].selected, false, "and clears the selection");
+        console.log("PASS phase 8d: an empty site explains itself, and All sites restores the whole list (item 66)");
+
+        // ---- Phase 9: search, filters and windowed rendering (item 68) ---------
+    // The Bookmark tab is a working set: "find the ones I mean" has to work
+    // BEFORE a batch runs. These phases drive the real controls (typing in the
+    // search box, picking a status/date) and assert what the panel does with
+    // the storage the worker would have written.
+    syncStore.bookmarkSiteFilter = "all";
+    history = { "nhentai:2": { filename: "NHDW/Dark Room.zip", when: 1700000000000 } };
+    bookmarkState = {
+        v: 1,
+        collapsed: false,
+        items: [
+            stateItem("1", "nhentai", { title: "Milky Way", addedAt: 1, selected: true }),
+            stateItem("2", "nhentai", { title: "Dark Room", addedAt: 1, status: "done", selected: false }),
+            stateItem("3", "hitomi", { title: "Milky Night", addedAt: 1, status: "failed", selected: true }),
+            stateItem("4", "nhentai", { title: "Milky Done", addedAt: Date.now(), status: "done", selected: false })
+        ]
+    };
+    byId("tabQueue").dispatchLast("click");
+    await wait(50);
+
+    const searchBox = byId("nhdwBmSearch");
+    assertOk(searchBox !== undefined && searchBox.tagName === "INPUT", "the list needs a search box (item 68)");
+    assertOk(nodes.has("nhdwBmStatusFilter") && nodes.get("nhdwBmStatusFilter").tagName === "SELECT",
+        "the list needs a status filter (item 68)");
+    assertOk(nodes.has("nhdwBmDateFilter") && nodes.get("nhdwBmDateFilter").tagName === "SELECT",
+        "the list needs a date filter (item 68)");
+    assertEqual(findRows(byId("nhdwBmList")).length, 4, "with no query the whole list renders");
+
+    searchBox.value = "milky";
+    searchBox.dispatch("input");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 3, "the search narrows the rendered rows");
+    assertEqual(byId("nhdwBmFilterInfo").textContent, "showing 3 of 4",
+        "the filter line says how much of the list the query shows");
+    // The owner's rule: a green check means the file is really on disk. Row 4
+    // SAYS done but history has no record for it, so it must stay unmarked -
+    // while row 2, which history records, carries the mark with its filename.
+    const milkyRows = findRows(byId("nhdwBmList"));
+    const doneRow = milkyRows.filter((row) => findDeep(row, "nhdwBmTitle").textContent === "Milky Done")[0];
+    assertOk(doneRow !== undefined, "the searched rows carry their stored titles");
+    // A DOM node can never be JSON.stringify'd, so this asserts the boolean:
+    // a failed run must print a readable message, not a circular-structure
+    // TypeError that hides which rule broke.
+    assertOk(findDeep(doneRow, "nhdwBmAlready") === null,
+        "a row that merely says done must not carry the downloaded mark (item 68)");
+    searchBox.value = "dark";
+    searchBox.dispatch("input");
+    await wait(30);
+    const markedRow = findRows(byId("nhdwBmList"))[0];
+    const historyMark = findDeep(markedRow, "nhdwBmAlready");
+    assertOk(historyMark !== null, "a title history records carries the downloaded mark (item 68)");
+    assertOk(String(historyMark.title).indexOf("Dark Room.zip") !== -1,
+        "the mark names the artifact behind it, got " + JSON.stringify(historyMark.title));
+    assertEqual(byId("nhdwBmHistoryInfo").textContent, "1 already downloaded",
+        "the header counts what the current query already has on disk");
+    console.log("PASS phase 9a: search narrows the list and the downloaded mark follows history, not row status (item 68)");
+
+    // Status and date compose with each other and with the search; the counts
+    // line keeps reporting the WHOLE list, because the query is a view.
+    searchBox.value = "";
+    searchBox.dispatch("input");
+    const statusSelect = nodes.get("nhdwBmStatusFilter");
+    statusSelect.value = "done";
+    statusSelect.dispatch("change");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 2, "the status filter shows only the done rows");
+    statusSelect.value = "selected";
+    statusSelect.dispatch("change");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 2, "the selected-only view shows the ticked rows");
+    statusSelect.value = "all";
+    statusSelect.dispatch("change");
+    const dateSelect = nodes.get("nhdwBmDateFilter");
+    dateSelect.value = "older";
+    dateSelect.dispatch("change");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 3, "the older bucket drops the row added today");
+    assertEqual(byId("nhdwBmCounts").textContent, "4 bookmarked \u00b7 2 selected \u00b7 2 done",
+        "the counts line keeps reporting the whole list while a query is active");
+    assertEqual(byId("nhdwBmHistoryInfo").textContent, "1 already downloaded",
+        "the history count follows the query");
+    dateSelect.value = "all";
+    dateSelect.dispatch("change");
+    await wait(30);
+    assertEqual(byId("nhdwBmFilterInfo").textContent, "", "the filter line disappears when nothing is filtered");
+    assertEqual(byId("nhdwBmHistoryInfo").textContent, "1 already downloaded",
+        "the history count stays for the whole list");
+    console.log("PASS phase 9b: status and date filters compose, and the counts stay whole-list (item 68)");
+
+    // Windowed rendering: a big list renders a bounded chunk with a "Show more"
+    // control instead of thousands of rows, and the window resets when the
+    // query changes (so a search cannot be hidden behind a stale window).
+    syncStore.bookmarkSiteFilter = "all";
+    const manyItems = [];
+    for (let i = 1; i <= 250; i++) {
+        manyItems.push(stateItem(String(i), "nhentai", { title: "Bulk " + i, addedAt: 1 }));
+    }
+    bookmarkState = { v: 1, collapsed: false, items: manyItems };
+    byId("tabQueue").dispatchLast("click");
+    await wait(50);
+    assertEqual(findRows(byId("nhdwBmList")).length, 200, "a 250-row list renders one bounded chunk");
+    const moreButton = findDeep(byId("nhdwBmList"), "nhdwBmMore");
+    assertOk(moreButton !== null, "the window offers a way to show more (item 68)");
+    assertEqual(moreButton.textContent, "Show more (200 of 250)", "the control says how much is on screen");
+    moreButton.dispatchLast("click");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 250, "Show more grows the window to the end");
+    assertOk(findDeep(byId("nhdwBmList"), "nhdwBmMore") === null,
+        "the control goes away at the end of the list (item 68)");
+    // A query re-windows from the top: one term that every title carries still
+    // renders the bounded chunk (not the 250 the user had grown to), and the
+    // control says so. Every term must match, so "bulk 250" is exactly one row.
+    searchBox.value = "bulk";
+    searchBox.dispatch("input");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 200, "the query re-windows from the top");
+    assertEqual(findDeep(byId("nhdwBmList"), "nhdwBmMore").textContent, "Show more (200 of 250)",
+        "the re-windowed list says how much is on screen");
+    searchBox.value = "bulk 250";
+    searchBox.dispatch("input");
+    await wait(30);
+    assertEqual(findRows(byId("nhdwBmList")).length, 1, "every search term must match, so this is one row");
+    console.log("PASS phase 9c: the list renders a bounded window and grows on demand (item 68)");
+
+    // Select all honours the query: only the matching rows may be ticked, and
+    // they travel as composite keys so a same-numbered gallery elsewhere is
+    // never touched. With no query the whole-list form is unchanged.
+    bookmarkState = {
+        v: 1,
+        collapsed: false,
+        items: [
+            stateItem("1", "nhentai", { title: "Milky Way" }),
+            stateItem("2", "nhentai", { title: "Dark Room" }),
+            stateItem("3", "hitomi", { title: "Milky Night" }),
+            stateItem("4", "nhentai", { title: "Milky Done" })
+        ]
+    };
+    searchBox.value = "";
+    searchBox.dispatch("input");
+    byId("tabQueue").dispatchLast("click");
+    await wait(50);
+    searchBox.value = "milky";
+    searchBox.dispatch("input");
+    await wait(30);
+    const beforeQuerySelect = sentMessages.length;
+    findByText(byId("queuePane"), "Select all").dispatchLast("click");
+    await wait(30);
+    const querySelect = sentMessages.slice(beforeQuerySelect).filter((msg) => msg.action === "bookmarkSelect");
+    assertEqual(querySelect.length, 1, "Select all sends one bookmarkSelect message");
+    assertDeepEqual(querySelect[0].ids, ["nhentai:1", "hitomi:3", "nhentai:4"],
+        "a searched Select all names only the matching rows, by composite key");
+    assertEqual(querySelect[0].all, undefined, "and it does not fall back to the whole-list form");
+    searchBox.value = "";
+    searchBox.dispatch("input");
+    await wait(30);
+    const beforeWholeSelect = sentMessages.length;
+    findByText(byId("queuePane"), "Select all").dispatchLast("click");
+    await wait(30);
+    const wholeSelect = sentMessages.slice(beforeWholeSelect).filter((msg) => msg.action === "bookmarkSelect");
+    assertEqual(wholeSelect.length, 1, "Select all still sends one message with no query");
+    assertEqual(wholeSelect[0].all, true, "and keeps the unchanged whole-list form");
+    console.log("PASS phase 9d: Select all follows the search and sends composite keys (item 68)");
+
+    console.log("PASS: the Queue tab's rows, drag-reorder, backup and per-site downloads behave correctly in a window-less context.");
     } catch (error) {
         fail(error && error.stack ? error.stack : String(error));
     }
