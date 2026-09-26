@@ -1,7 +1,93 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`). Chrome **3.10.5**,
-Firefox **1.4.5**. This session ran the mandatory review pass on the merged
+**Updated:** 2026-09-26 (session `arena/01a0dd1a-nh-dw-2-0`, logo-lab). Chrome
+**3.11.5**, Firefox **1.4.5** (untouched — visual work lands there only after
+the parity pass). Late same-day additions (owner notes): every tryout raster
+in `assets/icons/` is background-free **and keeps its interior coloring** —
+the v6 over-correction (blanket-keying interior whites in place on the
+compressed 128px copies) is fully reverted: fox-tail inner white, wing-bone
+lattice, mimic feathers, hitomi eye-ring are all back, re-derived from the
+uncompressed 1024px renders in `Preview/logo-lab/site-sigils/`; only trapped
+background blocks (e.g. the crow's mist block) are keyed, from the originals
+via pure-white fuzz. **Pre-edit states preserved on disk:**
+`Preview/logo-lab/alt-states/v5-whites-preserved-from-compressed/` and
+`v6-whites-keyed/` (13 sigils each). QA composites on `#202a34` **and**
+`#f5f5f5` + 16px row → `sigil-wall-v7.png`. The worker + settings preview
+both fall back to the classic icon if a stored candidate's PNG is pruned
+from the released zip or unpacked folder. Two **crow master candidates**
+(owner concept: the raven that dissolves into black mist — the creature no
+single site owns; one variant's mist regathers into the red download arrow)
+are in the switcher **and ride beside the real extension icon** at
+`NHDW_Extension_v3.0.0/Icon-crow-mist.png` /
+`Icon-crow-mist-arrow.png` (shipped in the ZIP via `package-chrome.js`
+`CORE`; the package-test allowlist regex was widened to match) — the owner
+compares by renaming one to `Icon.png`, no rebuild. **v8 owner corrections
+(3.11.1):** plain `sigil-hitomi` de-horned at the uncompressed source (horn
+law — hitomi is hornless; the halo twin was already hornless, twins now
+structurally identical except the halo), and the shared grey inactive
+re-toned from bright silver into the classic inactive band
+(`#686868`–`#ABABAB`, luminance-only remap, alpha untouched; the arrow is
+kept — its tip merges into the background in the 1024px original, so this
+asset derives from the approved v5-era raster and the eventual vector
+remaster must draw the arrow explicitly). Pre-edit copies preserved in
+`alt-states/` (`site-sigils-originals/`, `v7-pre-horn-grey-fix/`). **v9
+(3.11.2):** plain hitomi's head is a true round dome now; the halo is an
+angel's **gold ring with a transparent hole** (the white pill is gone) —
+eye-ring still protected; grey inactive **reverted to the silver iteration**
+(the v8 band retone read "corrupted"); NEW candidates:
+`sigil-nh-blackwing-a3-grey.png` (all-grey inactive variant from a3,
+natural-luminance desaturation, not wired) and
+`sigil-nh-blackwing-a-balloon.png` (owner balloon sketch: blackwing-A black
+interior bucket-filled with blue `#1c3cf0`, dark skin line + red arrow
+untouched, switcher `blackwing-a-balloon` → 15 options, 18 assets). **v10 (3.11.3):** owner
+picked the **a3-grey as THE shared inactive** — all 14 non-classic theme
+greys in `background.ts` now point at it (classic keeps `/Icon-grey.png`;
+silver file kept as the legacy alternate); and the balloon got its
+**subtitle-stroke black lining** (mask-erode rim, disk 12 ≈ 1.5px at 128 —
+blue fill, black line, red arrow untouched; pre-lined copies preserved).
+**v11 (3.11.4):** the balloon's **red arrow got its own inner black
+stroke** (same erode-rim recipe on the red mask — subtitle lining inside
+and out), and both crow masters gained **grey twins**
+(`sigil-crow-mist-grey.png`, `sigil-crow-mist-arrow-grey.png`,
+natural-luminance desaturation, wired as the crow themes' inactive, plus
+root compare copies `Icon-crow-…-grey.png` in the package CORE) → 15
+options, 20 assets. **v12 (3.11.5):** third crow line `crow-mist-redeye` —
+**the eye is the state marker**: arrow-red on supported sites
+(`sigil-crow-mist-redeye.png`), balloon-blue on unsupported tabs
+(`sigil-crow-mist-redeye-grey.png`, body grey / eye never greyed);
+two-block pixel eye probed from the uncompressed render; plain crow-mist
+pair preserved untouched → family of 3 lines + 3 grey twins, 16 options,
+22 assets, root compare copies for every crow line. Posture: classic stays
+default and permanent fallback. This session ran **PR #53**: the multi-site logo system
+("site sigils": one downward-arrow DNA, six site worlds — NH black demon
+wings + red arrow per owner directive; diving-fox arrow for hentaifox with
+heart twin-tail variant; hitomi keeps its chunky wings + eye-ring and gains
+the owner-requested halo, hornless; imhentai = mismatched bat/feather mimic
+wings; hentaiera = restored chalice-arrow, single center horn; hentaienvy =
+hunched, stubby side horns), a Settings → **"Toolbar icon"** tryout switcher
+(14 live candidates, `chrome.storage.sync` `toolbarIcon`, classic default,
+grey inactive on unsupported tabs), and the planning/docs set:
+`ASSET_PLAN.md` (one-shot build for all six visual families — backdrop,
+tabs, buttons, injected bar, status — native/light direction + style budget:
+one `css/theme.css`, ≤15 tokens, value swaps only), `DESIGN_REFERENCE.md`
+(technique pool + logo workflow + every owner correction codified), and
+`NHDW_Extension_v3.0.0/Preview/logo-lab/ICONS_CATALOG.md` (what's inside the
+tryout folder + add/delete recipe; lives in Preview/ because the runtime- ZIP
+allowlist in `test/package-chrome.test.js` rejects doc files under `assets/`). Review walls v1–v12 (dark+light rows, root-icon crow comparison, alt-states backups) with magnified 16px rows in
+`Preview/logo-lab/`. Nothing replaces `Icon.png`/`Icon-grey.png` yet — the
+winner is hand-vectorized with transparency first, per plan. Verified before
+handoff: webpack build clean, 617 unit tests + MV3 smoke pass,
+`package:chrome` ZIP rebuilt (nhdw-chrome-3.11.5.zip, 389083 bytes: 22 icon assets + 6 root crow compares, 0 doc/Preview files).
+
+**Next session:** owner picks icon winners in the switcher (per-site grey
+variants + vectorization after), then families 2–6 from `ASSET_PLAN.md`
+(backdrop → tabs → buttons → injected bar → status) honoring the style
+budget; optional per-tab `chrome.action.setIcon` site-switching is a
+separate approved change; Firefox gets the visual system only with the
+item-58 parity work.
+
+**Previous entry — 2026-09-26 (session `arena/01a0d976-nh-dw-2-0`).** Chrome
+**3.10.5**, Firefox **1.4.5**. This session ran the mandatory review pass on the merged
 3.10.0 work (PR #50) and found **three defects**, each fixed under a test that
 failed on the pre-fix build: **F1** the tested listing-only guard
 (`resolveListCardPage()`) had no production caller, so gallery pages whose

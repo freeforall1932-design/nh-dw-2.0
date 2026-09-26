@@ -108,6 +108,9 @@ try {
         if (area === "sync" && changes && changes.uiMode) {
             applyUiMode(String(changes.uiMode.newValue || UI_MODE_DEFAULT));
         }
+        if (area === "sync" && changes && changes.toolbarIcon) {
+            setIconTheme(String(changes.toolbarIcon.newValue || ICON_THEME_DEFAULT));
+        }
     });
 } catch (_) { /* storage unavailable in some test harnesses */ }
 
@@ -133,11 +136,126 @@ chrome.tabs.onActivated.addListener(function() {
 // fetched as js/Icon.png and chrome.action.setIcon rejects with
 // "Failed to set icon 'Icon.png': Failed to fetch". Root-relative paths
 // resolve against the extension origin instead.
-const ICON_COLOR = "/Icon.png";
-const ICON_GREY = "/Icon-grey.png";
+//
+// ---- toolbar icon themes (logo-lab tryout) ------------------------------
+// The owner is comparing candidate marks before one becomes the runtime
+// icon (ASSET_PLAN.md family 1). The Settings tab writes `toolbarIcon` to
+// chrome.storage.sync; this map turns that choice into the active/grey pair
+// applied below. "classic" stays the default so the tryout can always be
+// reverted. Tryout sigils are 128px alpha-real rasters staged under
+// assets/icons/: background always transparent, interior keeps the
+// original painted coloring — including intentional white/pale detail
+// (fox-tail inner, wing-bone lattice, hitomi eye-ring); only trapped
+// background blocks are keyed out, and always from the uncompressed
+// white-background renders in Preview/logo-lab/site-sigils/ — never by
+// re-keying the compressed runtime copies (ASSET_PLAN.md family 1).
+const ICON_THEME_DEFAULT = "classic";
+const ICON_THEMES: Record<string, { color: string; grey: string }> = {
+    "classic": { color: "/Icon.png", grey: "/Icon-grey.png" },
+    "blackwing-a": {
+        color: "/assets/icons/sigil-nh-blackwing-a.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "blackwing-a3": {
+        color: "/assets/icons/sigil-nh-blackwing-a3.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "blackwing-b": {
+        color: "/assets/icons/sigil-nh-blackwing-b.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    // Experimental (owner sketch 2026-09-26): the blackwing skin filled with
+    // blue like a balloon - black outline kept, red arrow untouched.
+    "blackwing-a-balloon": {
+        color: "/assets/icons/sigil-nh-blackwing-a-balloon.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    // Site sigils (ASSET_PLAN.md family 1): one arrow, six worlds - the
+    // shared DNA is the downward arrow; every site builds its own world
+    // around it (structural mutation + accent + an assigned horn signature:
+    // NH = two tall horns, hitomi = hornless + halo, fox = ears, imhentai =
+    // side horns + mismatched wings, era = single center horn, envy =
+    // stubby side horns). Killed drafts (twin arrows = recycle-glyph read,
+    // A2 textured head, angel substitution) live in Preview/ only.
+    "hentaifox": {
+        color: "/assets/icons/sigil-hentaifox.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "hentaifox-heart": {
+        color: "/assets/icons/sigil-hentaifox-dive-heart.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "hentaifox-body": {
+        color: "/assets/icons/sigil-hentaifox-dive-body.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "hitomi": {
+        color: "/assets/icons/sigil-hitomi.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "hitomi-halo": {
+        color: "/assets/icons/sigil-hitomi-halo.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "imhentai": {
+        color: "/assets/icons/sigil-imhentai-mimic.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "hentaiera": {
+        color: "/assets/icons/sigil-hentaiera-chalice-c1.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    "hentaienvy": {
+        color: "/assets/icons/sigil-hentaienvy-hunch-short.png",
+        grey: "/assets/icons/sigil-nh-blackwing-a3-grey.png"
+    },
+    // Project master candidates (owner concept 2026-09-26): the crow - a
+    // creature no single site owns, dissolving into black mist as it crosses
+    // between all six. Pixel-art treatment, semi-simple like the hitomi wing.
+    // Each crow carries its own grey twin (owner request, v11) instead of
+    // the shared a3 inactive.
+    "crow-mist": {
+        color: "/assets/icons/sigil-crow-mist.png",
+        grey: "/assets/icons/sigil-crow-mist-grey.png"
+    },
+    // Eye-state variant (owner request, v12): the eye is the state marker -
+    // red on supported sites, balloon blue on unsupported tabs.
+    "crow-mist-redeye": {
+        color: "/assets/icons/sigil-crow-mist-redeye.png",
+        grey: "/assets/icons/sigil-crow-mist-redeye-grey.png"
+    },
+    "crow-mist-arrow": {
+        color: "/assets/icons/sigil-crow-mist-arrow.png",
+        grey: "/assets/icons/sigil-crow-mist-arrow-grey.png"
+    }
+};
+let currentIconTheme: { color: string; grey: string } = ICON_THEMES[ICON_THEME_DEFAULT];
+
+function setIconTheme(themeKey: string) {
+    currentIconTheme = ICON_THEMES[themeKey] || ICON_THEMES[ICON_THEME_DEFAULT];
+    // Re-evaluate the active tab so a theme switch shows up immediately,
+    // not only after the next tab move.
+    try {
+        chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+            if (tabs && tabs[0])
+                setIcon(tabs[0].url);
+        });
+    } catch (_) { /* tabs unavailable in some test harnesses */ }
+}
+
+try {
+    chrome.storage.sync.get({ toolbarIcon: ICON_THEME_DEFAULT }, (elems: any) => {
+        const key = elems && elems.toolbarIcon ? String(elems.toolbarIcon) : ICON_THEME_DEFAULT;
+        // setIconTheme also re-evaluates the active tab: on worker wake the
+        // boot-time icon query below runs before this storage read resolves,
+        // so without the re-eval the toolbar would show the default theme
+        // until the next tab event.
+        setIconTheme(key);
+    });
+} catch (_) { /* storage unavailable in some test harnesses */ }
 
 function setIcon(url: string | undefined) {
-    const iconPath = url && getSourceForUrl(url) !== null ? ICON_COLOR : ICON_GREY;
+    const iconPath = url && getSourceForUrl(url) !== null ? currentIconTheme.color : currentIconTheme.grey;
     applyActionIcon(iconPath);
 }
 
@@ -173,7 +291,7 @@ async function loadIconImageData(iconPath: string): Promise<ImageData | null> {
     }
 }
 
-function applyActionIcon(iconPath: string) {
+function applyActionIcon(iconPath: string, depth: number = 0) {
     const swallow = (result: any) => {
         if (result && typeof result.catch === "function") {
             result.catch(() => { /* toolbar icon updates are best-effort */ });
@@ -185,6 +303,14 @@ function applyActionIcon(iconPath: string) {
             result.catch(() => {
                 loadIconImageData(iconPath).then((imageData) => {
                     if (!imageData) {
+                        // A pruned tryout candidate (owner deleted its PNG
+                        // from the released/unpacked folder): fall back to
+                        // the classic icon instead of leaving a broken
+                        // toolbar glyph. The stored choice is left alone -
+                        // if the file returns, the theme just works again.
+                        if (depth === 0 && iconPath !== ICON_THEMES[ICON_THEME_DEFAULT].color) {
+                            applyActionIcon(ICON_THEMES[ICON_THEME_DEFAULT].color, 1);
+                        }
                         return;
                     }
                     try {

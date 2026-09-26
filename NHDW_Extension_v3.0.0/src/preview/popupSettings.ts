@@ -549,6 +549,82 @@ function renderInterfaceSection(container: HTMLElement): void {
     panelHint.textContent = "The side panel stays docked next to the page and can be resized; the popup closes as soon as it loses focus. Reopen the extension after changing this.";
     section.appendChild(panelHint);
 
+    // ---- toolbar icon (logo-lab tryout) ----------------------------------
+    // Candidate marks from Preview/logo-lab (ASSET_PLAN.md family 1) staged
+    // as 128px rasters under assets/icons/. This select is the approval
+    // vehicle: the owner tries each candidate on the real toolbar (colored)
+    // and on unsupported tabs (grey inactive variant) before one becomes the
+    // runtime Icon.png. "classic" always maps back to the shipping icons.
+    const iconLabel = el("label");
+    iconLabel.className = "psInline";
+    iconLabel.appendChild(document.createTextNode("Toolbar icon "));
+    const iconSelect = el("select");
+    iconSelect.id = "psToolbarIcon";
+    const iconThemes = [
+        { value: "classic", label: "Classic (pink + green)", preview: "Icon.png" },
+        { value: "blackwing-a", label: "Blackwing A (demon + red arrow)", preview: "assets/icons/sigil-nh-blackwing-a.png" },
+        { value: "blackwing-a3", label: "Blackwing A3 (clean head + layered wings)", preview: "assets/icons/sigil-nh-blackwing-a3.png" },
+        { value: "blackwing-b", label: "Blackwing B (wings + red arrow)", preview: "assets/icons/sigil-nh-blackwing-b.png" },
+        { value: "blackwing-a-balloon", label: "Blackwing A balloon (blue inside, experimental)", preview: "assets/icons/sigil-nh-blackwing-a-balloon.png" },
+        { value: "hentaifox", label: "Sigil: HentaiFox (fox head + tail, orange)", preview: "assets/icons/sigil-hentaifox.png" },
+        { value: "hentaifox-heart", label: "Sigil: HentaiFox dive (heart twin-tail)", preview: "assets/icons/sigil-hentaifox-dive-heart.png" },
+        { value: "hentaifox-body", label: "Sigil: HentaiFox dive (single tail)", preview: "assets/icons/sigil-hentaifox-dive-body.png" },
+        { value: "hitomi", label: "Sigil: Hitomi (eye arrow, chunky wings)", preview: "assets/icons/sigil-hitomi.png" },
+        { value: "hitomi-halo", label: "Sigil: Hitomi + halo (hornless)", preview: "assets/icons/sigil-hitomi-halo.png" },
+        { value: "imhentai", label: "Sigil: ImHentai mimic (bat + feather wings)", preview: "assets/icons/sigil-imhentai-mimic.png" },
+        { value: "hentaiera", label: "Sigil: HentaiEra chalice (center horn)", preview: "assets/icons/sigil-hentaiera-chalice-c1.png" },
+        { value: "hentaienvy", label: "Sigil: HentaiEnvy hunch (stub horns)", preview: "assets/icons/sigil-hentaienvy-hunch-short.png" },
+        { value: "crow-mist", label: "Master: Crow (black mist, pixel)", preview: "assets/icons/sigil-crow-mist.png" },
+        { value: "crow-mist-redeye", label: "Master: Crow redeye (red=site, blue=other tab)", preview: "assets/icons/sigil-crow-mist-redeye.png" },
+        { value: "crow-mist-arrow", label: "Master: Crow + arrow (black mist)", preview: "assets/icons/sigil-crow-mist-arrow.png" }
+    ];
+    for (const theme of iconThemes) {
+        const option = el("option");
+        option.value = theme.value;
+        option.textContent = theme.label;
+        iconSelect.appendChild(option);
+    }
+    iconLabel.appendChild(iconSelect);
+    section.appendChild(iconLabel);
+
+    const iconPreview = el("img");
+    iconPreview.className = "psIconPreview";
+    iconPreview.alt = "Preview of the selected toolbar icon";
+    section.appendChild(iconPreview);
+
+    // The stored candidate's PNG may have been pruned from assets/icons/
+    // (released zip or unpacked folder): fall back to the classic preview
+    // instead of a broken image. The worker falls back the same way.
+    let iconPreviewFellBack = false;
+    iconPreview.addEventListener("error", () => {
+        if (iconPreviewFellBack) {
+            return;
+        }
+        iconPreviewFellBack = true;
+        try {
+            iconPreview.src = chrome.runtime.getURL("Icon.png");
+        } catch (_) {
+            iconPreview.src = "Icon.png";
+        }
+    });
+
+    const iconHint = el("small");
+    iconHint.textContent = "Logo-lab tryout: classic vs blackwing NH candidates and the per-site sigils. One arrow, six worlds - each site carries one structural mutation plus accent and an assigned horn signature (fox-diving arrow for HentaiFox, eye-arrow plus halo for Hitomi, mismatched bat-and-feather mimic wings for ImHentai, chalice with a single center horn for HentaiEra, drooped hunch with stub horns for HentaiEnvy). On tabs that are not a supported site the grey inactive variant shows instead. These are concept renders - the winner is redrawn as a clean transparent vector before it replaces the real icon.";
+    section.appendChild(iconHint);
+
+    const updateIconPreview = () => {
+        const theme = iconThemes.find((entry) => entry.value === iconSelect.value) || iconThemes[0];
+        // Re-arm the missing-file fallback for the newly selected theme.
+        iconPreviewFellBack = false;
+        try {
+            iconPreview.src = chrome.runtime.getURL(theme.preview);
+        } catch (_) {
+            // Relative fallback for harnesses without chrome.runtime.
+            iconPreview.src = theme.preview;
+        }
+    };
+
+
     const controlsLabel = el("label");
     controlsLabel.className = "psInline";
     const controlsBox = el("input");
@@ -615,10 +691,12 @@ function renderInterfaceSection(container: HTMLElement): void {
 
     container.appendChild(section);
 
-    chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true, bookmarkAutoCapture: false }, (elems: any) => {
+    chrome.storage.sync.get({ uiMode: "sidepanel", inPageControls: true, bookmarkAutoCapture: false, toolbarIcon: "classic" }, (elems: any) => {
         panelSelect.value = elems.uiMode === "popup" ? "popup" : "sidepanel";
         controlsBox.checked = elems.inPageControls === undefined ? true : !!elems.inPageControls;
         autoBox.checked = !!elems.bookmarkAutoCapture;
+        iconSelect.value = iconThemes.some((t) => t.value === String(elems.toolbarIcon)) ? String(elems.toolbarIcon) : "classic";
+        updateIconPreview();
         panelSelect.addEventListener("change", () => {
             chrome.storage.sync.set({ uiMode: panelSelect.value === "popup" ? "popup" : "sidepanel" });
         });
@@ -627,6 +705,11 @@ function renderInterfaceSection(container: HTMLElement): void {
         });
         autoBox.addEventListener("change", () => {
             chrome.storage.sync.set({ bookmarkAutoCapture: autoBox.checked });
+        });
+        iconSelect.addEventListener("change", () => {
+            const value = iconThemes.some((t) => t.value === iconSelect.value) ? iconSelect.value : "classic";
+            chrome.storage.sync.set({ toolbarIcon: value });
+            updateIconPreview();
         });
     });
 }
