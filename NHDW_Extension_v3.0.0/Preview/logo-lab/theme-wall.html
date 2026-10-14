@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<!--
+  Theme wall: every panel view of theme-specimen.html, light row over dark
+  row, at the real 500px popup width. Review page only (never shipped).
+  ?theme=light|dark shows one row; default shows both.
+-->
+<html>
+<head>
+    <meta charset="utf-8"/>
+    <style>
+        html { background: #777; font: 12px/1.4 system-ui, sans-serif; color: #fff; }
+        body { margin: 0; padding: 12px; }
+        .row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+        .cell { flex: 0 0 auto; }
+        .cell span { display: block; margin: 0 0 4px 2px; opacity: .9; }
+        iframe { display: block; width: 500px; border: 0; background: #fff; }
+        .narrow iframe { width: 360px; }
+    </style>
+</head>
+<body>
+<script>
+    var theme = new URLSearchParams(location.search).get("theme");
+    var views = [
+        ["single", "Download · single title", 400],
+        ["list", "Download · listing", 640],
+        ["bookmark", "Bookmark", 780],
+        ["settings", "Settings", 720],
+        ["modal", "Modal + failed notice", 560]
+    ];
+    (theme ? [theme] : ["light", "dark"]).forEach(function (t) {
+        var row = document.createElement("div");
+        row.className = "row";
+        views.forEach(function (v) {
+            var cell = document.createElement("div");
+            cell.className = "cell";
+            var label = document.createElement("span");
+            label.textContent = v[1] + " · " + t;
+            var frame = document.createElement("iframe");
+            frame.src = "theme-specimen.html?view=" + v[0] + "&theme=" + t + (v[0] === "modal" ? "&failed=1" : "");
+            frame.height = v[2];
+            cell.appendChild(label);
+            cell.appendChild(frame);
+            row.appendChild(cell);
+        });
+        document.body.appendChild(row);
+    });
+</script>
+</body>
+</html>

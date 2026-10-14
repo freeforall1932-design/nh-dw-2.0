@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<!--
+  Theme specimen (ASSET_PLAN.md "full popup specimen", families 2/3/4/6).
+  Static dummy markup that mirrors what src/preview/*.ts renders, linked to
+  the REAL runtime stylesheets, so css/theme.css can be reviewed at native
+  size without a browser session. Never shipped (Preview/ is outside the
+  runtime ZIP allowlist).
+
+  URL state:  ?view=single|list|bookmark|settings|modal  &theme=light|dark
+  Open theme-wall.html for every view in both themes on one page.
+-->
+<html id="htmlLight">
+<head>
+    <meta charset="utf-8"/>
+    <link rel="stylesheet" type="text/css" href="../../css/theme.css"/>
+    <link rel="stylesheet" type="text/css" href="../../css/style.css"/>
+</head>
+<body>
+    <div id="popupTabs" class="popupTabs">
+        <button id="tabDownload" class="popupTab active" type="button">Download</button>
+        <button id="tabQueue" class="popupTab" type="button">Bookmark</button>
+        <button id="tabSettings" class="popupTab" type="button">Settings</button>
+    </div>
+    <div id="failedNotice" class="failedNotice" hidden></div>
+    <div id="action">Loading...</div>
+    <div id="queuePane" hidden></div>
+    <div id="settingsPane" hidden></div>
+    <div id="cdnNotice" class="cdnNotice" hidden></div>
+    <div id="modalHost"></div>
+<script>
+(function () {
+    var params = new URLSearchParams(location.search);
+    var view = params.get("view") || "single";
+    var theme = params.get("theme") || "light";
+    if (theme === "dark") { document.documentElement.id = "htmlDark"; }
+    if (params.get("panel") === "1") { document.documentElement.classList.add("nhdwPanel"); }
+
+    var tabs = { tabDownload: "download", tabQueue: "queue", tabSettings: "settings" };
+    var active = (view === "bookmark" || view === "modal") ? "queue" : view === "settings" ? "settings" : "download";
+    Object.keys(tabs).forEach(function (id) {
+        document.getElementById(id).classList.toggle("active", tabs[id] === active);
+    });
+    document.getElementById("action").hidden = active !== "download";
+    document.getElementById("queuePane").hidden = active !== "queue";
+    document.getElementById("settingsPane").hidden = active !== "settings";
+
+    // ---- Download tab: single title (message.downloadInfo) -----------------
+    function single() {
+        return '<small>Mode: open tab (no API key)</small><br/>' +
+            '<div class="popupColumns"><div class="popupColumn">' +
+            '<h3>Specimen Title | A Quiet Afternoon</h3>' +
+            '<div>(24 pages)</div><br/>' +
+            'Format: <select id="downloadFormat"><option>ZIP</option><option>CBZ</option><option>PDF</option><option>Raw images</option></select><br/>' +
+            '<small id="singleHistoryInfo" class="nhdwAlready">&#10003; Already downloaded: Specimen_Title.zip</small><br/>' +
+            'Downloads/<input type="text" id="path" value="Specimen_Title"/>.zip<br/><br/>' +
+            '<input type="button" id="button" value="Download again" autofocus/> ' +
+            '<input type="button" id="buttonBookmark" class="nhdwBookmarkToggle nhdwBookmarkOn" value="Bookmarked"/> ' +
+            '<input type="button" id="buttonSaveOffline" value="Save offline"/>' +
+            '</div><div class="popupColumn">' +
+            '<b>Similar galleries</b>' +
+            '<div id="similarPanel">' +
+            '<div class="similarList">' +
+            row("Second Specimen Volume", 18, false) + row("Third Specimen, Colour Pages", 32, true) +
+            row("Fourth Specimen", 9, false) + row("A Longer Specimen Title That Will Need To Be Clipped", 41, false) +
+            '</div>' +
+            '<input type="button" id="buttonSimilarAll" value="All"/> <input type="button" id="buttonSimilarNone" value="None"/><br/>' +
+            '<input type="button" id="buttonSimilar" value="Download selected"/>' +
+            '</div></div></div>';
+        function row(title, pages, on) {
+            return '<div class="similarRow"><label><input type="checkbox" class="similarItem" checked> ' + title +
+                ' <small>(' + pages + 'p)</small></label>' +
+                '<input type="button" class="nhdwBookmarkToggle' + (on ? ' nhdwBookmarkOn' : '') + ' similarBookmark" value="' + (on ? 'Bookmarked' : 'Bookmark') + '"/></div>';
+        }
+    }
+
+    // ---- Download tab: listing page (popup.ts + message.listDownloadOptions)
+    function list() {
+        var items = [
+            ["Specimen One", false], ["Specimen Two", true], ["Specimen Three", false],
+            ["Specimen Four", false], ["Specimen Five", false], ["Specimen Six", false]
+        ];
+        var rows = items.map(function (it, i) {
+            var h = '<input id="s' + i + '" type="checkbox"' + (i % 2 ? '' : ' checked') + '/>' + it[0] + '<br/>';
+            if (it[1]) { h += '<small class="nhdwAlready">&#10003; Already downloaded: Specimen_Two.zip <a href="#" class="nhdwRedl">Download anyway</a></small><br/>'; }
+            return h;
+        }).join("");
+        return '<span id="modeBadgeSlot"><small>Mode: open tab (no API key)</small><br/></span><h3>6 doujinshis found</h3>' +
+            '<div id="selectionPointer" class="selectionPointer">Ticking rows here and ticking cards on the page are the same selection; for the listing\'s other pages use the range block below.</div>' +
+            '<div class="listGalleries">' + rows + '</div>' +
+            '<div id="downloadedSummary" class="nhdwSummary">3 selected · 1 already downloaded · 2 will download</div>' +
+            '<input type="button" id="invert" value="Invert all"/><input type="button" id="remove" value="Clear all"/>' +
+            '<div class="listOptions">' +
+            '<div class="listOptionRow"><label for="listFormat">Format</label><select id="listFormat"><option>ZIP</option><option>CBZ</option><option>PDF</option><option>Raw images (testing)</option></select></div>' +
+            '<div class="listOptionRow"><label for="listOutputMode">Output</label><select id="listOutputMode"><option>Separate files (one per title)</option><option>Single merged file (all titles)</option></select></div>' +
+            '<div class="listOptionRow"><label class="listInline" for="listMasterFolder"><input type="checkbox" id="listMasterFolder" checked/> Put everything in the Downloads/NHDW/ folder</label></div>' +
+            '<small id="listRawNote" class="listNote">Raw is still under test: it writes loose images into one folder per title and always behaves as separate files.</small>' +
+            '<div id="listNamePreview" class="listPreview">Specimen One.zip, Specimen Two.zip, …</div>' +
+            '</div>' +
+            '<input type="button" id="button" value="Download selected"/>' +
+            '<div id="rangeBlock" class="rangeBlock">' +
+            '<div class="rangeBlockHeader">Listing pages · page <b id="rangeCurrentPage">2</b> / <b id="rangeMaxPage">14</b></div>' +
+            '<div class="rangeBlockRow"><input type="text" id="downloadInput" aria-label="Page range" placeholder="1-5" value="2-5"/><input type="button" id="buttonHelp" value="?"/><span id="rangeCount" class="rangeCount">4 pages · about 100 titles</span></div>' +
+            '<div class="rangeBlockActions"><input type="button" id="buttonAll" value="Download range now"/><input type="button" id="buttonRangeBookmark" value="Add range to Bookmark"/></div>' +
+            '<div id="rangeStatus" class="rangeStatus"></div>' +
+            '</div>';
+    }
+
+    // ---- Bookmark tab (bookmarkPanel.ts buildChrome + buildRow) ------------
+    function bmRow(title, id, pages, status, extra) {
+        var badge = status === "saved" ? "bookmarked" : status;
+        var right = '<span class="nhdwBmStatus nhdwBmStatusBadge-' + status + '">' + badge + '</span>' +
+            (status === "downloading"
+                ? '<button type="button" class="nhdwBmCancel">Cancel</button>'
+                : '<button type="button" class="nhdwBmDownload">Download</button>') +
+            '<button type="button" class="nhdwBmRemove">&times;</button>';
+        return '<div class="nhdwBmRow nhdwBmStatus-' + status + '">' +
+            '<input type="checkbox" class="nhdwBmSelect"' + (status === "saved" ? ' checked' : '') + '/>' +
+            '<span class="nhdwBmDrag" draggable="true">&#x28ff;&#x28ff;</span>' +
+            '<div class="nhdwBmThumb">#</div>' +
+            '<div class="nhdwBmInfo"><div class="nhdwBmTitle">' + title + '</div>' +
+            (status === "done" ? '<span class="nhdwBmAlready">&#10003;</span>' : '') +
+            '<div class="nhdwBmMeta">#' + id + ' · ' + pages + ' pages' + (extra || '') + '</div>' +
+            (status === "done" ? '<div class="nhdwBmSaved">' + title.replace(/ /g, "_") + '.zip</div>' : '') +
+            (status === "failed" ? '<div class="nhdwBmError">Cloudflare: the gallery page returned a challenge</div>' : '') +
+            '</div><div class="nhdwBmRight">' + right + '</div></div>';
+    }
+    function bookmark(empty) {
+        var rows = empty
+            ? '<div class="nhdwBmEmpty">Nothing bookmarked yet. Tap the bookmark icon on a card or the Bookmark button on a gallery page, paste ids below, or turn on auto-capture in Settings.</div>'
+            : bmRow("Specimen Title | A Quiet Afternoon", "366224", 24, "saved") +
+              bmRow("Second Specimen Volume", "366225", 18, "downloading") +
+              bmRow("Third Specimen, Colour Pages", "366226", 32, "done") +
+              bmRow("Fourth Specimen", "366227", 9, "failed", " · pasted") +
+              '<button type="button" class="nhdwBmMore">Show more (4 of 212)</button>';
+        return '<div class="nhdwBmHeader"><div><strong>Bookmark queue</strong><span id="nhdwBmCounts" class="nhdwBmCounts">212 titles · 3 ticked · 1 downloading</span></div>' +
+            '<button type="button" id="nhdwBmOpenPanel" class="nhdwBmToggle">Open docked &#8599;</button>' +
+            '<div class="nhdwBmFilter"><select class="nhdwBmSiteSelect"><option>All sites</option><option>nhentai</option><option>hitomi</option></select>' +
+            '<span class="nhdwBmFilterInfo">showing 4 of 212</span><span class="nhdwBmHistoryInfo">1 already downloaded</span></div>' +
+            '<button type="button" id="nhdwBmToggle" class="nhdwBmToggle">Collapse</button></div>' +
+            '<div id="nhdwBmNotice" class="nhdwBmNotice">Added 3 titles. Titles and covers resolve in the background.</div>' +
+            '<div id="nhdwBmBody">' +
+            '<div class="nhdwBmPasteBox"><label for="nhdwBmPaste">Paste gallery ids or links</label>' +
+            '<textarea id="nhdwBmPaste" rows="3"></textarea>' +
+            '<small>Accepts 366224, https://nhentai.net/g/366224/, /v/366224, ranges like 366220-366224, mixed and separated by commas, spaces or new lines.</small>' +
+            '<div class="nhdwBmActions"><button type="button">Add to queue</button><button type="button">Download now</button></div></div>' +
+            '<div class="nhdwBmToolbar"><input type="search" class="nhdwBmSearch" placeholder="Search titles, ids, tags"/>' +
+            '<select class="nhdwBmQuerySelect"><option>Any state</option></select><select class="nhdwBmQuerySelect"><option>Any date</option></select>' +
+            '<button type="button">Select all</button><button type="button">Select none</button>' +
+            '<label class="nhdwBmCheck"><input type="checkbox"/> include already downloaded</label>' +
+            '<button type="button" class="nhdwBmDanger">Clear list</button></div>' +
+            '<div id="nhdwBmList" class="nhdwBmList">' + rows + '</div>' +
+            '<div class="nhdwBmFooter"><button type="button" id="nhdwBmDownloadSelected" class="nhdwBmPrimary">Download 3 selected</button>' +
+            '<small>One file per title, named by the list-mode template in Settings. Format, folder and naming are shared with the in-page bar. The list downloads in this order - drag a row by its handle to change it.</small></div>' +
+            '<div class="nhdwBmToolbar nhdwBmBackup"><button type="button">Export backup</button><button type="button">Import backup</button>' +
+            '<small>Merges, never replaces: rows already here keep their status and file name.</small></div>' +
+            '</div>';
+    }
+
+    // ---- Settings tab (popupSettings.ts) -----------------------------------
+    function settings() {
+        function check(label, on) { return '<label class="psInline"><input type="checkbox"' + (on ? ' checked' : '') + '/> ' + label + '</label>'; }
+        return '<div class="psSection"><h4>nhentai API key (optional)</h4>' +
+            '<div class="psStatus psStatusOff">No key stored - open-tab mode.</div>' +
+            '<input type="password" id="psApiKeyInput" placeholder="Paste API key here (Ctrl+V)"/>' +
+            '<div class="psButtonRow"><button type="button">Save &amp; verify</button><button type="button" disabled>Remove key</button></div>' +
+            '<small>Paste with Ctrl+V. The key is stored in this browser only and never synced. Downloads work without a key.</small></div>' +
+            '<div class="psSection"><h4>File name</h4><small>Tick what the downloaded file name should contain.</small>' +
+            '<div class="psChecks">' + check("Pretty title {pretty}", true) + check("Gallery id {id}", false) + check("Artist {artist}", false) + '</div>' +
+            '<div class="psStatus">Preview: Specimen Title.zip</div>' +
+            check("Replace spaces with underscores", true) + '</div>' +
+            '<div class="psSection"><h4>List mode (homepage, search, artist, tag)</h4>' +
+            '<small>Defaults used when downloading from a listing page - the in-page card buttons and floating bar, or the Download tab\'s range block.</small>' +
+            '<label class="psInline">Format <select><option>ZIP</option></select></label>' +
+            '<label class="psInline">Output <select><option>Separate files (one per title)</option></select></label>' +
+            check("Put list downloads in the master folder", true) + check("File name: same as single title", true) +
+            '<div class="psStatus psStatusOn">Preview: Specimen Title.zip</div></div>' +
+            '<div class="psSection"><h4>Download history</h4><div class="psStatus psStatusOn">148 galleries remembered.</div>' +
+            '<label class="psOptionRow"><input type="checkbox" checked/> Check the file still exists before skipping</label>' +
+            '<div class="psButtonRow"><button type="button">Clear history</button></div></div>' +
+            '<div class="psSection"><h4>Interface</h4>' +
+            '<label class="psInline">Toolbar click opens <select><option>Side panel (dockable)</option></select></label>' +
+            '<label class="psInline">Toolbar icon <select><option>Classic (default)</option></select></label>' +
+            '<img class="psIconPreview" src="../../Icon.png" alt=""/>' +
+            check("Download / Select buttons on listing cards", true) + check("Auto-capture bookmarks while scrolling", false) + '</div>';
+    }
+
+    function modal() {
+        return '<div class="nhdwModalOverlay"><div class="nhdwModal" role="dialog">' +
+            '<h3>Merge 3 different titles into one PDF?</h3>' +
+            '<p>A merged PDF is a tankoubon: the titles cannot be separated again afterwards.</p>' +
+            '<p>Separate files keep one PDF per title with the list-mode name.</p>' +
+            '<label class="nhdwModalDismiss"><input type="checkbox"/> Don\'t ask again this session</label>' +
+            '<div class="nhdwModalButtons"><button type="button" class="nhdwModalPrimary">Switch to separate files</button>' +
+            '<button type="button">Merge anyway</button><button type="button">Cancel</button></div></div></div>';
+    }
+
+    if (view === "single") { document.getElementById("action").innerHTML = single(); }
+    if (view === "list") { document.getElementById("action").innerHTML = list(); }
+    if (view === "bookmark" || view === "modal") { document.getElementById("queuePane").innerHTML = bookmark(params.get("empty") === "1"); }
+    if (view === "settings") { document.getElementById("settingsPane").innerHTML = settings(); }
+    if (view === "modal") { document.getElementById("modalHost").innerHTML = modal(); }
+    if (params.get("failed") === "1") {
+        var fn = document.getElementById("failedNotice");
+        fn.hidden = false;
+        fn.innerHTML = '<b>1 gallery failed to download</b><ul class="nhdwFailedList"><li><b>Fourth Specimen</b> <small>(#366227)</small><br/>' +
+            '<small class="nhdwFailedReason">Cloudflare: the gallery page returned a challenge</small></li></ul>' +
+            '<small>Failed galleries are not marked as downloaded; nothing partial is recorded.</small><br/>' +
+            '<input type="button" value="Retry failed (1)"/> <input type="button" value="Dismiss"/>';
+    }
+})();
+</script>
+</body>
+</html>

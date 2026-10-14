@@ -1,0 +1,160 @@
+/* NHDW theme layer (ASSET_PLAN.md families 2/3/4/6, DESIGN_REFERENCE.md
+   "UI styling - native, light, readable").
+
+   Style budget law: this is the ONLY place colours, radii and motion are
+   defined - at most 15 custom properties - plus element-level primitives
+   (type, backdrop, tonal buttons, inputs, focus, scrollbars). Project
+   classes stay in style.css and only reference the tokens; no selector in
+   this file names a component. test/theme-budget.test.js enforces the cap.
+
+   Linked before style.css. Component rules set background-COLOR; the
+   hover/pressed primitives below layer a translucent background-IMAGE on
+   top, so one rule gives every button - pink, tonal or ghost - the same
+   quiet hover step without per-class hover rules. */
+
+:root {
+    color-scheme: light;
+    --surface: #fcfcfd;
+    --surface-2: #eceef2;
+    --ink: #202a34;
+    --ink-2: rgba(32, 42, 52, 0.7);
+    --line: rgba(32, 42, 52, 0.17);
+    --wash: rgba(32, 42, 52, 0.08);
+    --accent: #e31b53;
+    --accent-ink: #cf1247;
+    --accent-wash: rgba(227, 27, 83, 0.1);
+    --ok: #1a7a3c;
+    --warn: #b35900;
+    --bad: #c0392b;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --ease: 140ms ease-out;
+    accent-color: var(--accent);
+}
+
+/* --accent is a FILL (white text on it); --accent-ink is the same pink as
+   TEXT, border or focus ring on a surface, shaded so it passes AA in both
+   themes - never put #e31b53 text on the dark surface, it is 3:1 there. */
+/* Dark theme = the same tokens, re-valued. preview.ts swaps the root id. */
+#htmlDark {
+    color-scheme: dark;
+    --surface: #202a34;
+    --surface-2: #19212a;
+    --ink: #e8edf2;
+    --ink-2: rgba(232, 237, 242, 0.6);
+    --line: rgba(232, 237, 242, 0.16);
+    --wash: rgba(232, 237, 242, 0.1);
+    --accent-ink: #ff7aa0;
+    --accent-wash: rgba(227, 27, 83, 0.2);
+    --ok: #5fcf7e;
+    --warn: #f2a154;
+    --bad: #f0705f;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :root { --ease: 0s; }
+}
+
+/* ---- Type + backdrop (family 2): system font, one quiet tint shift from
+   the surface into the chrome colour toward the bottom. No image. The
+   gradient is viewport-fixed so it spans the popup or the side panel
+   exactly, with no min-height on html (a popup must shrink with its tab). ---- */
+html {
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: var(--ink);
+    background: var(--surface-2) linear-gradient(var(--surface) 30%, var(--surface-2)) fixed no-repeat;
+    scrollbar-color: var(--line) transparent;
+}
+
+body {
+    margin: 0;
+    padding: 0 10px 12px; /* .popupTabs bleeds out by the same 10px */
+}
+
+* {
+    scrollbar-width: thin;
+}
+
+h3 {
+    margin: 6px 0 4px;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+h4 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+}
+
+small {
+    font-size: 11.5px;
+    color: var(--ink-2);
+}
+
+hr {
+    border: 0;
+    border-top: 1px solid var(--line);
+    margin: 14px 0;
+}
+
+code {
+    font: 11.5px ui-monospace, Menlo, Consolas, monospace;
+    padding: 0 3px;
+    border-radius: 4px;
+    background: var(--surface-2);
+}
+
+/* ---- Controls (family 4): tonal buttons and native-looking fields. The
+   :where() base has zero specificity so component rules win by default. ---- */
+:where(button, input[type="button"]) {
+    font: inherit;
+    font-weight: 500;
+    color: var(--ink);
+    background-color: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+:where(input[type="button"]) {
+    margin: 2px; /* legacy inline button runs (Invert all / Clear all) breathe */
+}
+
+:where(input[type="text"], input[type="password"], input[type="search"], select, textarea) {
+    font: inherit;
+    color: var(--ink);
+    background-color: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 5px 8px;
+}
+
+button, input[type="button"], select, textarea,
+input[type="text"], input[type="password"], input[type="search"] {
+    transition: background-color var(--ease), color var(--ease), border-color var(--ease), opacity var(--ease);
+}
+
+button:hover, input[type="button"]:hover {
+    background-image: linear-gradient(var(--wash), var(--wash));
+}
+
+button:active, input[type="button"]:active {
+    background-image: linear-gradient(var(--wash), var(--wash)), linear-gradient(var(--wash), var(--wash));
+}
+
+button:disabled, input[type="button"]:disabled {
+    opacity: 0.45;
+    cursor: default;
+    background-image: none;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 2px;
+}
