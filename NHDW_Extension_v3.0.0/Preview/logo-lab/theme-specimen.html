@@ -7,6 +7,7 @@
   runtime ZIP allowlist).
 
   URL state:  ?view=single|list|bookmark|settings|modal  &theme=light|dark
+              &failed=1 &empty=1 &panel=1 &focus=<element id>  (keyboard focus ring)
   Open theme-wall.html for every view in both themes on one page.
 -->
 <html id="htmlLight">
@@ -206,6 +207,11 @@
             '<small class="nhdwFailedReason">Cloudflare: the gallery page returned a challenge</small></li></ul>' +
             '<small>Failed galleries are not marked as downloaded; nothing partial is recorded.</small><br/>' +
             '<input type="button" value="Retry failed (1)"/> <input type="button" value="Dismiss"/>';
+    }
+    // focus=<id>: put the keyboard focus ring on one control (e.g. focus=tabQueue).
+    if (params.get("focus")) {
+        var target = document.getElementById(params.get("focus"));
+        if (target) { target.focus(); }
     }
 })();
 </script>

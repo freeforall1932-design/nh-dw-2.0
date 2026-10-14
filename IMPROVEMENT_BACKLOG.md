@@ -3208,7 +3208,7 @@ Tests first, as usual:
 
 **Owner question:** "is there a way to make the UI artistic but not bloated".
 Answered by building the style budget rather than describing it. Chrome
-**3.12.0**; Firefox untouched.
+**3.12.0**; Firefox **1.4.7** (the sibling dark-mode defect only — no theme).
 
 ### Landed
 
@@ -3288,6 +3288,46 @@ Answered by building the style budget rather than describing it. Chrome
   5's listed scope.
 - Review: `Preview/logo-lab/content-specimen.html?host=light|dark&harvest=1&status=1&redl=1`,
   `content-wall.html`, `content-wall-before.png`, `content-wall-after.png`.
+
+### Review pass before the merge (owner request)
+
+- **Method:** css-tree parse of every stylesheet in both trees (clean; the one
+  duplicate selector, `.nhdwBmHeader` in `panelRenderers.css`, is on `main`
+  already), `git diff main...HEAD` of the TS/HTML/manifest/package changes
+  read against each other, a rebuild compared with the committed bundles
+  (identical), and a grep of the Firefox tree for the Chrome defect's
+  pattern.
+- **Finding 1 — Firefox had the same bug.** `NHDW_Firefox_v1.0.0/src/preview/
+  preview.ts` applied `darkMode` with the one-way
+  `getElementById('htmlLight')!.id = 'htmlDark'` inside
+  `bootstrapForActiveTab`, which the drawer re-runs through
+  `rebootstrapIfUrlChanged` on every tab change — so with dark mode on, the
+  second pass threw inside the storage callback and the drawer stopped
+  following the tab. Ported the Chrome fix (`applyDarkMode(on)` sets
+  `document.documentElement.id` on every bootstrap; `storage.onChanged`
+  flips it live). Red-first: FF `scripts/e2e-popup.js` **phase 16** (root-id
+  override of the `getElementById` stub, `uncaughtException` capture because
+  the FF storage stub answers on a microtask, two hops dark→dark→light, live
+  onChanged both ways) fails on the 1.4.6 bundle with the real error.
+  Firefox **1.4.6 → 1.4.7**; the Chrome theme files are still not shared.
+- **Finding 2 — tab focus ring partly hidden.** The ring is 2px outside the
+  tab; tabs are adjacent `position: relative` boxes, so the active tab's
+  fill painted over one side of a focused neighbour's ring.
+  `.popupTab:focus-visible { z-index: 1 }` in `style.css` (paint order
+  only). `theme-specimen.html` gained `&focus=<id>` to show any ring.
+- **False alarm, recorded for the next session:** a fresh `npm run build`
+  appeared to prove the committed `js/options.js` lacked the dark-mode
+  wiring. The sandbox had reset local git to `main` between turns while
+  keeping the working tree, so HEAD was the wrong baseline; `git fetch` +
+  `git reset origin/<branch>` showed the pushed bundles were current.
+  Compare against `origin/<branch>` before calling a bundle stale. Also:
+  `node_modules` and `/tmp` do not survive a sandbox restore — re-run
+  `npm ci` in each tree first (a silent `webpack: not found` build leaves the
+  old bundles in place and looks like "no changes").
+- **Verified after the fixes:** Chrome 624 unit, MV3 smoke, e2e exit 0,
+  `dist/nhdw-chrome-3.12.0.zip` 392 381 B; Firefox 650 unit, full `test:e2e`
+  list green (popup harness to phase 16 in both modes), `web-ext lint`
+  0 errors / 32 warnings (unchanged count).
 
 ### Audit — what the MD docs describe that is still not built
 

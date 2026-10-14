@@ -6,8 +6,8 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.10.6-blue)
-![Firefox](https://img.shields.io/badge/Firefox-1.4.3-orange)
+![Version](https://img.shields.io/badge/version-3.12.0-blue)
+![Firefox](https://img.shields.io/badge/Firefox-1.4.7-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -199,6 +199,8 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| **3.12.0** | The theme layer (`ASSET_PLAN.md` families 2–6 under the style budget): one `css/theme.css` with 15 tokens and element primitives, `style.css`/`content.css` value swaps only, the seated browser tab strip, one pink primary per surface, status chips, a soft modal, the options page in the same look in light **and** dark. Found and fixed on the way: the side panel threw on its second dark-mode bootstrap (one-way `#htmlLight → #htmlDark` rename) and stopped following the tab — fixed in Chrome and ported to Firefox **1.4.7**; the injected "Include already downloaded" row never hid on hosts without a `[hidden]` rule; the floating bar overflowed narrow windows. `test/theme-budget.test.js` locks the budget and measures AA contrast. |
+| **3.10.4 – 3.11.5** | Bookmark-tab per-site filter (item 66), bookmark search / state / date query with a 200-row window and the history-sourced green ✓ (68), live-session auto-fetch "Scroll for me" (70), and the logo-lab icon work — tryout toolbar-icon candidates with a classic-icon fallback. Details per step in `IMPROVEMENT_BACKLOG.md`. |
 | **3.10.3** | Item 71: the panel's list says out loud what replaced the retired "Download all (N pages)" button — ticking a row and ticking a card on the page are one selection, and the range block covers the listing's other pages; the List-mode hint names the range block too. Behind that, the pipeline's skip guard now reads a recorded bare id as the **default site's** record instead of this job's site, so a legacy nhentai record can no longer mask a same-numbered gallery on another site (a real skip-the-download bug on the five added hosts for history from before 3.8.0). |
 | **3.10.2** | Item 65: the panel's third tab is labelled **Bookmark** and every tooltip/hint that called it a "Queue" follows (storage key `bookmarkQueue`, `#tabQueue` id, message actions and the export format are unchanged on purpose); Firefox 1.4.2 carries the same rename. Ships in **PR #51** together with the **3.10.1** review fixes below. |
 | **3.10.1** | Review pass on the 3.10.0 work: listing card controls honour the tested listing-only guard (`resolveListCardPage`), so a gallery page's related-gallery cards are never decorated and the floating bar stays hidden there; the bar's `allIdsSite` read asks storage for the key, so another site's selection can no longer appear selected; the legacy nhentai caption checkbox is gated to nhentai instead of also firing on the five added hosts. |

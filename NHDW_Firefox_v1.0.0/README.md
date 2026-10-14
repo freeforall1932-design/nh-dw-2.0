@@ -1,6 +1,6 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.6)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.7)
 
-**Updated:** 2026-09-26 · status: **website-embedded UI + PR #44 review fixes
+**Updated:** 2026-10-14 (v1.4.7 dark-mode fix; the 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
 Chrome-3.9.0 backport — bookmark icon, gallery-page Bookmark button, Queue-tab
 markup (43), drag-reorder (44), backup import/export (52), canonical-separator
@@ -8,7 +8,13 @@ gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
 
-v1.4.6 = the Bookmark ✓ now checks on-disk presence via the worker, not
+v1.4.7 = dark-mode fix ported from Chrome 3.12.0: the drawer applied the
+`darkMode` preference with a one-way `#htmlLight → #htmlDark` rename that
+threw on every re-bootstrap after the first (tab change with dark mode on),
+so the drawer stopped following the tab; the root id now follows the stored
+value both ways and live from `storage.onChanged` (red-first: e2e-popup
+phase 16). The Chrome theme layer itself is NOT shared yet (parity pass
+pending). v1.4.6 = the Bookmark ✓ now checks on-disk presence via the worker, not
 just a stored history record; backup history import also reaches Firefox's
 no-offscreen worker; Harvest avoids a no-op DOM observer feedback loop and its
 wider bar is wrapped/bounded and the Bookmark search is sized for a

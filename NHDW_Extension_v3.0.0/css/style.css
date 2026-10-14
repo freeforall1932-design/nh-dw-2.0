@@ -189,6 +189,12 @@ html {
     color: var(--ink);
 }
 
+/* The ring sits 2px outside the tab; tabs are adjacent and positioned, so
+   without this the next tab's fill (the active one) paints over one side. */
+.popupTab:focus-visible {
+    z-index: 1;
+}
+
 .popupTab.active {
     background-color: var(--surface);
     border-color: var(--line);

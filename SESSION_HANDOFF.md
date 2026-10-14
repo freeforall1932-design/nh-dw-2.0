@@ -1,7 +1,8 @@
 # Current Session Handoff — nh-dw-2.0
 
 **Updated:** 2026-10-14 (session `arena/023065de-nh-dw-2-0`, theme layer).
-Chrome **3.12.0**, Firefox **1.4.5** (untouched). Owner question "is there a
+Chrome **3.12.0**, Firefox **1.4.7** (one ported bug fix, no theme — see the
+review paragraph below). Owner question "is there a
 way to make the UI artistic but not bloated" answered by shipping
 `ASSET_PLAN.md` families **2/3/4/6** under the style budget law: ONE new file
 `css/theme.css` (4.6 KB, **15 tokens** — surface/surface-2, ink/ink-2, line,
@@ -56,6 +57,30 @@ open per the MD audit** (`IMPROVEMENT_BACKLOG.md` 2026-10-14 log): Firefox
 optional 16px tab glyphs / Bookmark-tab count, and a busy state (no
 `aria-busy` hook in the code). Verified: 624 unit + MV3 smoke + e2e exit 0
 (+ phase 12), `package:chrome` ZIP rebuilt.
+**Review pass before the merge (owner: "review the code for any missing
+logic, misaligned code and any broken code before updating md files and
+merge pr"):** Chrome tree clean — every stylesheet parses (css-tree), the
+only duplicate selector (`.nhdwBmHeader`) predates this branch, TS/HTML/
+manifest/package diffs are consistent, and a rebuild reproduces the committed
+`js/` bundles byte for byte. Two real findings, both fixed here: (1) the
+**Firefox tree carried the same one-way `#htmlLight → #htmlDark` rename** in
+its `src/preview/preview.ts` bootstrap, so the Firefox drawer threw on every
+re-bootstrap with dark mode on — ported the Chrome fix (`applyDarkMode` on
+every bootstrap + `storage.onChanged`), red-first as FF `e2e-popup.js`
+**phase 16** (fails on the 1.4.6 bundle with `Cannot set properties of null
+(setting 'id')`), Firefox bumped to **1.4.7**; the theme itself is still NOT
+shared (parity rule). (2) The popup tab's keyboard focus ring sits 2px
+outside the tab and the tabs are adjacent positioned boxes, so the active
+tab's fill painted over one side of a neighbour's ring — `.popupTab:focus-
+visible { z-index: 1 }` (paint order only; the specimen takes `&focus=<id>`
+to show any ring). A false alarm worth recording: a fresh `npm run build`
+first looked like the committed `js/options.js` lacked the dark-mode wiring —
+the sandbox had reset local git to `main` while keeping the working tree;
+`git fetch` + `git reset origin/<branch>` showed the pushed bundles were
+current. Always compare against `origin/<branch>` before calling a bundle
+stale. Final numbers: Chrome 624 unit + smoke + e2e (12 phases) + ZIP
+392 381 B; Firefox 650 unit + full e2e list (popup to phase 16, both modes) +
+`web-ext lint` 0 errors / 32 warnings (unchanged).
 
 **Previous entry — 2026-09-26 (session `arena/01a0dd1a-nh-dw-2-0`, logo-lab).** Chrome
 **3.11.5**, Firefox **1.4.5** (untouched — visual work lands there only after

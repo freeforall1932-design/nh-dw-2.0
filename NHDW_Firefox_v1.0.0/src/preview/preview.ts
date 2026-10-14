@@ -294,6 +294,23 @@ function siteForSelection(url: string): string {
 // Last URL the view was rendered for (side-panel mode re-renders on change).
 let lastBootstrappedUrl: string | null = null;
 
+// The root id is the theme switch (style.css / panelRenderers.css key their
+// dark rules on #htmlDark). It is set from the stored preference on every
+// bootstrap - the drawer bootstraps again on each tab change, and the old
+// one-way rename (`getElementById('htmlLight')!.id = 'htmlDark'`) threw on
+// the second pass once the root was already dark, taking the re-render with
+// it (Chrome 3.12.0 fix, ported) - and it follows a live options change.
+function applyDarkMode(on: boolean): void {
+    document.documentElement.id = on ? "htmlDark" : "htmlLight";
+}
+try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === "sync" && changes && changes.darkMode) {
+            applyDarkMode(!!changes.darkMode.newValue);
+        }
+    });
+} catch (_) { /* no storage events here: the next bootstrap re-reads it */ }
+
 function bootstrapForActiveTab() {
     getPreviewTab().then((tab) => {
     chrome.storage.sync.get({
@@ -303,9 +320,7 @@ function bootstrapForActiveTab() {
         if (popup.parsing === null) {
             popup.parsing = elems.htmlParsing ? new HtmlParsing() : new ApiParsing();
         }
-        if (elems.darkMode) {
-            document.getElementById('htmlLight')!.id = 'htmlDark';
-        }
+        applyDarkMode(!!elems.darkMode);
 
         // Empty/closed source still renders progress, failures and settings;
         // the ordinary unsupported-page notice replaces a stuck "Loading...".

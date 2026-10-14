@@ -554,9 +554,13 @@ piece of work".
   (e2e-popup phase 12). Family 5 (`content.css`) built the same way —
   mirrored `--nhdw-*` tokens, value swaps, selected-card outline — over the
   dummy-host specimen, which also caught the never-hidden "Include already
-  downloaded" row and the bar overflowing narrow windows. Still open per the
-  docs audit: Firefox, ghost-wing watermark, optional tab glyphs, busy
-  state — list in the `IMPROVEMENT_BACKLOG.md` 2026-10-14 log.
+  downloaded" row and the bar overflowing narrow windows. Pre-merge review
+  found the same one-way rename in the Firefox drawer (`src/preview/
+  preview.ts`) — ported the fix red-first (FF e2e-popup phase 16), Firefox
+  **1.4.7**; and a tab focus ring half-covered by the active tab's fill
+  (`.popupTab:focus-visible { z-index: 1 }`). Still open per the docs
+  audit: Firefox theme parity, ghost-wing watermark, optional tab glyphs,
+  busy state — list in the `IMPROVEMENT_BACKLOG.md` 2026-10-14 log.
 
 - **Item 40 — the popup harness bootstraps a listing page (2026-09-26):** the
   two missing stubs (`js/getGalleries.js` injection answered, `executeInTab`
