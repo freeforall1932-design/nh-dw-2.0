@@ -1,6 +1,88 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-09-26 (session `arena/01a0dd1a-nh-dw-2-0`, logo-lab). Chrome
+**Updated:** 2026-10-14 (session `arena/023065de-nh-dw-2-0`, theme layer).
+Chrome **3.12.0**, Firefox **1.4.7** (one ported bug fix, no theme — see the
+review paragraph below). Owner question "is there a
+way to make the UI artistic but not bloated" answered by shipping
+`ASSET_PLAN.md` families **2/3/4/6** under the style budget law: ONE new file
+`css/theme.css` (4.6 KB, **15 tokens** — surface/surface-2, ink/ink-2, line,
+wash, accent/accent-ink/accent-wash, ok/warn/bad, radius-sm/md, ease — plus
+element primitives only: system type, the bottom tint-shift backdrop, tonal
+buttons, native-looking fields, focus ring, thin scrollbars, `color-scheme`
++ `accent-color` so form controls theme for free). `css/style.css` got
+**value swaps only**: same selectors, 39 colour literals → 3, 171 → 132 rules
+(every `#htmlDark` override pair is gone — dark mode re-values the tokens on
+`#htmlDark`). Visible result: the **seated browser tab** (strip in the chrome
+colour, active tab fused with the pane, 2px accent top line, dividers vanish
+beside it), pink reserved for the ONE primary per surface (everything else
+tonal/ghost), status **chips**, soft modal, dashed empty state, and the
+options page picks up the same look by linking the file (no markup change).
+Mechanics worth knowing: component rules set `background-color`, the shared
+hover/pressed primitives layer a translucent `background-image` — one rule
+styles every button's hover; `--accent` is the fill, `--accent-ink` the same
+pink as text/border/ring shaded for AA in both themes (`#e31b53` text on the
+dark surface is 3:1 — never use it). Guard: `test/theme-budget.test.js`
+(≤15 tokens, ≤6 KB, no url/import/font/keyframes, no class selectors in the
+theme, no literals in style.css, link order, in the runtime ZIP). Review
+artefacts: `Preview/logo-lab/theme-specimen.html` (static dummy markup of
+every pane, `?view=…&theme=…`), `theme-wall.html`, and the before/after walls
+`theme-wall-before.png` / `theme-wall-after.png` / `theme-compare.png`.
+**Dark mode (same session, owner request):** the options page now wears the
+theme in dark too (`<html id="htmlLight">`, `options.ts` flips the root id
+from the stored `darkMode` on load and live on its own checkbox) — and
+wiring it exposed a live defect: `preview.ts` applied dark mode with a
+one-way `getElementById('htmlLight')!.id = 'htmlDark'` inside
+`bootstrapForActiveTab`, which the side panel runs again on every tab
+change, so with dark mode ON the second pass threw and the panel stopped
+following the tab (the harness's auto-creating `getElementById` stub hid
+it). Now `document.documentElement.id` is set from the preference on every
+bootstrap and on `storage.onChanged`; red-first proof is `e2e-popup.js`
+phase 12. Contrast is **measured**, not eyeballed, in the budget test (light
+`--warn` moved to `#a35100` for 4.5:1 on `--surface-2`). **Family 5 (same
+session, before the PR):** `css/content.css` mirrors the dark token set as
+`--nhdw-*` on `.nhdw-card` + `.nhdw-action-bar` (theme.css is not injected
+into hosts), value swaps on the existing rules — chrome-coloured bar with a
+hairline, one pink primary, tonal buttons with the wash hover, `Ready` in
+`--nhdw-ok`, translucent chrome card pills — plus the plan's selected-card
+treatment (full-opacity strip + 2px inset accent outline). The dummy-host
+specimen (`Preview/logo-lab/content-specimen.html`, `content-wall*.png`)
+found two defects, fixed there: the "Include already downloaded" row's
+`display: inline-flex` defeated the `hidden` attribute (never hid on hosts
+without a `[hidden]` rule), and the bar overflowed both edges on narrow
+windows (now wraps: `width: max-content` + `max-width: calc(100vw - 32px)`).
+The budget test locks the mirror, the namespace and the `[hidden]` rule.
+`titleBookmark.css` deliberately untouched (owner-chosen colours). **Still
+open per the MD audit** (`IMPROVEMENT_BACKLOG.md` 2026-10-14 log): Firefox
+(`panelRenderers.css`), the ghost-wing watermark (no approved vector), the
+optional 16px tab glyphs / Bookmark-tab count, and a busy state (no
+`aria-busy` hook in the code). Verified: 624 unit + MV3 smoke + e2e exit 0
+(+ phase 12), `package:chrome` ZIP rebuilt.
+**Review pass before the merge (owner: "review the code for any missing
+logic, misaligned code and any broken code before updating md files and
+merge pr"):** Chrome tree clean — every stylesheet parses (css-tree), the
+only duplicate selector (`.nhdwBmHeader`) predates this branch, TS/HTML/
+manifest/package diffs are consistent, and a rebuild reproduces the committed
+`js/` bundles byte for byte. Two real findings, both fixed here: (1) the
+**Firefox tree carried the same one-way `#htmlLight → #htmlDark` rename** in
+its `src/preview/preview.ts` bootstrap, so the Firefox drawer threw on every
+re-bootstrap with dark mode on — ported the Chrome fix (`applyDarkMode` on
+every bootstrap + `storage.onChanged`), red-first as FF `e2e-popup.js`
+**phase 16** (fails on the 1.4.6 bundle with `Cannot set properties of null
+(setting 'id')`), Firefox bumped to **1.4.7**; the theme itself is still NOT
+shared (parity rule). (2) The popup tab's keyboard focus ring sits 2px
+outside the tab and the tabs are adjacent positioned boxes, so the active
+tab's fill painted over one side of a neighbour's ring — `.popupTab:focus-
+visible { z-index: 1 }` (paint order only; the specimen takes `&focus=<id>`
+to show any ring). A false alarm worth recording: a fresh `npm run build`
+first looked like the committed `js/options.js` lacked the dark-mode wiring —
+the sandbox had reset local git to `main` while keeping the working tree;
+`git fetch` + `git reset origin/<branch>` showed the pushed bundles were
+current. Always compare against `origin/<branch>` before calling a bundle
+stale. Final numbers: Chrome 624 unit + smoke + e2e (12 phases) + ZIP
+392 381 B; Firefox 650 unit + full e2e list (popup to phase 16, both modes) +
+`web-ext lint` 0 errors / 32 warnings (unchanged).
+
+**Previous entry — 2026-09-26 (session `arena/01a0dd1a-nh-dw-2-0`, logo-lab).** Chrome
 **3.11.5**, Firefox **1.4.5** (untouched — visual work lands there only after
 the parity pass). Late same-day additions (owner notes): every tryout raster
 in `assets/icons/` is background-free **and keeps its interior coloring** —
@@ -1002,7 +1084,10 @@ byte-identical — keep them in sync on any future change).
   history-sourced already-downloaded ✓ with the filename, query-scoped Select
   all, `tags[]` on the queue; and the listing harvest (`#nhdw-harvest` +
   status + remembered scroll, observer collection, run-token Stop, persisted
-  always-inactive `listHarvest` merged on reload).
+  always-inactive `listHarvest` merged on reload). **3.11.x** (2026-09-26) the
+  logo-lab tryout switcher + sigils. **3.12.0** (2026-10-14, this branch) the
+  theme layer: `css/theme.css` (15 tokens + primitives), style.css value
+  swaps, seated tabs, chips, options page themed, budget guard test.
 - **Firefox:** 1.0.0 Android snapshot → 1.1.0 parity elevation (rebase onto
   Chrome src + audited delta) → 1.2.0 website-embedded UI (items 56/57, PR #44
   review) → 1.3.0 Chrome-3.9.0 backport → **1.4.0** Chrome-3.10.0 backport

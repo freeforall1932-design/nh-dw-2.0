@@ -36,6 +36,10 @@
 //      hand-delivered message, a gallery tab URL bootstraps the preview from
 //      the tab's own _gallery, and the panel's Save offline handler sends one
 //      list-mode job - asking first when that title is already recorded.
+//   16. dark mode across drawer re-bootstraps (1.4.7): with darkMode on, a
+//      second bootstrap must not throw (the one-way #htmlLight rename did,
+//      against a real document), the root id must follow the stored value
+//      both ways, and a live storage.onChanged flips it without a bootstrap.
 //
 // THREE STUB TRAPS, each of which silently tests the wrong thing (all cost a
 // debugging round; keep them if you port this harness to the Firefox folder):
@@ -246,6 +250,7 @@ function setStoredHistory(history) { localStore.downloadHistory = history; }
 const panelUrl = "moz-extension://testid/index.html" + (fullPanel ? "?sourceTabId=7" : "");
 const updatedListeners = [];
 const activatedListeners = [];
+const storageChangedListeners = [];
 // Default false: the message-layer phases keep a simulated in-progress job so
 // bootstrap does not race live metadata fetches into #action. Phase 13 flips
 // it true so rebootstrap reaches updatePreviewAsync (the wash path, item 60).
@@ -287,6 +292,9 @@ const chromeStub = {
             : ({ content_scripts: [{ js: ["js/content.js", "js/listControls.js"] }] })
     },
     storage: {
+        // Phase 16 fires these by hand; no stub write raises one on its own, so
+        // the history watcher in bookmarkPanel stays quiet in every other phase.
+        onChanged: { addListener(fn) { storageChangedListeners.push(fn); } },
         // Stateful: the settings pane reads what it wrote moments earlier.
         sync: {
             get(keys, cb) { queueMicrotask(() => cb(readStorage(syncStore, keys))); },
@@ -992,6 +1000,52 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("accepting the confirm must force that one gallery, got " + JSON.stringify(forced.redownloadIds));
     }
     console.log("PASS phase 15d: Save offline asks before re-saving a recorded title and forces exactly that gallery");
+
+    // ---- Phase 16: dark mode across drawer re-bootstraps (1.4.7) -------------
+    // A real document has ONE root whose id is whatever was assigned last, so
+    // getElementById("htmlLight") answers null once the root is #htmlDark. The
+    // auto-creating byId above hid exactly that: bootstrapForActiveTab used to
+    // run `getElementById('htmlLight')!.id = 'htmlDark'`, which threw on the
+    // second bootstrap with dark mode on - here inside a storage microtask, so
+    // it surfaces as an uncaught exception - and the drawer stopped following
+    // the tab. The root id is the theme switch; it must follow the preference
+    // both ways, and live from storage.onChanged.
+    if (!fullPanel) {
+        const root = documentStub.documentElement;
+        root.id = "htmlLight";
+        const plainById = documentStub.getElementById;
+        documentStub.getElementById = (id) => {
+            if (id === "htmlLight" || id === "htmlDark") return root.id === id ? root : null;
+            return plainById(id);
+        };
+        let uncaught = null;
+        const onUncaught = (e) => { uncaught = e; };
+        process.on("uncaughtException", onUncaught);
+        const hop = async (url) => {
+            setPreviewTabUrl(url);
+            for (const listener of activatedListeners) listener({ tabId: 7 });
+            await wait(80);
+            if (uncaught) {
+                fail("re-bootstrapping the drawer must not throw, got: " + (uncaught && uncaught.message));
+            }
+        };
+        syncStore.darkMode = true;
+        await hop("https://nhentai.net/g/555001/");
+        assert.strictEqual(root.id, "htmlDark", "darkMode=true must put #htmlDark on the root at bootstrap");
+        await hop("https://nhentai.net/g/555002/");
+        assert.strictEqual(root.id, "htmlDark", "a second bootstrap with dark mode on must keep #htmlDark");
+        syncStore.darkMode = false;
+        await hop("https://nhentai.net/g/555003/");
+        assert.strictEqual(root.id, "htmlLight", "darkMode=false must restore #htmlLight on the next bootstrap");
+        assert.ok(storageChangedListeners.length > 0,
+            "the drawer must watch storage.onChanged so a Dark mode toggle in the options page applies live");
+        for (const listener of storageChangedListeners) listener({ darkMode: { oldValue: false, newValue: true } }, "sync");
+        assert.strictEqual(root.id, "htmlDark", "a live darkMode change must flip the root to #htmlDark without a bootstrap");
+        for (const listener of storageChangedListeners) listener({ darkMode: { oldValue: true, newValue: false } }, "sync");
+        assert.strictEqual(root.id, "htmlLight", "a live darkMode change must flip the root back to #htmlLight");
+        process.off("uncaughtException", onUncaught);
+        console.log("PASS phase 16: dark mode follows the stored preference across re-bootstraps and live changes");
+    }
 
     process.exit(0);
 })();

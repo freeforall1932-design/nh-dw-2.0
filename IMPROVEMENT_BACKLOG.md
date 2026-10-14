@@ -3204,6 +3204,151 @@ Tests first, as usual:
   `bookmarkFilters.ts` / `listHarvest.ts` plus the labels in `bookmarkPanel.ts`
   / `listControls.ts`.
 
+## Session log — 2026-10-14: the theme layer (ASSET_PLAN families 2/3/4/6) and the dark-mode re-bootstrap defect
+
+**Owner question:** "is there a way to make the UI artistic but not bloated".
+Answered by building the style budget rather than describing it. Chrome
+**3.12.0**; Firefox **1.4.7** (the sibling dark-mode defect only — no theme).
+
+### Landed
+
+- **`css/theme.css`** (new, 4.7 KB): 15 custom properties (`--surface`,
+  `--surface-2`, `--ink`, `--ink-2`, `--line`, `--wash`, `--accent`,
+  `--accent-ink`, `--accent-wash`, `--ok`, `--warn`, `--bad`, `--radius-sm`,
+  `--radius-md`, `--ease`) and element primitives only — system type, the
+  viewport-fixed surface→chrome tint shift (family 2, the pure-CSS option),
+  tonal buttons whose hover/pressed are one shared translucent
+  `background-image` layer, native fields, 2px `:focus-visible` ring, thin
+  scrollbars, `color-scheme` + `accent-color`, reduced-motion collapse.
+- **`css/style.css`**: value swaps only — same selectors, 39 colour literals
+  → 3, 171 → 132 rules, every `#htmlDark` override pair removed. Seated
+  browser tab strip (family 3), one pink primary per surface (family 4),
+  10px tinted status chips, soft modal, dashed empty state, thin scrollbars
+  (family 6). `options.html` links the theme and gets the look for free.
+- **Dark mode defect (found while wiring the options page):** `preview.ts`
+  applied the preference with a one-way rename —
+  `getElementById('htmlLight')!.id = 'htmlDark'` — inside
+  `bootstrapForActiveTab`. The side panel bootstraps again on every tab
+  change, so with dark mode ON the second pass threw `Cannot set properties
+  of null` inside the storage callback and the panel stopped following the
+  tab. The popup harness never saw it because its `getElementById` stub
+  auto-creates any id. Fixed as `document.documentElement.id = on ?
+  "htmlDark" : "htmlLight"` on every bootstrap plus a `storage.onChanged`
+  listener (live flip); the options page applies the same switch on load, on
+  its own checkbox, and carries `id="htmlLight"` on its root. Red-first:
+  `scripts/e2e-popup.js` phase 12 makes the root behave like a real document
+  for the two ids and fails on the pre-fix bundle with the real error.
+- **Guards:** `test/theme-budget.test.js` — token cap, ≤ 6 KB, no
+  url/import/font/keyframes, no class/id selectors in the theme, link order
+  and runtime-ZIP presence, no colour literals in style.css, and **measured**
+  WCAG contrast (every text token over both surfaces in both themes ≥ 4.5,
+  `--accent` fill edge ≥ 3, white on accent ≥ 4.5). The light `--warn` moved
+  `#b35900` → `#a35100` because it measured 4.16:1 on `--surface-2`.
+- **Review artefacts** (`Preview/logo-lab/`): `theme-specimen.html`
+  (`?view=single|list|bookmark|settings|modal&theme=light|dark&failed=1&empty=1&panel=1`),
+  `theme-wall.html`, `theme-wall-before.png`, `theme-wall-after.png`,
+  `theme-compare.png`.
+
+### Family 5 — the injected UI (same session, owner: "take that before opening PR")
+
+- **`css/content.css`**: theme.css is not injected into host pages, so the
+  nine tokens the injected UI needs are mirrored (`--nhdw-*`) on its two
+  roots, `.nhdw-card` and `.nhdw-action-bar`, with theme.css's DARK values —
+  the bar and the strips are always the extension's chrome colour whatever
+  the host's scheme. Every other change is a value swap on the rules that
+  were already there: bar = `--nhdw-surface`, hairline border, 10px radius,
+  one soft shadow, system font, `color-scheme: dark` (native dark selects);
+  tonal buttons with the shared wash-overlay hover, the ONE pink primary;
+  `Ready` in `--nhdw-ok`; "Scroll for me" + harvest status as `--nhdw-ink-2`
+  instead of opacity; card pills in translucent chrome, 24px, 6px radius;
+  Download pink → lighter pink on hover (no more white inversion);
+  bookmark hover = chrome pill + `--nhdw-accent-ink` glyph. The plan's
+  **selected-card treatment**: a ticked card keeps its strip at full opacity
+  (like a bookmarked one) and wears a 2px inset accent outline — no layout
+  effect on the host. Reduced motion collapses the four transitions.
+- **Two defects found by the specimen, fixed in the same file:** (1) the
+  "Include already downloaded" row is toggled with the `hidden` attribute,
+  but the row's author `display: inline-flex` outranks the UA's `[hidden]`
+  rule — on a host without its own `[hidden]{display:none!important}` the
+  row never went away; `.nhdw-redownload-row[hidden] { display: none }`
+  restores it. (2) The bar overflowed both viewport edges on narrow windows
+  (≈1000px with harvest on); it now wraps — `flex-wrap`, `width:
+  max-content` (shrink-to-fit from `left: 50%` would otherwise wrap at half
+  the viewport) and `max-width: calc(100vw - 32px)`. Positioning, z-index
+  and specificity untouched.
+- **Guard** (`test/theme-budget.test.js`): the mirror equals theme.css's dark
+  tokens (≤ 10, namespaced), no colour literal outside the mirror block but
+  `#fff`, every selector names an `nhdw-` class (the legacy nhentai
+  `input[type="checkbox"]` zoom rule is the one grandfathered exception —
+  it is a containment smell worth retiring with the legacy checkbox
+  feature), the `[hidden]` rule, `position: fixed` and the z-index.
+- **Not restyled on purpose:** `css/titleBookmark.css` (the gallery-page
+  Bookmark / Save offline / Select buttons) — their blue/teal/violet were an
+  owner decision to differ from the site's buttons and are outside family
+  5's listed scope.
+- Review: `Preview/logo-lab/content-specimen.html?host=light|dark&harvest=1&status=1&redl=1`,
+  `content-wall.html`, `content-wall-before.png`, `content-wall-after.png`.
+
+### Review pass before the merge (owner request)
+
+- **Method:** css-tree parse of every stylesheet in both trees (clean; the one
+  duplicate selector, `.nhdwBmHeader` in `panelRenderers.css`, is on `main`
+  already), `git diff main...HEAD` of the TS/HTML/manifest/package changes
+  read against each other, a rebuild compared with the committed bundles
+  (identical), and a grep of the Firefox tree for the Chrome defect's
+  pattern.
+- **Finding 1 — Firefox had the same bug.** `NHDW_Firefox_v1.0.0/src/preview/
+  preview.ts` applied `darkMode` with the one-way
+  `getElementById('htmlLight')!.id = 'htmlDark'` inside
+  `bootstrapForActiveTab`, which the drawer re-runs through
+  `rebootstrapIfUrlChanged` on every tab change — so with dark mode on, the
+  second pass threw inside the storage callback and the drawer stopped
+  following the tab. Ported the Chrome fix (`applyDarkMode(on)` sets
+  `document.documentElement.id` on every bootstrap; `storage.onChanged`
+  flips it live). Red-first: FF `scripts/e2e-popup.js` **phase 16** (root-id
+  override of the `getElementById` stub, `uncaughtException` capture because
+  the FF storage stub answers on a microtask, two hops dark→dark→light, live
+  onChanged both ways) fails on the 1.4.6 bundle with the real error.
+  Firefox **1.4.6 → 1.4.7**; the Chrome theme files are still not shared.
+- **Finding 2 — tab focus ring partly hidden.** The ring is 2px outside the
+  tab; tabs are adjacent `position: relative` boxes, so the active tab's
+  fill painted over one side of a focused neighbour's ring.
+  `.popupTab:focus-visible { z-index: 1 }` in `style.css` (paint order
+  only). `theme-specimen.html` gained `&focus=<id>` to show any ring.
+- **False alarm, recorded for the next session:** a fresh `npm run build`
+  appeared to prove the committed `js/options.js` lacked the dark-mode
+  wiring. The sandbox had reset local git to `main` between turns while
+  keeping the working tree, so HEAD was the wrong baseline; `git fetch` +
+  `git reset origin/<branch>` showed the pushed bundles were current.
+  Compare against `origin/<branch>` before calling a bundle stale. Also:
+  `node_modules` and `/tmp` do not survive a sandbox restore — re-run
+  `npm ci` in each tree first (a silent `webpack: not found` build leaves the
+  old bundles in place and looks like "no changes").
+- **Verified after the fixes:** Chrome 624 unit, MV3 smoke, e2e exit 0,
+  `dist/nhdw-chrome-3.12.0.zip` 392 381 B; Firefox 650 unit, full `test:e2e`
+  list green (popup harness to phase 16 in both modes), `web-ext lint`
+  0 errors / 32 warnings (unchanged count).
+
+### Audit — what the MD docs describe that is still not built
+
+- **Family 5, `css/content.css`**: **built** (above).
+- **Firefox tree** (`panelRenderers.css` + mobile CSS): no theme yet; the
+  plan asks for identical tab treatment there.
+- **Family 2 ghost-wing watermark**: not built — waits for an approved vector
+  master (the sigils are still 128px rasters); the tint shift is in.
+- **Family 3 optional 16px tab glyphs**: not built (text-only tabs;
+  `test/tab-labels.test.js` locks the labels). A count on the Bookmark tab
+  itself is not built either — `.nhdwBmCounts` is the pane header line.
+- **Family 4 busy state** (pulse/dot-spin with the label kept): not built —
+  the code expresses busy as `disabled` + status text and has no
+  `aria-busy` hook; adding one is a TS change at ~6 call sites.
+- **Specimen page sections 1 and 3** (sigil wall, injected-UI specimen) are
+  separate pages/absent; the popup specimen (section 2) exists but has no
+  reduced-motion toggle or interactive state matrix (states are shown by
+  hovering/focusing the real controls).
+- Not a gap: forced-colors collapse — gradients are dropped by the UA in
+  `forced-colors: active`, so the backdrop and washes flatten on their own.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |

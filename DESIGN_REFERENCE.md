@@ -36,6 +36,16 @@ and uBlock/Dark Reader (already catalogued) for density and containment.
 custom properties + small primitives; existing files get value swaps only;
 any surface restyle beyond ~40 lines is over-dressed — cut back. Light
 enough to review in one screen: that is the point.
+**Built 2026-10-14 (3.12.0)** — how the budget was met, keep it this way:
+(1) tokens + element primitives in `theme.css`, component classes stay in
+`style.css` and only reference tokens (the guard test rejects a class
+selector in the theme and a colour literal in the components); (2) component
+rules set `background-color`, the shared hover/pressed primitives add a
+translucent `background-image` — one rule, every button; (3) `--accent` is
+a fill, `--accent-ink` the same pink shaded for AA as text/border/ring;
+(4) dark mode re-values the tokens on `#htmlDark` — never add an override
+pair; (5) review with `Preview/logo-lab/theme-wall.html` (static specimen of
+every pane in both themes, no browser session needed).
 
 ## The logo workflow that worked (house method)
 

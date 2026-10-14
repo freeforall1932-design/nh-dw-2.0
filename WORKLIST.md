@@ -543,6 +543,25 @@ piece of work".
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
 
+- **Theme layer — ASSET_PLAN families 2/3/4/6 (2026-10-14, 3.12.0):** one
+  `css/theme.css` (15 tokens + element primitives, 4.6 KB), `style.css` value
+  swaps only (39 colour literals → 3, every `#htmlDark` pair removed), seated
+  browser tabs, one primary per surface, status chips, options page linked.
+  `test/theme-budget.test.js` enforces the style budget and measures AA
+  contrast; specimen + walls in `Preview/logo-lab/theme-*`. Options page in
+  dark mode too, and the side-panel dark-mode re-bootstrap throw
+  (`getElementById('htmlLight')!` on the second pass) fixed red-first
+  (e2e-popup phase 12). Family 5 (`content.css`) built the same way —
+  mirrored `--nhdw-*` tokens, value swaps, selected-card outline — over the
+  dummy-host specimen, which also caught the never-hidden "Include already
+  downloaded" row and the bar overflowing narrow windows. Pre-merge review
+  found the same one-way rename in the Firefox drawer (`src/preview/
+  preview.ts`) — ported the fix red-first (FF e2e-popup phase 16), Firefox
+  **1.4.7**; and a tab focus ring half-covered by the active tab's fill
+  (`.popupTab:focus-visible { z-index: 1 }`). Still open per the docs
+  audit: Firefox theme parity, ghost-wing watermark, optional tab glyphs,
+  busy state — list in the `IMPROVEMENT_BACKLOG.md` 2026-10-14 log.
+
 - **Item 40 — the popup harness bootstraps a listing page (2026-09-26):** the
   two missing stubs (`js/getGalleries.js` injection answered, `executeInTab`
   answering the `_gallery` poll) plus phases 11a–11d / 15a–15d, which drive the

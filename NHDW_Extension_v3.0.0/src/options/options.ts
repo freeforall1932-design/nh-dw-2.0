@@ -60,7 +60,19 @@ const OPTIONS_DEFAULTS = {
 // make the inherited value indistinguishable from a chosen one.
 };
 
+// The options page wears the same theme as the panel: theme.css re-values its
+// tokens on #htmlDark, so the root id is the whole switch - applied from the
+// stored preference on load and live when the Dark mode box is toggled.
+function applyDarkMode(on: boolean): void {
+    document.documentElement.id = on ? "htmlDark" : "htmlLight";
+}
+
 chrome.storage.sync.get(Object.keys(OPTIONS_DEFAULTS).concat("listFormat"), function(elems) {
+    applyDarkMode(!!(elems as any).darkMode);
+    const darkBox = document.getElementById("darkMode") as HTMLInputElement | null;
+    if (darkBox) {
+        darkBox.addEventListener("change", () => applyDarkMode(darkBox.checked));
+    }
     options.forEach(o => {
         o.init(elems);
         document.getElementById(o.getId())!.addEventListener("change", function() {

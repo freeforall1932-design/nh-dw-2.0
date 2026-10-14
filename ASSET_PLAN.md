@@ -324,6 +324,21 @@ is forbidden by the transformative rule above.
 ## Style budget (owner constraint 2026-09-26 — style must stay light enough
 to read, never a context-flood)
 
+**Status 2026-10-14 (3.12.0): built for families 2, 3, 4, 5 and 6** —
+`css/theme.css` holds 15 tokens + element primitives, `style.css` got value
+swaps only, and `test/theme-budget.test.js` turns this budget — and the
+family-2 "measured, not eyeballed" AA contrast rule — into failing tests.
+The options page wears the theme in both modes. Family 5: `css/content.css`
+mirrors the dark token set on its two roots (`.nhdw-card`, `.nhdw-action-bar`
+— theme.css is not injected into host pages), value swaps on the existing
+rules plus the listed selected-card treatment; reviewed over dummy light and
+dark hosts (`Preview/logo-lab/content-specimen.html`, `content-wall*.png`),
+with the namespace/containment lock in the same test. Still open: Firefox
+(`panelRenderers.css`), the ghost-wing watermark (waits for an approved
+vector; the backdrop is the tint-shift option), the optional 16px tab
+glyphs, and the family-4 busy state (no `aria-busy` hook in the code yet).
+Audit list: `IMPROVEMENT_BACKLOG.md`, 2026-10-14 log.
+
 One new file, `css/theme.css` (linked from `index.html` and `options.html`),
 holds the whole layer so diffs stay localized and reviewable: ≤ 15 custom
 properties (surface/surface-2, accent, accent-wash, border, radii sm/md,

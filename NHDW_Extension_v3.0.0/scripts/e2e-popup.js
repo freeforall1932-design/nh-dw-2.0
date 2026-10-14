@@ -38,6 +38,10 @@
 //      hand-delivered message, a gallery tab URL bootstraps the preview from
 //      the tab's own _gallery, and the panel's Save offline handler sends one
 //      list-mode job - asking first when that title is already recorded.
+//  12. dark mode across side-panel re-bootstraps (3.12.0): with darkMode on,
+//      a second bootstrap must not throw (the one-way #htmlLight rename did,
+//      against a real document), the root id must follow the stored value
+//      both ways, and a live storage.onChanged flips it without a bootstrap.
 //
 // THREE STUB TRAPS, each of which silently tests the wrong thing (all cost a
 // debugging round; keep them if you port this harness to the Firefox folder):
@@ -242,6 +246,7 @@ function setPreviewTabUrl(url) { activeTabUrl = url; }
 function setStoredHistory(history) { localExtra.downloadHistory = history; }
 const updatedListeners = [];
 const activatedListeners = [];
+const storageChangedListeners = [];
 
 // Local-storage keys a phase arms for the panel (item 40), merged under the
 // apiKeyGate the earlier phases depend on.
@@ -271,6 +276,9 @@ const chromeStub = {
         getURL: (p) => p
     },
     storage: {
+        // Phase 12 fires these by hand; no stub write raises one on its own, so
+        // the history watcher in bookmarkPanel stays quiet in every other phase.
+        onChanged: { addListener(fn) { storageChangedListeners.push(fn); } },
         // Stateful: the settings pane reads what it wrote moments earlier.
         sync: {
             get(defaults, cb) { cb(Object.assign({}, defaults, syncStore)); },
@@ -846,6 +854,56 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("accepting the confirm must force that one gallery, got " + JSON.stringify(forced.redownloadIds));
     }
     console.log("PASS phase 11d: Save offline asks before re-saving a recorded title and forces exactly that gallery");
+
+    // ---- Phase 12: dark mode across side-panel re-bootstraps (3.12.0) -------
+    // A real document has ONE root whose id is whatever was assigned last, so
+    // getElementById("htmlLight") answers null once the root is #htmlDark. The
+    // auto-creating byId above hid exactly that: bootstrapForActiveTab used to
+    // run `getElementById('htmlLight')!.id = 'htmlDark'`, which threw on the
+    // second bootstrap with dark mode on - the side panel's every tab-change
+    // re-render died with it. theme.css re-values its tokens on #htmlDark, so
+    // the root id is the theme switch and must follow the preference both ways.
+    const root = documentStub.documentElement;
+    root.id = "htmlLight";
+    const plainById = documentStub.getElementById;
+    documentStub.getElementById = (id) => {
+        if (id === "htmlLight" || id === "htmlDark") return root.id === id ? root : null;
+        return plainById(id);
+    };
+    const hop = (url) => {
+        setPreviewTabUrl(url);
+        try {
+            for (const listener of activatedListeners) listener({ tabId: 7 });
+        } catch (e) {
+            fail("re-bootstrapping the panel must not throw, got: " + (e && e.message));
+        }
+    };
+    syncStore.darkMode = true;
+    hop("https://nhentai.net/g/555001/");
+    if (root.id !== "htmlDark") {
+        fail("darkMode=true must put #htmlDark on the root at bootstrap, got " + JSON.stringify(root.id));
+    }
+    hop("https://nhentai.net/g/555002/");
+    if (root.id !== "htmlDark") {
+        fail("a second bootstrap with dark mode on must keep #htmlDark, got " + JSON.stringify(root.id));
+    }
+    syncStore.darkMode = false;
+    hop("https://nhentai.net/g/555003/");
+    if (root.id !== "htmlLight") {
+        fail("darkMode=false must restore #htmlLight on the next bootstrap, got " + JSON.stringify(root.id));
+    }
+    if (storageChangedListeners.length === 0) {
+        fail("the panel must watch storage.onChanged so a Dark mode toggle in the options page applies live");
+    }
+    for (const listener of storageChangedListeners) listener({ darkMode: { oldValue: false, newValue: true } }, "sync");
+    if (root.id !== "htmlDark") {
+        fail("a live darkMode change must flip the root to #htmlDark without a bootstrap, got " + JSON.stringify(root.id));
+    }
+    for (const listener of storageChangedListeners) listener({ darkMode: { oldValue: true, newValue: false } }, "sync");
+    if (root.id !== "htmlLight") {
+        fail("a live darkMode change must flip the root back to #htmlLight, got " + JSON.stringify(root.id));
+    }
+    console.log("PASS phase 12: dark mode follows the stored preference across re-bootstraps and live changes");
 
     console.log("PASS: popup message layer behaves correctly in a window-less context.");
     process.exit(0);

@@ -9,52 +9,36 @@ html {
     text-align: center;
 }
 
-#htmlLight {
-    color: #202a34;
-}
-
-#htmlDark {
-    color: white;
-    background-color: #202a34;
-}
-
 #downloadInput, #buttonHelp  {
     display: block;
     margin-left: auto;
     margin-right: auto;
 }
 
-#button, #buttonBack, #buttonAll{
+#button, #buttonBack, #buttonAll {
     display: block;
     margin-left: auto;
     margin-right: auto;
-    background-color: #e31b53;
-    color: white;
-    border: none;
-    padding: 15px 32px;
+    padding: 8px 20px;
 }
 
-#buttonAll {
-    background-color: #888;
+#button {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
 }
 
 #progressBar {
     width: 100%;
 }
 
-input[type="button"] {
-    border-radius: 5px;
-}
-
-input[type="button"]:hover {
-    color: #e31b53;
-    background-color: white;
-}
 #cdnNotice {
     margin-top: 8px;
-    padding: 6px;
-    border: 1px solid #e31b53;
-    border-radius: 5px;
+    padding: 8px 10px;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
     font-size: 12px;
     text-align: center;
 }
@@ -68,15 +52,12 @@ input[type="button"]:hover {
    listed by name with Retry / Dismiss) and the failed list inside summaries. */
 #failedNotice {
     margin: 8px 0;
-    padding: 6px;
-    border: 1px solid #b3541e;
-    border-radius: 5px;
+    padding: 8px 10px;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
     font-size: 12px;
     text-align: left;
-}
-
-#htmlDark #failedNotice {
-    border-color: #f2a154;
 }
 
 .nhdwFailedList {
@@ -92,11 +73,7 @@ input[type="button"]:hover {
 }
 
 .nhdwFailedReason {
-    color: #b3541e;
-}
-
-#htmlDark .nhdwFailedReason {
-    color: #f2a154;
+    color: var(--warn);
 }
 
 /* Two-column popup: current gallery on the left, similar galleries on the right */
@@ -119,8 +96,9 @@ input[type="button"]:hover {
 .similarList {
     max-height: 190px;
     overflow-y: auto;
-    border: 1px solid #999;
-    border-radius: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface);
     padding: 4px 6px;
     margin: 6px 0;
 }
@@ -150,10 +128,10 @@ input[type="button"]:hover {
    row). Same box as the panel's other buttons; the on state is the gallery
    pink/blue the rest of the UI already uses for "queued". */
 .nhdwBookmarkToggle {
-    border: 1px solid #999;
-    background: transparent;
+    border: 1px solid var(--line);
+    background-color: transparent;
     color: inherit;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 4px 8px;
     font-size: 12px;
     cursor: pointer;
@@ -161,20 +139,14 @@ input[type="button"]:hover {
 }
 
 .nhdwBookmarkToggle:hover {
-    border-color: #e31b53;
-    color: #e31b53;
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
 }
 
 .nhdwBookmarkToggle.nhdwBookmarkOn {
-    background: #1d6fd8;
-    border-color: #1d6fd8;
-    color: #fff;
-}
-
-.nhdwBookmarkToggle.nhdwBookmarkOn:hover {
-    background: #1760bd;
-    border-color: #1760bd;
-    color: #fff;
+    background-color: var(--accent-wash);
+    border-color: var(--accent-ink);
+    color: var(--accent-ink);
 }
 
 .similarBookmark {
@@ -182,43 +154,71 @@ input[type="button"]:hover {
     font-size: 11px;
 }
 
-#htmlDark .similarList {
-    border-color: #555;
-}
-
-/* ---- Popup tabs (Download | Settings) ---- */
+/* ---- Popup tabs (Download | Bookmark | Settings): the seated browser tab.
+   The strip is the chrome colour and bleeds to the panel edge; the active
+   tab takes the pane colour, overlaps the strip's hairline by 1px and so
+   fuses with the content below it. Its 2px top line is the accent (the
+   Firefox --tab-line-color convention). Dividers sit between inactive tabs
+   and vanish next to the active one. ---- */
 .popupTabs {
     display: flex;
-    gap: 6px;
-    margin: 0 0 8px 0;
-    border-bottom: 2px solid #e31b53;
-    padding-bottom: 0;
+    align-items: flex-end;
+    gap: 0;
+    margin: 0 -10px 10px;
+    padding: 8px 10px 0;
+    background-color: var(--surface-2);
+    border-bottom: 1px solid var(--line);
 }
 
 .popupTab {
+    position: relative;
     flex: 1;
-    padding: 8px 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font-size: 14px;
-    font-weight: bold;
+    padding: 8px 0 9px;
+    margin-bottom: -1px;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    background-color: transparent;
+    color: var(--ink-2);
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
-    border-radius: 5px 5px 0 0;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .popupTab:hover {
-    color: #e31b53;
+    color: var(--ink);
+}
+
+/* The ring sits 2px outside the tab; tabs are adjacent and positioned, so
+   without this the next tab's fill (the active one) paints over one side. */
+.popupTab:focus-visible {
+    z-index: 1;
 }
 
 .popupTab.active {
-    background-color: #e31b53;
-    color: white;
+    background-color: var(--surface);
+    border-color: var(--line);
+    color: var(--ink);
+    box-shadow: inset 0 2px 0 var(--accent);
 }
 
-#htmlDark .popupTab.active {
-    background-color: #e31b53;
-    color: white;
+.popupTab.active:hover {
+    background-image: none;
+}
+
+.popupTab + .popupTab::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background-color: var(--line);
+}
+
+.popupTab.active::before,
+.popupTab.active + .popupTab::before {
+    display: none;
 }
 
 /* ---- Settings pane ---- */
@@ -227,14 +227,11 @@ input[type="button"]:hover {
 }
 
 .psSection {
-    border: 1px solid #999;
-    border-radius: 5px;
-    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
+    padding: 10px 12px;
     margin-bottom: 10px;
-}
-
-#htmlDark .psSection {
-    border-color: #555;
 }
 
 .psSection h4 {
@@ -247,8 +244,9 @@ input[type="button"]:hover {
 }
 
 #psApiKeyInput {
-    width: 96%;
-    padding: 6px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
     margin: 4px 0;
 }
 
@@ -273,21 +271,6 @@ input[type="button"]:hover {
 .psButtonRow button {
     flex: 1;
     padding: 7px 0;
-    border: none;
-    border-radius: 5px;
-    background-color: #e31b53;
-    color: white;
-    cursor: pointer;
-}
-
-.psButtonRow button:hover {
-    color: #e31b53;
-    background-color: white;
-}
-
-.psButtonRow button:disabled {
-    background-color: #999;
-    cursor: default;
 }
 
 .psStatus {
@@ -297,20 +280,12 @@ input[type="button"]:hover {
 }
 
 .psStatusOn {
-    color: #1a7f37;
+    color: var(--ok);
     font-weight: bold;
 }
 
 .psStatusOff {
-    color: #b35900;
-}
-
-#htmlDark .psStatusOn {
-    color: #4ec970;
-}
-
-#htmlDark .psStatusOff {
-    color: #e0a34e;
+    color: var(--warn);
 }
 
 .psChecks {
@@ -331,13 +306,12 @@ input[type="button"]:hover {
     height: 48px;
     margin: 6px 0 0 0;
     object-fit: contain;
-    border: 1px solid #999;
-    border-radius: 8px;
-    background: #202a34;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: #202a34; /* a toolbar swatch, deliberately not a token */
 }
 
 #htmlDark .psIconPreview {
-    border-color: #555;
     background: #0d1117;
 }
 
@@ -354,27 +328,21 @@ html.nhdwPanel body {
 .listGalleries {
     max-height: 220px;
     overflow-y: auto;
-    border: 1px solid #999;
-    border-radius: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface);
     padding: 4px 6px;
     margin: 6px 0;
     text-align: left;
 }
 
-#htmlDark .listGalleries {
-    border-color: #555;
-}
-
 .listOptions {
-    border: 1px solid #999;
-    border-radius: 5px;
-    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
+    padding: 8px 10px;
     margin: 8px 0;
     text-align: left;
-}
-
-#htmlDark .listOptions {
-    border-color: #555;
 }
 
 .listOptionRow {
@@ -403,11 +371,7 @@ html.nhdwPanel body {
 .listNote {
     display: block;
     margin: 4px 0;
-    color: #b35900;
-}
-
-#htmlDark .listNote {
-    color: #e0a34e;
+    color: var(--warn);
 }
 
 .listPreview {
@@ -418,15 +382,12 @@ html.nhdwPanel body {
 
 /* ---- Listing page-range block (item 61) ---- */
 .rangeBlock {
-    border: 1px solid #999;
-    border-radius: 5px;
-    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
+    padding: 8px 10px;
     margin: 8px 0;
     text-align: left;
-}
-
-#htmlDark .rangeBlock {
-    border-color: #555;
 }
 
 .rangeBlockHeader {
@@ -448,12 +409,8 @@ html.nhdwPanel body {
 
 .rangeCount {
     font-size: 12px;
-    color: #555;
+    color: var(--ink-2);
     white-space: nowrap;
-}
-
-#htmlDark .rangeCount {
-    color: #bbb;
 }
 
 .rangeBlockActions {
@@ -473,21 +430,17 @@ html.nhdwPanel body {
 /* ---- Shared-selection pointer (item 71) ---- */
 .selectionPointer {
     font-size: 12px;
-    color: #555;
+    color: var(--ink-2);
     margin: 4px 0 8px;
     text-align: left;
     word-break: break-word;
-}
-
-#htmlDark .selectionPointer {
-    color: #bbb;
 }
 
 /* ---- Modal confirmations (batch-PDF merge warning) ---- */
 .nhdwModalOverlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: rgba(0, 0, 0, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -496,18 +449,14 @@ html.nhdwPanel body {
 }
 
 .nhdwModal {
-    background: #fff;
-    color: #202a34;
-    border: 2px solid #e31b53;
-    border-radius: 8px;
-    padding: 12px 14px;
+    background-color: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    padding: 14px 16px;
     max-width: 420px;
     text-align: left;
-}
-
-#htmlDark .nhdwModal {
-    background: #202a34;
-    color: #fff;
 }
 
 .nhdwModal h3 {
@@ -538,39 +487,25 @@ html.nhdwPanel body {
 .nhdwModalButtons button {
     flex: 1 1 auto;
     padding: 8px 10px;
-    border: 1px solid #999;
-    border-radius: 5px;
-    background: #eee;
-    color: #202a34;
-    cursor: pointer;
 }
 
 .nhdwModalButtons button.nhdwModalPrimary {
-    background-color: #e31b53;
+    background-color: var(--accent);
     color: #fff;
-    border-color: #e31b53;
-    font-weight: bold;
-}
-
-.nhdwModalButtons button:focus {
-    outline: 2px solid #202a34;
+    border-color: var(--accent);
+    font-weight: 600;
 }
 
 /* ---- Persistent download history (listing panel) -------------------------
    Rows already downloaded get a small badge and a per-row "Download anyway"
    override; the summary line shows real counts before the job is committed. */
 .nhdwAlready {
-    color: #4c8b4c;
+    color: var(--ok);
     font-size: 11px;
 }
 
-#htmlDark .nhdwAlready {
-    color: #9ee29e;
-}
-
-.nhdwAlready a.nhdwRedl,
-#htmlDark .nhdwAlready a.nhdwRedl {
-    color: #e31b53;
+.nhdwAlready a.nhdwRedl {
+    color: var(--accent-ink);
     font-weight: bold;
     text-decoration: underline;
     cursor: pointer;
@@ -584,12 +519,8 @@ html.nhdwPanel body {
 }
 
 .nhdwSummary.nhdwSummaryWarn {
-    color: #b3541e;
+    color: var(--warn);
     font-weight: bold;
-}
-
-#htmlDark .nhdwSummary.nhdwSummaryWarn {
-    color: #f2a154;
 }
 
 /* ---- Queue pane (persistent bookmark list) -------------------------------
@@ -606,14 +537,11 @@ html.nhdwPanel body {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 6px 8px;
-    border: 1px solid #999;
-    border-radius: 5px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
     margin-bottom: 8px;
-}
-
-#htmlDark .nhdwBmHeader {
-    border-color: #555;
 }
 
 .nhdwBmHeader strong {
@@ -624,7 +552,7 @@ html.nhdwPanel body {
 .nhdwBmCounts {
     display: block;
     font-size: 11px;
-    opacity: 0.8;
+    color: var(--ink-2);
 }
 
 /* ---- per-site filter (item 66) ----
@@ -648,59 +576,41 @@ html.nhdwPanel body {
 
 .nhdwBmFilterInfo {
     font-size: 11px;
-    opacity: 0.8;
+    color: var(--ink-2);
     white-space: nowrap;
 }
 
 .nhdwBmToggle {
-    border: 1px solid #e31b53;
-    background: transparent;
-    color: #e31b53;
-    border-radius: 4px;
+    border: 1px solid var(--line);
+    background-color: transparent;
+    color: inherit;
+    border-radius: var(--radius-sm);
     padding: 4px 8px;
     font-size: 11px;
     cursor: pointer;
     white-space: nowrap;
 }
 
-.nhdwBmToggle:hover {
-    background: #e31b53;
-    color: #fff;
-}
-
 .nhdwBmNotice {
     font-size: 12px;
     padding: 6px 8px;
     margin-bottom: 8px;
-    border-radius: 4px;
-    background: #eef6ff;
-    border: 1px solid #b8d8f5;
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-2);
+    border: 1px solid var(--line);
 }
 
 .nhdwBmNoticeError {
-    background: #fff0f0;
-    border-color: #f0b8b8;
-}
-
-#htmlDark .nhdwBmNotice {
-    background: #1d2b3a;
-    border-color: #35506b;
-}
-
-#htmlDark .nhdwBmNoticeError {
-    background: #3a1d1d;
-    border-color: #6b3535;
+    color: var(--bad);
+    border-color: var(--bad);
 }
 
 .nhdwBmPasteBox {
-    border: 1px solid #999;
-    border-radius: 5px;
-    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
+    padding: 8px 10px;
     margin-bottom: 8px;
-}
-
-#htmlDark .nhdwBmPasteBox {
-    border-color: #555;
 }
 
 .nhdwBmPasteBox label {
@@ -720,8 +630,7 @@ html.nhdwPanel body {
 
 .nhdwBmPasteBox small {
     display: block;
-    font-size: 10px;
-    opacity: 0.75;
+    font-size: 10.5px;
     margin: 4px 0;
 }
 
@@ -732,19 +641,13 @@ html.nhdwPanel body {
 
 .nhdwBmActions button,
 .nhdwBmToolbar button {
-    border: 1px solid #999;
-    background: transparent;
+    border: 1px solid var(--line);
+    background-color: transparent;
     color: inherit;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 5px 8px;
     font-size: 12px;
     cursor: pointer;
-}
-
-.nhdwBmActions button:hover,
-.nhdwBmToolbar button:hover {
-    border-color: #e31b53;
-    color: #e31b53;
 }
 
 .nhdwBmToolbar {
@@ -758,7 +661,7 @@ html.nhdwPanel body {
 /* Item 52: the backup row reuses .nhdwBmToolbar's button styling and adds the
    hint that says what an import does (merges, never replaces). */
 .nhdwBmBackup {
-    border-top: 1px solid #999;
+    border-top: 1px solid var(--line);
     padding-top: 8px;
     margin-top: 8px;
 }
@@ -766,11 +669,6 @@ html.nhdwPanel body {
 .nhdwBmBackup small {
     flex: 1 1 100%;
     font-size: 11px;
-    opacity: 0.75;
-}
-
-#htmlDark .nhdwBmBackup {
-    border-top-color: #555;
 }
 
 .nhdwBmCheck {
@@ -781,8 +679,8 @@ html.nhdwPanel body {
 }
 
 .nhdwBmDanger:hover {
-    border-color: #c0392b;
-    color: #c0392b;
+    border-color: var(--bad);
+    color: var(--bad);
 }
 
 .nhdwBmList {
@@ -795,9 +693,11 @@ html.nhdwPanel body {
 
 .nhdwBmEmpty {
     font-size: 12px;
-    opacity: 0.75;
-    padding: 12px 4px;
+    color: var(--ink-2);
+    padding: 18px 16px;
     text-align: center;
+    border: 1px dashed var(--line);
+    border-radius: var(--radius-md);
 }
 
 /* ---- Drag-reorder the bookmark queue (item 44) --------------------------
@@ -827,53 +727,49 @@ html.nhdwPanel body {
 }
 
 .nhdwBmRow.nhdwBmDropTarget {
-    outline: 2px dashed #e31b53;
+    outline: 2px dashed var(--accent-ink);
     outline-offset: -2px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
 }
 
 .nhdwBmRow {
     display: flex;
     align-items: center;
     gap: 8px;
-    border: 1px solid #ccc;
-    border-radius: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface);
     padding: 6px;
 }
 
-#htmlDark .nhdwBmRow {
-    border-color: #4a4a4a;
+.nhdwBmRow:hover {
+    background-color: var(--surface-2);
 }
 
 .nhdwBmRow.nhdwBmStatus-done {
-    border-color: #4caf50;
+    border-color: var(--ok);
 }
 
 .nhdwBmRow.nhdwBmStatus-failed {
-    border-color: #c0392b;
+    border-color: var(--bad);
 }
 
 .nhdwBmRow.nhdwBmStatus-downloading {
-    border-color: #e31b53;
+    border-color: var(--accent-ink);
 }
 
 .nhdwBmThumb {
     flex: 0 0 auto;
     width: 46px;
     height: 66px;
-    border-radius: 3px;
+    border-radius: 4px;
     overflow: hidden;
-    background: #ddd;
-    color: #666;
+    background-color: var(--surface-2);
+    color: var(--ink-2);
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 16px;
-}
-
-#htmlDark .nhdwBmThumb {
-    background: #333;
-    color: #888;
 }
 
 .nhdwBmThumb img {
@@ -899,23 +795,19 @@ html.nhdwPanel body {
 .nhdwBmMeta,
 .nhdwBmSaved {
     font-size: 10px;
-    opacity: 0.75;
+    color: var(--ink-2);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
 .nhdwBmSaved {
-    color: #2e7d32;
-}
-
-#htmlDark .nhdwBmSaved {
-    color: #7bc47f;
+    color: var(--ok);
 }
 
 .nhdwBmError {
     font-size: 10px;
-    color: #c0392b;
+    color: var(--bad);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -929,76 +821,51 @@ html.nhdwPanel body {
     gap: 4px;
 }
 
+/* Chips: one shape (10px radius, 1px tinted border, 600 weight) and the
+   state colour as text, so the three states differ by label + colour. */
 .nhdwBmStatus {
     font-size: 10px;
-    padding: 1px 5px;
-    border-radius: 8px;
-    background: #eee;
-    color: #333;
-}
-
-#htmlDark .nhdwBmStatus {
-    background: #3a3a3a;
-    color: #ddd;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 1px 7px;
+    border-radius: 10px;
+    color: var(--ink-2);
+    background-color: var(--surface-2);
+    background-color: color-mix(in srgb, currentColor 10%, var(--surface));
+    border: 1px solid currentColor;
+    border-color: color-mix(in srgb, currentColor 40%, transparent);
 }
 
 .nhdwBmStatusBadge-downloading {
-    background: #e31b53;
-    color: #fff;
+    color: var(--accent-ink);
 }
 
 .nhdwBmStatusBadge-done {
-    background: #4caf50;
-    color: #fff;
+    color: var(--ok);
 }
 
 .nhdwBmStatusBadge-failed {
-    background: #c0392b;
-    color: #fff;
+    color: var(--bad);
 }
 
 .nhdwBmDownload {
-    border: 1px solid #e31b53;
-    background: #e31b53;
-    color: #fff;
-    border-radius: 4px;
+    border: 1px solid var(--line);
+    background-color: transparent;
+    color: inherit;
+    border-radius: var(--radius-sm);
     padding: 3px 7px;
     font-size: 11px;
     cursor: pointer;
-}
-
-.nhdwBmDownload:hover {
-    background: transparent;
-    color: #e31b53;
-}
-
-.nhdwBmDownload:disabled {
-    border-color: #999;
-    background: #999;
-    color: #eee;
-    cursor: default;
 }
 
 .nhdwBmCancel {
-    border: 1px solid #c0392b;
-    background: #c0392b;
-    color: #fff;
-    border-radius: 4px;
+    border: 1px solid var(--bad);
+    background-color: transparent;
+    color: var(--bad);
+    border-radius: var(--radius-sm);
     padding: 3px 7px;
     font-size: 11px;
     cursor: pointer;
-}
-
-.nhdwBmCancel:hover {
-    background: transparent;
-    color: #c0392b;
-}
-
-.nhdwBmCancel:disabled {
-    border-color: #999;
-    background: #999;
-    color: #eee;
-    cursor: default;
 }
 
 .nhdwBmRemove {
@@ -1014,7 +881,7 @@ html.nhdwPanel body {
 
 .nhdwBmRemove:hover {
     opacity: 1;
-    color: #c0392b;
+    color: var(--bad);
 }
 
 .nhdwBmFooter {
@@ -1023,37 +890,22 @@ html.nhdwPanel body {
     gap: 4px;
     margin-top: 8px;
     padding-top: 8px;
-    border-top: 1px solid #ccc;
-}
-
-#htmlDark .nhdwBmFooter {
-    border-color: #4a4a4a;
+    border-top: 1px solid var(--line);
 }
 
 .nhdwBmFooter small {
-    font-size: 10px;
-    opacity: 0.7;
+    font-size: 10.5px;
 }
 
 .nhdwBmPrimary {
-    border: none;
-    background: #e31b53;
+    border: 1px solid var(--accent);
+    background-color: var(--accent);
     color: #fff;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 8px;
     font-size: 13px;
-    font-weight: bold;
+    font-weight: 600;
     cursor: pointer;
-}
-
-.nhdwBmPrimary:hover {
-    background: #c2174a;
-}
-
-.nhdwBmPrimary:disabled {
-    background: #999;
-    color: #eee;
-    cursor: default;
 }
 
 /* Item 68: search, state/date filters and the count of what is already on
@@ -1062,51 +914,46 @@ html.nhdwPanel body {
 .nhdwBmSearch {
     flex: 1 1 180px;
     min-width: 140px;
-    border: 1px solid #999;
-    background: transparent;
+    border: 1px solid var(--line);
+    background-color: var(--surface);
     color: inherit;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 5px 8px;
     font-size: 12px;
 }
 
 .nhdwBmQuerySelect {
-    border: 1px solid #999;
-    background: transparent;
+    border: 1px solid var(--line);
+    background-color: var(--surface);
     color: inherit;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 5px 6px;
     font-size: 12px;
 }
 
 .nhdwBmHistoryInfo {
     font-size: 11px;
-    opacity: 0.75;
+    color: var(--ink-2);
 }
 
 .nhdwBmMore {
     display: block;
     width: 100%;
     margin-top: 6px;
-    border: 1px solid #999;
-    background: transparent;
+    border: 1px solid var(--line);
+    background-color: transparent;
     color: inherit;
-    border-radius: 4px;
+    border-radius: var(--radius-sm);
     padding: 6px 8px;
     font-size: 12px;
     cursor: pointer;
-}
-
-.nhdwBmMore:hover {
-    border-color: #e31b53;
-    color: #e31b53;
 }
 
 /* The already-downloaded check sits with the title: a green tick means the
    history records a finished artifact for this row, and only that. */
 .nhdwBmAlready {
     float: right;
-    color: #2e9e4f;
+    color: var(--ok);
     font-weight: bold;
     font-size: 14px;
     line-height: 1;

@@ -1,7 +1,7 @@
 # NHDW_Extension_v3.0.0 — Chrome MV3 source + loadable folder
 
 This folder is the **TypeScript source of truth** for the Chrome/Edge/Brave
-build of NHentai Downloader (v3.10.6). **Load this folder directly** using
+build of NHentai Downloader (v3.12.0). **Load this folder directly** using
 Chrome/Edge/Brave → Extensions → Developer mode → Load unpacked. The `js/`
 bundles are committed here; no duplicate release folder needs syncing.
 `npm run package:chrome` generates a runtime-only ZIP under ignored `dist/`
