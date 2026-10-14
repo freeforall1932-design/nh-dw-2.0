@@ -56,6 +56,58 @@ describe("style budget - css/theme.css is a token file, not a redesign", functio
         assert.ok(collectRuntimeFiles(root).includes("css/theme.css"), "theme.css must ship in the runtime package");
     });
 
+    // ASSET_PLAN.md family 2: "AA text contrast measured over every region in
+    // dark/light (not eyeballed)". The regions are the two surfaces; the text
+    // tokens are composited over each (ink-2 is translucent) and measured
+    // with the WCAG 2 formula. --accent is a fill: white text on it and its
+    // edge against both surfaces are what count for it.
+    it("measures AA contrast for every text token on both surfaces in both themes", function () {
+        const tokensOf = (selector) => {
+            const match = stripComments(theme).match(new RegExp(selector.replace("#", "\\#") + "\\s*\\{([^}]*)\\}"));
+            assert.ok(match, "theme.css must declare " + selector);
+            const out = {};
+            for (const line of match[1].split(";")) {
+                const m = line.match(/--([a-z0-9-]+)\s*:\s*(.+)/);
+                if (m) out[m[1]] = m[2].trim();
+            }
+            return out;
+        };
+        const parse = (value) => {
+            let m;
+            if ((m = value.match(/^#([0-9a-f]{3})$/i))) return [0, 1, 2].map((i) => parseInt(m[1][i] + m[1][i], 16)).concat(1);
+            if ((m = value.match(/^#([0-9a-f]{6})$/i))) return [0, 2, 4].map((i) => parseInt(m[1].slice(i, i + 2), 16)).concat(1);
+            if ((m = value.match(/^rgba?\(([^)]+)\)$/))) {
+                const parts = m[1].split(",").map(Number);
+                return [parts[0], parts[1], parts[2], parts.length > 3 ? parts[3] : 1];
+            }
+            throw new Error("token value not measurable: " + value);
+        };
+        const luminance = (rgb) => {
+            const channel = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+            return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+        };
+        const contrast = (fg, bg) => {
+            const f = parse(fg), b = parse(bg);
+            const flat = [0, 1, 2].map((i) => f[i] * f[3] + b[i] * (1 - f[3]));
+            const l1 = luminance(flat), l2 = luminance(b);
+            return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+        };
+        const light = tokensOf(":root");
+        const dark = Object.assign({}, light, tokensOf("#htmlDark"));
+        for (const [name, t] of [["light", light], ["dark", dark]]) {
+            for (const surface of ["surface", "surface-2"]) {
+                for (const text of ["ink", "ink-2", "accent-ink", "ok", "warn", "bad"]) {
+                    const ratio = contrast(t[text], t[surface]);
+                    assert.ok(ratio >= 4.5, name + ": --" + text + " on --" + surface + " is " + ratio.toFixed(2) + ":1, AA text needs 4.5");
+                }
+                const edge = contrast(t.accent, t[surface]);
+                assert.ok(edge >= 3, name + ": --accent fill against --" + surface + " is " + edge.toFixed(2) + ":1, UI needs 3");
+            }
+            const onAccent = contrast("#fff", t.accent);
+            assert.ok(onAccent >= 4.5, name + ": white on --accent is " + onAccent.toFixed(2) + ":1");
+        }
+    });
+
     it("keeps hard-coded theme colours out of style.css", function () {
         const body = stripComments(style).toLowerCase();
         assert.strictEqual(body.indexOf("#e31b53"), -1, "the accent pink must come from var(--accent) / var(--accent-ink)");

@@ -547,8 +547,13 @@ piece of work".
   `css/theme.css` (15 tokens + element primitives, 4.6 KB), `style.css` value
   swaps only (39 colour literals → 3, every `#htmlDark` pair removed), seated
   browser tabs, one primary per surface, status chips, options page linked.
-  `test/theme-budget.test.js` enforces the style budget; specimen + walls in
-  `Preview/logo-lab/theme-*`. Family 5 (`content.css`) and Firefox pending.
+  `test/theme-budget.test.js` enforces the style budget and measures AA
+  contrast; specimen + walls in `Preview/logo-lab/theme-*`. Options page in
+  dark mode too, and the side-panel dark-mode re-bootstrap throw
+  (`getElementById('htmlLight')!` on the second pass) fixed red-first
+  (e2e-popup phase 12). Still open per the docs audit: family 5
+  (`content.css`), Firefox, ghost-wing watermark, optional tab glyphs, busy
+  state — list in the `IMPROVEMENT_BACKLOG.md` 2026-10-14 log.
 
 - **Item 40 — the popup harness bootstraps a listing page (2026-09-26):** the
   two missing stubs (`js/getGalleries.js` injection answered, `executeInTab`

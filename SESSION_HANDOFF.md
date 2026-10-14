@@ -25,11 +25,26 @@ dark surface is 3:1 — never use it). Guard: `test/theme-budget.test.js`
 theme, no literals in style.css, link order, in the runtime ZIP). Review
 artefacts: `Preview/logo-lab/theme-specimen.html` (static dummy markup of
 every pane, `?view=…&theme=…`), `theme-wall.html`, and the before/after walls
-`theme-wall-before.png` / `theme-wall-after.png`. **Not done on purpose:**
-family 5 (`content.css`, injected into six host pages — containment rules
-need real-host screenshots), the ghost-wing watermark (no approved vector
-yet), and Firefox (parity pass first). Verified: 622 unit + MV3 smoke +
-e2e exit 0, `package:chrome` ZIP rebuilt.
+`theme-wall-before.png` / `theme-wall-after.png` / `theme-compare.png`.
+**Dark mode (same session, owner request):** the options page now wears the
+theme in dark too (`<html id="htmlLight">`, `options.ts` flips the root id
+from the stored `darkMode` on load and live on its own checkbox) — and
+wiring it exposed a live defect: `preview.ts` applied dark mode with a
+one-way `getElementById('htmlLight')!.id = 'htmlDark'` inside
+`bootstrapForActiveTab`, which the side panel runs again on every tab
+change, so with dark mode ON the second pass threw and the panel stopped
+following the tab (the harness's auto-creating `getElementById` stub hid
+it). Now `document.documentElement.id` is set from the preference on every
+bootstrap and on `storage.onChanged`; red-first proof is `e2e-popup.js`
+phase 12. Contrast is **measured**, not eyeballed, in the budget test (light
+`--warn` moved to `#a35100` for 4.5:1 on `--surface-2`). **Not done on
+purpose — the audit of the MD docs** (`IMPROVEMENT_BACKLOG.md` 2026-10-14
+log has the list): family 5 (`content.css`, six host pages — needs the
+dummy-host specimen + light/dark host screenshots), Firefox
+(`panelRenderers.css`), the ghost-wing watermark (no approved vector), the
+optional 16px tab glyphs / Bookmark-tab count, and a busy state (no
+`aria-busy` hook in the code). Verified: 623 unit + MV3 smoke + e2e exit 0
+(+ phase 12), `package:chrome` ZIP rebuilt.
 
 **Previous entry — 2026-09-26 (session `arena/01a0dd1a-nh-dw-2-0`, logo-lab).** Chrome
 **3.11.5**, Firefox **1.4.5** (untouched — visual work lands there only after

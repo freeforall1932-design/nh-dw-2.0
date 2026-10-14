@@ -326,9 +326,13 @@ to read, never a context-flood)
 
 **Status 2026-10-14 (3.12.0): built for families 2, 3, 4 and 6** —
 `css/theme.css` holds 15 tokens + element primitives, `style.css` got value
-swaps only, and `test/theme-budget.test.js` turns this budget into a failing
-test. Family 5 (`content.css`) and Firefox are still pending; the ghost-wing
-watermark waits for an approved vector (the backdrop is the tint-shift option).
+swaps only, and `test/theme-budget.test.js` turns this budget — and the
+family-2 "measured, not eyeballed" AA contrast rule — into failing tests.
+The options page wears the theme in both modes. Still open: family 5
+(`content.css`), Firefox (`panelRenderers.css`), the ghost-wing watermark
+(waits for an approved vector; the backdrop is the tint-shift option), the
+optional 16px tab glyphs, and the family-4 busy state (no `aria-busy` hook
+in the code yet). Audit list: `IMPROVEMENT_BACKLOG.md`, 2026-10-14 log.
 
 One new file, `css/theme.css` (linked from `index.html` and `options.html`),
 holds the whole layer so diffs stay localized and reviewable: ≤ 15 custom

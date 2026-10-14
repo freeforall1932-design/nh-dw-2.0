@@ -133,6 +133,23 @@ function siteForSelection(url: string): string {
 // Last URL the view was rendered for (side-panel mode re-renders on change).
 let lastBootstrappedUrl: string | null = null;
 
+// theme.css re-values its tokens on #htmlDark, so the root id IS the theme
+// switch. It is set from the stored preference on every bootstrap - the side
+// panel bootstraps again on each tab change, and the old one-way rename
+// (`getElementById('htmlLight')!.id = 'htmlDark'`) threw on the second pass
+// once the root was already dark, taking the re-render with it - and it
+// follows a live change from the options page.
+function applyDarkMode(on: boolean): void {
+    document.documentElement.id = on ? "htmlDark" : "htmlLight";
+}
+try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === "sync" && changes && changes.darkMode) {
+            applyDarkMode(!!changes.darkMode.newValue);
+        }
+    });
+} catch (_) { /* no storage events here: the next bootstrap re-reads it */ }
+
 function bootstrapForActiveTab() {
     chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
     if (!tabs || !tabs[0]) {
@@ -145,9 +162,7 @@ function bootstrapForActiveTab() {
         if (popup.parsing === null) {
             popup.parsing = elems.htmlParsing ? new HtmlParsing() : new ApiParsing();
         }
-        if (elems.darkMode) {
-            document.getElementById('htmlLight')!.id = 'htmlDark';
-        }
+        applyDarkMode(!!elems.darkMode);
 
         let currUrl = tabs[0].url as string;
         popup.url = currUrl;

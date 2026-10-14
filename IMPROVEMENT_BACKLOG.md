@@ -3204,6 +3204,75 @@ Tests first, as usual:
   `bookmarkFilters.ts` / `listHarvest.ts` plus the labels in `bookmarkPanel.ts`
   / `listControls.ts`.
 
+## Session log — 2026-10-14: the theme layer (ASSET_PLAN families 2/3/4/6) and the dark-mode re-bootstrap defect
+
+**Owner question:** "is there a way to make the UI artistic but not bloated".
+Answered by building the style budget rather than describing it. Chrome
+**3.12.0**; Firefox untouched.
+
+### Landed
+
+- **`css/theme.css`** (new, 4.7 KB): 15 custom properties (`--surface`,
+  `--surface-2`, `--ink`, `--ink-2`, `--line`, `--wash`, `--accent`,
+  `--accent-ink`, `--accent-wash`, `--ok`, `--warn`, `--bad`, `--radius-sm`,
+  `--radius-md`, `--ease`) and element primitives only — system type, the
+  viewport-fixed surface→chrome tint shift (family 2, the pure-CSS option),
+  tonal buttons whose hover/pressed are one shared translucent
+  `background-image` layer, native fields, 2px `:focus-visible` ring, thin
+  scrollbars, `color-scheme` + `accent-color`, reduced-motion collapse.
+- **`css/style.css`**: value swaps only — same selectors, 39 colour literals
+  → 3, 171 → 132 rules, every `#htmlDark` override pair removed. Seated
+  browser tab strip (family 3), one pink primary per surface (family 4),
+  10px tinted status chips, soft modal, dashed empty state, thin scrollbars
+  (family 6). `options.html` links the theme and gets the look for free.
+- **Dark mode defect (found while wiring the options page):** `preview.ts`
+  applied the preference with a one-way rename —
+  `getElementById('htmlLight')!.id = 'htmlDark'` — inside
+  `bootstrapForActiveTab`. The side panel bootstraps again on every tab
+  change, so with dark mode ON the second pass threw `Cannot set properties
+  of null` inside the storage callback and the panel stopped following the
+  tab. The popup harness never saw it because its `getElementById` stub
+  auto-creates any id. Fixed as `document.documentElement.id = on ?
+  "htmlDark" : "htmlLight"` on every bootstrap plus a `storage.onChanged`
+  listener (live flip); the options page applies the same switch on load, on
+  its own checkbox, and carries `id="htmlLight"` on its root. Red-first:
+  `scripts/e2e-popup.js` phase 12 makes the root behave like a real document
+  for the two ids and fails on the pre-fix bundle with the real error.
+- **Guards:** `test/theme-budget.test.js` — token cap, ≤ 6 KB, no
+  url/import/font/keyframes, no class/id selectors in the theme, link order
+  and runtime-ZIP presence, no colour literals in style.css, and **measured**
+  WCAG contrast (every text token over both surfaces in both themes ≥ 4.5,
+  `--accent` fill edge ≥ 3, white on accent ≥ 4.5). The light `--warn` moved
+  `#b35900` → `#a35100` because it measured 4.16:1 on `--surface-2`.
+- **Review artefacts** (`Preview/logo-lab/`): `theme-specimen.html`
+  (`?view=single|list|bookmark|settings|modal&theme=light|dark&failed=1&empty=1&panel=1`),
+  `theme-wall.html`, `theme-wall-before.png`, `theme-wall-after.png`,
+  `theme-compare.png`.
+
+### Audit — what the MD docs describe that is still not built
+
+- **Family 5, `css/content.css`** (floating bar, card controls, selected-card
+  treatment, counters, "Scroll for me", Ready/status, the Harvest→Stop morph
+  styling): untouched. Needs the dummy-host specimen (section 3 of the
+  specimen spec) and light/dark host screenshots; values only, containment
+  untouched.
+- **Firefox tree** (`panelRenderers.css` + mobile CSS): no theme yet; the
+  plan asks for identical tab treatment there.
+- **Family 2 ghost-wing watermark**: not built — waits for an approved vector
+  master (the sigils are still 128px rasters); the tint shift is in.
+- **Family 3 optional 16px tab glyphs**: not built (text-only tabs;
+  `test/tab-labels.test.js` locks the labels). A count on the Bookmark tab
+  itself is not built either — `.nhdwBmCounts` is the pane header line.
+- **Family 4 busy state** (pulse/dot-spin with the label kept): not built —
+  the code expresses busy as `disabled` + status text and has no
+  `aria-busy` hook; adding one is a TS change at ~6 call sites.
+- **Specimen page sections 1 and 3** (sigil wall, injected-UI specimen) are
+  separate pages/absent; the popup specimen (section 2) exists but has no
+  reduced-motion toggle or interactive state matrix (states are shown by
+  hovering/focusing the real controls).
+- Not a gap: forced-colors collapse — gradients are dropped by the UA in
+  `forced-colors: active`, so the backdrop and washes flatten on their own.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
