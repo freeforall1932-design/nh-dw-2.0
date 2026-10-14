@@ -551,8 +551,11 @@ piece of work".
   contrast; specimen + walls in `Preview/logo-lab/theme-*`. Options page in
   dark mode too, and the side-panel dark-mode re-bootstrap throw
   (`getElementById('htmlLight')!` on the second pass) fixed red-first
-  (e2e-popup phase 12). Still open per the docs audit: family 5
-  (`content.css`), Firefox, ghost-wing watermark, optional tab glyphs, busy
+  (e2e-popup phase 12). Family 5 (`content.css`) built the same way —
+  mirrored `--nhdw-*` tokens, value swaps, selected-card outline — over the
+  dummy-host specimen, which also caught the never-hidden "Include already
+  downloaded" row and the bar overflowing narrow windows. Still open per the
+  docs audit: Firefox, ghost-wing watermark, optional tab glyphs, busy
   state — list in the `IMPROVEMENT_BACKLOG.md` 2026-10-14 log.
 
 - **Item 40 — the popup harness bootstraps a listing page (2026-09-26):** the

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<!-- Injected-UI wall: content-specimen.html over a light and a dark dummy
+     host, same scroll position, each in its own viewport so the fixed bar
+     sits at the bottom of each. Shoot at 1860x600 (two 920px frames). -->
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>NHDW injected UI wall</title>
+    <style>
+        html { background: #666; }
+        body { margin: 0; padding: 10px; display: flex; gap: 10px; font: 12px system-ui, sans-serif; color: #fff; }
+        figure { margin: 0; }
+        figcaption { margin: 0 0 4px; }
+        iframe { display: block; width: 920px; height: 560px; border: 0; background: #fff; }
+    </style>
+</head>
+<body>
+    <figure>
+        <figcaption>Light host · 3 selected · harvest running · Ready flash</figcaption>
+        <iframe src="content-specimen.html?host=light&harvest=1&status=1&redl=1"></iframe>
+    </figure>
+    <figure>
+        <figcaption>Dark host · same state</figcaption>
+        <iframe src="content-specimen.html?host=dark&harvest=1&status=1&redl=1"></iframe>
+    </figure>
+</body>
+</html>

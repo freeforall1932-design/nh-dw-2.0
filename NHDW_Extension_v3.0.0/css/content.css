@@ -8,6 +8,27 @@ input[type="checkbox"] {
    Injected by js/listControls.js; everything is namespaced with nhdw- so it
    cannot collide with nhentai's own styles. --------------------------------- */
 
+/* Theme (ASSET_PLAN.md family 5): css/theme.css is NOT injected into host
+   pages, so the few tokens the injected UI needs are mirrored here, on its
+   own two roots - the card (its strip inherits them) and the bar. Values are
+   theme.css's DARK set: the bar and the strips are always the extension's
+   chrome colour, whatever the host's scheme. test/theme-budget.test.js keeps
+   these equal to theme.css. Everything below is a value swap on the rules
+   that were already here - selectors, specificity, z-index and positioning
+   are untouched (containment first) - plus the selected-card treatment the
+   plan lists. */
+.nhdw-card, .nhdw-action-bar {
+    --nhdw-surface: #202a34;
+    --nhdw-surface-2: #19212a;
+    --nhdw-ink: #e8edf2;
+    --nhdw-ink-2: rgba(232, 237, 242, 0.6);
+    --nhdw-line: rgba(232, 237, 242, 0.16);
+    --nhdw-wash: rgba(232, 237, 242, 0.1);
+    --nhdw-accent: #e31b53;
+    --nhdw-accent-ink: #ff7aa0;
+    --nhdw-ok: #5fcf7e;
+}
+
 .nhdw-card {
     position: relative;
 }
@@ -27,7 +48,7 @@ input[type="checkbox"] {
     pointer-events: none;
     z-index: 5;
     opacity: 0.55;
-    transition: opacity 0.12s ease-in-out;
+    transition: opacity 0.14s ease-out;
 }
 
 .nhdw-card-controls > * {
@@ -49,9 +70,9 @@ input[type="checkbox"] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.6);
-    border-radius: 4px;
-    padding: 2px 4px;
+    background: rgba(32, 42, 52, 0.75);
+    border-radius: 6px;
+    padding: 3px;
     margin: 0;
     cursor: pointer;
 }
@@ -62,29 +83,28 @@ input[type="checkbox"] {
     height: 18px;
     margin: 0;
     cursor: pointer;
-    accent-color: #e31b53;
+    accent-color: var(--nhdw-accent);
 }
 
 .nhdw-card-controls .nhdw-download {
-    background: #e31b53;
+    background-color: var(--nhdw-accent);
     color: #fff;
     border: none;
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 12px;
-    font-weight: bold;
+    border-radius: 6px;
+    padding: 5px 8px;
+    font: 600 12px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     cursor: pointer;
-    line-height: 1.2;
+    transition: background-color 0.14s ease-out, color 0.14s ease-out;
 }
 
 .nhdw-card-controls .nhdw-download:hover {
-    background: #fff;
-    color: #e31b53;
+    background-color: color-mix(in srgb, var(--nhdw-accent) 86%, #fff);
+    color: #fff;
 }
 
 .nhdw-card-controls .nhdw-download:disabled {
-    background: #777;
-    color: #ddd;
+    background-color: rgba(32, 42, 52, 0.75);
+    color: var(--nhdw-ink-2);
     cursor: default;
 }
 
@@ -99,16 +119,22 @@ input[type="checkbox"] {
     bottom: 16px;
     transform: translateX(-50%);
     display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     align-items: center;
-    gap: 8px;
+    gap: 6px 8px;
+    box-sizing: border-box;
+    width: max-content; /* shrink-to-fit from left:50% would wrap at half the viewport */
+    max-width: calc(100vw - 32px);
     padding: 8px 12px;
-    background: #1f1f1f;
-    color: #fff;
-    border: 1px solid #e31b53;
-    border-radius: 8px;
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+    background: var(--nhdw-surface);
+    color: var(--nhdw-ink);
+    color-scheme: dark;
+    border: 1px solid var(--nhdw-line);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
     z-index: 2147483000;
-    font-size: 13px;
+    font: 13px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 .nhdw-action-bar.nhdw-hidden {
@@ -121,41 +147,48 @@ input[type="checkbox"] {
 }
 
 .nhdw-action-bar select {
-    background: #2c2c2c;
-    color: #fff;
-    border: 1px solid #555;
-    border-radius: 4px;
+    background-color: var(--nhdw-surface-2);
+    color: var(--nhdw-ink);
+    border: 1px solid var(--nhdw-line);
+    border-radius: 6px;
     padding: 3px 4px;
-    font-size: 13px;
+    font: inherit;
 }
 
 .nhdw-action-bar select:disabled {
-    color: #999;
+    color: var(--nhdw-ink-2);
 }
 
 .nhdw-action-bar button {
-    border: none;
-    border-radius: 4px;
-    padding: 5px 12px;
-    font-size: 13px;
+    border: 1px solid var(--nhdw-line);
+    border-radius: 6px;
+    padding: 4px 11px;
+    font: inherit;
+    font-weight: 500;
+    white-space: nowrap;
     cursor: pointer;
-    background: #444;
-    color: #fff;
+    background-color: var(--nhdw-surface-2);
+    color: var(--nhdw-ink);
+    transition: background-color 0.14s ease-out, color 0.14s ease-out;
 }
 
 .nhdw-action-bar button.nhdw-primary {
-    background: #e31b53;
-    font-weight: bold;
+    background-color: var(--nhdw-accent);
+    border-color: transparent;
+    color: #fff;
+    font-weight: 600;
 }
 
+/* One hover for every button, pink or tonal: a translucent wash layered
+   over whatever the fill is (the same trick as theme.css). */
 .nhdw-action-bar button:hover {
-    background: #fff;
-    color: #e31b53;
+    background-image: linear-gradient(var(--nhdw-wash), var(--nhdw-wash));
 }
 
 .nhdw-action-bar .nhdw-status {
     white-space: nowrap;
-    color: #9ee29e;
+    color: var(--nhdw-ok);
+    font-weight: 600;
 }
 
 .nhdw-action-bar .nhdw-redownload-row {
@@ -166,13 +199,21 @@ input[type="checkbox"] {
     cursor: pointer;
 }
 
+/* listControls.js toggles this row with the `hidden` attribute, and the
+   author display above outranks the UA's [hidden] { display: none } - so on
+   a host without its own [hidden] rule the row never went away. Found by
+   the family-5 specimen (Preview/logo-lab/content-specimen.html). */
+.nhdw-action-bar .nhdw-redownload-row[hidden] {
+    display: none;
+}
+
 .nhdw-action-bar .nhdw-redownload-row input[type="checkbox"] {
     zoom: 1;
     width: 14px;
     height: 14px;
     margin: 0;
     cursor: pointer;
-    accent-color: #e31b53;
+    accent-color: var(--nhdw-accent);
 }
 
 /* ---- Bookmark button on a gallery card ---------------------------------
@@ -182,17 +223,18 @@ input[type="checkbox"] {
    already bookmark" has to be answerable at a glance while scrolling. ---- */
 
 .nhdw-card-controls .nhdw-bookmark {
-    background: rgba(0, 0, 0, 0.6);
+    background-color: rgba(32, 42, 52, 0.75);
     color: #fff;
     border: none;
-    border-radius: 4px;
-    width: 26px;
-    height: 26px;
+    border-radius: 6px;
+    width: 24px;
+    height: 24px;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
+    transition: background-color 0.14s ease-out, color 0.14s ease-out;
 }
 
 .nhdw-card-controls .nhdw-bookmark svg.nhdw-bookmark-glyph {
@@ -203,23 +245,32 @@ input[type="checkbox"] {
 }
 
 .nhdw-card-controls .nhdw-bookmark:hover {
-    background: #fff;
-    color: #e31b53;
+    background-color: var(--nhdw-surface);
+    color: var(--nhdw-accent-ink);
 }
 
 .nhdw-card-controls .nhdw-bookmark-on {
-    background: #e31b53;
+    background-color: var(--nhdw-accent);
     color: #fff;
 }
 
 .nhdw-card-controls .nhdw-bookmark-on:hover {
-    background: #fff;
-    color: #e31b53;
+    background-color: color-mix(in srgb, var(--nhdw-accent) 86%, #fff);
+    color: #fff;
 }
 
-/* A bookmarked card keeps its controls legible instead of fading to 55%. */
-.nhdw-card:has(.nhdw-bookmark-on) .nhdw-card-controls {
+/* A bookmarked or selected card keeps its controls legible instead of
+   fading to 55%, and a selected card wears a 2px inset accent outline, so
+   "which of these did I tick" is answerable while scrolling. An outline
+   never changes the host's layout. */
+.nhdw-card:has(.nhdw-bookmark-on) .nhdw-card-controls,
+.nhdw-card:has(.nhdw-select-box:checked) .nhdw-card-controls {
     opacity: 1;
+}
+
+.nhdw-card:has(.nhdw-select-box:checked) {
+    outline: 2px solid var(--nhdw-accent);
+    outline-offset: -2px;
 }
 
 /* Item 70: the harvest controls live in the same bar as the bulk buttons.
@@ -231,7 +282,7 @@ input[type="checkbox"] {
     gap: 4px;
     white-space: nowrap;
     font-size: 12px;
-    opacity: 0.85;
+    color: var(--nhdw-ink-2);
     cursor: pointer;
 }
 
@@ -242,5 +293,15 @@ input[type="checkbox"] {
 .nhdw-action-bar .nhdw-harvest-status {
     white-space: nowrap;
     font-size: 12px;
-    opacity: 0.85;
+    color: var(--nhdw-ink-2);
+}
+
+/* Family-4 hard rule: reduced motion collapses every transition above. */
+@media (prefers-reduced-motion: reduce) {
+    .nhdw-card-controls,
+    .nhdw-card-controls .nhdw-download,
+    .nhdw-card-controls .nhdw-bookmark,
+    .nhdw-action-bar button {
+        transition: none;
+    }
 }

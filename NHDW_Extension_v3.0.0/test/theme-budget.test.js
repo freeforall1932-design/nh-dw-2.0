@@ -108,6 +108,58 @@ describe("style budget - css/theme.css is a token file, not a redesign", functio
         }
     });
 
+    // ASSET_PLAN.md family 5: css/content.css is injected into six host pages
+    // where theme.css is not, so it mirrors the few tokens it needs. The
+    // mirror must not drift from theme.css's dark set, nothing else in the
+    // file may carry a theme colour, and every selector stays namespaced -
+    // containment is the hard rule there.
+    it("content.css mirrors theme.css's dark tokens, stays namespaced and hides what the script hides", function () {
+        const content = stripComments(read("css/content.css"));
+        const themeBody = stripComments(theme);
+        const tokensOf = (css, selector) => {
+            const match = css.match(new RegExp(selector + "\\s*\\{([^}]*)\\}"));
+            assert.ok(match, "missing rule " + selector);
+            const out = {};
+            for (const line of match[1].split(";")) {
+                const m = line.match(/--([a-z0-9-]+)\s*:\s*(.+)/);
+                if (m) out[m[1]] = m[2].trim();
+            }
+            return out;
+        };
+        const themeDark = Object.assign({}, tokensOf(themeBody, ":root"), tokensOf(themeBody, "#htmlDark"));
+        const mirror = tokensOf(content, "\\.nhdw-card, \\.nhdw-action-bar");
+        const names = Object.keys(mirror);
+        assert.ok(names.length > 0 && names.length <= 10, "content.css mirrors at most 10 tokens, has " + names.length);
+        for (const name of names) {
+            assert.ok(name.startsWith("nhdw-"), "content.css token must be namespaced: --" + name);
+            const source = name.slice("nhdw-".length);
+            assert.strictEqual(mirror[name], themeDark[source], "--" + name + " must equal theme.css dark --" + source);
+        }
+        // Colour literals live in the mirror block only (white-on-accent aside).
+        const outside = content.replace(/\.nhdw-card, \.nhdw-action-bar\s*\{[^}]*\}/, "");
+        for (const literal of outside.toLowerCase().match(/#[0-9a-f]{3,6}\b/g) || []) {
+            assert.strictEqual(literal, "#fff", "colour literal outside the token block in content.css: " + literal);
+        }
+        // Namespace lock: every selector names an nhdw- class, except the one
+        // legacy nhentai checkbox rule that predates the controls.
+        for (const match of outside.matchAll(/([^{}]+)\{/g)) {
+            const selector = match[1].trim();
+            if (selector === "" || selector.startsWith("@")) continue;
+            for (const part of selector.split(",")) {
+                const one = part.trim();
+                assert.ok(one.indexOf("nhdw-") !== -1 || one === 'input[type="checkbox"]',
+                    "un-namespaced selector in content.css (containment): " + one);
+            }
+        }
+        // listControls.js toggles the re-download row with the hidden attribute;
+        // an author display value outranks the UA's [hidden] rule.
+        assert.ok(/\.nhdw-redownload-row\[hidden\]\s*\{\s*display:\s*none/.test(content),
+            "content.css must keep [hidden] working on the re-download row");
+        // Containment values that must never move.
+        assert.ok(/\.nhdw-action-bar\s*\{[^}]*position:\s*fixed/.test(content), "the bar stays position: fixed");
+        assert.ok(/z-index:\s*2147483000/.test(content), "the bar keeps its z-index");
+    });
+
     it("keeps hard-coded theme colours out of style.css", function () {
         const body = stripComments(style).toLowerCase();
         assert.strictEqual(body.indexOf("#e31b53"), -1, "the accent pink must come from var(--accent) / var(--accent-ink)");

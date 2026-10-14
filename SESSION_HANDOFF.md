@@ -37,13 +37,24 @@ following the tab (the harness's auto-creating `getElementById` stub hid
 it). Now `document.documentElement.id` is set from the preference on every
 bootstrap and on `storage.onChanged`; red-first proof is `e2e-popup.js`
 phase 12. Contrast is **measured**, not eyeballed, in the budget test (light
-`--warn` moved to `#a35100` for 4.5:1 on `--surface-2`). **Not done on
-purpose — the audit of the MD docs** (`IMPROVEMENT_BACKLOG.md` 2026-10-14
-log has the list): family 5 (`content.css`, six host pages — needs the
-dummy-host specimen + light/dark host screenshots), Firefox
+`--warn` moved to `#a35100` for 4.5:1 on `--surface-2`). **Family 5 (same
+session, before the PR):** `css/content.css` mirrors the dark token set as
+`--nhdw-*` on `.nhdw-card` + `.nhdw-action-bar` (theme.css is not injected
+into hosts), value swaps on the existing rules — chrome-coloured bar with a
+hairline, one pink primary, tonal buttons with the wash hover, `Ready` in
+`--nhdw-ok`, translucent chrome card pills — plus the plan's selected-card
+treatment (full-opacity strip + 2px inset accent outline). The dummy-host
+specimen (`Preview/logo-lab/content-specimen.html`, `content-wall*.png`)
+found two defects, fixed there: the "Include already downloaded" row's
+`display: inline-flex` defeated the `hidden` attribute (never hid on hosts
+without a `[hidden]` rule), and the bar overflowed both edges on narrow
+windows (now wraps: `width: max-content` + `max-width: calc(100vw - 32px)`).
+The budget test locks the mirror, the namespace and the `[hidden]` rule.
+`titleBookmark.css` deliberately untouched (owner-chosen colours). **Still
+open per the MD audit** (`IMPROVEMENT_BACKLOG.md` 2026-10-14 log): Firefox
 (`panelRenderers.css`), the ghost-wing watermark (no approved vector), the
 optional 16px tab glyphs / Bookmark-tab count, and a busy state (no
-`aria-busy` hook in the code). Verified: 623 unit + MV3 smoke + e2e exit 0
+`aria-busy` hook in the code). Verified: 624 unit + MV3 smoke + e2e exit 0
 (+ phase 12), `package:chrome` ZIP rebuilt.
 
 **Previous entry — 2026-09-26 (session `arena/01a0dd1a-nh-dw-2-0`, logo-lab).** Chrome

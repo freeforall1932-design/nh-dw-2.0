@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<!-- Injected-UI specimen (ASSET_PLAN.md family 5, specimen section 3).
+
+     Static dummy markup of what js/listControls.js injects into a listing
+     page - the per-card strip (Select / Bookmark / Download) and the floating
+     action bar - rendered over a DUMMY host page, so css/content.css can be
+     reviewed without visiting a site. Review only; nothing here ships.
+
+     Query string:
+       host=light|dark   the dummy host page's own scheme (default light)
+       harvest=1         the Harvest button is in its "Stop harvest" state,
+                         with the status line and "Scroll for me" disabled
+       status=1          the 4-second "Ready" flash is showing
+       redl=1            the "Include already downloaded" row is visible
+     The host's styles below are deliberately NOT ours: a serif face, its own
+     card chrome, its own link colours - the bar and strips must look like
+     the extension on top of any of the six sites, light or dark. -->
+<html class="nhdw-controls-on" lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <title>NHDW injected UI specimen</title>
+    <link rel="stylesheet" type="text/css" href="../../css/content.css"/>
+    <style>
+        /* ---- the dummy HOST page (not ours) ---- */
+        html { font: 14px/1.4 Georgia, "Times New Roman", serif; }
+        body { margin: 0; min-height: 100vh; }
+        .host { padding: 0 0 90px; }
+        .host-nav { display: flex; align-items: center; gap: 18px; padding: 10px 20px; font-weight: bold; }
+        .host-nav span { opacity: .7; font-weight: normal; }
+        .host-grid { display: grid; grid-template-columns: repeat(auto-fill, 180px); gap: 14px; padding: 16px 20px; }
+        .gallery { display: block; width: 180px; border-radius: 4px; overflow: hidden; }
+        .gallery .cover { display: block; text-decoration: none; color: inherit; }
+        .gallery .thumb { height: 240px; }
+        .gallery .caption { padding: 6px 8px; font-size: 12px; line-height: 1.3; height: 2.6em; overflow: hidden; }
+        .gallery .caption input { margin: 0 4px 0 0; } /* the legacy caption box, hidden while controls are on */
+        /* light host */
+        html.light body { background: #f4f4f4; color: #222; }
+        html.light .host-nav { background: #fff; border-bottom: 1px solid #ddd; }
+        html.light .gallery { background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
+        html.light .thumb { background: linear-gradient(135deg, #d9dde3, #b9c2cc); }
+        /* dark host (nhentai-like) */
+        html.dark body { background: #0d0d0d; color: #ddd; }
+        html.dark .host-nav { background: #1f1f1f; }
+        html.dark .gallery { background: #1f1f1f; }
+        html.dark .thumb { background: linear-gradient(135deg, #3a3a3a, #262626); }
+    </style>
+</head>
+<body>
+<div class="host">
+    <div class="host-nav">DummyHost <span>Home</span><span>Search</span><span>Tags</span><span>Random</span></div>
+    <div class="host-grid" id="grid"></div>
+</div>
+
+<div id="nhdw-action-bar" class="nhdw-action-bar">
+    <span class="nhdw-count" id="nhdw-count">3 selected · 1 already downloaded · 2 will download</span>
+    <select id="nhdw-format" title="Download format">
+        <option>ZIP</option><option>CBZ</option><option>PDF</option><option>Raw</option>
+    </select>
+    <select id="nhdw-output" title="One file per title, or everything merged into one file">
+        <option>Separate files</option><option>One merged file</option>
+    </select>
+    <label class="nhdw-redownload-row" id="nhdw-redownload-row" hidden><input type="checkbox" id="nhdw-redownload"/> Include already downloaded</label>
+    <button type="button" id="nhdw-download-selected" class="nhdw-primary">Download</button>
+    <button type="button" id="nhdw-select-all">Select all</button>
+    <button type="button" id="nhdw-clear-selected">Clear</button>
+    <button type="button" id="nhdw-harvest">Harvest</button>
+    <label class="nhdw-harvest-scroll-row" id="nhdw-harvest-scroll-row"><input type="checkbox" id="nhdw-harvest-scroll"/> Scroll for me</label>
+    <span class="nhdw-harvest-status" id="nhdw-harvest-status"></span>
+</div>
+
+<script>
+(function () {
+    var q = new URLSearchParams(location.search);
+    document.documentElement.classList.add(q.get("host") === "dark" ? "dark" : "light");
+
+    var OUTLINE = "M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2zm0 13.9-5-2.14-5 2.14V5h10v11.9z";
+    var FILLED = "M17 3H7a2 2 0 0 0-2 2v16l7-3 7 3V5a2 2 0 0 0-2-2z";
+    var cards = [
+        { title: "Specimen One | A Quiet Afternoon", selected: true },
+        { title: "Specimen Two", bookmarked: true },
+        { title: "Specimen Three | The Long Subtitle That Wraps Onto Two Lines", selected: true, downloaded: true },
+        { title: "Specimen Four", queued: true },
+        { title: "Specimen Five", selected: true, bookmarked: true },
+        { title: "Specimen Six" },
+        { title: "Specimen Seven" },
+        { title: "Specimen Eight" }
+    ];
+    var grid = document.getElementById("grid");
+    cards.forEach(function (c) {
+        var card = document.createElement("div");
+        card.className = "gallery nhdw-card";
+        card.innerHTML =
+            '<a class="cover" href="#"><div class="thumb"></div>' +
+            '<div class="caption"><input type="checkbox" class="nhdw-legacy-check"/>' + c.title + '</div></a>' +
+            '<div class="nhdw-card-controls">' +
+              '<div class="nhdw-card-controls-left">' +
+                '<label class="nhdw-select" title="Select this gallery"><input type="checkbox" class="nhdw-select-box"' + (c.selected ? ' checked' : '') + '/></label>' +
+                '<button type="button" class="nhdw-bookmark' + (c.bookmarked ? ' nhdw-bookmark-on' : '') + '" aria-pressed="' + (c.bookmarked ? 'true' : 'false') + '">' +
+                  '<svg class="nhdw-bookmark-glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="' + (c.bookmarked ? FILLED : OUTLINE) + '"/></svg>' +
+                '</button>' +
+              '</div>' +
+              '<button type="button" class="nhdw-download"' + (c.queued ? ' disabled' : '') + '>' + (c.queued ? 'Queued' : c.downloaded ? 'Downloaded' : 'Download') + '</button>' +
+            '</div>';
+        grid.appendChild(card);
+    });
+
+    if (q.get("harvest") === "1") {
+        document.getElementById("nhdw-harvest").textContent = "Stop harvest";
+        document.getElementById("nhdw-harvest-scroll").disabled = true;
+        document.getElementById("nhdw-harvest-scroll").checked = true;
+        document.getElementById("nhdw-harvest-status").textContent = "12 collected · scrolling 3/40";
+    }
+    if (q.get("redl") === "1") {
+        document.getElementById("nhdw-redownload-row").hidden = false;
+    }
+    if (q.get("status") === "1") {
+        var status = document.createElement("span");
+        status.id = "nhdw-status";
+        status.className = "nhdw-status";
+        status.textContent = "Ready";
+        document.getElementById("nhdw-action-bar").appendChild(status);
+    }
+})();
+</script>
+</body>
+</html>

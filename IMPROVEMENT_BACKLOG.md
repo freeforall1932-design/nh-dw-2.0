@@ -3249,13 +3249,49 @@ Answered by building the style budget rather than describing it. Chrome
   `theme-wall.html`, `theme-wall-before.png`, `theme-wall-after.png`,
   `theme-compare.png`.
 
+### Family 5 — the injected UI (same session, owner: "take that before opening PR")
+
+- **`css/content.css`**: theme.css is not injected into host pages, so the
+  nine tokens the injected UI needs are mirrored (`--nhdw-*`) on its two
+  roots, `.nhdw-card` and `.nhdw-action-bar`, with theme.css's DARK values —
+  the bar and the strips are always the extension's chrome colour whatever
+  the host's scheme. Every other change is a value swap on the rules that
+  were already there: bar = `--nhdw-surface`, hairline border, 10px radius,
+  one soft shadow, system font, `color-scheme: dark` (native dark selects);
+  tonal buttons with the shared wash-overlay hover, the ONE pink primary;
+  `Ready` in `--nhdw-ok`; "Scroll for me" + harvest status as `--nhdw-ink-2`
+  instead of opacity; card pills in translucent chrome, 24px, 6px radius;
+  Download pink → lighter pink on hover (no more white inversion);
+  bookmark hover = chrome pill + `--nhdw-accent-ink` glyph. The plan's
+  **selected-card treatment**: a ticked card keeps its strip at full opacity
+  (like a bookmarked one) and wears a 2px inset accent outline — no layout
+  effect on the host. Reduced motion collapses the four transitions.
+- **Two defects found by the specimen, fixed in the same file:** (1) the
+  "Include already downloaded" row is toggled with the `hidden` attribute,
+  but the row's author `display: inline-flex` outranks the UA's `[hidden]`
+  rule — on a host without its own `[hidden]{display:none!important}` the
+  row never went away; `.nhdw-redownload-row[hidden] { display: none }`
+  restores it. (2) The bar overflowed both viewport edges on narrow windows
+  (≈1000px with harvest on); it now wraps — `flex-wrap`, `width:
+  max-content` (shrink-to-fit from `left: 50%` would otherwise wrap at half
+  the viewport) and `max-width: calc(100vw - 32px)`. Positioning, z-index
+  and specificity untouched.
+- **Guard** (`test/theme-budget.test.js`): the mirror equals theme.css's dark
+  tokens (≤ 10, namespaced), no colour literal outside the mirror block but
+  `#fff`, every selector names an `nhdw-` class (the legacy nhentai
+  `input[type="checkbox"]` zoom rule is the one grandfathered exception —
+  it is a containment smell worth retiring with the legacy checkbox
+  feature), the `[hidden]` rule, `position: fixed` and the z-index.
+- **Not restyled on purpose:** `css/titleBookmark.css` (the gallery-page
+  Bookmark / Save offline / Select buttons) — their blue/teal/violet were an
+  owner decision to differ from the site's buttons and are outside family
+  5's listed scope.
+- Review: `Preview/logo-lab/content-specimen.html?host=light|dark&harvest=1&status=1&redl=1`,
+  `content-wall.html`, `content-wall-before.png`, `content-wall-after.png`.
+
 ### Audit — what the MD docs describe that is still not built
 
-- **Family 5, `css/content.css`** (floating bar, card controls, selected-card
-  treatment, counters, "Scroll for me", Ready/status, the Harvest→Stop morph
-  styling): untouched. Needs the dummy-host specimen (section 3 of the
-  specimen spec) and light/dark host screenshots; values only, containment
-  untouched.
+- **Family 5, `css/content.css`**: **built** (above).
 - **Firefox tree** (`panelRenderers.css` + mobile CSS): no theme yet; the
   plan asks for identical tab treatment there.
 - **Family 2 ghost-wing watermark**: not built — waits for an approved vector
