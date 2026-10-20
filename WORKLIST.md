@@ -63,7 +63,34 @@ the last choice across closes and surfaces (`chrome.storage.sync`, like
 uiMode), and while a filter is on the toolbar's **Select all / Select none**
 send the visible rows' **composite keys** instead of the whole-list form, so
 nothing off screen is silently ticked. Chrome **3.10.4** / Firefox **1.4.4**.
-**item 71 landed (verify-and-close + one real defect)** — the blanket "Download
+**item 72 landed (cross-mirror fallback)** — a mirror-site gallery whose
+own image mirrors all fail validation (throttle/challenge) continues
+from a sibling site: hentaienvy by token host-swap (the imhentai↔envy
+twins share the `/033/<token>/` store, so the path is identical and
+only the hosts change), hentaiera by title match (separate backend —
+search, normalize + score titles, ≥ 0.9 containment, page-count
+check, sticky switch). Because imhentai and hentaiera search often
+answer nothing unless the wording is the full title (or a tag), the
+title search climbs a **wording ladder** (item 73): raw title →
+normalized title → strongest tag term (the adapters now extract typed
+gallery tags), each rung tried only when the previous search parses
+to zero usable cards. Chains follow the owner's recorded orders
+(imh→envy→era, envy→era→imh, era→envy→imh); nhentai/hentaifox/hitomi
+are untouched. Reactive and request-free while the site is healthy,
+so default ON with a Settings + panel opt-out (`mirrorFallback`).
+Settings and the panel also carry a **Download quality** reminder
+(item 74): downloads fetch the reading-mode/source images (original
+resolution, original format); the sites' own download button (the
+lite/lower-resolution zip copy) is deliberately not used — and the
+in-page lite/source buttons (item 75) were decided against for the
+same reason. Fetch-side only — queue/job/bookmark/history mechanics
+unchanged; history still records only full success.
+`src/utils/mirrorFallback.ts` + `getFallbackImageUrls?` adapter
+hook; 34 unit tests (`test/mirror-fallback.test.js`, both trees)
+and Downloader integration cases green; e2e re-pinned the raw-mode
+attempt count (canonical-only stays the raw contract). Live-chain
+verification on real throttled galleries is an owner-only pass.
+Chrome **3.14.0** / Firefox **1.6.0**. **item 71 landed (verify-and-close + one real defect)** — the blanket "Download
 all (N pages)" entry was already gone (item 61's range block), so the panel now
 also *says* what took its place: a `#selectionPointer` line in the list
 ("ticking rows here and ticking cards on the page are the same selection; for
@@ -174,16 +201,67 @@ Two cheap checks that have caught real bugs here:
 
 ## Open, in the order I would take them
 
-**Top of the queue (2026-09-26):** items **68/70 landed best-effort**;
-**42/58** remain the real-browser, Firefox Android, and then signing passes.
-The device pass cannot be substituted with the offline suites. Item 71's
-remaining wording choice is recorded below.
+**Top of the queue (2026-10-17):** item **72 landed** (cross-mirror
+fallback, both trees, Chrome 3.13.0 / Firefox 1.5.0). New from the
+owner's 2026-10-17 note: **73** (title-match search robustness — the
+imh/era wording ladder), **74** (Settings reminder: source/high-res
+pipeline vs lite/low-res zip button — copy-only), **75** (owner
+decision: embedded-UI "Download lite" / "Download source" buttons —
+recommendation recorded against). Then owner-only **42/58**
+(real-browser + Android device passes, then signing).
 
 **One open question for the owner (recorded, not started):** (1) **item 71's
 remaining UX choice** is narrowed to whether the
 range block alone is enough on a listing page or the button should also point
 at the page's floating bar — the shipped pointer already names on-page
 selection, so either answer is a wording change, not a rebuild.
+
+### Owner additions 2026-10-17 — search robustness, pipeline reminder, lite/source buttons (items 73–75)
+
+Owner brief (verbatim intent): the only fully functional search on the
+mirror network is **hentaienvy** (as easy as nhentai's); **imhentai and
+hentaiera sometimes return nothing** unless the query is worded like the
+full title, or searched by tags instead. **All three landed 2026-10-17
+(Chrome 3.14.0 / Firefox 1.6.0):**
+
+- **73 — DONE: the wording ladder.** Search URL shapes were already
+  done and capture-verified (`GET /search/?key=` on all three network
+  sites; hentaifox's `/search/?q=` is out of scope — no chain). The
+  title-match leg now climbs per sibling: (1) raw pretty title (the
+  best single shot, per the owner's "full title" finding), (2) the
+  normalized title (when a bracketed group made the raw wording land
+  wrong), (3) the strongest tag term (artist > group/character > any
+  non-language tag) — each rung tried only when the previous search
+  parses to zero usable cards. The three mirror adapters now extract
+  typed tags from their gallery pages (grounded selectors from the
+  captures; language tags dropped), so rung 3 has a query. A
+  Cloudflare-challenged search page still parses to zero cards and
+  stays an honest failure. Red-first: 11 new tests (ladder units,
+  tag parsing on real-capture markup, Downloader rung-2 and rung-3
+  rescues, honest exhaustion).
+- **74 — DONE: the pipeline reminder (copy-only).** A "Quality note"
+  under the format control on the options page and a "Download
+  quality" section in the panel Settings: downloads fetch the
+  **reading-mode / source images** (original resolution, the site's
+  original format); the sites' own download button (the lite /
+  low-resolution zip copy) is deliberately not used. Owner's
+  same-title sampling behind the wording: hitomi's zip is webp
+  ~1–5% smaller than its reading-mode originals; hentaifox's zip
+  deviates most (~1–2% cumulative); imhentai/hentaienvy/hentaiera
+  zips are byte-identical to reader fetches.
+- **75 — DECIDED AGAINST (owner pick, 2026-10-17):** no in-page
+  "Download lite" / "Download source" buttons. Strategy A stays the
+  only pipeline: the lite (zip-button) variant is the inferior one
+  per the owner's own sampling, and zip endpoints are deliberately
+  not hammered. (nhentai itself has no such buttons either — the
+  "like nh" reference was the embedded-UI drawer pattern.)
+- **Hitomi — needs nothing more (closed by inspection).** The
+  owner's own call treats hitomi like hentaifox (unique, sometimes-
+  exists, no guaranteed mirror copy), so item 72 gives it an empty
+  chain — correct. Strategy A already serves hitomi's reading-mode
+  originals (PNG; avif conversion possibly pending on fresh samples —
+  that precaution stays an owner device-pass question in
+  `MULTISITE_V4_PLAN.md` §7).
 
 ### Owner roadmap 2026-09-24 — panel rewrite, site parity, auto-fetch (items 60–71)
 
@@ -428,6 +506,61 @@ open parts until the owner answers).
   The same pass verified §E and found the guard-identity defect (2 more red
   tests, fixed) — see the banner and the backlog log.
 
+- [x] **72. Cross-mirror fallback for mirror-site galleries — DONE 2026-10-17 (Chrome 3.13.0 / Firefox 1.5.0).**
+  When a mirror-site gallery's own image mirrors all fail validation
+  (a throttle, a challenge), the download continues from a sibling
+  site. Two mechanisms, one setting (`mirrorFallback`, default ON,
+  Settings + panel opt-out, reactive/passive so ON by the owner's
+  default rule): **token host-swap** for imhentai↔hentaienvy (they
+  share the `/033/<token>/` content store with disjoint gallery-id
+  spaces — same path, other hosts, never an id lookup) and
+  **title-match** for hentaiera (separate backend — search the
+  sibling, normalize + score titles, require ≥ 0.9 containment,
+  verify page count, then switch). Chains (owner-recorded orders):
+  imh→(envy, era), envy→(era, imh), era→(envy, imh); nhentai /
+  hentaifox / hitomi have none. Fetch-side/adapter-layer only —
+  queue, job, bookmark and history mechanics untouched; one job is
+  still one site; the composite `<site>:<id>` identity is preserved
+  through a switch and history records only full success. Pure core
+  in `src/utils/mirrorFallback.ts` (chains, search-URL builder,
+  title normalize/score, per-site search-result parsers, match
+  picker); `getFallbackImageUrls?` on the adapter contract carries
+  the token-swap URLs. 23 new unit tests (`test/mirror-fallback.test.js`,
+  both trees) + Downloader integration cases; e2e raw-mode attempt
+  count re-pinned (canonical-only stays the raw contract — the
+  sibling URLs are tried after it). Live-chain verification on real
+  throttled galleries is an owner-only pass (no sandbox egress).
+
+- [x] **73. Title-match search robustness (imh/era wording) — DONE 2026-10-17 (Chrome 3.14.0 / FF 1.6.0).**
+  Search URL shapes were already done and capture-verified
+  (`/search/?key=` on all three network sites). The wording
+  ladder now climbs per sibling: (1) raw pretty title, (2)
+  normalized title, (3) the strongest tag term (artist >
+  group/character > any non-language tag) — each rung tried
+  only when the previous search parses to zero usable cards.
+  The three mirror adapters now extract typed tags from their
+  gallery pages (imh `ul.galleries_info`, era tag buttons,
+  envy `hnv-gallery-tag` links; language tags dropped), so
+  rung 3 has a query. Red-first: 11 new tests (ladder units,
+  tag parsing on real-capture markup, Downloader rung-2 and
+  rung-3 rescues, honest exhaustion).
+
+- [x] **74. Settings reminder — which pipeline "Download" runs
+  — DONE 2026-10-17 (Chrome 3.14.0 / FF 1.6.0).** Copy-only:
+  a "Quality note" under the format control on the options
+  page and a "Download quality" section in the panel Settings
+  — downloads fetch the reading-mode/source images (original
+  resolution, original format); the sites' own download
+  button (lite/low-res) is deliberately not used.
+
+- [x] **75. Embedded-UI "Download lite" / "Download source"
+  buttons — DECIDED AGAINST 2026-10-17 (owner pick).**
+  Strategy A stays the only pipeline: the lite (zip-button)
+  variant is inferior per the owner's own same-title
+  sampling (hitomi webp ~1–5% smaller, hentaifox largest
+  deviation) and zip endpoints are deliberately not
+  hammered. No buttons built.
+
 #### Blocked (record here the moment a site cannot support an item)
 
 _(format: `item · site · architecture reason · capture reference`)_
@@ -543,6 +676,7 @@ piece of work".
 
 ## Done (one line each — details in `IMPROVEMENT_BACKLOG.md` session logs)
 
+- **Item 72 — cross-mirror fallback (2026-10-17, Chrome 3.13.0 / Firefox 1.5.0):** mirror-site galleries whose own image mirrors all fail validation continue from a sibling site — hentaienvy by token host-swap (shared `/033/` store), hentaiera by title match (≥ 0.9 containment + page-count check), chains imh→(envy|era), envy→(era|imh), era→(envy|imh); reactive, default ON, Settings/panel opt-out; `src/utils/mirrorFallback.ts` + `getFallbackImageUrls?` adapter hook; 23 unit tests both trees, e2e re-pinned; live-chain check is owner-only.
 - **Theme layer — ASSET_PLAN families 2/3/4/6 (2026-10-14, 3.12.0):** one
   `css/theme.css` (15 tokens + element primitives, 4.6 KB), `style.css` value
   swaps only (39 colour literals → 3, every `#htmlDark` pair removed), seated

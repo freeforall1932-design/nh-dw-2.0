@@ -17,6 +17,10 @@
         PDF = one PDF file with one image per page; images are embedded without
         re-compression, so quality stays the same and the size is about the same
         as all images together. Raw = each image downloaded separately (no archive).</small>
+        <br/><small><b>Quality note:</b> every download fetches the reading-mode
+        source images — original resolution, the site's original format. The
+        sites' own download button (a lite, lower-resolution copy) is
+        deliberately not used.</small>
         <br/>
         Folder for raw downloads:
         <input id="rawMasterFolder" type="text" size="16" placeholder="NHDW"/>
@@ -183,6 +187,16 @@
         <label><input id="batchNameDate" type="checkbox"/>
         Add the download date to merged file names (search_31082026.zip, _part2, _part3...)</label><br/>
         <button id="clearHistory" type="button">Clear history</button>
+        <br/><hr/>
+        <h3>Mirror fallback</h3>
+        <p><small>When a mirror-site gallery's own image mirrors all fail
+        (a throttle or a challenge), the download continues from a sibling
+        site: hentaienvy shares imhentai's content store (the same token,
+        other hosts), and hentaiera copies are found by title. Only runs
+        after the site's own mirrors failed — a healthy download makes no
+        extra requests.</small></p>
+        <label><input id="mirrorFallback" type="checkbox"/>
+        Route a throttled mirror-site download to its sibling sites</label><br/>
     </body>
     <script src="js/options.js"></script>
 </html>

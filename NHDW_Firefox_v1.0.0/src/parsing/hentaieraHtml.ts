@@ -78,6 +78,30 @@ export function extractHentaieraReaderImage(html: string): string | null {
  * The per-gallery extension is read from the thumbnail strip (or the cover),
  * never assumed — different galleries legitimately use jpg and webp.
  */
+// Item 73: the gallery's tag buttons, feeding the
+// sibling-search wording ladder (the owner's live note:
+// hentaiera's search answers tags when the title wording
+// fails). Types come from the href prefix; language tags
+// carry no matching signal and are dropped.
+const TAG_ANCHOR_RE = /<a\s+([^>]*)>([^<]*)/g;
+function extractHentaieraTags(html: string): Array<{ type: string; name: string }> {
+    const tags: Array<{ type: string; name: string }> = [];
+    TAG_ANCHOR_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_ANCHOR_RE.exec(html)) !== null) {
+        const attrs = match[1];
+        const href = /href=["']\/([a-z]+)\/[^"']*["']/i.exec(attrs);
+        if (href === null) continue;
+        const type = href[1].toLowerCase();
+        if (type !== "artist" && type !== "group" && type !== "character" && type !== "tag") continue;
+        const cls = /class=["'][^"']*["']/i.exec(attrs);
+        if (cls === null || cls[0].indexOf("tag") === -1) continue;
+        const name = match[2].replace(/\s+/g, " ").trim();
+        if (name !== "") tags.push({ type, name });
+    }
+    return tags;
+}
+
 export function extractHentaieraGallery(html: string): any | null {
     const ld = parseLdImageGallery(html);
     if (ld === null) {
@@ -116,7 +140,7 @@ export function extractHentaieraGallery(html: string): any | null {
         title: { english: name, japanese: "", pretty: name },
         images: { pages: pages },
         scanlator: "",
-        tags: [],
+        tags: extractHentaieraTags(html),
         num_pages: numPages
     };
 }

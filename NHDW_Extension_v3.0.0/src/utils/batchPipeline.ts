@@ -36,6 +36,14 @@ export interface BatchJobOptions {
     alreadyDownloadedIds?: string[];
     redownloadIds?: string[];
     /**
+     * Mirror-network fallback (item 72): when a mirror-site
+     * gallery's own mirrors all fail to serve a real image,
+     * try the sibling sites — the /033/ twin by host swap,
+     * hentaiera by title match. Reactive only (zero extra
+     * requests while the site is healthy). Default ON.
+     */
+    mirrorFallback?: boolean;
+    /**
      * The site every gallery of THIS job belongs to (item 48).
      *
      * Absent (or "nhentai") means the default site, which is what every
@@ -441,7 +449,11 @@ export async function runBatchDownload(args: {
         apiKey: apiKey || null,
         useServerArchive: !!options.useServerArchive,
         rawMasterFolder: rawMasterFolder,
-        archiveMasterFolder: archiveMasterFolder
+        archiveMasterFolder: archiveMasterFolder,
+        // Item 72: relayed like every other setting so the
+        // Downloader (offscreen document included) never
+        // touches chrome.storage. Absent = default ON.
+        mirrorFallback: options.mirrorFallback !== false
     };
 
     const names: Array<string> = [];

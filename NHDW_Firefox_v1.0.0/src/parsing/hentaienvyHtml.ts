@@ -46,6 +46,32 @@ export function extractHentaienvyReaderImage(html: string): string | null {
 /**
  * Convert a HentaiEnvy gallery or reader page HTML into the normalized gallery object.
  */
+// Item 73: the gallery's tag links, feeding the
+// sibling-search wording ladder (the owner's live note:
+// tags are the reliable wording on this network). Types
+// come from the href prefix; the clean name is the title
+// attribute. Language tags carry no matching signal and
+// are dropped.
+const TAG_ANCHOR_RE = /<a\s+([^>]*)>([^<]*)/g;
+function extractHentaienvyTags(html: string): Array<{ type: string; name: string }> {
+    const tags: Array<{ type: string; name: string }> = [];
+    TAG_ANCHOR_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_ANCHOR_RE.exec(html)) !== null) {
+        const attrs = match[1];
+        if (attrs.indexOf("hnv-gallery-tag") === -1) continue;
+        const href = /href=["']\/([a-z]+)\/[^"']*["']/i.exec(attrs);
+        if (href === null) continue;
+        const type = href[1].toLowerCase();
+        if (type !== "artist" && type !== "group" && type !== "character"
+            && type !== "tag" && type !== "category") continue;
+        const titleAttr = /title=["']([^"']*)["']/i.exec(attrs);
+        const name = (titleAttr ? titleAttr[1] : match[2]).replace(/\s+/g, " ").trim();
+        if (name !== "") tags.push({ type, name });
+    }
+    return tags;
+}
+
 export function extractHentaienvyGallery(html: string): any | null {
     if (!html || typeof html !== "string") return null;
 
@@ -119,7 +145,7 @@ export function extractHentaienvyGallery(html: string): any | null {
             thumbnail: { t: "j", w: 0, h: 0 }
         },
         scanlator: "",
-        tags: [],
+        tags: extractHentaienvyTags(html),
         num_pages: numPages
     };
 }

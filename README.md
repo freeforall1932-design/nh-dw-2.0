@@ -6,8 +6,8 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.12.0-blue)
-![Firefox](https://img.shields.io/badge/Firefox-1.4.7-orange)
+![Version](https://img.shields.io/badge/version-3.14.0-blue)
+![Firefox](https://img.shields.io/badge/Firefox-1.6.0-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -104,6 +104,7 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 | Master folder | On | Wrap downloads in `Downloads/NHDW/`. |
 | Name template | `{pretty}` | Tokens like `{pretty}`, `{id}` — resolved from each gallery's own metadata. |
 | Verify downloaded files exist | On | A recorded gallery is only skipped while its file is still on disk. |
+| Mirror fallback | On | A mirror-site gallery whose own image mirrors all fail (throttle/challenge) continues from a sibling site: hentaienvy shares imhentai's content store (same token, other hosts), hentaiera copies are matched by title. Runs only after the site's own mirrors failed — a healthy download makes no extra requests. |
 | Auto-capture | Off | Bookmark every card as you scroll. |
 | Toolbar click opens | Side panel | Switch back to the classic popup. |
 
@@ -199,6 +200,8 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| **3.14.0** (Firefox **1.6.0**) | Items 73–74: the mirror-fallback title search now climbs a wording ladder — raw title → normalized title → strongest tag term (the adapters extract typed gallery tags for this; the owner's live note: imhentai/hentaiera search often answer nothing unless the wording is the full title or a tag), each rung tried only when the previous search comes back empty. Settings and the panel now carry a "Download quality" reminder: downloads fetch the reading-mode source images (original resolution, original format); the sites' own download button (lite/lower-resolution) is deliberately not used. Item 75 (in-page lite/source buttons) was decided against. |
+| **3.13.0** (Firefox **1.5.0**) | Item 72 — cross-mirror fallback: a mirror-site gallery whose own image mirrors all fail validation continues from a sibling site. hentaienvy serves imhentai's images by token host-swap (the twins share the `/033/<token>/` store, so only the hosts change); hentaiera copies are found by title (search, ≥ 0.9 title containment, page-count check, then a sticky switch). Chains follow the site graph: imhentai→(envy, era), envy→(era, imh), era→(envy, imh). Reactive only — no sibling requests while the gallery's own mirrors work — and off by opt-out in Settings and the panel (`Mirror fallback`). Fetch-side only: queue, jobs, bookmarks and history behave exactly as before, and history still records only full success. 23 new unit tests per tree; live-chain verification on a real throttled gallery is a device-pass item. |
 | **3.12.0** | The theme layer (`ASSET_PLAN.md` families 2–6 under the style budget): one `css/theme.css` with 15 tokens and element primitives, `style.css`/`content.css` value swaps only, the seated browser tab strip, one pink primary per surface, status chips, a soft modal, the options page in the same look in light **and** dark. Found and fixed on the way: the side panel threw on its second dark-mode bootstrap (one-way `#htmlLight → #htmlDark` rename) and stopped following the tab — fixed in Chrome and ported to Firefox **1.4.7**; the injected "Include already downloaded" row never hid on hosts without a `[hidden]` rule; the floating bar overflowed narrow windows. `test/theme-budget.test.js` locks the budget and measures AA contrast. |
 | **3.10.4 – 3.11.5** | Bookmark-tab per-site filter (item 66), bookmark search / state / date query with a 200-row window and the history-sourced green ✓ (68), live-session auto-fetch "Scroll for me" (70), and the logo-lab icon work — tryout toolbar-icon candidates with a classic-icon fallback. Details per step in `IMPROVEMENT_BACKLOG.md`. |
 | **3.10.3** | Item 71: the panel's list says out loud what replaced the retired "Download all (N pages)" button — ticking a row and ticking a card on the page are one selection, and the range block covers the listing's other pages; the List-mode hint names the range block too. Behind that, the pipeline's skip guard now reads a recorded bare id as the **default site's** record instead of this job's site, so a legacy nhentai record can no longer mask a same-numbered gallery on another site (a real skip-the-download bug on the five added hosts for history from before 3.8.0). |

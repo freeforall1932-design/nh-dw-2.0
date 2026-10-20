@@ -1,5 +1,6 @@
 import { SiteAdapter } from "./GallerySource";
 import { extractImhentaiGallery, extractImhentaiReaderImage } from "../parsing/imhentaiHtml";
+import { sharedStoreImageUrls } from "../utils/mirrorFallback";
 
 export const IMHENTAI_PAGE_HOST = "https://imhentai.xxx";
 export const IMHENTAI_IMAGE_SERVERS: string[] = [
@@ -63,6 +64,16 @@ export const imhentaiSource: SiteAdapter = {
             "m4.imhentai.xxx",
             "m5.imhentai.xxx"
         ];
+    },
+
+    // Mirror fallback (item 72): hentaienvy serves the SAME
+    // /033/<token>/ content store (the captures show one token
+    // on both sites' m-hosts; the owner's zip comparison found
+    // the downloads byte-identical). The gallery IDS are
+    // disjoint between the twins, so this is a host swap on
+    // the token — never an id lookup.
+    getFallbackImageUrls(mediaId: string, filename: string): string[] {
+        return sharedStoreImageUrls(mediaId, filename, "hentaienvy");
     },
 
     getAllowedPathRegex(): RegExp {

@@ -1,9 +1,29 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Updated:** 2026-10-14 (session `arena/023065de-nh-dw-2-0`, theme layer).
-Chrome **3.12.0**, Firefox **1.4.7** (one ported bug fix, no theme — see the
-review paragraph below). Owner question "is there a
-way to make the UI artistic but not bloated" answered by shipping
+**Updated:** 2026-10-17 (session `arena/96e2ebce-nh-dw-2-0`, item 72
+cross-mirror fallback). Chrome **3.13.0**, Firefox **1.5.0** — both
+trees fully green (Chrome 647 unit / 182 e2e / 7 smoke; Firefox 673
+unit / 221 e2e / 7 smoke), docs synced, ready to commit. A
+mirror-site gallery whose own image mirrors all fail validation now
+continues from a sibling site: **hentaienvy by token host-swap**
+(the imhentai↔envy twins share the `/033/<token>/` store — same path,
+other hosts) and **hentaiera by title match** (search, ≥ 0.9 title
+containment, page-count check, sticky source switch). Chains per the
+owner's recorded orders: imh→(envy, era), envy→(era, imh),
+era→(envy, imh); nhentai/hentaifox/hitomi unaffected. Reactive and
+request-free while healthy ⇒ default ON, opt-out in Settings and the
+panel (`mirrorFallback`). Core: `src/utils/mirrorFallback.ts` (new,
+pure); adapters grow an optional `getFallbackImageUrls?` hook; the
+Downloader walks own-mirrors → sibling-store URLs (archive mode) or
+canonical → sibling URLs (raw mode) → memoized once-per-gallery
+title-match switch → honest failure naming the fallback. Queue, job,
+bookmark and history mechanics untouched; history still records only
+full success. Full spec + red evidence + the two stale-build traps:
+`IMPROVEMENT_BACKLOG.md` session log 2026-10-17; chain table and
+integration cases pinned by `test/mirror-fallback.test.js` (23 tests,
+both trees). Live-chain verification on a real throttled gallery is
+owner-only (no sandbox egress). Previous entry below — owner question
+"is there a way to make the UI artistic but not bloated", answered by shipping
 `ASSET_PLAN.md` families **2/3/4/6** under the style budget law: ONE new file
 `css/theme.css` (4.6 KB, **15 tokens** — surface/surface-2, ink/ink-2, line,
 wash, accent/accent-ink/accent-wash, ok/warn/bad, radius-sm/md, ease — plus
@@ -450,6 +470,25 @@ on these offline checks.**
 
 ## Latest work (2026-09-23/26) — one paragraph per pass
 
+- **Item 72 — cross-mirror fallback (2026-10-17, this branch, Chrome 3.13.0 / Firefox 1.5.0):**
+  mirror-site galleries whose own image mirrors all fail validation
+  continue from a sibling site — token host-swap for the
+  imhentai↔hentaienvy shared `/033/` store, title-match (≥ 0.9
+  containment + `num_pages` check + sticky switch) for hentaiera;
+  owner-recorded chain orders; default ON with a Settings/panel
+  opt-out; fetch-side only. Both trees green; the Firefox port is six
+  byte-identical shared files plus surgical patches to `background.ts`,
+  `options.ts`, `options.html`, `popupSettings.ts` (FF's
+  `bookmarkService.ts`/`siteUi.ts`/`embeddedUi.ts` deltas preserved).
+  Two traps recorded for the next session: bare `npx mocha` runs a
+  stale `build/test/`, and `npm run test:e2e` runs the stale **webpack**
+  bundle `js/background.js` — an e2e failure after a source edit is
+  usually `npm run build` missing, not a logic bug. Also: raw mode's
+  one-download-per-attempt contract is pinned by e2e phase 3
+  (18 attempts for a 3-page gallery) — sibling URLs are appended
+  AFTER the canonical, and the site's own numbered mirrors stay
+  archive-mode-only. Details: `IMPROVEMENT_BACKLOG.md` session log
+  2026-10-17.
 - **Items 68 + 70 — best-effort, owner-directed (2026-09-26, this branch):**
   the owner's call was to implement both rather than wait for the spec pass
   they were parked behind ("how do i test it later if theres nothing to test"),
