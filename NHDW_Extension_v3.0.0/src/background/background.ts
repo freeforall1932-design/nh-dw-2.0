@@ -487,7 +487,7 @@ module background
                 // (non-secret) settings; read them here so the Downloader
                 // never touches chrome.storage itself (same class runs inside
                 // the offscreen document).
-                chrome.storage.sync.get({ useZip: "zip", rawMasterFolder: "NHDW", maxConcurrentDownloads: "3", rawMaxConcurrent: "3" }, (elems: any) => {
+                chrome.storage.sync.get({ useZip: "zip", rawMasterFolder: "NHDW", maxConcurrentDownloads: "3", rawMaxConcurrent: "3", mirrorFallback: true }, (elems: any) => {
                     // ONE resolution for the whole job. The Downloader is
                     // always handed the result, so it never falls back to its
                     // own storage read and can never resolve to something the
@@ -503,6 +503,9 @@ module background
                     // only reads them from its settings bag).
                     settings.maxConcurrentDownloads = elems && elems.maxConcurrentDownloads !== undefined ? elems.maxConcurrentDownloads : "3";
                     settings.rawMaxConcurrent = elems && elems.rawMaxConcurrent !== undefined ? elems.rawMaxConcurrent : "3";
+                    // Item 72: mirror-network fallback (default ON; the
+                    // Downloader treats an absent value as ON too).
+                    settings.mirrorFallback = !(elems && elems.mirrorFallback === false);
                     startWithSettings();
                 });
             } catch (_) {
@@ -1044,6 +1047,11 @@ function resolveWorkerBatchOptions(options?: BatchJobOptions): Promise<BatchJobO
                 maxConcurrentDownloads: stored && stored.maxConcurrentDownloads !== undefined ? stored.maxConcurrentDownloads : "3",
                 rawMaxConcurrent: stored && stored.rawMaxConcurrent !== undefined ? stored.rawMaxConcurrent : "3",
                 rawMasterFolder: stored && stored.rawMasterFolder !== undefined ? String(stored.rawMasterFolder) : "NHDW",
+                // Item 72: mirror-network fallback. Default ON —
+                // it is reactive (runs only after the gallery's
+                // own mirrors all failed) and makes no background
+                // requests, so it costs nothing while healthy.
+                mirrorFallback: !(stored && stored.mirrorFallback === false),
                 apiKey: localApi.apiKey,
                 useServerArchive: localApi.useServerArchive
             };
@@ -1052,6 +1060,9 @@ function resolveWorkerBatchOptions(options?: BatchJobOptions): Promise<BatchJobO
                 if (typeof options.downloadName === "string") merged.downloadName = options.downloadName;
                 if (typeof options.rawMasterFolder === "string") merged.rawMasterFolder = options.rawMasterFolder;
                 if (typeof options.archiveMasterFolder === "string") merged.archiveMasterFolder = options.archiveMasterFolder;
+                // Item 72: a per-job override wins over the stored
+                // default, same as every other setting here.
+                if (options.mirrorFallback !== undefined) merged.mirrorFallback = !!options.mirrorFallback;
                 if (options.useZip) merged.useZip = resolveJobFormat(options.useZip, merged.useZip);
                 if (typeof options.duplicateBehaviour === "string") merged.duplicateBehaviour = options.duplicateBehaviour;
                 if (options.replaceSpaces !== undefined) merged.replaceSpaces = options.replaceSpaces;

@@ -45,6 +45,34 @@ export function extractImhentaiReaderImage(html: string): string | null {
 /**
  * Convert an ImHentai gallery page HTML into the normalized gallery object.
  */
+// Item 73: the gallery's tag row, feeding the sibling-search
+// wording ladder (the owner's live note: imhentai's search
+// answers tags when the title wording fails). Types come from
+// the href prefix (/artist/, /tag/…); language tags carry no
+// matching signal and are dropped. The row sits in the
+// ul.galleries_info block; the count badge inside each anchor
+// is past the first "<", so the captured text is the name.
+const TAG_ANCHOR_RE = /<a\s+([^>]*)>([^<]*)/g;
+function extractImhentaiTags(html: string): Array<{ type: string; name: string }> {
+    const tags: Array<{ type: string; name: string }> = [];
+    const info = /<ul class="galleries_info[\s\S]*?<\/ul>/.exec(html);
+    const scope = info ? info[0] : html;
+    TAG_ANCHOR_RE.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = TAG_ANCHOR_RE.exec(scope)) !== null) {
+        const attrs = match[1];
+        const href = /href=['"]\/([a-z]+)\/[^'"]*['"]/i.exec(attrs);
+        if (href === null) continue;
+        const type = href[1].toLowerCase();
+        if (type !== "artist" && type !== "group" && type !== "character" && type !== "tag") continue;
+        const cls = /class=['"][^'"]*['"]/i.exec(attrs);
+        if (cls === null || cls[0].indexOf("tag") === -1) continue;
+        const name = match[2].replace(/\s+/g, " ").trim();
+        if (name !== "") tags.push({ type, name });
+    }
+    return tags;
+}
+
 export function extractImhentaiGallery(html: string): any | null {
     if (!html || typeof html !== "string") return null;
 
@@ -112,7 +140,7 @@ export function extractImhentaiGallery(html: string): any | null {
             thumbnail: { t: "j", w: 0, h: 0 }
         },
         scanlator: "",
-        tags: [],
+        tags: extractImhentaiTags(html),
         num_pages: numPages
     };
 }

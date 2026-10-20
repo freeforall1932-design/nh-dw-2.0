@@ -32,7 +32,10 @@ let options = [
     new Select("listOutputMode"),
     new CheckBox("listMasterFolder"),
     new Select("uiMode"),
-    new CheckBox("inPageControls")
+    new CheckBox("inPageControls"),
+    // Item 72: mirror-network fallback (default ON — reactive
+    // only, see src/utils/mirrorFallback.ts).
+    new CheckBox("mirrorFallback")
 ]
 
 const OPTIONS_DEFAULTS = {
@@ -54,7 +57,8 @@ const OPTIONS_DEFAULTS = {
     listMasterFolder: true,
     listDownloadName: LIST_TEMPLATE_INHERIT,
     uiMode: "sidepanel",
-    inPageControls: true
+    inPageControls: true,
+    mirrorFallback: true
 // listFormat is requested WITHOUT a default: storage.get answers only the keys
 // a caller asks for, and a "zip" default here would both hide "never set" and
 // make the inherited value indistinguishable from a chosen one.

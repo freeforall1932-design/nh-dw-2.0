@@ -1,6 +1,8 @@
 var JSZip = require("jszip");
 import { GallerySource, clearnetSource } from "../sources/GallerySource";
 import { getSourceForSite } from "../sources/index";
+import { looksLikeGallery } from "../parsing/GalleryEmbed";
+import { mirrorFallbackChainFor, buildMirrorSearchUrl, mirrorSearchQueryVariants, parseMirrorSearchResults, pickMirrorTitleMatch } from "../utils/mirrorFallback";
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
@@ -13,7 +15,7 @@ export { sanitizeArtifactFilename };
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string; mirrorFallback?: boolean } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -47,6 +49,12 @@ export default class Downloader
         }
 
         this.#mediaId = this.#json.media_id;
+        // Item 72: mirror-network fallback. Reactive only — it runs
+        // after this gallery's own mirrors all failed to serve a
+        // real image, so a healthy download makes zero extra
+        // requests. Default ON (the owner's rule: a passive, static
+        // setting that eats no resources while the site is up).
+        this.#mirrorFallback = !this.#settings || this.#settings.mirrorFallback !== false;
     }
 
     // Top-level folder that collects raw (loose image) downloads; "" = off.
@@ -526,33 +534,37 @@ export default class Downloader
     }
 
     // Download a page
-    async #downloadPageInternalAsync(currPage: number, progress: number) {
-        let page = this.#json.images.pages[currPage];
-        let format;
-        switch (page.t)
-        {
+    // The per-page extension from its legacy type code. Extracted
+    // (item 72) so a gallery that switched to a mirror mid-walk can
+    // recompute the address from the MIRROR's own page types — the
+    // extension is per-gallery on this network, not per-site.
+    #pageFormatCode(page: any): string | null {
+        switch (page.t) {
             case "j":
-                format = ".jpg";
-                break;
+                return ".jpg";
             case "p":
-                format = ".png";
-                break;
+                return ".png";
             case "g":
-                format = ".gif";
-                break;
+                return ".gif";
             case "w":
-                format = ".webp";
-                break;
+                return ".webp";
             case "b":
-                format = ".bmp";
-                break;
+                return ".bmp";
             case "a":
-                format = ".avif";
-                break;
+                return ".avif";
             case "0": // Invalid page, probably an issue on NHentai side
-                return;
+                return null;
             default:
                 throw "Unknown page format " + page.t;
+        }
+    }
+
+    async #downloadPageInternalAsync(currPage: number, progress: number) {
+        let page = this.#json.images.pages[currPage];
+        if (page === undefined) { page = { t: "j", w: 0, h: 0 }; }
+        const format = this.#pageFormatCode(page);
+        if (format === null) {
+            return;
         }
         let filenameParsing = (page && page.hash) ? (page.hash + format) : ((currPage + 1) + format); // Name for parsing
         this.updateProgress(progress, this.#doujinshiName + "/" + ((currPage + 1) + format), false);
@@ -562,37 +574,93 @@ export default class Downloader
         // Try the canonical CDN first, then the numbered mirrors. This is
         // similar to gallery-dl's extractor fallback strategy and avoids making
         // one random mirror failure abort an otherwise valid gallery.
-        const imageUrls = this.#source.getImageUrls(String(this.#mediaId), filenameParsing);
+        // Item 72 appends the mirror-network fallbacks (the /033/
+        // twin's hosts for the same token) after the site's own mirrors.
+        const imageUrls = this.#imageUrlsForPage(filenameParsing);
 
         if (this.useZip === "raw") {
             // Raw mode cannot inspect the response before Chrome starts the
             // download. Use the canonical original-image URL and report startup
             // errors through the downloads API callback (routed through
             // #saveArtifact so the offscreen document can relay to the worker).
-            const imageUrl = imageUrls[0];
+            let lastRawError: any = null;
+            const masterPrefix = this.#rawMasterFolder !== "" ? this.#rawMasterFolder + "/" : "";
+            // Pages are numbered (001.jpg…) inside a folder named after
+            // the gallery, itself inside the master folder (default
+            // "NHDW") so hundreds of galleries group tidily. An empty
+            // master folder disables the extra level; slashes in the
+            // value nest deeper. sanitizeArtifactFilename cleans every
+            // segment independently at save time.
+            const rawSavePath = masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename;
             try {
-                // Pages are numbered (001.jpg…) inside a folder named after
-                // the gallery, itself inside the master folder (default
-                // "NHDW") so hundreds of galleries group tidily. An empty
-                // master folder disables the extra level; slashes in the
-                // value nest deeper. sanitizeArtifactFilename cleans every
-                // segment independently at save time.
-                const masterPrefix = this.#rawMasterFolder !== "" ? this.#rawMasterFolder + "/" : "";
-                await this.#saveArtifact(imageUrl, masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename);
+                await this.#saveArtifact(imageUrls[0], rawSavePath);
+                return;
             } catch (error: any) {
                 // Startup failures AND downloads interrupted after they
                 // started (network drop, disk full, cancelled in the shelf)
                 // land here and go through the retry loop; only after the
                 // retries are exhausted does the gallery fail.
-                const reason = error && error.message !== undefined ? error.message : error;
-                throw "Failed to download original image (" + reason + ").";
+                lastRawError = error;
             }
-            return;
+            // Item 72: the SIBLING store's URL for the same page is
+            // tried when the canonical download fails to start. The
+            // site's own numbered mirrors stay untouched here — raw
+            // mode has always handed exactly one URL to the download
+            // manager, and a failed mirror download still briefly
+            // occupies the shelf.
+            const fallbackUrls = this.#fallbackUrlsForPage(filenameParsing);
+            for (const imageUrl of fallbackUrls) {
+                try {
+                    await this.#saveArtifact(imageUrl, rawSavePath);
+                    return;
+                } catch (error: any) {
+                    lastRawError = error;
+                }
+            }
+            const switched = await this.#maybeSwitchMirror();
+            if (switched) {
+                // After a title-match switch the sibling's own
+                // canonical URL is the right single target.
+                try {
+                    await this.#saveArtifact(this.#imageUrlsForPage(filenameParsing)[0], rawSavePath);
+                    return;
+                } catch (error: any) {
+                    lastRawError = error;
+                }
+            }
+            const reason = lastRawError && lastRawError.message !== undefined ? lastRawError.message : lastRawError;
+            throw this.#mirrorExhaustedError("Failed to download original image (" + reason + ").");
         }
 
         // ZIP/CBZ and PDF share the fetch + validation loop; only the payload
         // handling differs (archive entry vs in-memory page list).
-        const validated = await this.#loadValidatedImage(imageUrls);
+        let validated: { blob: Blob; contentType: string | null };
+        try {
+            validated = await this.#loadValidatedImage(imageUrls);
+        } catch (error) {
+            // Item 72: every own-mirror URL failed to serve a real
+            // image (a throttle, a challenge, an error document).
+            // The title-match step of the chain resolves the same
+            // gallery on a sibling site — once per gallery, not per
+            // page — and this page is re-walked from there.
+            const switched = await this.#maybeSwitchMirror();
+            if (!switched) {
+                throw this.#mirrorExhaustedError(error);
+            }
+            // The sibling may type its pages differently (jpg vs
+            // webp is per-gallery on this network), so recompute
+            // the page address from the MIRROR's own metadata.
+            const switchedPage = (this.#json.images.pages || [])[currPage];
+            if (switchedPage !== undefined) {
+                const switchedFormat = this.#pageFormatCode(switchedPage);
+                if (switchedFormat !== null) {
+                    filenameParsing = (switchedPage && switchedPage.hash)
+                        ? (switchedPage.hash + switchedFormat)
+                        : ((currPage + 1) + switchedFormat);
+                }
+            }
+            validated = await this.#loadValidatedImage(this.#imageUrlsForPage(filenameParsing));
+        }
         if (this.useZip === "pdf") {
             // Keep the raw bytes; encoding decisions happen once, at assembly.
             this.#pdfPages.push({
@@ -649,6 +717,158 @@ export default class Downloader
     // archives keep one folder per gallery.
     #archiveEntryName(filename: string): string {
         return this.#archiveLayout === "flat" ? filename : this.path + "/" + filename;
+    }
+
+    // Item 72: the sibling-store URLs for the same media address
+    // (the /033/ twin's hosts for the same token — a host swap;
+    // the twins share the content store, so the path is identical).
+    // Empty for every site outside the token-shared store.
+    #fallbackUrlsForPage(filenameParsing: string): string[] {
+        if (!this.#mirrorFallback) {
+            return [];
+        }
+        const source = this.#source as any;
+        if (typeof source.getFallbackImageUrls !== "function") {
+            return [];
+        }
+        const fallbackUrls = source.getFallbackImageUrls(String(this.#mediaId), filenameParsing);
+        return Array.isArray(fallbackUrls) ? fallbackUrls : [];
+    }
+
+    // This site's own mirrors first (canonical CDN, then the
+    // numbered mirrors — the pre-existing order), then, when
+    // mirror fallback is enabled, the sibling store's hosts.
+    #imageUrlsForPage(filenameParsing: string): string[] {
+        const urls = this.#source.getImageUrls(String(this.#mediaId), filenameParsing);
+        for (const url of this.#fallbackUrlsForPage(filenameParsing)) {
+            if (urls.indexOf(url) === -1) {
+                urls.push(url);
+            }
+        }
+        return urls;
+    }
+
+    // Item 72: resolve the title-match step of the fallback chain
+    // at most once per gallery (see #mirrorSwitch). Token steps
+    // never reach this — they already ride in the page's URL list.
+    #maybeSwitchMirror(): Promise<boolean> {
+        if (!this.#mirrorFallback) {
+            return Promise.resolve(false);
+        }
+        if (this.#mirrorSwitch === null) {
+            this.#mirrorSwitch = this.#resolveMirrorSwitch().catch(() => false);
+        }
+        return this.#mirrorSwitch;
+    }
+
+    // Walk the title-match chain: search each sibling for the
+    // gallery's title, refuse anything that is not the same
+    // gallery (score threshold + 1:1 page count — the mirror
+    // network's copies are page-identical per the owner's
+    // byte comparison), and on acceptance switch the walk to
+    // the sibling's adapter, token and page types.
+    async #resolveMirrorSwitch(): Promise<boolean> {
+        const expectedTitle = this.#json && this.#json.title
+            ? String(this.#json.title.pretty || this.#json.title.english || "")
+            : "";
+        if (expectedTitle === "") {
+            return false;
+        }
+        for (const step of mirrorFallbackChainFor(this.site)) {
+            if (step.mode !== "title") {
+                continue;
+            }
+            const adapter = getSourceForSite(step.site);
+            if (adapter === null || typeof adapter.extractGallery !== "function") {
+                continue;
+            }
+            // Item 73: wording ladder. imhentai and
+            // hentaiera search often answer nothing
+            // unless the query is worded like the full
+            // title — or searched by tags instead — so
+            // each rung is tried only when the previous
+            // search parses to zero usable cards.
+            let match: any = null;
+            for (const query of mirrorSearchQueryVariants(
+                expectedTitle, this.#json && this.#json.tags)) {
+                const searchUrl = buildMirrorSearchUrl(step.site, query);
+                if (searchUrl === null) {
+                    continue;
+                }
+                const searchHtml = await this.#fetchMirrorText(searchUrl);
+                if (searchHtml === null) {
+                    continue;
+                }
+                const cards = parseMirrorSearchResults(searchHtml, step.site);
+                if (cards.length === 0) {
+                    continue;
+                }
+                match = pickMirrorTitleMatch(cards, expectedTitle);
+                if (match !== null) {
+                    break;
+                }
+            }
+            if (match === null) {
+                continue;
+            }
+            const galleryHtml = await this.#fetchMirrorText(adapter.getGalleryUrl(match.id));
+            if (galleryHtml === null) {
+                continue;
+            }
+            const extracted = adapter.extractGallery(galleryHtml);
+            if (extracted === null || !looksLikeGallery(extracted)) {
+                continue;
+            }
+            // A sibling reporting a different page count is a
+            // different gallery (or a partial mirror) — refuse it.
+            if (typeof extracted.num_pages === "number"
+                && typeof this.#json.num_pages === "number"
+                && extracted.num_pages > 0
+                && extracted.num_pages !== this.#json.num_pages) {
+                continue;
+            }
+            if (!extracted.site) {
+                extracted.site = adapter.site;
+            }
+            this.#source = adapter;
+            this.#mediaId = extracted.media_id;
+            this.#json = extracted;
+            this.updateProgress(Number(this.currentProgress), this.#doujinshiName, false, "mirror fallback: " + adapter.site);
+            return true;
+        }
+        return false;
+    }
+
+    // One search/gallery fetch for the title-match step.
+    // Extension-origin fetch — the same route mirror-site
+    // metadata already takes: a Cloudflare challenge page
+    // parses to no cards and the chain moves to the next
+    // sibling. Never throws; null means "try the next".
+    async #fetchMirrorText(url: string): Promise<string | null> {
+        if (this.#isAborted()) {
+            return null;
+        }
+        try {
+            const resp = await fetch(url, { credentials: "include", cache: "no-store", signal: this.#abortSignal || undefined });
+            if (resp && resp.ok && typeof resp.text === "function") {
+                return await resp.text();
+            }
+        } catch (_) {
+            // Challenge or network failure: try the next sibling.
+        }
+        return null;
+    }
+
+    // Item 72: when the whole chain is exhausted, the failure
+    // must say the siblings were tried — not just that the
+    // images failed — so the owner can tell a dead mirror from
+    // a gallery nobody else carries.
+    #mirrorExhaustedError(error: any): any {
+        if (!this.#mirrorFallback || mirrorFallbackChainFor(this.site).length === 0) {
+            return error;
+        }
+        const message = String(error && (error as any).message !== undefined ? (error as any).message : error);
+        return message + " Mirror fallback found no copy on the sibling sites.";
     }
 
     // Prepare one collected page for the PDF. RGB JPEGs are embedded as-is
@@ -781,10 +1001,17 @@ export default class Downloader
     // a relay, because chrome.downloads is not exposed in offscreen documents
     // (only chrome.runtime is).
     saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string };
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string; mirrorFallback?: boolean };
     // "flat" = this gallery owns the whole archive (pages at the root);
     // "nested" = shared batch archive (one folder per gallery inside).
     #archiveLayout: string = "nested";
+    // Item 72: mirror-network fallback (reactive — see the
+    // constructor). False turns the whole chain off.
+    #mirrorFallback: boolean = true;
+    // Item 72: the title-match switch resolves at most once per
+    // gallery; every concurrently failing page awaits this one
+    // promise, so one throttle costs one search per sibling.
+    #mirrorSwitch: Promise<boolean> | null = null;
     // Pages collected for PDF assembly, filled in page order at the end.
     #pdfPages: Array<{ index: number; bytes: Uint8Array; contentType: string | null }> = [];
 

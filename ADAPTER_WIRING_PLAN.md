@@ -24,6 +24,7 @@ Every field below is verified against real user captures, HAR traces, and reader
 | **Referer Needed** | Yes | Yes | No | Yes | Yes | Yes (`gold-usergeneratedcontent.net`) |
 | **Cloudflare** | Optional / Managed | Yes | Yes | Yes | Yes | **No** (Direct CDN) |
 | **Fetch Strategy** | Tab-fetch / Direct API | Tab-fetch | Tab-fetch | Tab-fetch | Tab-fetch | Direct CDN fetch |
+| **Sibling fallback (item 72)** | none (single-site network) | title-match chain: envy → imh | token host-swap: envy (6 hosts), then era by title | token host-swap: imh (2 hosts), then era by title | title-match chain: era → imh | none (single-site network) |
 
 ---
 
@@ -58,6 +59,7 @@ export interface SiteAdapter extends GallerySource {
     
     // Image addressing & CDN rules
     getImageUrls(mediaId: string, filename: string, extra?: any): string[];
+    getFallbackImageUrls?(mediaId: string, filename: string): string[]; // item 72: sibling-store URLs for the same media address (token-shared twins only)
     getImageHosts(): string[];
     getAllowedPathRegex(): RegExp;
     

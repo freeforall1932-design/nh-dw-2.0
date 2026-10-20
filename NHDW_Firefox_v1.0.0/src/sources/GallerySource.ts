@@ -14,6 +14,13 @@ export interface SiteAdapter {
     getImageUrls(mediaId: string, filename: string, extra?: any): string[];
     getImageHosts?(): string[];
     getAllowedPathRegex?(): RegExp;
+    // Mirror-network fallback (item 72): sibling URLs for the SAME
+    // media address, tried after this site's own mirrors all failed
+    // to serve a real image. Only the /033/ store twins
+    // (imhentai <-> hentaienvy) implement it — hentaiera's store is
+    // separate, so its fallback is a title match (utils/mirrorFallback.ts),
+    // never a URL list.
+    getFallbackImageUrls?(mediaId: string, filename: string): string[];
     needsTabFetch?(): boolean;
 }
 

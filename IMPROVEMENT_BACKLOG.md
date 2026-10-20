@@ -3349,6 +3349,109 @@ Answered by building the style budget rather than describing it. Chrome
 - Not a gap: forced-colors collapse — gradients are dropped by the UA in
   `forced-colors: active`, so the backdrop and washes flatten on their own.
 
+## Session log — 2026-10-17: item 72, cross-mirror fallback (the mirror network's throttle routing)
+
+**Owner request:** a download fallback for imhentai and hentaiera
+(galleries whose image mirrors all fail validation). Era differs —
+separate backend, so title-match only; hentaienvy tracks imhentai's
+content store, so a token host-swap. Both mechanisms in one item
+(owner pick, `ask_user` 2026-10-16); trigger = any failure after the
+gallery's own mirrors fail validation; default ON with a Settings
+opt-out (both legs are reactive/passive — no background requests
+while the site is healthy — so the owner's default rule says ON).
+Queue/job/bookmark mechanics explicitly untouched ("like nhentai
+already existing code"); the fallback is fetch-side/adapter-layer
+only. Chrome **3.13.0**; Firefox **1.5.0**.
+
+### Landed
+
+- **`src/utils/mirrorFallback.ts`** (new, pure): `MIRROR_FALLBACK_CHAINS`
+  (imh→[envy:token, era:title]; envy→[era:title, imh:token];
+  era→[envy:title, imh:title]; nhentai/fox/hitomi/unknown→[]),
+  `mirrorFallbackChainFor`, `MIRROR_STORE_HOSTS` + `sharedStoreImageUrls`
+  (the token host-swap URL builder), `buildMirrorSearchUrl` (per-site
+  `/search/?key=` — the shape measured from all three captured homepages),
+  `normalizeMirrorTitle` / `mirrorTitleScore` (containment = shared
+  tokens / min(sides); threshold 0.9), `MirrorSearchCard`,
+  `parseMirrorSearchResults` (per-site selectors; era's captured cards
+  carry `class="thumb "` with a trailing space), `pickMirrorTitleMatch`.
+- **Adapter contract:** optional `getFallbackImageUrls?(mediaId,
+  filename)` — imhentai returns the 6 envy hosts for the same
+  `/033/<token>/…` path; envy returns the 2 imh hosts; era returns
+  [] (no shared store). `GallerySource` declares the optional hook.
+  Host swap, never id lookup — the twins' gallery-id spaces are
+  disjoint (§2.2).
+- **`Downloader.ts`:** archive mode appends the fallback URLs to the
+  validation walk (deduped); when every URL fails, the memoized
+  once-per-gallery `#maybeSwitchMirror()` walks the title-match
+  chain — search the sibling, parse, pick ≥ 0.9, fetch the sibling
+  gallery, `extractGallery`, sanity-check (`looksLikeGallery` +
+  equal `num_pages`), then stickily switch `#source`/`#mediaId`/
+  `#json` (filename parsing recomputed) and retry the page. Raw mode
+  keeps its one-URL contract: canonical first, then the sibling-store
+  URLs, then (after a title switch) the sibling's canonical. Setting
+  off ⇒ zero sibling requests; healthy gallery ⇒ zero sibling
+  requests (both pinned). Token-swap URLs are re-derived per page
+  (six fast rejects per page on a dead store — accepted tradeoff,
+  recorded here). Exhausted chain ⇒ honest failure: the original
+  error plus " Mirror fallback found no copy on the sibling sites."
+- **Settings plumbing:** `mirrorFallback` key through
+  `BatchJobOptions`/gallery settings, `resolveWorkerBatchOptions`
+  (default ON), the single-title path, the panel
+  (`#psMirrorFallback` in `popupSettings.ts`) and the options page
+  (`CheckBox("mirrorFallback")` + `OPTIONS_DEFAULTS`).
+- **Tests:** `test/mirror-fallback.test.js` (new, 23 tests, both
+  trees — registered in both mocha lists): chain table, token-swap
+  URL builder, adapter consistency (every chain member implements
+  the hook; every non-member does not), title normalize/score,
+  search-URL builder, three real-markup search parsers, match
+  picker, and 8 Downloader integration cases (token swap served,
+  title switch sticks, wrong-page rejection, exhaustion honesty,
+  setting-off silence, healthy-site silence).
+
+### Red evidence (and two defects the tests caught in my own code)
+
+- The era parser initially missed captured cards (`class="thumb "`
+  with a trailing space) — the container regex is now
+  `/<div class="thumb\s*"/gi`.
+- **Raw-mode regression, caught by e2e phase 3:** my first cut made
+  raw mode walk *all* URLs per attempt, which broke the pinned
+  contract (3 pages × (1 + 5 retries) = 18 download-manager calls)
+  and would have occupied the shelf with mirror attempts. Raw mode
+  is canonical-first-plus-sibling-URLs only; the site's own numbered
+  mirrors stay archive-mode-only, as before.
+- Also re-pinned by unit tests: `()` strips like `[]` in title
+  normalization; `encodeURIComponent` yields `%20` (not `+`); the
+  zip fixtures assert against the nested default layout
+  (`{ archiveLayout: "flat" }` where flat is meant); a sticky
+  title-switch re-resolves page 1 only (era) while the token swap
+  attempts twice (envy); the wrong-pages fixture overrides
+  `readerPagesJson` (the parser's ground truth), not the
+  `data-total-pages` attribute.
+
+### Ports and traps
+
+- Firefox port: six shared files copied byte-identical
+  (`sources/*`, `utils/mirrorFallback.ts`, `utils/batchPipeline.ts`,
+  `background/Downloader.ts`); surgical patches to `background.ts`
+  (job-start read + `resolveWorkerBatchOptions` defaults + per-job
+  override), `options.ts`/`options.html` (checkbox + section),
+  `preview/popupSettings.ts` (panel row). FF's `bookmarkService.ts`
+  carries platform extras (`sourceTabId`) and no item-72 content —
+  untouched, as are the FF-only `siteUi.ts`/`embeddedUi.ts`.
+- **Two stale-build traps in one session:** bare
+  `npx mocha test/x.test.js` runs a stale `build/test/` (only
+  `npm test` recompiles), and `npm run test:e2e` runs the stale
+  **webpack** bundle `js/background.js` (only `npm run build`
+  refreshes it) — the e2e raw-attempt failure looked like a logic
+  bug but was the pre-fix bundle. Both suites green after the real
+  rebuilds: Chrome 647 unit / 182 e2e / 7 smoke; Firefox 673 unit /
+  221 e2e / 7 smoke.
+- Live chain verification (real throttled gallery → sibling copy
+  downloading) is owner-only: the sandbox has no egress to these
+  hosts, and a Cloudflare challenge on a search page parses to zero
+  cards — the honest failure path, not a silent wrong answer.
+
 ## Item stubs — 2026-09-24 owner roadmap (numbers reserved; specs live in WORKLIST until implemented)
 
 | Item | Title | Status |
@@ -3365,5 +3468,9 @@ Answered by building the style budget rather than describing it. Chrome
 | 69 | Bookmark thumbnails — **viewport-lazy + GC both** (distance while scrolling + idle ~15–30s sweep; purge all on close/site-group switch; cross-site search keeps GC for dedupe/batch prep) (owner pick, elaboration 3 closed 2026-09-24) | confirmed — with 67/68 |
 | 70 | Live-session auto-fetch (twitter-style phase 2) | **done 2026-09-26 best-effort (Chrome 3.10.5 / FF 1.4.5)** — `#nhdw-harvest` + status + remembered "Scroll for me", observer collection of late cards, run-token Stop, persisted always-inactive `listHarvest` merged into the next selection; assumed defaults in the log above |
 | 71 | Demote panel Download-all where on-page Select exists | **done 2026-09-26 (Chrome 3.10.3 / FF 1.4.3)** — verified the blanket entry was already retired by 61; added the replacement pointer (`#selectionPointer`) + fixed the List-mode hint; the §E identity defect found while verifying is fixed and pinned (bare recorded id = default site). Left: an owner taste call on the pointer's wording only |
+| 72 | Cross-mirror fallback for mirror-site galleries (imhentai/hentaiera; envy tracks imh) | **done 2026-10-17 (Chrome 3.13.0 / FF 1.5.0)** — token host-swap for the imh↔envy shared `/033/` store + title-match (≥ 0.9 containment, page-count check, sticky switch) for era; chains imh→(envy, era), envy→(era, imh), era→(envy, imh); reactive, default ON, Settings/panel opt-out; fetch-side only; 23 unit tests both trees; live-chain verification owner-only |
+| 73 | Title-match search robustness (imh/era wording) | **done 2026-10-17 (Chrome 3.14.0 / FF 1.6.0)** — query-variant ladder (raw pretty title → normalized title → strongest tag term: artist > group/character > any non-language), each rung only after the previous search parses to zero usable cards; the three adapters now extract typed gallery tags (grounded selectors, language tags dropped) so rung 3 has a query; 11 red-first tests |
+| 74 | Settings reminder: which pipeline "Download" runs (copy-only) | **done 2026-10-17 (Chrome 3.14.0 / FF 1.6.0)** — "Quality note" on the options page + "Download quality" section in the panel Settings: reading-mode/source images (original resolution) are what Download fetches; the sites' lite/low-res download button is deliberately unused |
+| 75 | Embedded-UI "Download lite" / "Download source" buttons (like nh's in-page UI) | **decided against 2026-10-17 (owner pick)** — Strategy A stays the only pipeline: lite is inferior per the owner's same-title sampling and zip endpoints are deliberately not hammered |
 
 Do not allocate these numbers to anything else.

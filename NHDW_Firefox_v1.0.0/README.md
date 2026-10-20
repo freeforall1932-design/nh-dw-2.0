@@ -1,12 +1,39 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.4.7)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.6.0)
 
-**Updated:** 2026-10-14 (v1.4.7 dark-mode fix; the 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
+**Updated:** 2026-10-17 (v1.6.0 search-wording ladder + pipeline notes; the 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
 Chrome-3.9.0 backport — bookmark icon, gallery-page Bookmark button, Queue-tab
 markup (43), drag-reorder (44), backup import/export (52), canonical-separator
 gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
+
+v1.6.0 = items 73–74, ported from Chrome 3.14.0: the
+mirror-fallback title search now climbs a wording ladder
+(raw title → normalized title → strongest tag term — the
+adapters extract typed gallery tags for this; each rung is
+tried only when the previous search comes back empty, per
+the owner's note that imhentai/hentaiera search answers
+full-title wording or tags, not loose queries), and a
+"Download quality" reminder now sits in Settings and the
+panel: downloads fetch the reading-mode source images
+(original resolution); the sites' own lite/lower-resolution
+download button is deliberately not used. Item 75 (in-page
+lite/source buttons) was decided against.
+
+v1.5.0 = item 72, cross-mirror fallback, ported from Chrome 3.13.0: a
+mirror-site gallery whose own image mirrors all fail validation
+(throttle/challenge) continues from a sibling site — hentaienvy by
+token host-swap (the imhentai↔envy twins share the `/033/<token>/`
+content store, so the path is identical and only the hosts change) and
+hentaiera by title match (search, ≥ 0.9 title containment, page-count
+check, sticky switch). Chains: imhentai→(envy, era), envy→(era, imh),
+era→(envy, imh). Reactive only (no sibling requests while the site's
+own mirrors work), default ON with a Settings + panel opt-out
+(`mirrorFallback`). Fetch-side only — queue, jobs, bookmarks and
+history behave exactly as before. The six shared source files are
+byte-identical copies of the Chrome tree; the FF-only files
+(`content/siteUi.ts`, `utils/embeddedUi.ts`) are untouched.
 
 v1.4.7 = dark-mode fix ported from Chrome 3.12.0: the drawer applied the
 `darkMode` preference with a one-way `#htmlLight → #htmlDark` rename that

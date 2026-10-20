@@ -250,6 +250,8 @@ export function renderSettings(container: HTMLElement): void {
     });
 
     renderHistorySection(container);
+    renderMirrorFallbackSection(container);
+    renderDownloadQualitySection(container);
     renderListModeSection(container);
     renderInterfaceSection(container);
 }
@@ -344,6 +346,54 @@ function renderHistorySection(container: HTMLElement): void {
     });
 
     refreshStatus();
+}
+
+// ---- mirror-network fallback (item 72) ---------------------------------
+function renderMirrorFallbackSection(container: HTMLElement): void {
+    const section = el("div");
+    section.className = "psSection";
+
+    const heading = el("h4");
+    heading.textContent = "Mirror fallback";
+    section.appendChild(heading);
+
+    const hint = el("small");
+    hint.textContent = "When a mirror-site gallery's own image mirrors all fail (a throttle or a challenge), the download continues from a sibling site: hentaienvy shares imhentai's content store (the same token, other hosts), and hentaiera copies are found by title. Only runs after the site's own mirrors failed — a healthy download makes no extra requests.";
+    section.appendChild(hint);
+
+    const mirrorRow = el("label");
+    mirrorRow.className = "psOptionRow";
+    const mirrorBox = el("input");
+    mirrorBox.type = "checkbox";
+    mirrorBox.id = "psMirrorFallback";
+    mirrorRow.appendChild(mirrorBox);
+    mirrorRow.appendChild(document.createTextNode(" Route a throttled mirror-site download to its sibling sites"));
+    section.appendChild(mirrorRow);
+
+    container.appendChild(section);
+
+    chrome.storage.sync.get({ mirrorFallback: true }, (stored: any) => {
+        mirrorBox.checked = !stored || stored.mirrorFallback !== false;
+    });
+    mirrorBox.addEventListener("change", () => {
+        chrome.storage.sync.set({ mirrorFallback: mirrorBox.checked });
+    });
+}
+
+// ---- download quality (item 74) ------------------------------------
+function renderDownloadQualitySection(container: HTMLElement): void {
+    const section = el("div");
+    section.className = "psSection";
+
+    const heading = el("h4");
+    heading.textContent = "Download quality";
+    section.appendChild(heading);
+
+    const hint = el("small");
+    hint.textContent = "Every download fetches the reading-mode source images — original resolution, the site's original format. The sites' own download button (a lite, lower-resolution copy) is deliberately not used.";
+    section.appendChild(hint);
+
+    container.appendChild(section);
 }
 
 // ---- list mode (homepage / search / artist / tag / genre windows) -------

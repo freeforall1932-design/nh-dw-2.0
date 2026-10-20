@@ -224,9 +224,14 @@ signing). Details: `IMPROVEMENT_BACKLOG.md`.
   the owner's go; the owner's live note already leans Strategy A.
 - hitomi avif: the owner's note found PNG originals with avif conversion
   possibly pending; confirm on a fresh sample during a real-browser pass.
-- Cross-mirror fallback chains (owner's live-testing note): deferred by the
-  owner's 2026-09-15 call; token-host-swap design for imhentai↔hentaienvy is
-  recorded in §2.2 so it is not re-derived.
+- Cross-mirror fallback chains (owner's live-testing note): **closed by item 72
+  (2026-10-17, Chrome 3.13.0 / Firefox 1.5.0)** — implemented as designed in
+  §2.2: imhentai↔hentaienvy token host-swap (shared `/033/<token>/` store),
+  hentaiera title-match (separate backend), chains imh→(envy|era),
+  envy→(era|imh), era→(envy|imh); reactive, default ON with a Settings
+  opt-out (`src/utils/mirrorFallback.ts`). Live-chain verification on real
+  throttled galleries remains an owner-only pass (the sandbox has no egress
+  to these hosts).
 
 ## Do-not rules (planning level)
 
