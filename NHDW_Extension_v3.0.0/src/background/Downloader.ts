@@ -6,16 +6,18 @@ import { mirrorFallbackChainFor, buildMirrorSearchUrl, mirrorSearchQueryVariants
 import { decodeTabImageBytes, fetchImageFromTab } from "./tabImageFetch";
 import { requestArchiveDownloadUrl, fetchArchiveBytes } from "./ArchiveDownload";
 import { buildPdfDocument, jpegInfo, PdfImage } from "../utils/pdfBuilder";
-import { startTrackedDownload, normalizeRawConcurrency } from "./downloadControl";
+import { startTrackedDownload, normalizeRawConcurrency, ARCHIVE_COMPLETION_MAX_WAIT_MS } from "./downloadControl";
 import { errorMessage } from "../utils/utils";
 import { sanitizeArtifactFilename } from "../utils/artifactName";
+import { ArchiveIdentity, archiveGalleryId } from "../utils/archiveIdentity";
+import { NhentaiRateLimitError } from "../utils/apiAuth";
 // Re-export so existing tests (`require('../build/test/background/Downloader.js')`)
 // keep importing the sanitizer from here.
 export { sanitizeArtifactFilename };
 
 export default class Downloader
 {
-    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; rawMasterFolder?: string; archiveMasterFolder?: string; mirrorFallback?: boolean } = {})
+    constructor(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, zip: typeof JSZip, downloadName: string | null, signal: AbortSignal | null = null, source: GallerySource = clearnetSource, settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveIdentity?: ArchiveIdentity | null; rawMasterFolder?: string; archiveMasterFolder?: string; mirrorFallback?: boolean } = {})
     {
         this.progressCallback = progressCallback;
         this.#errorCallback = errorCallback;
@@ -205,72 +207,88 @@ export default class Downloader
         await self.#downloadAsync();
     }
 
-    // Archive mode (API key mode only, opt-in): ask the official
-    // POST /api/v2/galleries/<id>/download endpoint for a ready-made ZIP/CBZ
-    // instead of walking every page on the CDN (which the API docs explicitly
-    // advise against for full archives). Returns true when the archive was
-    // delivered; false sends the caller back to the page-by-page pipeline.
-    // Never throws for a plain "unavailable" outcome — only a user abort
-    // propagates.
+    // Opt-in API archive for independently identified, eligible nhentai ZIP/
+    // CBZ jobs. Ineligible jobs use their normal route. Once this route is
+    // selected, failure is reported instead of silently issuing page requests.
+    // This API is distinct from the site's own unobserved Download button.
     async #tryServerArchiveAsync(): Promise<boolean> {
         const settings = this.#settings || {};
         const apiKey = settings.apiKey ? String(settings.apiKey) : null;
-        if (apiKey === null || settings.useServerArchive !== true) {
+        if (settings.useServerArchive !== true) {
+            return false;
+        }
+        // A bare legacy id or the default source alone is NOT proof that this
+        // job belongs to nhentai. Require the canonical adapter, explicit
+        // metadata site, and an independently supplied job/URL identity to
+        // agree before sending any authenticated archive request.
+        const galleryId = archiveGalleryId(this.#json && this.#json.id);
+        const identity = settings.archiveIdentity;
+        if (this.#source !== clearnetSource || !this.#json || this.#json.site !== "nhentai"
+            || galleryId === null || !identity || identity.site !== "nhentai" || identity.id !== galleryId) {
             return false;
         }
         const format = this.useZip === "zip" ? "zip" : (this.useZip === "cbz" ? "cbz" : null);
         if (format === null) {
             return false; // raw/folder modes have no server-archive equivalent
         }
-        if (this.downloadName === null) {
-            // Batch accumulation mode: server archives cannot be merged into
-            // the shared ZIP, so page-by-page remains the only route.
+        if (this.downloadName === null || this.#archiveLayout !== "flat") {
+            // A server archive cannot be merged into a shared batch, even if
+            // the last entry has the final filename and the writer is empty.
             return false;
         }
         try {
-            // A server archive replaces the whole output archive. If pages
-            // from earlier galleries are already accumulated in the shared
-            // ZIP, delivering a per-gallery archive would silently discard
-            // them — keep page-by-page for shared batch archives.
-            if (this.#zip && Object.keys((this.#zip as any).files || {}).length > 0) {
+            // Replacement is safe only when the writer can be inspected and
+            // has no previously accumulated entries.
+            const files = this.#zip && (this.#zip as any).files;
+            if (!files || typeof files !== "object" || Object.keys(files).length > 0) {
                 return false;
             }
-        } catch (_) { /* zip introspection unavailable: be conservative */ }
-        const galleryId = this.#json ? this.#json.id : undefined;
-        if (galleryId === undefined || galleryId === null) {
+        } catch (_) {
             return false;
+        }
+        if (apiKey === null || apiKey.trim() === "") {
+            throw new Error("Server archive mode needs an API key; no archive request was made.");
+        }
+        const pages = this.#json && this.#json.images && this.#json.images.pages;
+        if (!Array.isArray(pages) || pages.length === 0) {
+            throw new Error("Server archive needs a non-empty gallery page count for validation.");
+        }
+        for (let i = 0; i < pages.length; i++) {
+            let formatCode: string | null = null;
+            try { if (pages[i] && typeof pages[i] === "object") formatCode = this.#pageFormatCode(pages[i]); } catch (_) {}
+            if (formatCode === null) throw new Error("Server archive needs valid gallery page metadata.");
         }
         try {
             this.updateProgress(1, this.#doujinshiName, false, "requesting server archive");
-            let result = await requestArchiveDownloadUrl(galleryId, format, apiKey, { signal: this.#abortSignal || undefined });
-            if (result !== null && result.expiresAt !== Number.MAX_SAFE_INTEGER && result.expiresAt * 1000 < Date.now() + 30000) {
-                // URL would expire before we can use it; ask once for a fresh one.
-                result = await requestArchiveDownloadUrl(galleryId, format, apiKey, { signal: this.#abortSignal || undefined });
-            }
-            if (result === null) {
-                return false;
+            const result = await requestArchiveDownloadUrl(galleryId, format, apiKey, { signal: this.#abortSignal || undefined });
+            if (result === null) throw new Error("Server archive request could not be prepared.");
+            if (result.expiresAt * 1000 < Date.now() + 30000) {
+                // Do not immediately issue another rate-limited request.
+                throw new Error("Server archive URL expires too soon to start safely.");
             }
             if (this.#isAborted()) {
                 throw "Download was aborted";
             }
             this.updateProgress(10, this.#doujinshiName, false, "downloading server archive");
-            const blob = await fetchArchiveBytes(result.url, { signal: this.#abortSignal || undefined });
+            const blob = await fetchArchiveBytes(result.url, { signal: this.#abortSignal || undefined, expectedImageCount: pages.length });
             if (this.#isAborted()) {
                 throw "Download was aborted";
             }
             this.updateProgress(90, this.#doujinshiName, true, "saving server archive");
-            await this.#downloadBlob(blob, this.downloadName + "." + format);
+            await this.#downloadBlob(blob, this.downloadName + "." + format, true);
             this.currentProgress = 100;
             try {
                 this.updateProgress(100, null, true);
             } catch (e) { } // Dead object
             return true;
         } catch (error) {
-            if (this.#isAborted() || error === "Download was aborted" || (error && (error as any).name === "AbortError")) {
+            if (this.#isAborted() || error === "Download was aborted" || (error && (error as any).name === "AbortError") || error instanceof NhentaiRateLimitError) {
                 throw error;
             }
-            console.warn("Server archive unavailable for gallery " + galleryId + " (" + errorMessage(error) + "); falling back to page-by-page download.");
-            return false;
+            // Archive request/transfer helpers emit sanitized messages only.
+            // Do not log or relay the signed URL, and do not bypass the
+            // failure by silently starting CDN page downloads.
+            throw new Error("Server archive failed: " + (errorMessage(error) || "unknown error"));
         }
     }
 
@@ -282,8 +300,23 @@ export default class Downloader
                 return;
             }
 
-            // Downloading
-            let maxNbOfPage = this.#json.images.pages.length;
+            // Validate the complete page list before fetching anything. A `0`
+            // descriptor is an unmapped/invalid page, not permission to skip
+            // that page and report a partial archive (or raw folder) as done.
+            const pages = this.#json && this.#json.images && this.#json.images.pages;
+            if (!Array.isArray(pages) || pages.length === 0) {
+                throw new Error("Unexpected response type (no pages in gallery metadata).");
+            }
+            for (let i = 0; i < pages.length; i++) {
+                let format: string | null = null;
+                try {
+                    if (pages[i] && typeof pages[i] === "object") format = this.#pageFormatCode(pages[i]);
+                } catch (_) { /* an unknown format is invalid metadata */ }
+                if (format === null) {
+                    throw new Error("Unknown page format (invalid page " + (i + 1) + ").");
+                }
+            }
+            let maxNbOfPage = pages.length;
 
             // Use concurrent downloads based on the maxConcurrentDownloads setting
             const downloadPage = async (i: number) => {
@@ -454,9 +487,12 @@ export default class Downloader
     // Service workers have no URL.createObjectURL, so there we fall back to a
     // base64 data URL handed to the Downloads API.
     async #urlForBlob(content: Blob): Promise<{ url: string; revoke: (() => void) | null }> {
-        if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+        if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function" && typeof URL.revokeObjectURL === "function") {
             const url = URL.createObjectURL(content);
-            return { url: url, revoke: () => URL.revokeObjectURL(url) };
+            // Capture the same URL implementation that created the object;
+            // this also keeps delayed cleanup stable in test/worker contexts.
+            const revokeObjectUrl = URL.revokeObjectURL.bind(URL);
+            return { url: url, revoke: () => revokeObjectUrl(url) };
         }
         const bytes = new Uint8Array(await content.arrayBuffer());
         let binary = "";
@@ -472,7 +508,7 @@ export default class Downloader
     // fallback that is chrome.downloads directly; in the offscreen document
     // chrome.downloads is not exposed (only chrome.runtime is), so the caller
     // sets saveUrl to a relay that asks the service worker to download.
-    async #saveArtifact(url: string, filename: string): Promise<void> {
+    async #saveArtifact(url: string, filename: string, requireCompletion: boolean = false): Promise<void> {
         // Last-mile filename hardening: chrome.downloads silently ignores the
         // filename for invalid names (control characters, stray dots/edges),
         // and the file then lands under the blob/CDN URL's own name — random
@@ -480,7 +516,7 @@ export default class Downloader
         // path segment so the requested name always survives.
         const safeName = sanitizeArtifactFilename(filename, this.#doujinshiName);
         if (this.saveUrl !== null) {
-            await this.saveUrl(url, safeName);
+            await this.saveUrl(url, safeName, requireCompletion);
             return;
         }
         // startTrackedDownload records the requested name for the
@@ -497,7 +533,9 @@ export default class Downloader
         // wait — and cancels loose raw pages, which are worthless half-done.
         await startTrackedDownload(url, safeName, {
             signal: this.#abortSignal,
-            cancelOnAbort: this.useZip === "raw"
+            cancelOnAbort: this.useZip === "raw" || requireCompletion,
+            requireCompletion,
+            maxWaitMs: requireCompletion ? ARCHIVE_COMPLETION_MAX_WAIT_MS : undefined
         });
     }
 
@@ -510,11 +548,11 @@ export default class Downloader
             : filename;
     }
 
-    async #downloadBlob(content: Blob, filename: string): Promise<void> {
+    async #downloadBlob(content: Blob, filename: string, requireCompletion: boolean = false): Promise<void> {
         const { url, revoke } = await this.#urlForBlob(content);
         filename = this.#archiveArtifactName(filename);
         try {
-            await this.#saveArtifact(url, filename);
+            await this.#saveArtifact(url, filename, requireCompletion);
         } catch (error) {
             if (revoke !== null) revoke();
             throw error;
@@ -561,10 +599,14 @@ export default class Downloader
 
     async #downloadPageInternalAsync(currPage: number, progress: number) {
         let page = this.#json.images.pages[currPage];
-        if (page === undefined) { page = { t: "j", w: 0, h: 0 }; }
+        if (!page || typeof page !== "object") {
+            throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
+        }
         const format = this.#pageFormatCode(page);
         if (format === null) {
-            return;
+            // The list can change after a mirror switch; never silently skip an
+            // invalid replacement page even if the original list was valid.
+            throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
         }
         let filenameParsing = (page && page.hash) ? (page.hash + format) : ((currPage + 1) + format); // Name for parsing
         this.updateProgress(progress, this.#doujinshiName + "/" + ((currPage + 1) + format), false);
@@ -619,10 +661,22 @@ export default class Downloader
             }
             const switched = await this.#maybeSwitchMirror();
             if (switched) {
-                // After a title-match switch the sibling's own
-                // canonical URL is the right single target.
+                // The sibling can use a different page extension or hash.
+                // Rebuild both the target and the saved filename from its
+                // metadata before handing the URL to the download manager.
+                const switchedPage = (this.#json.images.pages || [])[currPage];
+                if (!switchedPage || typeof switchedPage !== "object") {
+                    throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
+                }
+                const switchedFormat = this.#pageFormatCode(switchedPage);
+                if (switchedFormat === null) {
+                    throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
+                }
+                filenameParsing = switchedPage.hash ? (switchedPage.hash + switchedFormat) : ((currPage + 1) + switchedFormat);
+                const switchedFilename = this.#getNumberWithZeros(currPage + 1) + switchedFormat;
+                const switchedSavePath = masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + switchedFilename;
                 try {
-                    await this.#saveArtifact(this.#imageUrlsForPage(filenameParsing)[0], rawSavePath);
+                    await this.#saveArtifact(this.#imageUrlsForPage(filenameParsing)[0], switchedSavePath);
                     return;
                 } catch (error: any) {
                     lastRawError = error;
@@ -651,14 +705,15 @@ export default class Downloader
             // webp is per-gallery on this network), so recompute
             // the page address from the MIRROR's own metadata.
             const switchedPage = (this.#json.images.pages || [])[currPage];
-            if (switchedPage !== undefined) {
-                const switchedFormat = this.#pageFormatCode(switchedPage);
-                if (switchedFormat !== null) {
-                    filenameParsing = (switchedPage && switchedPage.hash)
-                        ? (switchedPage.hash + switchedFormat)
-                        : ((currPage + 1) + switchedFormat);
-                }
+            if (!switchedPage || typeof switchedPage !== "object") {
+                throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
             }
+            const switchedFormat = this.#pageFormatCode(switchedPage);
+            if (switchedFormat === null) {
+                throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
+            }
+            filenameParsing = switchedPage.hash ? (switchedPage.hash + switchedFormat) : ((currPage + 1) + switchedFormat);
+            filename = this.#getNumberWithZeros(currPage + 1) + switchedFormat;
             validated = await this.#loadValidatedImage(this.#imageUrlsForPage(filenameParsing));
         }
         if (this.useZip === "pdf") {
@@ -819,6 +874,21 @@ export default class Downloader
             if (extracted === null || !looksLikeGallery(extracted)) {
                 continue;
             }
+            // The descriptor list, not just the optional advertised count,
+            // must have one usable entry for every original page.
+            const mirrorPages = extracted.images && extracted.images.pages;
+            const originalPages = this.#json.images && this.#json.images.pages;
+            if (!Array.isArray(mirrorPages) || !Array.isArray(originalPages) || mirrorPages.length !== originalPages.length) {
+                continue;
+            }
+            let validMirrorPages = true;
+            for (const page of mirrorPages) {
+                try {
+                    if (!page || typeof page !== "object" || this.#pageFormatCode(page) === null) validMirrorPages = false;
+                } catch (_) { validMirrorPages = false; }
+                if (!validMirrorPages) break;
+            }
+            if (!validMirrorPages) continue;
             // A sibling reporting a different page count is a
             // different gallery (or a partial mirror) — refuse it.
             if (typeof extracted.num_pages === "number"
@@ -1000,8 +1070,8 @@ export default class Downloader
     // function instead of chrome.downloads. The offscreen document sets it to
     // a relay, because chrome.downloads is not exposed in offscreen documents
     // (only chrome.runtime is).
-    saveUrl: ((url: string, filename: string) => Promise<void>) | null = null;
-    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveMasterFolder?: string; mirrorFallback?: boolean };
+    saveUrl: ((url: string, filename: string, requireCompletion?: boolean) => Promise<void>) | null = null;
+    #settings: { useZip?: string; maxConcurrentDownloads?: number | string; rawMaxConcurrent?: number | string; archiveLayout?: string; apiKey?: string | null; useServerArchive?: boolean; archiveIdentity?: ArchiveIdentity | null; archiveMasterFolder?: string; mirrorFallback?: boolean };
     // "flat" = this gallery owns the whole archive (pages at the root);
     // "nested" = shared batch archive (one folder per gallery inside).
     #archiveLayout: string = "nested";

@@ -1125,3 +1125,48 @@ describe('Downloader (shared merged-batch writer — PR #48 cleanup regression)'
         await owned.cleanup();
     });
 });
+
+describe('Downloader rejects incomplete page metadata', () => {
+    let oldChrome, oldFetch, oldFileReader, oldURL;
+    let chrome, fetchStub;
+    beforeEach(() => {
+        oldChrome = globalThis.chrome;
+        oldFetch = globalThis.fetch;
+        oldFileReader = globalThis.FileReader;
+        oldURL = globalThis.URL;
+        chrome = makeChromeStub('zip');
+        fetchStub = makeFetchStub();
+        globalThis.chrome = chrome;
+        globalThis.fetch = fetchStub;
+        globalThis.FileReader = FileReaderStub;
+        globalThis.URL = undefined;
+    });
+    afterEach(() => {
+        if (oldChrome === undefined) delete globalThis.chrome; else globalThis.chrome = oldChrome;
+        if (oldFetch === undefined) delete globalThis.fetch; else globalThis.fetch = oldFetch;
+        if (oldFileReader === undefined) delete globalThis.FileReader; else globalThis.FileReader = oldFileReader;
+        if (oldURL === undefined) delete globalThis.URL; else globalThis.URL = oldURL;
+    });
+
+    for (const format of ['zip', 'raw']) {
+        it('does not silently succeed or save partial output for a bad page in ' + format, async () => {
+            const bad = JSON.parse(JSON.stringify(gallery));
+            bad.images.pages[1] = { t: '0' };
+            const downloader = new Downloader(bad, 'Test', () => {}, () => {}, 'Test', new JSZip(), 'Test', null, undefined,
+                { useZip: format, maxConcurrentDownloads: 1, archiveLayout: 'flat' });
+            downloader.retryBackoffMs = 0;
+            await assert.rejects(downloader.startAsync(), /invalid page.*2/i);
+            assert.strictEqual(fetchStub.attempted.length, 0, 'metadata must be validated before page downloads');
+            assert.strictEqual(chrome.downloads.calls.length, 0, 'no partial artifact may be saved');
+        });
+    }
+
+    it('does not create an empty archive for a gallery with no page descriptors', async () => {
+        const empty = JSON.parse(JSON.stringify(gallery));
+        empty.images.pages = [];
+        const downloader = new Downloader(empty, 'Test', () => {}, () => {}, 'Test', new JSZip(), 'Test', null, undefined,
+            { useZip: 'zip', maxConcurrentDownloads: 1, archiveLayout: 'flat' });
+        await assert.rejects(downloader.startAsync(), /no pages/i);
+        assert.strictEqual(chrome.downloads.calls.length, 0);
+    });
+});

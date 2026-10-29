@@ -4,7 +4,7 @@
 **Reference Source:** Audited against the owner's desktop reference repository
 ([`freeforall1932-design/all-comic-doujin-website-archiver-for-offline-reading-GUI-Last`](https://github.com/freeforall1932-design/all-comic-doujin-website-archiver-for-offline-reading-GUI-Last) / `Hitomi-Downloader`).
 
-This document tracks potential next candidate sites for extension support, categorized by architectural fit, technical complexity, and feasibility within a Manifest V3 browser extension.
+This document tracks potential next candidate sites for extension support, categorized by architectural fit, technical complexity, and feasibility within a Manifest V3 browser extension. **Current new-domain priorities are Sasangeyou and DoujinDesu** (§3.1); the independent lookalikes in §3.2 are deferred. Sasangeyou's offline planner and synthetic-only reader-data parser are not wired or verified against site DOM. Chromium's separate nhentai API archive hardening is offline-tested only; leave the option off. Firefox retains earlier behavior. See [WORKLIST.md](WORKLIST.md).
 
 ---
 
@@ -85,13 +85,47 @@ These platforms organize content as tagged single images or multi-image pools ra
 
 ---
 
+## 3.1 Tier 3: Owner-requested chapter and mixed-media feasibility
+
+| Site | URL | Status |
+| :--- | :--- | :--- |
+| **Sasangeyou** | `sasangeyou.net` | Offline chapter planner and synthetic reader-data candidate; adapter not implemented. External video/game hosts remain on hold. See [`NEW_DOMAIN_PLANNING.md`](NEW_DOMAIN_PLANNING.md#sasangeyounet). |
+| **DoujinDesu** | `doujin.desu.xxx` | Unimplemented; series slugs, chapter UUIDs and reader access need validation. See [DoujinDesu feasibility](NEW_DOMAIN_PLANNING.md#doujindesu). |
+
+## 3.2 Tier 4: Deferred NH-like lookalike candidates
+
+These independent, unverified origins are **not current priorities** and are
+not assumed to be official nhentai.net aliases, mutually compatible mirrors,
+or supported adapters. `nhentai.com` was already listed in Tier 1 above.
+
+| Site | Status |
+| :--- | :--- |
+| **nhentai.xxx** | Deferred; gallery-shaped homepage links observed, full reader unverified. |
+| **nhentai.website** | Deferred; homepage advertises ZIPs, actual download unverified. |
+| **nhentai.io** | Deferred; slug-based homepage links observed, reader unverified. |
+
+See the [scope decision](NEW_DOMAIN_PLANNING.md#nh-lookalike-scope) for
+credential isolation and the removed `.to` candidate. The existing
+[nhentai.net official-archive plan](NEW_DOMAIN_PLANNING.md#nhentainet-official-archives)
+is separate and is not a new candidate. Its cross-site isolation fix is
+in place in both source trees, but the option should remain **off** while the
+other archive-integrity and delivery-safety issues are open.
+
+---
+
 ## 4. Scope & the swap decision (2026-09-24, owner-directed)
 
-- **The canonical live roster is `new domain candidate` on `main`** — its
-  Tier 1 / Tier 2 URL list (asmhentai, e-hentai, pururin, simply-hentai,
-  myreadingmanga, nhentai.com; danbooru, gelbooru, rule34.xxx, yande.re,
-  sankaku, kemono/coomer) matches this document's analysis tiers (§2/§3) 1:1.
-  Keep the two in step when a pick is made; do not grow a third list.
+- **The canonical live roster is `new domain candidate`** — its Tier 1 /
+  Tier 2 URL list (asmhentai, e-hentai, pururin, simply-hentai, myreadingmanga,
+  nhentai.com; danbooru, gelbooru, rule34.xxx, yande.re, sankaku,
+  kemono/coomer) matches this document's analysis tiers (§2/§3). The
+  owner-requested Tier 3 and deferred Tier 4 entries (§3.1/§3.2) are also in
+  that roster. Keep the two rosters in step; the separate planning notebook
+  holds research, not another candidate roster.
+- **Sasangeyou and DoujinDesu are specific owner-requested investigations**,
+  not a blanket reversal of the chapter-site swap or a decision to download
+  video/games in this extension. Their feasibility and unresolved scope are
+  recorded in [`NEW_DOMAIN_PLANNING.md`](NEW_DOMAIN_PLANNING.md).
 - **Chapter-based webtoon/manhwa sites swapped to the desktop archiver**
   (`all-comic-doujin-website-archiver-for-offline-reading-GUI-Last`):
   tailspace.com, mangak.io and omegascans.org fit that tool's chapter/series
@@ -109,17 +143,19 @@ These platforms organize content as tagged single images or multi-image pools ra
 
 ## 5. Candidate Onboarding Checklist
 
-When selecting any candidate from Tier 1 to implement:
+For authorized candidate work, use appropriate, non-sensitive examples and the privacy checklist in
+[`NEW_DOMAIN_PLANNING.md`](NEW_DOMAIN_PLANNING.md#evidence-needed-for-a-future-authorized-comic-reader-implementation).
+Never share credentials, cookies, tokens, signed URLs or unredacted HARs.
 
-1. [ ] **Capture 1 Gallery Page HTML** (`view-source:https://<site>/<gallery-path>`)
-2. [ ] **Capture 1 Reader Page HTML** (page 1)
-3. [ ] **Capture 2–3 Full Image URLs** from DevTools Network tab (`Img` filter)
-4. [ ] **Capture 1 Listing Page HTML** (search/tag/home page with card markup —
-      the sample `src/utils/listCards.ts` is measured from; no listing sample = no
-      on-card Select/Bookmark/Download for the site)
+1. [ ] Describe a sanitized gallery-page structure.
+2. [ ] Describe a sanitized reader-page structure (page 1).
+3. [ ] Record image hostnames and redacted or synthetic URL shapes from Network (`Img` filter), only if needed.
+4. [ ] Record a **sanitized listing-page structure** (search/tag/home cards —
+      `src/utils/listCards.ts` needs a representative sample for on-card
+      Select/Bookmark/Download). Do not collect raw HARs or identifying paths.
 5. [ ] Check Cloudflare / Anti-bot status (is it behind Turnstile / managed challenge?)
 6. [ ] Check numbering invariant (unpadded online URL, zero-padded local file)
 7. [ ] Add parser `src/parsing/<site>Html.ts` + adapter `src/sources/<site>Source.ts`
 8. [ ] Register in `src/sources/index.ts`, `titleBookmark.ts`, `listCards.ts`, and `bookmarkQueue.ts`
-9. [ ] Update Chrome & Firefox `manifest.json` host permissions **and** add the listing host to the second `content_scripts` block (both trees)
-10. [ ] Add unit test suite `test/<site>.test.js` (+ both `package.json` mocha lists) and an `e2e-list-controls` per-site discovery fixture
+9. [ ] Update the Chromium `manifest.json` host permissions **and** add the listing host to the second `content_scripts` block. Firefox is a separate optional port, not a Chromium gate.
+10. [ ] Add the Chromium unit suite `test/<site>.test.js` (and its `package.json` mocha list) plus an `e2e-list-controls` discovery fixture. If ported to Firefox, add and run its equivalent wiring and tests before a Firefox release.

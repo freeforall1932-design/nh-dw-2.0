@@ -1,5 +1,13 @@
 # Capture guide — how to harvest, and the per-site list
 
+> **Current guidance (2026-10-28):** For the Sasangeyou reader, batch-link and
+> nhentai button investigation, use [SITE_CAPTURE_GUIDE.md](SITE_CAPTURE_GUIDE.md).
+> The older HAR/raw-URL instructions below are historical and are **not** a
+> request to share a HAR, headers, cookies, credentials, tokens, signed URLs or
+> media. Even a logged-out capture can contain sensitive browsing data; do not
+> assume its cookies or URLs are harmless. The current helper extracts only
+> the minimal, reviewable structure needed for these investigations.
+
 > **Status (Updated 2026-09-23):** All 6 initial target sites (`nhentai`,
 > `hentaiera`, `imhentai`, `hentaienvy`, `hentaifox`, and `hitomi`) have been
 > captured and verified in the repository (`captures/`). Their adapters, HTML

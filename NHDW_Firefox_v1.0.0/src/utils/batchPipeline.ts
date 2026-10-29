@@ -17,6 +17,7 @@ import { fetchNhentaiApi } from "./apiAuth";
 import { artifactRecordFilename, BatchOutcome, FailedGallery } from "./downloadHistory";
 import { DEFAULT_SITE, GALLERY_KEY_SEPARATOR, normalizeSite, toGalleryKey, splitGalleryKey } from "./siteKeys";
 import { resolveJobFormat } from "./downloadFormats";
+import { archiveIdentityFromBatchKey } from "./archiveIdentity";
 import { clearnetSource } from "../sources/GallerySource";
 import { getSourceForSite } from "../sources/index";
 import { utils, classifyError, errorMessage } from "./utils";
@@ -271,6 +272,15 @@ export async function resolveGalleryMetadata(
         // Either key works: callers built the map from whichever id they had.
         const candidate = galleryMetadata[key] || galleryMetadata[id];
         const json = requireGallery(candidate);
+        // Never save supplied metadata for a different title/site under this
+        // job's identity. Missing legacy fields remain supported, but explicit
+        // conflicts must fail rather than silently poison output and history.
+        if (json.id !== undefined && json.id !== null && String(json.id) !== id) {
+            throw new Error("Unexpected response type (gallery metadata id mismatch).");
+        }
+        if (json.site && String(json.site) !== site) {
+            throw new Error("Unexpected response type (gallery metadata site mismatch).");
+        }
         if (!json.site) json.site = adapter.site;
         return { ok: true, json: json };
     }
@@ -566,9 +576,11 @@ export async function runBatchDownload(args: {
                     skipped++;
                     continue;
                 }
-                let tmp = title;
+                const base = title + " (" + galleryId + ")";
+                let tmp = base;
+                let suffix = 2;
                 while (names.includes(tmp)) {
-                    tmp = title + " (" + galleryId + ")";
+                    tmp = base + " (" + suffix++ + ")";
                 }
                 title = tmp;
             }
@@ -587,7 +599,12 @@ export async function runBatchDownload(args: {
                     zipName: zipName,
                     displayName: allDoujinshis[key],
                     zip: effectiveSeparate ? host.newZip() : zip,
-                    gallerySettings: gallerySettings,
+                    // Use the original job site / key, not the default-site
+                    // history normalization or the resolved JSON, as separate
+                    // provenance for a privileged server-archive request.
+                    gallerySettings: Object.assign({}, gallerySettings, {
+                        archiveIdentity: archiveIdentityFromBatchKey(key, options.site)
+                    }),
                     sourceTabId: sourceTabId
                 });
                 succeeded++;

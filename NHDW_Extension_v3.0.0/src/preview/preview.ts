@@ -47,6 +47,13 @@ function initPopupTabs() {
         }
     };
     tabDownload.addEventListener("click", () => show("download"));
+    const chaptersButton = document.getElementById("buttonChapters");
+    if (chaptersButton) chaptersButton.addEventListener("click", () => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            if (!tabs || !tabs[0] || typeof tabs[0].id !== "number") return;
+            chrome.tabs.create({ url: chrome.runtime.getURL("chapters.html") + "?tab=" + tabs[0].id });
+        });
+    });
     tabQueue.addEventListener("click", () => show("queue"));
     tabSettings.addEventListener("click", () => show("settings"));
     // Live row updates (a card bookmarked on the page, a download settling)

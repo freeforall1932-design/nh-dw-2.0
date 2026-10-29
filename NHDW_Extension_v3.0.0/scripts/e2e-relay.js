@@ -120,6 +120,7 @@ const sandbox = {
     console,
     setTimeout,
     clearTimeout,
+    URL,
     fetch() { throw new Error("fetch called during background.js load"); }
 };
 sandbox.self = sandbox;
@@ -164,6 +165,8 @@ function sendToBackground(message, sender) {
         path: "Downloads/Test",
         name: "Test",
         tabId: 42,
+        site: "nhentai",
+        galleryUrl: "https://nhentai.net/g/123456/",
         formatOverride: "cbz"
     });
     if (!startAnswer || startAnswer.result !== "started") {
@@ -186,7 +189,19 @@ function sendToBackground(message, sender) {
         fail("downloadDoujinshi relay must carry the resolved image server list, got: "
             + JSON.stringify(relay.options.imageServers));
     }
-    console.log("PASS: downloadDoujinshi creates the offscreen document and relays the one-job format override");
+    if (!relay.options.archiveIdentity || relay.options.archiveIdentity.site !== "nhentai"
+        || relay.options.archiveIdentity.id !== "123456") {
+        fail("canonical preview provenance must reach the offscreen job: " + JSON.stringify(relay.options.archiveIdentity));
+    }
+    const conflictingStart = await sendToBackground({
+        action: "downloadDoujinshi", json: { id: 123456, site: "nhentai" }, path: "Test", name: "Test",
+        site: "hitomi", galleryUrl: "https://nhentai.net/g/123456/"
+    });
+    const conflictingRelay = relays[relays.length - 1];
+    if (!conflictingStart || conflictingStart.result !== "started" || conflictingRelay.options.archiveIdentity !== null) {
+        fail("conflicting single-title site must not be authorized for a server archive");
+    }
+    console.log("PASS: downloadDoujinshi relays format and independently checked source provenance");
 
     // 2b. UI mode: with no stored preference the default is the side panel, so
     //     the action popup is cleared (an action popup always wins over
@@ -397,6 +412,17 @@ function sendToBackground(message, sender) {
     }
     console.log("PASS: saveDownload relays the object URL to chrome.downloads.download");
 
+    const savedOnChanged = chromeStub.downloads.onChanged;
+    delete chromeStub.downloads.onChanged;
+    const strictWithoutTracker = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "saveDownload", url: "blob:chrome-extension://x/strict", filename: "Strict.zip", requireCompletion: true }, {}, resolve);
+    });
+    chromeStub.downloads.onChanged = savedOnChanged;
+    if (!strictWithoutTracker || strictWithoutTracker.result !== false || downloadCalls.length !== 1) {
+        fail("strict archive save must not start if completion tracking is unavailable");
+    }
+    console.log("PASS: strict archive relay refuses an untrackable browser handoff");
+
     // 9. fetchInTab: the worker injects the image fetch into the tab
     //    (chrome.scripting is not available in the offscreen document).
     //    executeScriptCalls[0] is the CDN config fetch the worker made when
@@ -485,7 +511,7 @@ function sendToBackground(message, sender) {
     }
     onMessageHandler({
         from: "offscreen", action: "downloadError", error: "Failed to download original image (x).",
-        galleryId: "333", galleryName: "Broken Three", retryJob: { formatOverride: "zip" }
+        galleryId: "333", galleryName: "Broken Three", site: "hitomi", retryJob: { formatOverride: "zip", site: "hitomi" }
     }, {}, () => {});
     await new Promise((r) => setTimeout(r, 20));
     const failedList = await sendToBackground({ action: "getFailedGalleries" });
@@ -496,6 +522,10 @@ function sendToBackground(message, sender) {
     const failedOne = failedList.failed.find((f) => f.id === "111");
     if (failedOne.name !== "Broken One" || !/NETWORK_FAILED/.test(failedOne.error) || !failedOne.retryJob || failedOne.retryJob.formatOverride !== "raw") {
         fail("remembered failures must keep name, reason and retry settings, got " + JSON.stringify(failedOne));
+    }
+    const failedOtherSite = failedList.failed.find((f) => f.id === "333");
+    if (!failedOtherSite || failedOtherSite.site !== "hitomi" || failedOtherSite.retryJob.site !== "hitomi") {
+        fail("single-title failure must retain its site for retry: " + JSON.stringify(failedOtherSite));
     }
     if (!sessionStore.nhdwFailedGalleries || sessionStore.nhdwFailedGalleries.length !== 3) {
         fail("failures must live in chrome.storage.session (survive worker restarts), got " + JSON.stringify(sessionStore.nhdwFailedGalleries));

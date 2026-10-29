@@ -5,7 +5,7 @@ import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl, SiteAdapter, clearnetSource } from "../sources"
 import { getActiveTabId, readGalleryFromTab, executeInTab } from "./activeTabGallery"
-import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
+import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi, parseRetryAfterMs, NhentaiRateLimitError } from "../utils/apiAuth"
 import {
     DownloadFormat,
     effectiveOutputMode,
@@ -190,6 +190,7 @@ function pendingFromMessage(failed: FailedGallery[], retryJob: any): PendingFail
         id: String(entry.id),
         name: String(entry.name || entry.id),
         error: String(entry.error || ""),
+        site: entry.site,
         retryJob: retryJob && typeof retryJob === "object" ? retryJob : null,
         at: Date.now()
     }));
@@ -315,7 +316,7 @@ chrome.runtime.onMessage.addListener(function(request) {
         // cancellation), NAME the gallery when the pipeline told us which one
         // failed, and offer a retry when it can be re-added.
         const failed: FailedGallery[] = request.galleryId !== undefined && request.galleryId !== null && request.galleryId !== ""
-            ? [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }]
+            ? [{ id: String(request.galleryId), site: request.site, name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }]
             : [];
         const retryable = failed.length > 0;
         // errorMessage(), never String(): this is the LAST hop before the user
@@ -486,7 +487,7 @@ export default class Popup
         const source = getSourceForUrl(self.url);
         const galleryId = source ? source.getGalleryId(self.url) : null;
         if (galleryId !== null && source !== null) {
-            await self.#doujinshiPreviewAsync(galleryId, source);
+            await self.#doujinshiPreviewAsync(galleryId, source, newUrl);
         } else if (source !== null) {
             executeActiveTabScript("js/getGalleries.js");
         } else {
@@ -508,7 +509,7 @@ export default class Popup
     }
 
     // Display popup for a doujinshi
-    async #doujinshiPreviewAsync(id: string, source: SiteAdapter = clearnetSource) {
+    async #doujinshiPreviewAsync(id: string, source: SiteAdapter = clearnetSource, galleryUrl: string = "") {
         let json: any | null = null;
         let status = 0;
         let statusText = "";
@@ -518,6 +519,7 @@ export default class Popup
         // any keyed failure keep the original order below.
         const modeState = await getApiModeState();
         let keyedRejected = false;
+        let rateLimitMessage = "";
         if (source.site === "nhentai" && modeState.mode === "keyed") {
             try {
                 const keyedParsing = new ApiParsing();
@@ -528,6 +530,9 @@ export default class Popup
                     json = await keyedParsing.GetJsonAsync(keyedResp);
                 } else if (keyedResp.status === 401) {
                     keyedRejected = true;
+                } else if (keyedResp.status === 429) {
+                    const retryAfter = keyedResp.headers && keyedResp.headers.get ? keyedResp.headers.get("Retry-After") : null;
+                    rateLimitMessage = new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter)).message;
                 }
             } catch (error) {
                 statusText = errorMessage(error);
@@ -537,7 +542,7 @@ export default class Popup
         // Read the open gallery tab. Extension-origin fetches to the gallery
         // API are what Cloudflare 403s; the rendered page already carries its
         // metadata once any challenge is done.
-        if (json === null) {
+        if (json === null && !rateLimitMessage) {
             if (source.site === "nhentai") {
                 json = await getGalleryFromActiveTab(id);
             } else {
@@ -551,16 +556,20 @@ export default class Popup
             }
         }
 
-        if (json === null && source.site === "nhentai") {
+        if (json === null && source.site === "nhentai" && !rateLimitMessage) {
             try {
                 const resp = await fetch(this.parsing!.GetUrl(id), {
                     credentials: "include",
                     cache: "no-store",
+                    redirect: "error",
                     headers: await getOptionalApiHeaders()
                 });
                 status = resp.status;
                 statusText = resp.statusText;
-                if (resp.ok) {
+                if (resp.status === 429) {
+                    const retryAfter = resp.headers && resp.headers.get ? resp.headers.get("Retry-After") : null;
+                    rateLimitMessage = new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter)).message;
+                } else if (resp.ok) {
                     json = await this.parsing!.GetJsonAsync(resp);
                 }
             } catch (error) {
@@ -589,9 +598,9 @@ export default class Popup
         }
 
         if (json === null) {
-            let html = status === 404
-                ? message.errorOther(status, statusText)
-                : message.cloudflareMetadata();
+            let html = rateLimitMessage
+                ? message.errorOther(429, rateLimitMessage)
+                : (status === 404 ? message.errorOther(status, statusText) : message.cloudflareMetadata());
             if (keyedRejected) {
                 html += '<br/><small>Your API key was rejected (HTTP 401). Check it in the extension options, or clear it there to use open-tab mode only.</small>';
             }
@@ -750,6 +759,10 @@ export default class Popup
                                 path: (document.getElementById('path') as HTMLInputElement).value,
                                 name: title,
                                 tabId: tabId,
+                                // Source and URL come from the previewed page,
+                                // independently of the returned gallery JSON.
+                                site: source.site,
+                                galleryUrl: galleryUrl,
                                 formatOverride: selectedFormat()
                             }, (response) => {
                                 if (response && response.result === "queued") {

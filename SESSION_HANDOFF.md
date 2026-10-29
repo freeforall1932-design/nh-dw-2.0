@@ -1,5 +1,49 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Latest owner direction (2026-10-28):** Chromium is primary; retain Firefox
+but do not claim parity. The owner authorized Sasangeyou chapter work and
+nhentai archive progress, says batch choices can vary and they can identify the
+wanted option, and reports native nhentai download and reader use the same
+original file size. That is not independent byte-identity, quality or
+original-upload verification. The native button flow is still unobserved.
+External video/game mirror work remains on hold; DoujinDesu is not implemented.
+
+**Latest Chromium state (2026-10-29):** A new, explicitly opt-in
+**universal chapter collector** ships in the Chromium tree: `Chapters ↗` in the
+panel opens `chapters.html`, which uses `activeTab` + `chrome.scripting` to
+inject a probe into the user's own tab, discovers chapter links by a supplied
+CSS selector, inspects static reader HTML as data (`htmlparser2`/`css-select`,
+no DOM construction or subresource requests), requires explicit host approval,
+streams and signature-checks each page, and saves one strict-completion
+CBZ/ZIP per chapter through the worker's tracked `blob:` relay. It has **no**
+wildcard host access, no automatic injection, no batch/mirror resolution and no
+live-site validation. See [UNIVERSAL_CHAPTER_TOOL.md](UNIVERSAL_CHAPTER_TOOL.md).
+
+The offline chapter planner requires an explicit
+batch option and does not infer that alternatives expired; a non-executing
+synthetic `ts_reader.run` candidate parser preserves one chosen server's ordered
+references. Neither is wired to the extension or verified against site DOM.
+The API archive path now has bounded ZIP/CRC/signature/count checks, restrictive
+HTTPS/expiry/redirect handling, explicit failures, full long `Retry-After`
+handling, same-batch deferral and strict browser-completion tracking in mocks.
+Keep the option **off**: real delivery hosts, CORS, actual save completion,
+page identity and quality remain unverified; a cross-context/restart cooldown
+is not implemented. Firefox retains its earlier behavior and was not ported in
+this pass. Normal per-page image signature validation remains unfixed. Old
+installed/queued jobs can still use previous code.
+
+Chromium's latest offline run: **738 passing / 4 pending**, build, smoke and all
+VM e2e scripts (including the new bundled chapter integration and relay-guard
+harness) passed, as did capture-helper tests. A Chromium 153 headless-shell
+attempt failed to register the extension, so no real-browser test ran. Firefox's
+prior run was **703 passing / 4 pending**; it was not retested for this pass.
+No real key, media transfer or native-button click occurred. See
+[WORKLIST.md](WORKLIST.md), [NEW_DOMAIN_PLANNING.md](NEW_DOMAIN_PLANNING.md) and
+[SITE_CAPTURE_GUIDE.md](SITE_CAPTURE_GUIDE.md).
+
+**Historical handoff below:** Earlier session status, test counts and priorities
+are archival; the latest state above and the actual current Git branch take precedence.
+
 **Updated:** 2026-10-17 (session `arena/96e2ebce-nh-dw-2-0`, item 72
 cross-mirror fallback). Chrome **3.13.0**, Firefox **1.5.0** — both
 trees fully green (Chrome 647 unit / 182 e2e / 7 smoke; Firefox 673

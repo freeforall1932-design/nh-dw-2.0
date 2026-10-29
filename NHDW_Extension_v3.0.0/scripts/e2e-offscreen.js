@@ -67,7 +67,7 @@ const chromeCore = {
             if (msg.action === "saveDownload") {
                 // The service worker calls chrome.downloads.download here and
                 // answers with the downloadId as soon as the item exists.
-                downloads.push({ url: msg.url, filename: msg.filename });
+                downloads.push({ url: msg.url, filename: msg.filename, requireCompletion: msg.requireCompletion === true });
                 if (saveDownloadErrorScript !== null) {
                     if (cb) setTimeout(() => cb({ result: false, error: new Error(saveDownloadErrorScript) }), 0);
                     return;
@@ -91,6 +91,7 @@ const chromeCore = {
                     const outcome = rawDownloadScript(entry.filename, entry.attempt, entry.asked || 0);
                     entry.asked = (entry.asked || 0) + 1;
                     if (outcome === "complete") answer = { result: true, ok: true, state: "complete", error: null };
+                    else if (outcome === "unknown") answer = { result: true, ok: true, state: "unknown", error: null };
                     else if (outcome === "pending") answer = { result: true, ok: false, state: "pending", error: null };
                     else answer = { result: true, ok: false, state: "interrupted", error: "Download interrupted (" + outcome + ")" };
                 }
@@ -141,17 +142,14 @@ const chromeStub = new Proxy(chromeCore, {
 const objectBlobs = {};   // blobUrl -> Blob
 const revokedUrls = [];
 let blobCounter = 0;
-const URLStub = {
-    createObjectURL(blob) {
-        blobCounter++;
-        const url = "blob:nhtest/" + blobCounter;
-        objectBlobs[url] = blob;
-        return url;
-    },
-    revokeObjectURL(url) {
-        revokedUrls.push(url);
-    }
+function URLStub(input, base) { return new URL(input, base); }
+URLStub.createObjectURL = function(blob) {
+    blobCounter++;
+    const url = "blob:nhtest/" + blobCounter;
+    objectBlobs[url] = blob;
+    return url;
 };
+URLStub.revokeObjectURL = function(url) { revokedUrls.push(url); };
 
 // --- fetch stub: nhentai API + image CDN ------------------------------------
 const GALLERY_ID = 123456;
@@ -231,14 +229,30 @@ function imageBytesFor(url) {
 // All URLs the offscreen document fetched directly (no source tab): used to
 // prove which CDN host URL generation actually used.
 const fetchedUrls = [];
+let serverArchiveFixture = null;
+let rateLimitStage = null;
 
 function fetchStub(url) {
     const u = String(url);
     fetchedUrls.push(u);
+    if (u === "https://nhentai.net/api/v2/galleries/" + GALLERY_ID + "/download?format=zip") {
+        if (rateLimitStage === "archive") return Promise.resolve(new Response("", { status: 429, headers: { "retry-after": "120" } }));
+        return Promise.resolve(new Response(JSON.stringify({
+            url: "https://cdn.nhentai.net/archive-fixture.zip?signature=synthetic",
+            expires_at: Math.floor(Date.now() / 1000) + 600
+        }), { status: 200 }));
+    }
+    if (u === "https://cdn.nhentai.net/archive-fixture.zip?signature=synthetic") {
+        return Promise.resolve(new Response(serverArchiveFixture, { status: 200, headers: { "content-type": "application/zip" } }));
+    }
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
+        if (rateLimitStage === "metadata") return Promise.resolve(new Response("", { status: 429, headers: { "retry-after": "120" } }));
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
+    }
+    if (u.includes('gold-usergeneratedcontent.net')) {
+        return Promise.resolve(new Response(pageBytes[0], { status: 200 }));
     }
     const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(u);
     if (imgMatch) {
@@ -379,6 +393,11 @@ function askOffscreen(message) {
 }
 
 (async () => {
+    const fixtureZip = new JSZip();
+    fixtureZip.file("001.jpg", pageBytes[0]);
+    fixtureZip.file("002.jpg", pageBytes[1]);
+    fixtureZip.file("003.jpg", pageBytes[2]);
+    serverArchiveFixture = await fixtureZip.generateAsync({ type: "nodebuffer", compression: "STORE" });
     try {
         vm.runInContext(code, vmCtx, { filename: bundlePath });
     } catch (err) {
@@ -1349,6 +1368,112 @@ function askOffscreen(message) {
     }
     galleryJson2.title = savedTitle2;
     console.log("PASS: separate ignore-dup counts the dropped title in skipped");
+
+    // Single-title success and failure must retain the selected source in
+    // history and retry messages, not collide with the default site's id.
+    const hitomiHash = "0e".repeat(32);
+    const hitomiSingle = {
+        id: 765432, site: "hitomi", media_id: hitomiHash,
+        title: { english: "Single", japanese: "", pretty: "Single" },
+        images: { pages: [{ t: "w", hash: hitomiHash, name: "01.webp" }] }, tags: []
+    };
+    sentMessages.length = 0;
+    anchorDownloads.length = 0;
+    const hitomiStart = await askOffscreen({
+        action: "downloadDoujinshi", json: hitomiSingle, path: "Single", name: "Single",
+        options: Object.assign({}, relayedOptions, { site: "hitomi", useZip: "zip" })
+    });
+    if (!hitomiStart || hitomiStart.result !== "started") fail("single-site job did not start");
+    await waitFor(() => sentMessages.some((m) => m.action === "jobFinished"), "single-site job must finish");
+    const hitomiRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!hitomiRecords || hitomiRecords.length !== 1 || hitomiRecords[0].id !== "hitomi:765432") {
+        fail("single-site history must keep the original site: " + JSON.stringify(hitomiRecords));
+    }
+    sentMessages.length = 0;
+    const invalidHitomi = Object.assign({}, hitomiSingle, { images: { pages: [{ t: "0" }] } });
+    const failedStart = await askOffscreen({
+        action: "downloadDoujinshi", json: invalidHitomi, path: "Invalid", name: "Invalid",
+        options: Object.assign({}, relayedOptions, { site: "hitomi", useZip: "zip" })
+    });
+    if (!failedStart || failedStart.result !== "started") fail("invalid single-site job did not start");
+    await waitFor(() => sentMessages.some((m) => m.action === "jobFinished"), "invalid single-site job must finish");
+    const failedSingle = sentMessages.find((m) => m.action === "downloadError");
+    if (!failedSingle || failedSingle.site !== "hitomi" || !failedSingle.retryJob || failedSingle.retryJob.site !== "hitomi") {
+        fail("single-site failure and retry must keep the source: " + JSON.stringify(failedSingle));
+    }
+    const failedRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (failedRecords && failedRecords.length) fail("invalid metadata must not be recorded as a success");
+    console.log("PASS: single-title history and retry keep the original site");
+
+    // Experimental server archives must use the tracked worker relay, not an
+    // unobservable anchor click. Only a terminal complete result records
+    // history; an interrupted or unknown result is a failure.
+    for (const outcome of ["complete", "FILE_NO_SPACE", "unknown"]) {
+        sentMessages.length = 0;
+        downloads.length = 0;
+        anchorDownloads.length = 0;
+        fetchedUrls.length = 0;
+        cancelledDownloads.length = 0;
+        rawDownloadScript = () => outcome;
+        const start = await askOffscreen({
+            action: "downloadDoujinshi", json: Object.assign({}, galleryJson, { site: "nhentai" }),
+            path: "Downloads/ServerArchive", name: "ServerArchive",
+            options: Object.assign({}, relayedOptions, {
+                site: "nhentai", apiKey: "synthetic-key", useServerArchive: true,
+                archiveIdentity: { site: "nhentai", id: String(GALLERY_ID) }
+            })
+        });
+        if (!start || start.result !== "started") fail("server archive job did not start");
+        await waitFor(() => sentMessages.some(m => m.action === "jobFinished"), "server archive job must finish");
+        const records = sentMessages.filter(m => m.action === "jobFinished").map(m => m.records).pop() || [];
+        const errors = sentMessages.filter(m => m.action === "downloadError");
+        if (downloads.length !== 1 || downloads[0].requireCompletion !== true || anchorDownloads.length !== 0) {
+            fail("server archive must use the strict tracked relay instead of an anchor");
+        }
+        if (fetchedUrls.some(u => /\/galleries\/987654\//.test(u))) fail("server archive must not silently fetch pages");
+        if (outcome === "complete") {
+            if (errors.length || records.length !== 1 || records[0].id !== "nhentai:" + GALLERY_ID) fail("completed archive must be recorded");
+        } else {
+            if (errors.length !== 1 || records.length !== 0) fail("unconfirmed/interrupted archive must fail without history");
+            if (outcome === "unknown" && cancelledDownloads.length !== 1) fail("unknown archive completion must be cancelled");
+        }
+    }
+    rawDownloadScript = null;
+    console.log("PASS: server archive completion is tracked; interruption/unknown never record success");
+
+    for (const stage of ["metadata", "archive"]) {
+        sentMessages.length = 0;
+        downloads.length = 0;
+        anchorDownloads.length = 0;
+        fetchedUrls.length = 0;
+        tabFetches.length = 0;
+        rateLimitStage = stage;
+        const message = {
+            action: "downloadAllDoujinshis",
+            allDoujinshis: { [GALLERY_ID]: "One", [GALLERY_ID2]: "Two" },
+            finalName: "Downloads/RateLimited",
+            options: Object.assign({}, relayedOptions, {
+                site: "nhentai", apiKey: "synthetic-key", useServerArchive: stage === "archive", downloadSeparately: true
+            })
+        };
+        if (stage === "archive") message.galleryMetadata = { [GALLERY_ID]: galleryJson, [GALLERY_ID2]: galleryJson2 };
+        const start = await askOffscreen(message);
+        if (!start || start.result !== "started") fail(stage + " rate-limited job did not start");
+        await waitFor(() => sentMessages.some(m => m.action === "jobFinished"), stage + " rate-limited job must finish");
+        const summary = sentMessages.find(m => m.action === "batchSummary");
+        const records = sentMessages.filter(m => m.action === "jobFinished").map(m => m.records).pop() || [];
+        if (!summary || summary.succeeded !== 0 || summary.failed !== 2 || summary.total !== 2 ||
+            !summary.failedGalleries || summary.failedGalleries.length !== 2 ||
+            !/rate limit/i.test(summary.failedGalleries[1].error)) {
+            fail(stage + " 429 must defer remaining galleries: " + JSON.stringify(summary));
+        }
+        if (fetchedUrls.length !== 1 || tabFetches.length || downloads.length || anchorDownloads.length || records.length) {
+            fail(stage + " 429 must not fetch a fallback or record a success: " + JSON.stringify(fetchedUrls));
+        }
+        if (JSON.stringify(summary).includes("synthetic-key")) fail("rate-limit summary must not expose the key");
+        rateLimitStage = null;
+        console.log("PASS: offscreen " + stage + " 429 defers remaining galleries without fallback or history");
+    }
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {

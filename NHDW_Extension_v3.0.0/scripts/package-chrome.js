@@ -12,7 +12,7 @@ const JSZip = require('jszip');
 const CORE = ['Icon-crow-mist-arrow-grey.png', 'Icon-crow-mist-arrow.png',
     'Icon-crow-mist-grey.png', 'Icon-crow-mist-redeye-grey.png',
     'Icon-crow-mist-redeye.png', 'Icon-crow-mist.png',
-    'Icon-grey.png', 'Icon.png', 'LICENSE', 'index.html',
+    'Icon-grey.png', 'Icon.png', 'LICENSE', 'index.html', 'chapters.html',
     'manifest.json', 'offscreen.html', 'options.html'];
 const RUNTIME_EXT = {
     css: /\.(?:css|png|svg|webp|jpe?g|woff2?)$/i,

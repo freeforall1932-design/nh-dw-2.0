@@ -310,7 +310,7 @@ function errorCallback(error: string) {
 
 // Single-gallery failure report that also NAMES the gallery and carries what
 // the popup needs to offer "Retry": the id and the job it was started with.
-function galleryErrorCallback(id: string, name: string, retryJob: any) {
+function galleryErrorCallback(id: string, name: string, retryJob: any, site?: string) {
     return (error: any) => {
         chrome.runtime.sendMessage({
             from: "offscreen",
@@ -318,6 +318,7 @@ function galleryErrorCallback(id: string, name: string, retryJob: any) {
             error: errorMessage(error),
             galleryId: String(id),
             galleryName: name,
+            site: site,
             retryJob: retryJob
         });
     };
@@ -356,17 +357,18 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     // A failure names the gallery and carries the job settings so the popup
     // can re-add it (same format / master folder; metadata is re-resolved).
     const galleryId = jsonTmp && jsonTmp.id !== undefined ? String(jsonTmp.id) : "";
+    const jobSite = options && options.site ? String(options.site) : (jsonTmp && jsonTmp.site ? String(jsonTmp.site) : undefined);
     // Resolved ONCE for this job and used for the Downloader settings, the
     // history record and the retry job. The offscreen document has no
     // chrome.storage, so it must never let the Downloader fall back to its own
     // storage read: that is how the record could disagree with the file
     // (backlog item 33).
     const jobFormat = resolveJobFormat(options ? options.useZip : undefined);
-    const retryJob = buildRetryJob(sourceTabId, options);
+    const retryJob = buildRetryJob(sourceTabId, Object.assign({}, options || {}, { site: jobSite }));
     // Single-gallery jobs own their archive: pages at the root, file named
     // after the gallery (no Title/Title double folder).
-    currentDownloader = new Downloader(jsonTmp, path, galleryErrorCallback(galleryId, name, retryJob), progressCallback, name, zip, path, signal,
-        undefined, { useZip: jobFormat, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, rawMaxConcurrent: options ? options.rawMaxConcurrent : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined, archiveMasterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined });
+    currentDownloader = new Downloader(jsonTmp, path, galleryErrorCallback(galleryId, name, retryJob, jobSite), progressCallback, name, zip, path, signal,
+        undefined, { useZip: jobFormat, maxConcurrentDownloads: options ? options.maxConcurrentDownloads : undefined, rawMaxConcurrent: options ? options.rawMaxConcurrent : undefined, archiveLayout: "flat", apiKey: options && options.apiKey ? options.apiKey : undefined, useServerArchive: options ? !!options.useServerArchive : undefined, archiveIdentity: options ? options.archiveIdentity : null, rawMasterFolder: options && typeof options.rawMasterFolder === "string" ? options.rawMasterFolder : undefined, archiveMasterFolder: options && typeof options.archiveMasterFolder === "string" ? options.archiveMasterFolder : undefined });
     currentDownloader.saveUrl = saveArtifactSmart;
     if (typeof sourceTabId === "number") {
         currentDownloader.sourceTabId = sourceTabId;
@@ -382,7 +384,7 @@ function downloadDoujinshi(jsonTmp: any, path: string, name: string, sourceTabId
     currentDownloader.startAsync()
         .then(() => {
             collectHistoryRecords([{
-                id: String(jsonTmp.id),
+                id: toGalleryKey(String(jsonTmp.id), jobSite),
                 filename: artifactRecordFilename({ format: format, name: path, masterFolder: masterFolder })
             }]);
             notifyJobFinished(); scheduleIdleClose();
@@ -441,7 +443,7 @@ function cancelGallery(id: string | number, site?: string): boolean {
     const initialLen = queuedJobs.length;
     for (let i = queuedJobs.length - 1; i >= 0; i--) {
         const q = queuedJobs[i];
-        const qSite = q.options && q.options.site;
+        const qSite = (q.options && q.options.site) || (q.json && q.json.site);
         if (q.action === "downloadDoujinshi" && q.json && toGalleryKey(q.json.id, qSite) === key) {
             queuedJobs.splice(i, 1);
             cancelled = true;

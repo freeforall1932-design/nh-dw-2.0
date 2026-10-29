@@ -14,6 +14,7 @@
 // page-by-page route could still complete.
 
 import { fetchNhentaiApi, descriptiveUserAgentHeaders } from "../utils/apiAuth";
+import { archiveGalleryId } from "../utils/archiveIdentity";
 
 export interface ArchiveUrlResult {
     url: string;
@@ -42,11 +43,13 @@ export async function requestArchiveDownloadUrl(
     if (apiKey === null || String(apiKey).trim().length === 0) {
         return null; // The endpoint requires auth; keyless mode cannot use it.
     }
+    const validatedId = archiveGalleryId(galleryId);
+    if (validatedId === null) return null;
 
     let resp: Response;
     try {
         resp = await fetchNhentaiApi(
-            getArchiveRequestUrl(galleryId, format),
+            getArchiveRequestUrl(validatedId, format),
             { method: "POST", cache: "no-store", signal: deps.signal },
             apiKey,
             deps

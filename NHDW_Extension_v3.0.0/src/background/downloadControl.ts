@@ -55,6 +55,8 @@ export interface CompletionOptions {
     // archive the user waited for).
     signal?: AbortSignal | null;
     cancelOnAbort?: boolean;
+    // For paths that must not record a browser handoff as completion.
+    requireCompletion?: boolean;
 }
 
 export const DEFAULT_COMPLETION_POLL_MS = 10000;
@@ -371,10 +373,17 @@ export function startBrowserDownload(url: string, filename: string): Promise<num
 // terminal state. Rejects with an Error whose message names the reason
 // (creation failure, interruption, timeout, abort); resolves with the id.
 export async function startTrackedDownload(url: string, filename: string, completion?: CompletionOptions): Promise<{ downloadId: number }> {
+    if (completion && completion.requireCompletion && !completionTrackingAvailable()) {
+        throw new Error("Browser download completion tracking is unavailable.");
+    }
     const downloadId = await startBrowserDownload(url, filename);
     const outcome = await awaitDownloadCompletion(downloadId, completion);
     if (!outcome.ok) {
         throw new Error(outcome.error || "Download interrupted");
+    }
+    if (completion && completion.requireCompletion && outcome.state !== "complete") {
+        cancelTrackedDownload(downloadId);
+        throw new Error("Browser download completion could not be confirmed.");
     }
     return { downloadId: downloadId };
 }

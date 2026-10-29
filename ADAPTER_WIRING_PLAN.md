@@ -1,7 +1,10 @@
 # Multi-Site Adapter Implementation Plan (v4)
 
 **Recorded:** 2026-09-22 (session `arena/01a0c407-nh-dw-2-0`).
-**Status:** All 6 target site captures and HARs verified on `origin/main`. Ready for phased step-by-step implementation.
+**Historical status:** Six existing-site captures informed this plan. This is
+an adapter reference, not evidence that Sasangeyou or DoujinDesu is implemented
+or that current reader markup and transfers still match. See the current scope
+in §6 and [WORKLIST.md](WORKLIST.md).
 
 ---
 
@@ -118,30 +121,45 @@ for the five non-nhentai listing hosts — see §6 step 3.
 
 This document's §§1–4 stay as the operative reference for
 adding **site #7+**: copy the matrix row, implement the interface, wire the
-six seams, follow `CAPTURE_GUIDE.md` for samples first.
+six seams, follow [SITE_CAPTURE_GUIDE.md](SITE_CAPTURE_GUIDE.md) for sanitized samples first.
 
 ## 6. Adding site #7 (the live checklist)
 
-1. Owner capture per `CAPTURE_GUIDE.md` (one sanitized HAR per site, or
-   gallery+reader **and listing-page** HTML and 3 image URLs; rendered DOM
-   instead of HAR for client-side-rendered sites). The listing sample is what
-   the card-control table is measured from — without it, site #7 ships without
-   Select/Bookmark/Download on its cards.
+**Current scope:** Sasangeyou chapter work and Chromium nhentai API archive
+hardening are authorized. Sasangeyou has an offline chapter planner and a
+synthetic-only reader-data candidate parser; neither is wired or verified
+against site DOM. No new-site adapter is live-transfer verified. DoujinDesu
+remains unimplemented and external video/game hosts remain on hold. Chromium
+archive checks are offline-tested but its opt-in must stay off until real
+browser and delivery behavior are verified; Firefox retains its earlier
+behavior. This checklist is not evidence of new-site support.
+
+**Browser priority (owner decision 2026-10-27):** implement and verify new
+work in the Chromium tree first. Firefox porting is optional when low-effort
+and otherwise deferred; it does not block Chromium. Retain the Firefox tree,
+and if a Firefox change is released, give it its own manifest wiring and tests
+rather than implying unverified parity. See [WORKLIST.md](WORKLIST.md).
+
+1. With an authorized non-sensitive example, record sanitized gallery/reader
+   **and listing-page** structures and, only if needed, image hostnames and
+   redacted/synthetic URL shapes. The listing sample measures card selectors.
+   Never request credentials, cookies, tokens, signed URLs or unredacted HARs;
+   follow the [privacy checklist](NEW_DOMAIN_PLANNING.md#evidence-needed-for-a-future-authorized-comic-reader-implementation).
 2. Add the contract row to §1's matrix (every field measured from the
    capture, never assumed — the 2026-09-15 audit's wrong assumptions are the
    cautionary tale).
-3. `src/parsing/<site>Html.ts` + `src/sources/<site>Source.ts`; register in
-   `src/sources/index.ts`; site slug in `siteKeys`; per-adapter host/path
-   allowlists in `cdnConfig`; paste-box shapes; `titleBookmark.ts` table entry
-   if the site has a gallery page button anchor; manifest `host_permissions`
-   (both trees).
-4. **Card controls:** a row in `src/utils/listCards.ts` (container, cover/link
-   selector, title selector, id regex — measured from the listing capture, never
-   assumed) **and** the site's listing host in the second `content_scripts`
-   block of both `manifest.json`s; without both, cards render no controls and
+3. In the Chromium tree, add `src/parsing/<site>Html.ts` +
+   `src/sources/<site>Source.ts`; register in `src/sources/index.ts`; add the
+   site slug, host/path allowlists, paste-box shapes, title-button entry and
+   narrowly scoped `manifest.json` host permissions.
+4. **Card controls:** a row in Chromium's `src/utils/listCards.ts` (container,
+   cover/link selector, title selector, id regex — measured from the listing
+   capture) **and** the site's listing host in the second `content_scripts`
+   block of its `manifest.json`; without both, cards render no controls and
    Select-all has nothing to select.
-5. Unit suite `test/<site>.test.js` (+ append to BOTH `package.json` mocha
-   lists), e2e coverage — including a `e2e-list-controls` per-site discovery
-   fixture and an `e2e-title-bookmark` gallery-page case — both trees, release
-   sync.
-6. Real-browser check is owner-only (items 42/58 pattern).
+5. Add Chromium's unit suite `test/<site>.test.js` to its `package.json` mocha
+   list, with e2e coverage including `e2e-list-controls` discovery and an
+   `e2e-title-bookmark` gallery-page case. If a Firefox port is low-effort and
+   undertaken, repeat its browser-specific wiring and tests before its release.
+6. Real-browser check is owner-only; Chrome first (item 42), Firefox/device
+   verification (item 58) separately if that build is pursued.

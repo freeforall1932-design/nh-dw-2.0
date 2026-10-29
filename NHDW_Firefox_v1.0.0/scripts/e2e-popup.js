@@ -432,6 +432,20 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     console.log("PASS phase 1: object-shaped downloadError renders its message with Retry + Go Back");
 
+    // The visible Retry action must not turn a failure from another source
+    // into a default-site job, even if the job details omit the site.
+    deliver({ action: "downloadError", error: "Fixture failure", galleryId: "42",
+        galleryName: "Other source", site: "hitomi", retryJob: { formatOverride: "zip" } });
+    await wait(20);
+    sentMessages.length = 0;
+    byId("buttonRetryFailed").dispatchLast("click");
+    await wait(30);
+    const sourceRetry = sentMessages.find((m) => m.action === "downloadAllDoujinshis");
+    if (!sourceRetry || sourceRetry.site !== "hitomi" || !sourceRetry.allDoujinshis["42"]) {
+        fail("a single-title retry must preserve its source: " + JSON.stringify(sourceRetry));
+    }
+    console.log("PASS: single-title Retry retains the failed gallery's source");
+
     // ---- Phase 2: batch-level error still leaves an action (item 29) -------
     deliver({ action: "downloadError", error: "Unable to start the offscreen download document." });
     await wait(20);

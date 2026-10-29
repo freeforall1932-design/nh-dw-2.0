@@ -1,5 +1,81 @@
 # Worklist — nh-dw-2.0
 
+**Owner browser priority (2026-10-27):** Chromium is the primary target for new
+work, with the desktop **Load unpacked** workflow kept beginner-friendly.
+Firefox development, parity, device testing and signing are deferred unless a
+particular change is straightforward; they must not block a Chromium release.
+Keep the existing Firefox tree rather than deleting it. If it is changed or
+released later, test that build independently and describe any missing features
+or known defects honestly. This direction supersedes older *future-work* claims
+that both browser trees must be updated together; historical results below are
+unchanged. See [NEW_DOMAIN_PLANNING.md](NEW_DOMAIN_PLANNING.md#browser-priority).
+
+**Current scope:** The owner authorized continuing Sasangeyou chapter work and
+Chromium nhentai archive hardening. Sasangeyou and DoujinDesu remain the
+new-domain priorities; external video/game hosts remain on hold. The owner can
+identify a desired batch option when choices vary. A same-title available batch
+still has priority; separate chapter archives are the fallback only after the
+relevant batch options are explicitly confirmed expired. No related series or
+blocked host should be guessed. See [NEW_DOMAIN_PLANNING.md](NEW_DOMAIN_PLANNING.md).
+The owner reports the nhentai website download and reader have the same original
+file size; this is not an independently checked hash, quality or provenance
+comparison. The native button's click flow remains unobserved.
+
+**Latest Chromium progress (offline, not new-site support):**
+
+- [Universal chapter collector](UNIVERSAL_CHAPTER_TOOL.md) — Chromium-only,
+  user-initiated `Chapters ↗` page: explicit chapter selection, selector-based
+  discovery, data-only reader HTML parsing, per-host approval, bounded
+  signature-checked pages, one strict-completion archive per chapter, no
+  wildcard hosts or auto-injection. Synthetic tests plus a bundled end-to-end VM
+  run pass; **no live site, real browser or real media has been validated**, and
+  it does not detect or use site-provided batches.
+
+- [Chapter planning](NHDW_Extension_v3.0.0/src/utils/chapterPlan.ts) now accepts
+  multiple batch candidates and requires an explicit choice; one expired option
+  is not evidence that other choices expired. A non-executing, synthetic-only
+  [candidate reader parser](NHDW_Extension_v3.0.0/src/parsing/sasangeyouReaderCandidate.ts)
+  preserves selected-server references and count mismatches. Neither is wired to
+  the UI/downloader, and Sasangeyou's actual DOM/`ts_reader.run` pattern,
+  authorization and media transfer are unverified. DoujinDesu remains unimplemented.
+- The existing opt-in **API** archive route now fails eligible Chromium jobs
+  explicitly instead of silently switching to pages. Synthetic tests cover
+  source isolation, missing/expired URLs, HTTPS/host/redirect restrictions,
+  bounded ZIP parsing, CRCs, image signatures, unsafe/duplicate names and
+  expected image counts. These checks do not prove that images decode, pages
+  are the right pages, or bytes are original. Real delivery hosts are unknown;
+  the temporary nhentai.net-only allowlist may reject a legitimate host.
+- Chromium now respects long `Retry-After` values by returning the 429 rather
+  than retrying early. The current batch defers unattempted titles and stops
+  paginated work; the popup reports keyed 429s instead of fetching a fallback.
+  A cross-context/restart-persistent cooldown and separately queued jobs are
+  not yet guaranteed. Browser-save completion is required for this API route in
+  worker/offscreen mocks; real Chrome filename, permission and completion
+  behavior remain unverified.
+- **Leave server archive OFF.** The safety limits reject archives over 128 MiB
+  compressed, 256 MiB expanded, 64 MiB per entry or 5,000 entries; expiry is
+  required and capped conservatively at seven days. Real host, redirect, CORS,
+  expiry, format, save and quality behavior still need an authorized, sanitized
+  real-browser test. Old installed/queued builds may retain previous behavior.
+  Firefox was not ported in this pass and retains the earlier silent fallback,
+  HTML acceptance and 15-second retry cap; its option must also remain off.
+- Normal page downloading still has the reproduced image-integrity defect:
+  sufficiently large HTML falsely labelled `image/jpeg` can be saved as a JPEG;
+  raw browser URL handoff cannot inspect bytes. Metadata conflicts and
+  cross-site mirror equivalence still need broader review.
+- Latest offline validation: Chromium **722 passing, 4 pending**, build, smoke,
+  all VM e2e scripts and capture-helper tests passed. The added regressions cover
+  merged/skip/cancellation handling and metadata/archive 429 propagation through
+  both worker and offscreen VMs. A Chromium 153 headless-shell attempt could
+  not register the extension, so it did **not** run real-browser tests. Firefox's
+  previous run was **703 passing, 4 pending**; it was not retested for these
+  Chromium-only changes. No live archive, reader-media transfer, native-button
+  click, real key, or quality comparison was performed.
+
+The [minimal sanitized capture guide](SITE_CAPTURE_GUIDE.md) remains available;
+never request credentials, cookies, signed URLs, media or raw HARs. `nhentai.to`
+was removed per the owner's ad report; no nhentai video feature is requested.
+
 **Chrome folder consolidation (current session):**
 `NHDW_Extension_v3.0.0/` is now the one checked-in loadable Chrome tree.
 **Migration warning:** an old unpacked install at the former folder path may
@@ -175,7 +251,8 @@ This is the single place to look for *what to do next*.
 | **`MULTISITE_V4_PLAN.md`** | Multi-site decision record, cooldown strategies (C pending owner), bucket list. |
 | **`ADAPTER_WIRING_PLAN.md`** | Per-site contract matrix + adapter interface — the reference for site #7+. |
 | **`CAPTURE_GUIDE.md`** | How to capture samples for a NEW site. |
-| **`CANDIDATE_SITES.md`** | Candidate analysis for site #7+ (tiers, onboarding checklist, the 2026-09-24 swap decision). The canonical URL roster lives in `new domain candidate` on main. |
+| **`CANDIDATE_SITES.md`** | Candidate analysis for site #7+ (tiers, onboarding checklist, the 2026-09-24 swap decision). The canonical URL roster is `new domain candidate`. |
+| **`NEW_DOMAIN_PLANNING.md`** | Sasangeyou scoped observations, offline chapter work, deferred external mirrors and DoujinDesu, and Chromium nhentai archive progress and remaining safety gates. |
 
 Item numbers are shared with `IMPROVEMENT_BACKLOG.md` and are never reused.
 

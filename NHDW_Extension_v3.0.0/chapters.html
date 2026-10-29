@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chapter collection — NHDW</title>
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/chapters.css">
+  <script src="js/chapters.js" defer></script>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">NHDW · EXPERIMENTAL</p>
+    <h1>Chapter collection</h1>
+    <p>Collect chapters from a title or save an open chapter. Works only on compatible, normally accessible HTTPS pages; it cannot bypass login, Premium access, challenges or browser cross-origin rules.</p>
+    <p id="sourceStatus" class="notice" role="status">Connecting to the selected tab…</p>
+  </header>
+  <section aria-labelledby="discoverHeading">
+    <div class="step">01</div><h2 id="discoverHeading">Find chapters</h2>
+    <p>Open a title in the source tab, then scan. If its list is paginated, navigate that tab to each list page and scan again. Only observed links are collected; check the full selection yourself.</p>
+    <label>Chapter-link CSS selector <input id="linkSelector" value="a[href]" spellcheck="false"></label>
+    <label class="check"><input id="chapterFilter" type="checkbox" checked> Show links that look like chapter or episode links</label>
+    <label class="check"><input id="outsideLinks" type="checkbox"> Include links outside the title path (review for unrelated series)</label>
+    <label class="check"><input id="otherListPages" type="checkbox"> Allow adding list pages at other paths on the same site</label>
+    <div class="buttons"><button id="scanTitle" type="button">Scan / add title page</button><button id="scanCurrent" class="secondary" type="button">Use open chapter</button><button id="reset" class="secondary" type="button">Clear</button></div>
+    <div id="chapterList" class="chapter-list" aria-live="polite"></div>
+    <div class="buttons"><button id="selectAll" class="secondary" type="button">Select displayed</button><button id="selectNone" class="secondary" type="button">Clear selection</button></div>
+    <label>Order of the collected list <select id="order"><option value="">Choose its order…</option><option value="oldest">Oldest to newest</option><option value="newest">Newest to oldest (reverse for saving)</option></select></label>
+    <p class="hint">Scan list pages in their displayed order. No numeric sorting, hidden pages, related titles or site-provided batch links are guessed.</p>
+  </section>
+  <section aria-labelledby="inspectHeading">
+    <div class="step">02</div><h2 id="inspectHeading">Inspect the selected readers</h2>
+    <p>Supply a selector that matches only ordered page images. Static chapter HTML is inspected for title batches; JavaScript-only readers may not work. “Use open chapter” inspects the already-rendered page. The counts are discovered references, not proof that the full chapter or the intended server was found.</p>
+    <label>Page-image CSS selector <input id="imageSelector" value="#readerarea img, .reading-content img, .chapter-content img, .page-break img" spellcheck="false"></label>
+    <label>Image URL attribute <select id="imageAttribute"><option value="auto">Automatic, only if unambiguous</option><option value="src">src</option><option value="data-src">data-src</option><option value="data-lazy-src">data-lazy-src</option><option value="data-original">data-original</option></select></label>
+    <button id="inspect" type="button">Inspect selected chapters</button>
+    <div id="review" aria-live="polite"></div>
+  </section>
+  <section aria-labelledby="saveHeading">
+    <div class="step">03</div><h2 id="saveHeading">Save</h2>
+    <p>If a usable site-provided batch exists for your selection, use that first. This action is a separate, explicitly chosen page-reader workflow; it does not discover or use batch mirrors.</p>
+    <label>Title folder <input id="titleName" maxlength="120" placeholder="Title"></label>
+    <label>Archive format <select id="format"><option value="cbz">CBZ</option><option value="zip">ZIP</option></select></label>
+    <label class="check"><input id="confirm" type="checkbox"> I reviewed the chapters and page hosts, and can normally access them. No usable site batch is being overlooked.</label>
+    <div class="buttons"><button id="download" type="button" disabled>Save selected chapters</button><button id="cancel" class="secondary" type="button" disabled>Cancel</button></div>
+    <p class="hint">One archive per chapter; keep this page and the source tab open. No history or credentials are stored by this tool. Image signatures are checked, not full image decoding.</p>
+    <p id="status" role="status" aria-live="polite"></p>
+  </section>
+</main>
+</body>
+</html>
