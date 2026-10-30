@@ -26,6 +26,8 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
 1. Open the title (or a single chapter) in a tab.
 2. Extension panel → **Chapters ↗**. A blank extension page opens bound to that tab.
 3. **Find chapters**
+   - *Add chapter URLs* takes one chapter URL per line (same site as the source
+     tab) when you only want specific chapters, without scanning a title.
    - *Scan / add title page* collects links matching the given CSS selector.
    - Only links on the same HTTPS origin under the title's path are kept unless
      **Include links outside the title path** is enabled.
@@ -41,9 +43,46 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
    `data-lazy-src` and `data-original` are supported. If one element has
    different values in several attributes, the automatic mode refuses and asks
    for an explicit attribute instead of guessing full-size vs thumbnail.
+   The chosen **page order** is then applied (see below) and the review shows the
+   resolved order, e.g. `Chapter 1 — 7 image reference(s) · sorted by page links
+   (differs from reader order — verify): #1 pics.example/…-mini.jpg, …`.
 6. **Save**: pick a folder name and CBZ/ZIP, approve each discovered image host,
    tick the confirmation, and press the save button. One archive per chapter,
    named `001 - <label>.cbz` under the title folder, pages `001.jpg`, `002.png`…
+
+## Page order when image names are meaningless
+
+Reader-embedded galleries often use hashed file names, so sorting by file name
+is worthless: Tailspace (checked only through its public page text) lists a
+seven-page comic as `…/qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg`, etc., with the page
+number living in the link (`?page=1 … ?page=7`) and the caption (`page 1`).
+The tool therefore offers three explicit strategies:
+
+| Strategy | Signal | Refuses when |
+|---|---|---|
+| Reader order (default) | the order the reader/DOM lists them | never (nothing is reordered) |
+| Page links | `data-page`/`data-index`/`data-number`, then `?page=N`/`?p=N`/`?pg=N` or a `/page-N/` path on the nearest enclosing link, then “page N” in `alt`/`title` | any page lacks a number, or two pages share one |
+| File numbers | numeric groups of the final URL segment, compared numerically (`2` before `10` before `100`) | any name has no digits (hashes, word-only names), or two names collide |
+
+The review line states which strategy ran, flags reordering that differs from the
+reader order, and previews the first four resolved pages so a wrong guess is
+visible before saving. Nothing is ever fuzzy-matched or silently re-sorted.
+
+## Partial chapters (your "download all instead of nothing")
+
+`Keep incomplete chapters` (on by default) changes only what a *recoverable*
+page failure does:
+
+- pages that already arrived are written as
+  `001 - <label> (incomplete 4 of 12 pages).cbz`, and the run summary lists
+  `1 incomplete: <label> (4 of 12)`;
+- if the failure happened on the first page (nothing usable), that chapter is
+  reported as `failed` and the **rest of the batch still runs**;
+- with the option off, the chapter is simply reported as `failed` — no partial
+  file. Either way a failing chapter no longer discards the other chapters;
+- **throttling (429), access denial (401/403) and your Cancel are never
+  salvaged** — they stop the run immediately, because a truncated file there
+  would mean hammering a site that asked you to stop.
 
 ## Guarantees and safety properties (what the tests cover)
 
@@ -73,10 +112,11 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
   created download, an interruption, a timeout or an unavailable tracker fails
   that chapter. `scripts/e2e-chapter-relay.js` proves the relay accepts only
   this extension page, only `blob:` artifacts, and only with strict completion.
-- **All-or-nothing chapters.** A chapter archive is written only after every
-  page succeeded; a failed page saves nothing and stops subsequent chapters.
-  Throttling is polite: one page request at a time with a short pause between
-  them, plus a pause between chapter inspections.
+- **No silent truncation.** A full chapter is written only after every page
+  succeeded; a partial archive is always named `(incomplete X of Y pages)` and
+  reported, and later chapters are still attempted. Throttling is polite: one
+  page request at a time with a short pause between them, plus a pause between
+  chapter inspections.
 - **Cancel** aborts the in-flight fetch, stops the loop and cancels the current
   browser download.
 
@@ -99,7 +139,8 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
   not automated here.
 - **No history, no resume, no metadata.** Nothing is recorded in the download
   history; re-running re-fetches pages. Chapter numbering comes from the supplied
-  order, not from the site.
+  order, not from the site. A salvaged chapter is a genuinely short archive —
+  the marker in the name is the only thing distinguishing it from a complete one.
 - **Firefox is not ported.** `NHDW_Firefox_v1.0.0` has none of this.
 - **Content responsibility stays with the user.** The tool has no age or
   entitlement check and cannot grant access. Only save material you can
@@ -110,7 +151,9 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
 
 - `test/universal-chapter.test.js` — URL policy, discovery, truncation, image
   extraction/ambiguity, static HTML parsing, signatures, stream bounds,
-  429/403 handling, ordered archives, partial-failure and cancellation.
+  429/403 handling, all three page-order strategies (including Tailspace-style
+  hashed names and duplicate/missing page numbers), salvage vs strict failures,
+  fatal-code handling and cancellation.
 - `scripts/e2e-universal.js` — the built `chapters.js` + built probe in a VM
   with a synthetic site, asserting: scan makes no fetches; inspection fetches
   only selected chapter HTML; the save gate blocks unapproved hosts; ZIPs contain

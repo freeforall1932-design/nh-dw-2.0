@@ -4,6 +4,7 @@ const { JSDOM } = require('jsdom');
 const JSZip = require('jszip');
 const {
     publicHttpsUrl, discoverChapters, collectChapterImages, collectStaticChapterImages,
+    collectChapterPages, collectStaticChapterPages, orderChapterPages,
     identifyImage, readBoundedResponse, checkResponse, UNIVERSAL_MAX_CHAPTERS
 } = require('../build/test/utils/universalChapter.js');
 const { runUniversalChapterBatch } = require('../build/test/utils/universalChapterBatch.js');
@@ -98,6 +99,71 @@ describe('universal chapter discovery (synthetic DOM)', () => {
         const c = new AbortController(); c.abort();
         await assert.rejects(readBoundedResponse(new Response(Uint8Array.of(1)), 3, c.signal), /Cancelled/);
     });
+    describe('page ordering for jumbled image names', () => {
+        // Tailspace-style markup: random image hashes, page number in the link.
+        const markup = `<div id="pages">
+          <a href="?page=3"><img src="https://pics.example/comics/9/RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg" alt="Scale Train, page 3"></a>
+          <a href="?page=1"><img src="https://pics.example/comics/9/qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg" alt="Scale Train, page 1"></a>
+          <a href="?page=2"><img src="https://pics.example/comics/9/yWsMaHMFoeuUagfbityQikXT-mini.jpg" alt="Scale Train, page 2"></a>
+        </div>`;
+        const names = list => list.map(p => p.url.split('/').pop());
+        it('keeps the reader order when asked', () => {
+            const d = dom(markup).window.document;
+            const found = collectChapterPages(d, d.URL, '#pages img', 'src');
+            assert.strictEqual(found.order, 'reader');
+            assert.strictEqual(found.readerOrderDiffers, false);
+            assert.deepStrictEqual(names(found.pages), ['RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg', 'qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg']);
+        });
+        it('orders by the page number carried in each link and says it reordered', () => {
+            const d = dom(markup).window.document;
+            const found = collectChapterPages(d, d.URL, '#pages img', 'src', 'link-index');
+            assert.deepStrictEqual(names(found.pages), ['qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg', 'RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg']);
+            assert.strictEqual(found.readerOrderDiffers, true);
+            assert.deepStrictEqual(found.preview.map(x => x.slice(0, 2)), ['#1', '#2', '#3']);
+        });
+        it('refuses hashed names for number ordering instead of guessing', () => {
+            const d = dom(markup).window.document;
+            assert.throws(() => collectChapterPages(d, d.URL, '#pages img', 'src', 'name-natural'), /no numbers|hashed/i);
+        });
+        it('sorts ordinary numeric names naturally (2 before 10 before 100)', () => {
+            const d = dom(`<img src="https://i.example/003.jpg"><img src="https://i.example/100.jpg"><img src="https://i.example/1.jpg"><img src="https://i.example/10.jpg"><img src="https://i.example/002.jpg">`).window.document;
+            assert.deepStrictEqual(names(collectChapterPages(d, d.URL, 'img', 'src', 'name-natural').pages),
+                ['1.jpg', '002.jpg', '003.jpg', '10.jpg', '100.jpg']);
+        });
+        it('refuses duplicate or partial page numbers and unsupported strategies', () => {
+            const duplicate = dom(`<a href="?page=1"><img src="https://i.example/a.jpg"></a><a href="?page=1"><img src="https://i.example/b.jpg"></a>`).window.document;
+            assert.throws(() => collectChapterPages(duplicate, duplicate.URL, 'img', 'src', 'link-index'), /ambiguous/);
+            const partial = dom(`<a href="?page=1"><img src="https://i.example/a.jpg"></a><img src="https://i.example/b.jpg">`).window.document;
+            assert.throws(() => collectChapterPages(partial, partial.URL, 'img', 'src', 'link-index'), /no page number/);
+            const d = dom(markup).window.document;
+            assert.throws(() => collectChapterPages(d, d.URL, '#pages img', 'src', 'alphabetical'), /supported page-order/);
+        });
+        it('reads page numbers from data-page, path segments and the caption text', () => {
+            const raw = (url, extra) => Object.assign({ url, host: 'i.example', dataPage: null, linkHref: null, altText: '' }, extra);
+            const byData = orderChapterPages([
+                raw('https://i.example/c.jpg', { dataPage: '2' }), raw('https://i.example/a.jpg', { dataPage: '1' })
+            ], 'link-index');
+            assert.deepStrictEqual(byData.pages.map(p => p.url.slice(-5)), ['a.jpg', 'c.jpg']);
+            const byPath = orderChapterPages([
+                raw('https://i.example/b.jpg', { linkHref: 'https://i.example/comic/page-2/' }),
+                raw('https://i.example/a.jpg', { linkHref: 'https://i.example/comic/page-1/' })
+            ], 'link-index');
+            assert.deepStrictEqual(byPath.pages.map(p => p.url.slice(-5)), ['a.jpg', 'b.jpg']);
+            const byText = orderChapterPages([
+                raw('https://i.example/b.jpg', { altText: 'Scale Train, page 2' }),
+                raw('https://i.example/a.jpg', { altText: 'Scale Train, page 1' })
+            ], 'link-index');
+            assert.deepStrictEqual(byText.pages.map(p => p.url.slice(-5)), ['a.jpg', 'b.jpg']);
+        });
+        it('applies the same ordering to statically fetched chapter HTML', () => {
+            const found = collectStaticChapterPages(markup, 'https://reader.example/comic/', '#pages img', 'src', 'link-index');
+            assert.deepStrictEqual(names(found.pages), ['qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg', 'RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg']);
+            assert.strictEqual(found.readerOrderDiffers, true);
+            assert.deepStrictEqual(names(collectStaticChapterImages(markup, 'https://reader.example/comic/', '#pages img', 'src')),
+                ['RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg', 'qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg']);
+        });
+    });
+
     it('stops on throttling and access denial rather than retrying or bypassing', () => {
         for (const [status, message] of [[429, /rate.limit/i], [403, /denied/i], [401, /denied/i], [500, /HTTP 500/]]) {
             assert.throws(() => checkResponse(new Response('', { status })), message);
@@ -112,11 +178,11 @@ describe('universal chapter archive execution (synthetic)', () => {
     ];
     it('saves separate archives in the supplied reading order with ordered image bytes', async () => {
         const calls = [], saves = [];
-        const count = await runUniversalChapterBatch(chapters, 'Synthetic Title', 'cbz', {
+        const outcome = await runUniversalChapterBatch(chapters, 'Synthetic Title', 'cbz', {
             getPage: async (id, index) => { calls.push([id, index]); return index === 0 ? page(jpeg, 'jpg') : page(png, 'png'); },
             save: async (blob, filename) => { saves.push({ filename, bytes: Buffer.from(await blob.arrayBuffer()) }); }
         });
-        assert.strictEqual(count, 2);
+        assert.deepStrictEqual(outcome, { completed: 2, incomplete: [], failed: [] });
         assert.deepStrictEqual(calls, [['chapter-0', 0], ['chapter-0', 1], ['chapter-1', 0]]);
         assert.deepStrictEqual(saves.map(x => x.filename), ['Synthetic Title/001 - Chapter 1.cbz', 'Synthetic Title/002 - Chapter 2.cbz']);
         const zip = await JSZip.loadAsync(saves[0].bytes);
@@ -124,22 +190,73 @@ describe('universal chapter archive execution (synthetic)', () => {
         assert.deepStrictEqual(await zip.file('001.jpg').async('nodebuffer'), Buffer.from(jpeg));
         assert.deepStrictEqual(await zip.file('002.png').async('nodebuffer'), Buffer.from(png));
     });
-    it('never saves a partial chapter and stops subsequent work on a page error', async () => {
+    it('never writes a partial chapter when salvage is off, but still saves the other chapters', async () => {
         const calls = [], saves = [];
-        await assert.rejects(runUniversalChapterBatch(chapters, 'Title', 'zip', {
-            getPage: async (id, index) => { calls.push([id, index]); if (index === 1) throw new Error('rate limited'); return page(jpeg, 'jpg'); },
+        const outcome = await runUniversalChapterBatch(chapters, 'Title', 'zip', {
+            getPage: async (id, index) => { calls.push([id, index]); if (id === 'chapter-0' && index === 1) throw new Error('boom'); return page(jpeg, 'jpg'); },
             save: async (_blob, filename) => { saves.push(filename); }
-        }), /rate limited/);
-        assert.deepStrictEqual(calls, [['chapter-0', 0], ['chapter-0', 1]]);
-        assert.deepStrictEqual(saves, []);
+        });
+        assert.deepStrictEqual(calls, [['chapter-0', 0], ['chapter-0', 1], ['chapter-1', 0]]);
+        assert.deepStrictEqual(saves, ['Title/002 - Chapter 2.zip']);
+        assert.deepStrictEqual(outcome, {
+            completed: 1, incomplete: [],
+            failed: [{ label: 'Chapter 1', savedPages: 1, expectedPages: 2, reason: 'boom' }]
+        });
+    });
+    it('salvages the pages already fetched, marked incomplete, and continues to later chapters', async () => {
+        const saves = [], outcome = await runUniversalChapterBatch(chapters, 'Title', 'cbz', {
+            getPage: async (id, index) => {
+                if (id === 'chapter-0' && index === 1) throw new Error('image failed');
+                return page(jpeg, 'jpg');
+            },
+            save: async (blob, filename) => { saves.push({ filename, bytes: Buffer.from(await blob.arrayBuffer()) }); }
+        }, undefined, { salvagePartial: true });
+        assert.strictEqual(outcome.completed, 1);
+        assert.deepStrictEqual(outcome.incomplete.map(x => [x.label, x.savedPages, x.expectedPages, x.reason]),
+            [['Chapter 1', 1, 2, 'image failed']]);
+        assert.deepStrictEqual(outcome.failed, []);
+        // The salvaged chapter keeps only the pages that really arrived, and
+        // both the name and the result say it is incomplete.
+        assert.deepStrictEqual(saves.map(x => x.filename),
+            ['Title/001 - Chapter 1 (incomplete 1 of 2 pages).cbz', 'Title/002 - Chapter 2.cbz']);
+    });
+    it('saves nothing for a chapter whose first page failed, and still saves later chapters', async () => {
+        const saves = [];
+        const outcome = await runUniversalChapterBatch(chapters, 'Title', 'zip', {
+            getPage: async (id, index) => {
+                if (id === 'chapter-0') throw new Error('first page failed');
+                if (index > 0) throw new Error('unexpected');
+                return page(jpeg, 'jpg');
+            },
+            save: async (_blob, filename) => { saves.push(filename); }
+        }, undefined, { salvagePartial: true });
+        assert.deepStrictEqual(outcome, {
+            completed: 1, incomplete: [],
+            failed: [{ label: 'Chapter 1', savedPages: 0, expectedPages: 2, reason: 'first page failed' }]
+        });
+        assert.deepStrictEqual(saves, ['Title/002 - Chapter 2.zip']);
+    });
+    it('never salvages throttling, access denial or cancellation into a file', async () => {
+        for (const [code, pattern] of [['rate-limit', /rate/], ['blocked', /denied/], ['cancelled', /Cancelled/]]) {
+            const saves = [];
+            const error = new Error(code === 'rate-limit' ? 'rate limited' : code === 'blocked' ? 'denied' : 'Cancelled.');
+            error.code = code;
+            await assert.rejects(runUniversalChapterBatch(chapters, 'Title', 'zip', {
+                getPage: async (id, index) => { if (id === 'chapter-0' && index === 1) throw error; return page(jpeg, 'jpg'); },
+                save: async (_blob, filename) => { saves.push(filename); }
+            }, undefined, { salvagePartial: true }), pattern);
+            assert.deepStrictEqual(saves, [], code + ' must not salvage');
+        }
     });
     it('rejects forged or mislabeled image bytes before saving', async () => {
         let saved = false;
-        await assert.rejects(runUniversalChapterBatch([chapters[0]], 'Title', 'zip', {
+        const outcome = await runUniversalChapterBatch([chapters[0]], 'Title', 'zip', {
             getPage: async () => page(Buffer.from('<html>bad</html>'), 'jpg'),
             save: async () => { saved = true; }
-        }), /signature/);
+        }, undefined, { salvagePartial: true });
         assert.strictEqual(saved, false);
+        assert.strictEqual(outcome.completed, 0);
+        assert.match(outcome.failed[0].reason, /signature/);
     });
     it('halts when browser save fails or the user cancels', async () => {
         let calls = 0;
@@ -153,7 +270,7 @@ describe('universal chapter archive execution (synthetic)', () => {
         await assert.rejects(runUniversalChapterBatch(chapters, 'Title', 'zip', {
             getPage: async () => { controller.abort(); return page(jpeg, 'jpg'); },
             save: async (_blob, filename) => { saves.push(filename); }
-        }, controller.signal), /Cancelled/);
+        }, controller.signal, { salvagePartial: true }), /Cancelled/);
         assert.deepStrictEqual(saves, []);
     });
     it('rejects duplicate/invalid chapters before any request and sanitizes filenames', async () => {

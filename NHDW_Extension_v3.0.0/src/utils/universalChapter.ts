@@ -111,16 +111,136 @@ export function discoverChapters(
     return { chapters: found, truncated: truncated };
 }
 
-interface ImageNode { tagName: string; getAttribute(name: string): string | null; }
+interface ImageNode {
+    tagName: string;
+    getAttribute(name: string): string | null;
+    /** Nearest enclosing link and caption text, used only for page ordering. */
+    context(): { linkHref: string | null; altText: string };
+}
 
-function collectImageNodes(nodes: ImageNode[], baseUrl: string, attribute: ImageAttribute): UniversalPageReference[] {
+export type PageOrderStrategy = "reader" | "link-index" | "name-natural";
+
+export interface ChapterPageCollection {
+    pages: UniversalPageReference[];
+    order: PageOrderStrategy;
+    /** True when the chosen ordering moved at least one page. */
+    readerOrderDiffers: boolean;
+    /** Short, human-checkable prefix of the resolved order. */
+    preview: string[];
+}
+
+interface RawPage { url: string; host: string; dataPage: string | null; linkHref: string | null; altText: string; }
+
+function pageNumberToken(value: string | null): number | null {
+    if (value === null) return null;
+    const match = /^\s*(\d{1,5})\s*$/.exec(value);
+    return match ? Number(match[1]) : null;
+}
+
+/** A single, comparable page index; sources are tried most explicit first. */
+function pageHint(raw: RawPage): number | null {
+    const fromAttribute = pageNumberToken(raw.dataPage);
+    if (fromAttribute !== null) return fromAttribute;
+    if (raw.linkHref) {
+        const link = publicHttpsUrl(raw.linkHref);
+        if (link) {
+            for (const key of ["page", "p", "pg"]) {
+                const fromQuery = pageNumberToken(link.searchParams.get(key));
+                if (fromQuery !== null) return fromQuery;
+            }
+            const fromPath = /\/(?:page|pages)[-_/]?(\d{1,5})\/?$/i.exec(link.pathname);
+            if (fromPath) return Number(fromPath[1]);
+        }
+    }
+    const fromText = /(?:^|\b)pages?\s*#?(\d{1,5})\b/i.exec(raw.altText || "");
+    return fromText ? Number(fromText[1]) : null;
+}
+
+/** Numeric groups of the final path segment: "010.jpg" -> [10]. */
+function nameSignature(url: string): number[] | null {
+    let segment = "";
+    try { segment = new NativeURL(url).pathname.split("/").pop() || ""; } catch (_) { return null; }
+    try { segment = decodeURIComponent(segment); } catch (_) { /* keep raw */ }
+    const tokens = segment.match(/\d+/g);
+    return tokens ? tokens.map(Number) : null;
+}
+
+function compareSignatures(a: number[], b: number[]): number {
+    const length = Math.min(a.length, b.length);
+    for (let i = 0; i < length; i++) {
+        if (a[i] !== b[i]) return a[i] - b[i];
+    }
+    return a.length - b.length;
+}
+
+function pagePreview(pages: UniversalPageReference[], strategy: PageOrderStrategy): string[] {
+    return pages.slice(0, 4).map((page, index) => {
+        let tail = "";
+        try {
+            tail = decodeURIComponent(new NativeURL(page.url).pathname.split("/").pop() || "");
+        } catch (_) { tail = ""; }
+        if (tail.length > 28) tail = "…" + tail.slice(-27);
+        return "#" + (index + 1) + " " + page.host + "/" + tail;
+    });
+}
+
+/**
+ * Apply one explicit ordering strategy. "reader" is the site's own order and is
+ * the only safe default; the other strategies need a usable, unique signal for
+ * EVERY page, otherwise they refuse instead of inventing an order.
+ */
+export function orderChapterPages(raws: RawPage[], strategy: PageOrderStrategy): ChapterPageCollection {
+    if (["reader", "link-index", "name-natural"].indexOf(strategy) === -1) {
+        throw new UniversalChapterError("order", "Choose a supported page-order strategy.");
+    }
+    const stripped: UniversalPageReference[] = raws.map(raw => ({ url: raw.url, host: raw.host }));
+    if (strategy === "reader") {
+        return { pages: stripped, order: strategy, readerOrderDiffers: false, preview: pagePreview(stripped, strategy) };
+    }
+    let keys: (number[])[];
+    if (strategy === "link-index") {
+        const hints = raws.map(pageHint);
+        if (hints.some(hint => hint === null)) {
+            throw new UniversalChapterError("order",
+                "Some pages have no page number in their link or caption. Use the reader order, or add a selector whose links carry ?page=N.");
+        }
+        keys = hints.map(hint => [hint as number]);
+    } else {
+        const signatures = raws.map(raw => nameSignature(raw.url));
+        if (signatures.some(signature => signature === null)) {
+            throw new UniversalChapterError("order",
+                "Some image names contain no numbers (hashed or word-only names). Use the reader order or the page-number links instead.");
+        }
+        keys = signatures as number[][];
+    }
+    const seen = new Set<string>();
+    for (const key of keys) {
+        const id = key.join(",");
+        if (seen.has(id)) {
+            throw new UniversalChapterError("order",
+                "Two pages resolve to the same " + (strategy === "link-index" ? "page number" : "number pattern") + "; the order would be ambiguous.");
+        }
+        seen.add(id);
+    }
+    const indices = raws.map((_raw, index) => index)
+        .sort((a, b) => compareSignatures(keys[a], keys[b]) || a - b);
+    const pages = indices.map(index => stripped[index]);
+    return {
+        pages: pages,
+        order: strategy,
+        readerOrderDiffers: indices.some((value, position) => value !== position),
+        preview: pagePreview(pages, strategy)
+    };
+}
+
+function collectImageNodes(nodes: ImageNode[], baseUrl: string, attribute: ImageAttribute, order: PageOrderStrategy = "reader"): ChapterPageCollection {
     if (["auto", "src", "data-src", "data-lazy-src", "data-original"].indexOf(attribute) === -1) {
         throw new UniversalChapterError("attribute", "Choose a supported image attribute.");
     }
     if (!publicHttpsUrl(baseUrl)) throw new UniversalChapterError("url", "Chapter page URL is not allowed.");
     if (nodes.length === 0) throw new UniversalChapterError("empty", "No page images matched the selector.");
     if (nodes.length > UNIVERSAL_MAX_PAGES) throw new UniversalChapterError("limit", "Too many images matched the selector.");
-    const pages: UniversalPageReference[] = [];
+    const raws: RawPage[] = [];
     const attributes = attribute === "auto" ? ["data-src", "data-lazy-src", "data-original", "src"] : [attribute];
     for (const node of nodes) {
         if (node.tagName.toLowerCase() !== "img") {
@@ -137,21 +257,46 @@ function collectImageNodes(nodes: ImageNode[], baseUrl: string, attribute: Image
         if (urls.length === 0) throw new UniversalChapterError("empty", "An image has no usable URL in that attribute.");
         if (urls.length > 1) throw new UniversalChapterError("ambiguous", "An image has different source attributes; choose one explicitly.");
         const url = publicHttpsUrl(urls[0])!;
-        pages.push({ url: url.href, host: url.hostname });
+        const context = node.context();
+        const link = context.linkHref ? publicHttpsUrl(context.linkHref, baseUrl) : null;
+        raws.push({
+            url: url.href,
+            host: url.hostname,
+            dataPage: node.getAttribute("data-page") || node.getAttribute("data-index") || node.getAttribute("data-number"),
+            linkHref: link ? link.href : null,
+            altText: (node.getAttribute("alt") || "") + " " + (node.getAttribute("title") || "")
+        });
     }
-    return pages;
+    return orderChapterPages(raws, order);
 }
 
 /** Extract exactly the selected rendered image elements; never silently drop one. */
+export function collectChapterPages(
+    root: ParentNode, baseUrl: string, selector: string, attribute: ImageAttribute, order: PageOrderStrategy = "reader"
+): ChapterPageCollection {
+    const nodes: ImageNode[] = query(root, selector).map((element: any) => ({
+        tagName: String(element.tagName || ""),
+        getAttribute: (name: string) => element.getAttribute(name),
+        context: () => {
+            let anchor: any = null;
+            try { anchor = typeof element.closest === "function" ? element.closest("a") : null; } catch (_) { anchor = null; }
+            return { linkHref: anchor ? anchor.getAttribute("href") : null, altText: "" };
+        }
+    }));
+    return collectImageNodes(nodes, baseUrl, attribute, order);
+}
+
 export function collectChapterImages(root: ParentNode, baseUrl: string, selector: string, attribute: ImageAttribute): UniversalPageReference[] {
-    return collectImageNodes(query(root, selector), baseUrl, attribute);
+    return collectChapterPages(root, baseUrl, selector, attribute).pages;
 }
 
 /** Parse fetched HTML as data, never through a browser DOM or script engine.
  * Unlike DOMParser or detached img elements, this cannot initiate subresource
  * requests before the user approves image hosts. CSS support can differ from
  * querySelectorAll, so an unsupported selector is reported instead of guessed. */
-export function collectStaticChapterImages(html: string, chapterUrl: string, selector: string, attribute: ImageAttribute): UniversalPageReference[] {
+export function collectStaticChapterPages(
+    html: string, chapterUrl: string, selector: string, attribute: ImageAttribute, order: PageOrderStrategy = "reader"
+): ChapterPageCollection {
     if (!publicHttpsUrl(chapterUrl)) throw new UniversalChapterError("url", "Chapter page URL is not allowed.");
     const tree = parseDocument(html, { decodeEntities: true });
     let nodes: any[];
@@ -167,10 +312,25 @@ export function collectStaticChapterImages(html: string, chapterUrl: string, sel
         if (!parsed) throw new UniversalChapterError("url", "The chapter HTML has an unsupported base URL.");
         base = parsed.href;
     }
-    return collectImageNodes(nodes.map((node: any) => ({
+    const imageNodes: ImageNode[] = nodes.map((node: any) => ({
         tagName: String(node.name || ""),
-        getAttribute: (name: string) => Object.prototype.hasOwnProperty.call(node.attribs || {}, name) ? node.attribs[name] : null
-    })), base, attribute);
+        getAttribute: (name: string) => Object.prototype.hasOwnProperty.call(node.attribs || {}, name) ? node.attribs[name] : null,
+        context: () => {
+            let parent = node.parent;
+            while (parent) {
+                if (String(parent.name || "").toLowerCase() === "a" && parent.attribs && typeof parent.attribs.href === "string") {
+                    return { linkHref: parent.attribs.href, altText: "" };
+                }
+                parent = parent.parent;
+            }
+            return { linkHref: null, altText: "" };
+        }
+    }));
+    return collectImageNodes(imageNodes, base, attribute, order);
+}
+
+export function collectStaticChapterImages(html: string, chapterUrl: string, selector: string, attribute: ImageAttribute): UniversalPageReference[] {
+    return collectStaticChapterPages(html, chapterUrl, selector, attribute).pages;
 }
 
 export function identifyImage(bytes: Uint8Array): string | null {

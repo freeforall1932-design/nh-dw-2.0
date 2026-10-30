@@ -1,4 +1,4 @@
-import { runUniversalChapterBatch, InspectedUniversalChapter, UniversalPagePayload } from "../utils/universalChapterBatch";
+import { runUniversalChapterBatch, InspectedUniversalChapter, UniversalPagePayload, UniversalBatchResult } from "../utils/universalChapterBatch";
 import { pauseBetweenChapterRequests } from "../utils/universalChapter";
 
 const COMPLETION_MAX_WAIT_MS = 30 * 60 * 1000;
@@ -19,7 +19,8 @@ let origin = "";
 let sourcePath = "";
 let mode: "title" | "current" | "" = "";
 let candidates: Candidate[] = [];
-let inspected: InspectedUniversalChapter[] = [];
+type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string };
+let inspected: ReviewedChapter[] = [];
 let approvedHosts: string[] = [];
 let isBusy = false;
 let runController: AbortController | null = null;
@@ -48,7 +49,9 @@ function send(op: string, fields: any = {}): Promise<any> {
                 if (chrome.runtime.lastError || !response) {
                     reject(new Error("Cannot reach the source tab. Keep it open on the same site and scan again."));
                 } else if (response.ok !== true) {
-                    reject(new Error(String(response.error || "The chapter operation failed.")));
+                    const error = new Error(String(response.error || "The chapter operation failed."));
+                    (error as any).code = String(response.code || "");
+                    reject(error);
                 } else resolve(response);
             });
         } catch (_) { reject(new Error("Cannot reach the source tab.")); }
@@ -125,7 +128,11 @@ function renderReview(): void {
     review.appendChild(heading);
     const ul = document.createElement("ul");
     for (const chapter of inspected) {
-        const li = document.createElement("li"); li.textContent = chapter.label + " — " + chapter.count + " image reference(s)"; ul.appendChild(li);
+        const li = document.createElement("li");
+        let text = chapter.label + " — " + chapter.count + " image reference(s)";
+        if (chapter.orderNote) text += " · " + chapter.orderNote;
+        li.textContent = text;
+        ul.appendChild(li);
     }
     review.appendChild(ul);
     const hostHeader = document.createElement("p"); hostHeader.textContent = "Approve every image host to be contacted:"; review.appendChild(hostHeader);
@@ -144,7 +151,7 @@ async function inspectSelected(): Promise<void> {
     runController = controller; invalidateReview(); setBusy(true); setStatus("Inspecting selected readers…");
     try {
         await inject();
-        const results: InspectedUniversalChapter[] = [];
+        const results: ReviewedChapter[] = [];
         const hosts = new Set<string>();
         for (let i = 0; i < selection.length; i++) {
             if (controller.signal.aborted) throw new Error("Cancelled.");
@@ -154,11 +161,16 @@ async function inspectSelected(): Promise<void> {
             const result = await send("inspect", {
                 origin: origin, id: chapter.id, chapterUrl: chapter.url, current: chapter.current,
                 selector: el<HTMLInputElement>("imageSelector").value,
-                attribute: el<HTMLSelectElement>("imageAttribute").value
+                attribute: el<HTMLSelectElement>("imageAttribute").value,
+                order: el<HTMLSelectElement>("pageOrder").value
             });
             if (controller.signal.aborted) throw new Error("Cancelled.");
             if (!Number.isInteger(result.count) || !Array.isArray(result.hosts)) throw new Error("The reader inspection was incomplete.");
-            results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts });
+            const orderLabels: Record<string, string> = { "reader": "reader order", "link-index": "sorted by page links", "name-natural": "sorted by image numbers" };
+            let orderNote = orderLabels[String(result.order)] || "reader order";
+            if (result.order !== "reader" && result.readerOrderDiffers) orderNote += " (differs from reader order — verify)";
+            if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
+            results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts, orderNote: orderNote });
             for (const host of result.hosts) hosts.add(String(host));
         }
         inspected = results;
@@ -218,22 +230,32 @@ async function download(): Promise<void> {
         setStatus("Approve every listed image host and confirm your selection first."); return;
     }
     const format = el<HTMLSelectElement>("format").value === "zip" ? "zip" : "cbz";
+    const salvagePartial = el<HTMLInputElement>("salvage").checked;
     const hostCopy = approvedHosts.slice();
     const chapters = inspected.slice();
     const controller = new AbortController();
     runController = controller; savedCount = 0; setBusy(true);
     try {
-        const count = await runUniversalChapterBatch(chapters, titleInput.value || "Title", format, {
+        const result: UniversalBatchResult = await runUniversalChapterBatch(chapters, titleInput.value || "Title", format, {
             getPage: async (id, index): Promise<UniversalPagePayload> => {
-                const result = await send("page", { origin: origin, id: id, index: index, approvedHosts: hostCopy });
-                return { base64: result.base64, extension: result.extension, size: result.size };
+                const answer = await send("page", { origin: origin, id: id, index: index, approvedHosts: hostCopy });
+                return { base64: answer.base64, extension: answer.extension, size: answer.size };
             },
             save: saveBlob,
             progress: setStatus
-        }, controller.signal);
-        setStatus("Saved " + count + " chapter archive(s). Check browser downloads for the actual filenames.");
+        }, controller.signal, { salvagePartial: salvagePartial });
+        let text = "Saved " + result.completed + " complete chapter archive(s)";
+        if (result.incomplete.length) {
+            text += "; " + result.incomplete.length + " incomplete: " + result.incomplete
+                .map(item => item.label + " (" + item.savedPages + " of " + item.expectedPages + ")").join(", ");
+        }
+        if (result.failed.length) {
+            text += "; " + result.failed.length + " failed: " + result.failed
+                .map(item => item.label + " — " + item.reason).join(", ");
+        }
+        setStatus(text + ". Check browser downloads for the actual filenames.");
     } catch (error: any) {
-        setStatus("Stopped after " + savedCount + " completed archive(s): " + (error && error.message ? error.message : "download failed."));
+        setStatus("Stopped after " + savedCount + " saved archive(s): " + (error && error.message ? error.message : "download failed."));
     } finally { runController = null; setBusy(false); }
 }
 
@@ -248,6 +270,7 @@ el<HTMLButtonElement>("selectNone").addEventListener("click", () => { for (const
 order.addEventListener("change", invalidateReview);
 el<HTMLInputElement>("imageSelector").addEventListener("input", invalidateReview);
 el<HTMLSelectElement>("imageAttribute").addEventListener("change", invalidateReview);
+el<HTMLSelectElement>("pageOrder").addEventListener("change", invalidateReview);
 el<HTMLButtonElement>("inspect").addEventListener("click", () => { void inspectSelected(); });
 downloadButton.addEventListener("click", () => { void download(); });
 cancelButton.addEventListener("click", () => {
@@ -255,6 +278,40 @@ cancelButton.addEventListener("click", () => {
     void send("cancel").catch(() => {});
     setStatus("Cancelling…");
 });
+function addChapterUrls(): void {
+    if (isBusy) return;
+    const raw = el<HTMLTextAreaElement>("chapterUrls").value;
+    const lines = raw.split(/\r?\n/).map(line => line.trim()).filter(line => line !== "");
+    if (!lines.length) { setStatus("Paste one chapter URL per line first."); return; }
+    if (mode && mode !== "title" && mode !== "current") { setStatus("Clear the selection before adding chapter URLs."); return; }
+    let added = 0;
+    for (const line of lines) {
+        let url: URL;
+        try { url = new URL(line); } catch (_) { setStatus("Not a valid URL: " + line.slice(0, 80)); return; }
+        if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash) {
+            setStatus("Only plain public HTTPS chapter URLs are accepted: " + line.slice(0, 80)); return;
+        }
+        if (origin && url.origin !== origin) {
+            setStatus("Chapter URLs must be on the same site as the source tab (" + origin + ").");
+            return;
+        }
+        const href = url.href;
+        if (candidates.some(candidate => candidate.url === href) || candidates.length >= 200) continue;
+        const label = decodeURIComponent(url.pathname.split("/").filter(Boolean).pop() || url.hostname).slice(0, 120);
+        candidates.push({ id: "url-" + candidates.length, label: label, url: href, current: false, selected: true });
+        added++;
+    }
+    if (!origin && lines.length) {
+        // Bind the tool to this site so the probe can reach the chapters.
+        try { origin = new URL(lines[0]).origin; sourceStatus.textContent = "Source: " + origin + " (from pasted URLs). Keep the source tab on this site."; } catch (_) { /* validated above */ }
+    }
+    mode = "title";
+    el<HTMLTextAreaElement>("chapterUrls").value = "";
+    invalidateReview(); renderList();
+    setStatus(added ? "Added " + added + " chapter URL(s). Inspect them next." : "Those chapter URLs were already collected.");
+}
+el<HTMLButtonElement>("addUrls").addEventListener("click", addChapterUrls);
+
 renderList();
 if (!Number.isSafeInteger(tabId) || tabId < 0 || !new URL(location.href).searchParams.has("tab")) {
     sourceStatus.textContent = "No source tab selected. Open this tool from the extension on a website.";

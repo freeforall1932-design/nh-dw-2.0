@@ -10,7 +10,7 @@ p { margin: 12px 0; }
 section { border: 1px solid var(--line, #d9dfe6); border-radius: 12px; padding: 22px; margin: 16px 0; }
 .step { display: inline-flex; align-items: center; justify-content: center; margin-right: 10px; width: 30px; height: 30px; border-radius: 50%; color: var(--accent, #315da8); background: var(--accent-wash, #e6efff); font-size: 12px; font-weight: 750; }
 label:not(.check) { display: block; font-weight: 650; margin: 15px 0; }
-input:not([type=checkbox]), select { display: block; width: 100%; margin-top: 5px; padding: 9px 10px; border: 1px solid var(--line, #aab3bd); border-radius: 7px; font: inherit; background: var(--surface, #fff); color: var(--ink, #17212d); }
+input:not([type=checkbox]), select, textarea { display: block; width: 100%; margin-top: 5px; padding: 9px 10px; border: 1px solid var(--line, #aab3bd); border-radius: 7px; font: inherit; background: var(--surface, #fff); color: var(--ink, #17212d); }
 .check { display: flex; gap: 9px; align-items: baseline; margin: 10px 0; }
 .check input { flex: 0 0 auto; }
 .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }

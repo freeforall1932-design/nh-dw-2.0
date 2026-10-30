@@ -26,8 +26,9 @@ comparison. The native button's click flow remains unobserved.
 - [Universal chapter collector](UNIVERSAL_CHAPTER_TOOL.md) — Chromium-only,
   user-initiated `Chapters ↗` page: explicit chapter selection, selector-based
   discovery, data-only reader HTML parsing, per-host approval, bounded
-  signature-checked pages, one strict-completion archive per chapter, no
-  wildcard hosts or auto-injection. Synthetic tests plus a bundled end-to-end VM
+  signature-checked pages, explicit page-order strategies (reader, page links,
+  file numbers), optional clearly-marked partial chapters, one strict-completion
+  archive per chapter, no wildcard hosts or auto-injection. Synthetic tests plus a bundled end-to-end VM
   run pass; **no live site, real browser or real media has been validated**, and
   it does not detect or use site-provided batches.
 

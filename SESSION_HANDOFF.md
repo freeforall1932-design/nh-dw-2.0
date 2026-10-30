@@ -15,7 +15,9 @@ inject a probe into the user's own tab, discovers chapter links by a supplied
 CSS selector, inspects static reader HTML as data (`htmlparser2`/`css-select`,
 no DOM construction or subresource requests), requires explicit host approval,
 streams and signature-checks each page, and saves one strict-completion
-CBZ/ZIP per chapter through the worker's tracked `blob:` relay. It has **no**
+CBZ/ZIP per chapter through the worker's tracked `blob:` relay. A recoverable
+page failure can keep a clearly marked partial archive; 429/403 and Cancel stop
+the run without salvage. It has **no**
 wildcard host access, no automatic injection, no batch/mirror resolution and no
 live-site validation. See [UNIVERSAL_CHAPTER_TOOL.md](UNIVERSAL_CHAPTER_TOOL.md).
 
@@ -32,7 +34,7 @@ is not implemented. Firefox retains its earlier behavior and was not ported in
 this pass. Normal per-page image signature validation remains unfixed. Old
 installed/queued jobs can still use previous code.
 
-Chromium's latest offline run: **738 passing / 4 pending**, build, smoke and all
+Chromium's latest offline run: **748 passing / 4 pending**, build, smoke and all
 VM e2e scripts (including the new bundled chapter integration and relay-guard
 harness) passed, as did capture-helper tests. A Chromium 153 headless-shell
 attempt failed to register the extension, so no real-browser test ran. Firefox's

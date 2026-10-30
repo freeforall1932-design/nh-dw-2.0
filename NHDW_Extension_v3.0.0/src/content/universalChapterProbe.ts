@@ -3,7 +3,7 @@
 import {
     UNIVERSAL_MAX_HTML_BYTES, UNIVERSAL_MAX_IMAGE_BYTES,
     UniversalChapterError, ImageAttribute, UniversalPageReference,
-    publicHttpsUrl, discoverChapters, collectChapterImages, collectStaticChapterImages,
+    publicHttpsUrl, discoverChapters, collectChapterPages, collectStaticChapterPages, PageOrderStrategy,
     readBoundedResponse, checkResponse, identifyImage
 } from "../utils/universalChapter";
 
@@ -91,18 +91,21 @@ if (!scope.__nhdwChapterProbe) {
             if (!chapter || chapter.origin !== current.origin || !/^[a-z0-9-]{1,64}$/.test(id)) {
                 throw new UniversalChapterError("url", "The selected chapter is not on the source site.");
             }
-            let pages: UniversalPageReference[];
             const selector = String(message.selector || "");
             const attribute = String(message.attribute || "auto") as ImageAttribute;
+            const order = String(message.order || "reader") as PageOrderStrategy;
+            let collection;
             if (message.current === true) {
                 if (chapter.href !== current.href) throw new UniversalChapterError("tab-changed", "Return to the selected chapter and scan again.");
-                pages = collectChapterImages(document, document.baseURI, selector, attribute);
+                collection = collectChapterPages(document, document.baseURI, selector, attribute, order);
             } else {
                 const data = await boundedFetch(chapter.href, "html");
-                pages = collectStaticChapterImages(new TextDecoder("utf-8").decode(data), chapter.href, selector, attribute);
+                collection = collectStaticChapterPages(new TextDecoder("utf-8").decode(data), chapter.href, selector, attribute, order);
             }
+            const pages = collection.pages;
             inspected.set(id, { url: chapter.href, pages: pages });
-            return { ok: true, count: pages.length, hosts: Array.from(new Set(pages.map(page => page.host))) };
+            return { ok: true, count: pages.length, hosts: Array.from(new Set(pages.map(page => page.host))),
+                order: collection.order, readerOrderDiffers: collection.readerOrderDiffers, preview: collection.preview };
         }
         if (message.op === "page") {
             assertOrigin(String(message.origin || ""));
