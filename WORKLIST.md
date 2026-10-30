@@ -23,6 +23,57 @@ comparison. The native button's click flow remains unobserved.
 
 **Latest Chromium progress (offline, not new-site support):**
 
+**Deferred owner options (recorded 2026-10-30, not started):** the owner asked
+to keep these three choices on file for later.
+
+- [ ] **(A) DoujinDesu selection helper** — open the site's *own* download page for
+  exactly the chosen chapters: the site batch when the selection is large (the
+  owner's rough rule: more than 5–10 chapters, i.e. one combined file), otherwise
+  per-chapter download pages. Both observed buttons land on a `mirrored.to` link
+  directory, not a file, so the helper must stop at "here is the site's download
+  page" and let the owner pick a host. No host automation, no premium/captcha
+  handling, no bypass.
+- [ ] **(B) Real-browser verification run** — load the unpacked Chromium build and
+  exercise the chapter tool (`Chapters ↗`), one ordinary chapter page, the save
+  path and one strict-completion archive. Replaces synthetic-only evidence; a
+  prior `@sparticuz/chromium` attempt failed to register the extension, so this
+  needs a real desktop Chromium session.
+- [ ] **(C) Per-site reader tuning** — once a single live sample can be inspected,
+  record the real selector, URL attribute and page-order strategy per site
+  (Sasangeyou, Yurilab, Tailspace, DoujinDesu) instead of relying on generic
+  defaults. Capture with `SITE_CAPTURE_GUIDE.md`; no media or signed URLs.
+
+**New-domain download reinforcement (recorded 2026-10-30, all unverified):**
+
+The generic collector now covers top-down readers: page 1 is simply the first
+image element in DOM order, the reader's own advertised page total is compared
+with what was found, and `Load all pages (top-down)` scrolls the source tab to
+force lazy images into the DOM before inspection. Nothing below is live-tested.
+
+- [ ] **Sasangeyou (`sasangeyou.net`)** — WordPress/MangaThemesia; the offline
+  `ts_reader.run` candidate parser exists but is unwired. Premium chapters are
+  excluded; ordinary chapters only. Open question: does its reader expose plain
+  image URLs in static HTML (batch-inspectable) or only after script execution
+  (one chapter at a time via *Use open chapter*)?
+- [ ] **Yurilab (`yurilab.top`)** — WordPress series pages; the observed listing is
+  paginated (`?t=2`), so a title scan needs every list page added. Chapter reader
+  markup and page ordering are unknown.
+- [ ] **Tailspace (`tailspace.com`)** — gallery mode shows `?page=N` links whose
+  images are `-mini` thumbnails; scroll mode lists the full-size pages in DOM
+  order. Plan: prefer scroll mode + reader order, or link order in gallery mode,
+  and never mix thumbnail and full-size files.
+- [ ] **DoujinDesu (`doujin.desu.xxx`)** — top-down reader; page images come from
+  an obfuscated API, so *static* HTML inspection will probably find nothing.
+  Plan: *Use open chapter* + reader order per chapter (the browser has already
+  decoded the URLs), and keep title-level batch downloads on the site's own
+  `mirrored.to` pages. Open question: whether the reader lists every page in the
+  DOM after a scroll sweep.
+- [ ] **Sequential open-and-capture** (needed for JS-only readers such as Desu) —
+  open each selected chapter in the source tab, wait for its reader, capture page
+  order, save, then continue. Not implemented; today each chapter needs manual
+  *Use open chapter*.
+
+
 - [Universal chapter collector](UNIVERSAL_CHAPTER_TOOL.md) — Chromium-only,
   user-initiated `Chapters ↗` page: explicit chapter selection, selector-based
   discovery, data-only reader HTML parsing, per-host approval, bounded

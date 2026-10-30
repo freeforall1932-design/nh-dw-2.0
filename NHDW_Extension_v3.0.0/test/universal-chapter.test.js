@@ -5,7 +5,8 @@ const JSZip = require('jszip');
 const {
     publicHttpsUrl, discoverChapters, collectChapterImages, collectStaticChapterImages,
     collectChapterPages, collectStaticChapterPages, orderChapterPages,
-    identifyImage, readBoundedResponse, checkResponse, UNIVERSAL_MAX_CHAPTERS
+    identifyImage, readBoundedResponse, checkResponse, UNIVERSAL_MAX_CHAPTERS,
+    detectAdvertisedPageCount, detectStaticPageCount, planScrollSteps, sweepScroll
 } = require('../build/test/utils/universalChapter.js');
 const { runUniversalChapterBatch } = require('../build/test/utils/universalChapterBatch.js');
 
@@ -161,6 +162,67 @@ describe('universal chapter discovery (synthetic DOM)', () => {
             assert.strictEqual(found.readerOrderDiffers, true);
             assert.deepStrictEqual(names(collectStaticChapterImages(markup, 'https://reader.example/comic/', '#pages img', 'src')),
                 ['defGHIjklMNOpqr-mini.jpg', 'abcDEFghiJKLmno-mini.jpg', 'pqrSTUvwxYZAabc-mini.jpg']);
+        });
+    });
+
+    describe('top-down readers (page 1 is simply the first image)', () => {
+        it('reads the page total the reader advertises, or stays silent when unsure', () => {
+            const cases = [
+                ['<div data-total-pages="57"></div>', 57],
+                ['<div class="page-counter">3 / 57</div>', 57],
+                ['<span class="reader-counter">Page 3 of 57</span>', 57],
+                ['<p class="pages">57 pages</p>', 57],
+                ['<div class="page-counter">3 / 57</div><div class="page-counter">4 / 57</div>', 57],
+                // Different totals are not resolved by picking one.
+                ['<div class="page-counter">3 / 57</div><div class="page-counter">4 / 12</div>', null],
+                // Nothing that looks like a reader count.
+                ['<p>Uploaded 2 days ago</p>', null],
+                ['<div data-total-pages="99999"></div>', null]
+            ];
+            for (const [html, expected] of cases) {
+                assert.strictEqual(detectAdvertisedPageCount(dom(html).window.document), expected, 'DOM: ' + html);
+                assert.strictEqual(detectStaticPageCount(html), expected, 'static: ' + html);
+            }
+            assert.strictEqual(detectStaticPageCount('<div data-page-count="8"></div>'), 8);
+        });
+        it('plans a bounded scroll sweep that always reaches the bottom', () => {
+            assert.deepStrictEqual(planScrollSteps(500, 800), [0]);
+            assert.deepStrictEqual(planScrollSteps(0, 800), []);
+            assert.deepStrictEqual(planScrollSteps(1000, 800, 80), [0, 200]);
+            const steps = planScrollSteps(100000, 800, 10);
+            assert.ok(steps.length <= 10, 'bounded');
+            assert.strictEqual(steps[steps.length - 1], 99200, 'ends at the bottom');
+            for (let i = 1; i < steps.length; i++) assert.ok(steps[i] > steps[i - 1], 'monotonic');
+        });
+        it('sweeps a lazily growing reader from top to bottom', async () => {
+            let height = 1000, y = 0, cancelled = false;
+            const seen = [];
+            const host = {
+                scrollTo(next) { y = next; seen.push(next); height = Math.min(4000, height + 600); },
+                scrollY: () => y,
+                scrollHeight: () => height,
+                viewportHeight: () => 800,
+                wait: async () => {},
+                isCancelled: () => cancelled
+            };
+            const result = await sweepScroll(host, 40);
+            assert.strictEqual(result.reachedBottom, true);
+            assert.deepStrictEqual(seen, [...seen].sort((a, b) => a - b), 'only moves downwards');
+            assert.ok(seen.length >= 2);
+        });
+        it('stops immediately when cancelled and gives up on a page that cannot scroll', async () => {
+            const cancelledHost = {
+                scrollTo() { throw new Error('must not scroll after cancellation'); },
+                scrollY: () => 0, scrollHeight: () => 5000, viewportHeight: () => 800,
+                wait: async () => {}, isCancelled: () => true
+            };
+            assert.deepStrictEqual(await sweepScroll(cancelledHost, 10), { steps: 0, reachedBottom: false });
+            // A fixed/overflow layout never changes position: stop instead of looping.
+            const stuck = { scrollTo() {}, scrollY: () => 0, scrollHeight: () => 5000, viewportHeight: () => 800,
+                wait: async () => {}, isCancelled: () => false };
+            const result = await sweepScroll(stuck, 50);
+            assert.ok(result.steps < 5, 'gave up quickly, got ' + result.steps);
+            assert.strictEqual(result.reachedBottom, false);
         });
     });
 

@@ -23,4 +23,5 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .chapter-list label { padding: 6px 0; border-bottom: 1px solid var(--line, #d9dfe6); }
 #review ul { padding-left: 22px; }
 #status { min-height: 1.5em; font-weight: 600; }
+.warning { border-left: 3px solid var(--warn, #a35100); padding: 9px 12px; background: var(--surface-2, #f3f5f7); }
 @media (max-width: 520px) { main { padding: 24px 14px 48px; } section { padding: 16px; } }

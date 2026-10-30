@@ -333,6 +333,144 @@ export function collectStaticChapterImages(html: string, chapterUrl: string, sel
     return collectStaticChapterPages(html, chapterUrl, selector, attribute).pages;
 }
 
+const PAGE_COUNT_ATTRIBUTES = ["data-total-pages", "data-page-count", "data-pages", "data-totalpage", "data-num-pages"];
+const COUNTER_SELECTOR = '[class*="page" i], [id*="page" i], [class*="counter" i], [id*="counter" i]';
+
+/** Shared decision: one unambiguous total, or nothing. */
+function countFromSignals(attributeValues: string[], counterTexts: string[]): number | null {
+    const found = new Set<number>();
+    const accept = (value: unknown): void => {
+        const parsed = typeof value === "string" ? Number(value.trim()) : NaN;
+        if (Number.isInteger(parsed) && parsed >= 1 && parsed <= UNIVERSAL_MAX_PAGES) found.add(parsed);
+    };
+    for (const value of attributeValues) accept(value);
+    for (const raw of counterTexts) {
+        const text = String(raw || "").replace(/\s+/g, " ").trim();
+        if (text === "" || text.length > 120) continue;
+        // "3 / 57", "Page 3 of 57": the TOTAL is the second number.
+        const ofTotal = /(?:^|\b)(\d{1,4})\s*(?:\/|of)\s*(\d{1,4})(?:\b|$)/i.exec(text);
+        if (ofTotal) { accept(ofTotal[2]); continue; }
+        // "Total: 57 pages", "57 pages".
+        const pages = /(?:\b(\d{1,4})\s*pages?\b)/i.exec(text);
+        if (pages) accept(pages[1]);
+    }
+    return found.size === 1 ? Array.from(found)[0] : null;
+}
+
+/**
+ * Total page count the reader itself advertises, if it states one.
+ *
+ * Top-down ("scroll mode") readers list every page as an image in document
+ * order, so that order IS the page order even when the file names are random
+ * hashes. The count is what tells us whether the whole list is really present:
+ * lazy-loaded readers only fill images near the viewport, and a short list would
+ * otherwise look complete.
+ */
+export function detectAdvertisedPageCount(doc: Document): number | null {
+    try {
+        const attributes: string[] = [];
+        for (const name of PAGE_COUNT_ATTRIBUTES) {
+            for (const node of Array.from(doc.querySelectorAll("[" + name + "]"))) {
+                const value = node.getAttribute(name);
+                if (value !== null) attributes.push(value);
+            }
+        }
+        const texts = Array.from(doc.querySelectorAll(COUNTER_SELECTOR)).slice(0, 200)
+            .map(node => String(node.textContent || ""));
+        return countFromSignals(attributes, texts);
+    } catch (_) { return null; }
+}
+
+function staticNodeText(node: any): string {
+    if (!node) return "";
+    if (node.type === "text") return String(node.data || "");
+    if (!Array.isArray(node.children)) return "";
+    let text = "";
+    for (const child of node.children) text += " " + staticNodeText(child);
+    return text;
+}
+
+/** The same count, read from fetched chapter HTML instead of a live DOM. */
+export function detectStaticPageCount(html: string): number | null {
+    try {
+        const tree = parseDocument(String(html || ""), { decodeEntities: true });
+        const attributes: string[] = [];
+        for (const name of PAGE_COUNT_ATTRIBUTES) {
+            for (const node of selectAll("[" + name + "]", tree) as any[]) {
+                const value = node.attribs ? node.attribs[name] : undefined;
+                if (typeof value === "string") attributes.push(value);
+            }
+        }
+        const texts = (selectAll(COUNTER_SELECTOR, tree) as any[]).slice(0, 200).map(staticNodeText);
+        return countFromSignals(attributes, texts);
+    } catch (_) { return null; }
+}
+
+/** An even spread of scroll offsets that reaches the bottom, bounded. */
+export function planScrollSteps(totalHeight: number, viewportHeight: number, maxSteps: number = 80): number[] {
+    if (!Number.isFinite(totalHeight) || !Number.isFinite(viewportHeight) || totalHeight <= 0 || viewportHeight <= 0 || maxSteps < 1) {
+        return [];
+    }
+    const last = Math.max(0, Math.round(totalHeight - viewportHeight));
+    if (last === 0) return [0];
+    const natural = Math.max(1, Math.floor(viewportHeight * 0.8));
+    const limit = Math.max(1, Math.floor(maxSteps));
+    const count = Math.min(limit, Math.floor(last / natural) + 1);
+    if (count === 1) return [0, last];
+    const stride = Math.max(natural, Math.ceil(last / (count - 1)));
+    const steps: number[] = [];
+    for (let i = 0; i < count; i++) steps.push(Math.min(last, i * stride));
+    if (steps[steps.length - 1] !== last) steps[steps.length - 1] = last;
+    return steps;
+}
+
+export interface ScrollSweepHost {
+    scrollTo(y: number): void;
+    scrollY(): number;
+    scrollHeight(): number;
+    viewportHeight(): number;
+    wait(ms: number): Promise<void>;
+    isCancelled(): boolean;
+}
+
+/**
+ * Walk a lazily loaded top-down reader from top to bottom so every page element
+ * materializes, then leave the scroll position to the caller. Bounded by steps,
+ * stops when the height stops growing, and never scrolls while cancelled.
+ */
+export async function sweepScroll(host: ScrollSweepHost, maxSteps: number = 80): Promise<{ steps: number; reachedBottom: boolean }> {
+    let steps = 0;
+    let stalls = 0;
+    let lastY = -1;
+    let lastHeight = -1;
+    while (steps < maxSteps) {
+        if (host.isCancelled()) return { steps: steps, reachedBottom: false };
+        const viewport = host.viewportHeight();
+        const height = host.scrollHeight();
+        const bottom = Math.max(0, height - viewport);
+        const y = host.scrollY();
+        if (y >= bottom) {
+            // At the bottom: one extra wait so a last lazy image can settle.
+            if (height === lastHeight) return { steps: steps, reachedBottom: true };
+            lastHeight = height;
+        }
+        const next = Math.min(bottom, Math.round(y + Math.max(1, Math.floor(viewport * 0.8))));
+        host.scrollTo(next);
+        await host.wait(120);
+        steps++;
+        const after = host.scrollY();
+        if (after <= lastY && height === lastHeight) {
+            stalls++;
+            if (stalls >= 2) return { steps: steps, reachedBottom: after >= bottom };
+        } else {
+            stalls = 0;
+        }
+        lastY = after;
+        lastHeight = height;
+    }
+    return { steps: steps, reachedBottom: false };
+}
+
 export function identifyImage(bytes: Uint8Array): string | null {
     const ascii = (a: number, b: number) => String.fromCharCode.apply(null, Array.from(bytes.slice(a, b)));
     if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "jpg";

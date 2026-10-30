@@ -60,13 +60,40 @@ The tool therefore offers three explicit strategies:
 
 | Strategy | Signal | Refuses when |
 |---|---|---|
-| Reader order (default) | the order the reader/DOM lists them | never (nothing is reordered) |
+| Reader order (default) | the order the reader/DOM lists them — for a top-down reader this *is* page 1, 2, 3… | never (nothing is reordered) |
 | Page links | `data-page`/`data-index`/`data-number`, then `?page=N`/`?p=N`/`?pg=N` or a `/page-N/` path on the nearest enclosing link, then “page N” in `alt`/`title` | any page lacks a number, or two pages share one |
 | File numbers | numeric groups of the final URL segment, compared numerically (`2` before `10` before `100`) | any name has no digits (hashes, word-only names), or two names collide |
 
 The review line states which strategy ran, flags reordering that differs from the
 reader order, and previews the first four resolved pages so a wrong guess is
 visible before saving. Nothing is ever fuzzy-matched or silently re-sorted.
+
+## Top-down / scroll readers (random file names are fine)
+
+A vertical reader lists every page as an image, so **page 1 is simply the first
+image in document order** — no file name is involved. That is the default
+`Reader order` strategy, and it is why random hashes (Tailspace, DoujinDesu) are
+not a problem *when the reader is top-down*.
+
+Two helpers make that reliable:
+
+- **Advertised page count.** The tool reads a total the reader states
+  (`data-total-pages`, `data-page-count`, `data-pages`, or visible counters such
+  as `3 / 57`, `Page 3 of 57`, `57 pages`) from live or fetched HTML. If the
+  number of images found differs, the review shows a warning with
+  `found 2 of 3`; nothing is silently reordered or dropped. Ambiguous or
+  conflicting totals are ignored rather than guessed.
+- **`Load all pages (top-down)`.** Lazy readers only materialize images near the
+  viewport. With one chapter open via *Use open chapter*, this scrolls the source
+  tab from top to bottom (bounded: ≤ 80 steps, ~120 ms each, stops when the page
+  height stops growing, restores your scroll position, aborts on Cancel) so the
+  rest of the pages exist in the DOM. Then press *Inspect*.
+
+For readers that only build images after their own scripts run (an obfuscated
+API, for instance), *Use open chapter* is the only path — the page has already
+decoded its URLs by the time the tool reads them. Static-HTML inspection finds
+nothing there. That means such a site is currently **one chapter at a time**;
+batch-opening chapters sequentially is on the worklist, not implemented.
 
 ## Partial chapters (your "download all instead of nothing")
 
@@ -152,8 +179,9 @@ page failure does:
 - `test/universal-chapter.test.js` — URL policy, discovery, truncation, image
   extraction/ambiguity, static HTML parsing, signatures, stream bounds,
   429/403 handling, all three page-order strategies (including Tailspace-style
-  hashed names and duplicate/missing page numbers), salvage vs strict failures,
-  fatal-code handling and cancellation.
+  hashed names and duplicate/missing page numbers), advertised page-count
+  detection in both DOM and fetched HTML, the bounded scroll sweep, salvage vs
+  strict failures, fatal-code handling and cancellation.
 - `scripts/e2e-universal.js` — the built `chapters.js` + built probe in a VM
   with a synthetic site, asserting: scan makes no fetches; inspection fetches
   only selected chapter HTML; the save gate blocks unapproved hosts; ZIPs contain

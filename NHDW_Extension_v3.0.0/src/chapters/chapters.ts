@@ -19,7 +19,7 @@ let origin = "";
 let sourcePath = "";
 let mode: "title" | "current" | "" = "";
 let candidates: Candidate[] = [];
-type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string };
+type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null };
 let inspected: ReviewedChapter[] = [];
 let approvedHosts: string[] = [];
 let isBusy = false;
@@ -135,6 +135,16 @@ function renderReview(): void {
         ul.appendChild(li);
     }
     review.appendChild(ul);
+    const missing = inspected.filter(chapter => chapter.advertised !== null && chapter.advertised !== undefined &&
+        chapter.advertised !== chapter.count);
+    if (missing.length) {
+        const warning = document.createElement("p");
+        warning.className = "warning";
+        warning.textContent = "Page count does not match what the reader advertises: " + missing
+            .map(chapter => chapter.label + " (found " + chapter.count + " of " + chapter.advertised + ")").join(", ") +
+            ". A top-down reader may not have loaded every page yet — open the chapter, press “Load all pages (top-down)”, then inspect again.";
+        review.appendChild(warning);
+    }
     const hostHeader = document.createElement("p"); hostHeader.textContent = "Approve every image host to be contacted:"; review.appendChild(hostHeader);
     for (const host of approvedHosts) {
         const label = document.createElement("label"); label.className = "check";
@@ -170,7 +180,9 @@ async function inspectSelected(): Promise<void> {
             let orderNote = orderLabels[String(result.order)] || "reader order";
             if (result.order !== "reader" && result.readerOrderDiffers) orderNote += " (differs from reader order — verify)";
             if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
-            results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts, orderNote: orderNote });
+            const advertised = Number.isInteger(result.advertised) ? Number(result.advertised) : null;
+            results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts,
+                orderNote: orderNote, advertised: advertised });
             for (const host of result.hosts) hosts.add(String(host));
         }
         inspected = results;
@@ -311,6 +323,30 @@ function addChapterUrls(): void {
     setStatus(added ? "Added " + added + " chapter URL(s). Inspect them next." : "Those chapter URLs were already collected.");
 }
 el<HTMLButtonElement>("addUrls").addEventListener("click", addChapterUrls);
+
+// Lazy top-down readers only materialize the images near the viewport. Walking
+// the page forces the rest in, and the reader order of the resulting DOM is the
+// page order even when every file name is a random hash.
+function loadAllPages(): void {
+    if (isBusy) return;
+    const current = candidates.find(candidate => candidate.current) || (candidates.length === 1 ? candidates[0] : null);
+    if (!current) { setStatus("Use “Use open chapter” first so the tool knows which chapter is open."); return; }
+    if (!origin) { setStatus("Open the chapter in the source tab and scan it first."); return; }
+    const controller = new AbortController();
+    runController = controller; setBusy(true); setStatus("Scrolling the reader from top to bottom to load every page…");
+    inject().then(() => send("loadall", { origin: origin, chapterUrl: current.url, maxSteps: 80 }))
+        .then((result: any) => {
+            if (controller.signal.aborted) return;
+            if (!result.steps) { setStatus("The page did not scroll. Use “Use open chapter”, or select the images manually."); return; }
+            setStatus("Scrolled " + result.steps + " step(s)" + (result.reachedBottom === false ? " (the bottom was not reached)" : "") +
+                ", " + result.images + " image element(s) present" +
+                (Number.isInteger(result.advertised) ? ", reader advertises " + result.advertised + " page(s)" : "") +
+                ". Now press “Inspect selected chapters”.");
+        })
+        .catch((error: any) => { if (!controller.signal.aborted) setStatus(error && error.message ? error.message : "Unable to scroll the reader."); })
+        .then(() => { runController = null; setBusy(false); });
+}
+el<HTMLButtonElement>("loadAll").addEventListener("click", loadAllPages);
 
 renderList();
 if (!Number.isSafeInteger(tabId) || tabId < 0 || !new URL(location.href).searchParams.has("tab")) {

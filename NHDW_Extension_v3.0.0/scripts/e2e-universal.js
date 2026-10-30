@@ -18,7 +18,7 @@ const page3 = Buffer.from([255, 216, 255, 224, 3]);
 const fixtures = {
     // Tailspace-style: random image names, page number only in the link, and
     // the DOM order deliberately jumbled (page 2 before page 1).
-    'https://reader.example/series/book/chapter-1/': ['text/html', '<div id="readerarea"><a href="?page=2"><img data-src="https://images.example/two.png" alt="Fixture, page 2"></a><a href="?page=1"><img data-src="https://images.example/one.jpg" alt="Fixture, page 1"></a></div><div class="ads"><img src="https://unapproved.example/ad.jpg"></div>'],
+    'https://reader.example/series/book/chapter-1/': ['text/html', '<div class="page-counter">Page 1 / 3</div><div id="readerarea"><a href="?page=2"><img data-src="https://images.example/two.png" alt="Fixture, page 2"></a><a href="?page=1"><img data-src="https://images.example/one.jpg" alt="Fixture, page 1"></a></div><div class="ads"><img src="https://unapproved.example/ad.jpg"></div>'],
     'https://reader.example/series/book/chapter-2/': ['text/html', '<div id="readerarea"><a href="?page=1"><img data-src="https://images.example/three.jpg" alt="Fixture, page 1"></a></div>'],
     'https://images.example/one.jpg': ['image/jpeg', page1],
     'https://images.example/two.png': ['image/png', page2],
@@ -100,6 +100,9 @@ async function main() {
     click('scanTitle');
     await until(() => aw.document.querySelectorAll('#chapterList input').length === 2 && !aw.document.getElementById('scanTitle').disabled, 'scan');
     assert.strictEqual(requests.length, 0, 'scan should not fetch chapter/media URLs');
+    // The sweep needs one known open chapter; without it the button explains itself.
+    click('loadAll');
+    assert.match(aw.document.getElementById('status').textContent, /Use “Use open chapter” first/);
     click('selectAll');
     const order = aw.document.getElementById('order'); order.value = 'newest'; order.dispatchEvent(new aw.Event('change'));
     // Pasting a chapter URL is accepted on the same site and refused elsewhere.
@@ -112,6 +115,9 @@ async function main() {
     aw.document.getElementById('pageOrder').value = 'link-index';
     click('inspect');
     await until(() => aw.document.querySelectorAll('#review li').length === 2 && !aw.document.getElementById('inspect').disabled, 'inspect');
+    // The reader advertises 3 pages but only 2 images were found: warn, do not hide it.
+    assert.match(aw.document.querySelector('#review p.warning').textContent,
+        /Chapter 1 \(found 2 of 3\).*Load all pages \(top-down\)/);
     const reviewed = Array.from(aw.document.querySelectorAll('#review li'), x => x.textContent);
     assert.strictEqual(reviewed.length, 2);
     assert.match(reviewed[0], /^Chapter 1 — 2 image reference\(s\) · sorted by page links \(differs from reader order — verify\): #1 images\.example\//);

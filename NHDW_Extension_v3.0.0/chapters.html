@@ -42,7 +42,8 @@
       <option value="name-natural">File numbers — sort by numbers in the image name</option>
     </select></label>
     <p class="hint">If image names are random hashes (e.g. <code>a1B2c3D4e5F6g7H8-mini.jpg</code>), file numbers cannot order them: use the page links. A strategy that cannot number <em>every</em> page refuses instead of guessing, and the review shows the resolved order to check.</p>
-    <button id="inspect" type="button">Inspect selected chapters</button>
+    <div class="buttons"><button id="inspect" type="button">Inspect selected chapters</button><button id="loadAll" class="secondary" type="button">Load all pages (top-down)</button></div>
+    <p class="hint">Top-down / scroll readers list every page as an image in DOM order, so that order is the page order even when the file names are random hashes. If a reader only loads near the viewport, open one chapter with “Use open chapter”, press <strong>Load all pages (top-down)</strong> (it scrolls the source tab), then inspect. A page count the reader advertises is compared with what was found.</p>
     <div id="review" aria-live="polite"></div>
   </section>
   <section aria-labelledby="saveHeading">

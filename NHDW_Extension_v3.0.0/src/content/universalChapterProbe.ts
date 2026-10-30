@@ -4,6 +4,7 @@ import {
     UNIVERSAL_MAX_HTML_BYTES, UNIVERSAL_MAX_IMAGE_BYTES,
     UniversalChapterError, ImageAttribute, UniversalPageReference,
     publicHttpsUrl, discoverChapters, collectChapterPages, collectStaticChapterPages, PageOrderStrategy,
+    detectAdvertisedPageCount, detectStaticPageCount, sweepScroll,
     readBoundedResponse, checkResponse, identifyImage
 } from "../utils/universalChapter";
 
@@ -95,17 +96,41 @@ if (!scope.__nhdwChapterProbe) {
             const attribute = String(message.attribute || "auto") as ImageAttribute;
             const order = String(message.order || "reader") as PageOrderStrategy;
             let collection;
+            let advertised: number | null = null;
             if (message.current === true) {
                 if (chapter.href !== current.href) throw new UniversalChapterError("tab-changed", "Return to the selected chapter and scan again.");
                 collection = collectChapterPages(document, document.baseURI, selector, attribute, order);
             } else {
                 const data = await boundedFetch(chapter.href, "html");
-                collection = collectStaticChapterPages(new TextDecoder("utf-8").decode(data), chapter.href, selector, attribute, order);
+                const html = new TextDecoder("utf-8").decode(data);
+                collection = collectStaticChapterPages(html, chapter.href, selector, attribute, order);
+                advertised = detectStaticPageCount(html);
             }
             const pages = collection.pages;
             inspected.set(id, { url: chapter.href, pages: pages });
             return { ok: true, count: pages.length, hosts: Array.from(new Set(pages.map(page => page.host))),
-                order: collection.order, readerOrderDiffers: collection.readerOrderDiffers, preview: collection.preview };
+                order: collection.order, readerOrderDiffers: collection.readerOrderDiffers, preview: collection.preview,
+                advertised: message.current === true ? detectAdvertisedPageCount(document) : advertised };
+        }
+        if (message.op === "loadall") {
+            const current = assertOrigin(String(message.origin || ""));
+            const chapter = publicHttpsUrl(String(message.chapterUrl || ""));
+            if (!chapter || chapter.href !== current.href) {
+                throw new UniversalChapterError("tab-changed", "Open the chapter itself in the source tab before loading all pages.");
+            }
+            cancelled = false;
+            const original = window.scrollY || document.documentElement.scrollTop || 0;
+            const result = await sweepScroll({
+                scrollTo: (y: number) => { try { window.scrollTo(0, y); } catch (_) { /* jsdom/odd contexts */ } },
+                scrollY: () => window.scrollY || document.documentElement.scrollTop || 0,
+                scrollHeight: () => Math.max(document.documentElement.scrollHeight || 0, (document.body && document.body.scrollHeight) || 0),
+                viewportHeight: () => window.innerHeight || 800,
+                wait: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
+                isCancelled: () => cancelled
+            }, Number.isInteger(message.maxSteps) ? message.maxSteps : 80);
+            try { window.scrollTo(0, original); } catch (_) { /* cosmetic */ }
+            return { ok: true, steps: result.steps, reachedBottom: result.reachedBottom,
+                images: document.querySelectorAll("img").length, advertised: detectAdvertisedPageCount(document) };
         }
         if (message.op === "page") {
             assertOrigin(String(message.origin || ""));
