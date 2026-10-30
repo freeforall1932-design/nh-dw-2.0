@@ -54,7 +54,7 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
 
 Reader-embedded galleries often use hashed file names, so sorting by file name
 is worthless: Tailspace (checked only through its public page text) lists a
-seven-page comic as `…/qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg`, etc., with the page
+seven-page comic as `…/a1B2c3D4e5F6g7H8-mini.jpg` (illustrative placeholder), etc., with the page
 number living in the link (`?page=1 … ?page=7`) and the caption (`page 1`).
 The tool therefore offers three explicit strategies:
 

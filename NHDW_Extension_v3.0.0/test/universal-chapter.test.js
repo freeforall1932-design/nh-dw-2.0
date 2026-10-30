@@ -102,9 +102,9 @@ describe('universal chapter discovery (synthetic DOM)', () => {
     describe('page ordering for jumbled image names', () => {
         // Tailspace-style markup: random image hashes, page number in the link.
         const markup = `<div id="pages">
-          <a href="?page=3"><img src="https://pics.example/comics/9/RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg" alt="Scale Train, page 3"></a>
-          <a href="?page=1"><img src="https://pics.example/comics/9/qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg" alt="Scale Train, page 1"></a>
-          <a href="?page=2"><img src="https://pics.example/comics/9/yWsMaHMFoeuUagfbityQikXT-mini.jpg" alt="Scale Train, page 2"></a>
+          <a href="?page=3"><img src="https://pics.example/comics/9/defGHIjklMNOpqr-mini.jpg" alt="Scale Train, page 3"></a>
+          <a href="?page=1"><img src="https://pics.example/comics/9/abcDEFghiJKLmno-mini.jpg" alt="Scale Train, page 1"></a>
+          <a href="?page=2"><img src="https://pics.example/comics/9/pqrSTUvwxYZAabc-mini.jpg" alt="Scale Train, page 2"></a>
         </div>`;
         const names = list => list.map(p => p.url.split('/').pop());
         it('keeps the reader order when asked', () => {
@@ -112,12 +112,12 @@ describe('universal chapter discovery (synthetic DOM)', () => {
             const found = collectChapterPages(d, d.URL, '#pages img', 'src');
             assert.strictEqual(found.order, 'reader');
             assert.strictEqual(found.readerOrderDiffers, false);
-            assert.deepStrictEqual(names(found.pages), ['RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg', 'qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg']);
+            assert.deepStrictEqual(names(found.pages), ['defGHIjklMNOpqr-mini.jpg', 'abcDEFghiJKLmno-mini.jpg', 'pqrSTUvwxYZAabc-mini.jpg']);
         });
         it('orders by the page number carried in each link and says it reordered', () => {
             const d = dom(markup).window.document;
             const found = collectChapterPages(d, d.URL, '#pages img', 'src', 'link-index');
-            assert.deepStrictEqual(names(found.pages), ['qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg', 'RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg']);
+            assert.deepStrictEqual(names(found.pages), ['abcDEFghiJKLmno-mini.jpg', 'pqrSTUvwxYZAabc-mini.jpg', 'defGHIjklMNOpqr-mini.jpg']);
             assert.strictEqual(found.readerOrderDiffers, true);
             assert.deepStrictEqual(found.preview.map(x => x.slice(0, 2)), ['#1', '#2', '#3']);
         });
@@ -157,10 +157,10 @@ describe('universal chapter discovery (synthetic DOM)', () => {
         });
         it('applies the same ordering to statically fetched chapter HTML', () => {
             const found = collectStaticChapterPages(markup, 'https://reader.example/comic/', '#pages img', 'src', 'link-index');
-            assert.deepStrictEqual(names(found.pages), ['qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg', 'RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg']);
+            assert.deepStrictEqual(names(found.pages), ['abcDEFghiJKLmno-mini.jpg', 'pqrSTUvwxYZAabc-mini.jpg', 'defGHIjklMNOpqr-mini.jpg']);
             assert.strictEqual(found.readerOrderDiffers, true);
             assert.deepStrictEqual(names(collectStaticChapterImages(markup, 'https://reader.example/comic/', '#pages img', 'src')),
-                ['RtiuRIhVBmEtCGYQdLHNnyIa-mini.jpg', 'qpTJxDfIdjPxRdEhlEjqXvqb-mini.jpg', 'yWsMaHMFoeuUagfbityQikXT-mini.jpg']);
+                ['defGHIjklMNOpqr-mini.jpg', 'abcDEFghiJKLmno-mini.jpg', 'pqrSTUvwxYZAabc-mini.jpg']);
         });
     });
 
