@@ -52,9 +52,10 @@
     <label>Title folder <input id="titleName" maxlength="120" placeholder="Title"></label>
     <label>Archive format <select id="format"><option value="cbz">CBZ</option><option value="zip">ZIP</option></select></label>
     <label class="check"><input id="salvage" type="checkbox" checked> Keep incomplete chapters if a page fails (file name says “incomplete N of M pages”)</label>
+    <label class="check"><input id="retry" type="checkbox" checked> Retry a page twice after a network hiccup or server error (never after 429/403 or Cancel)</label>
     <label class="check"><input id="confirm" type="checkbox"> I reviewed the chapters and page hosts, and can normally access them. No usable site batch is being overlooked.</label>
     <div class="buttons"><button id="download" type="button" disabled>Save selected chapters</button><button id="cancel" class="secondary" type="button" disabled>Cancel</button></div>
-    <p class="hint">One archive per chapter; keep this page and the source tab open. No history or credentials are stored by this tool. Image signatures are checked, not full image decoding. Throttling (429) or access denial (401/403) always stops the run and never produces a salvaged file.</p>
+    <p class="hint">CBZ chapters get a minimal <code>ComicInfo.xml</code> (series, chapter, page count) so comic readers show a title. One archive per chapter; keep this page and the source tab open. No history or credentials are stored by this tool. Image signatures are checked, not full image decoding. Throttling (429) or access denial (401/403) always stops the run and never produces a salvaged file.</p>
     <p id="status" role="status" aria-live="polite"></p>
   </section>
 </main>

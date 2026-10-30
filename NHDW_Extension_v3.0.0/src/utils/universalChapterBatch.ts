@@ -6,7 +6,7 @@
  * are still saved, but the filename and the returned result say plainly that
  * the archive is incomplete. Throttling and access denial are never salvaged:
  * those stop the whole run so the site is not hammered. */
-import { UNIVERSAL_MAX_CHAPTER_BYTES, UNIVERSAL_MAX_IMAGE_BYTES, UNIVERSAL_MAX_PAGES, identifyImage, pauseBetweenChapterRequests, UniversalChapterError } from "./universalChapter";
+import { UNIVERSAL_MAX_CHAPTER_BYTES, UNIVERSAL_MAX_IMAGE_BYTES, UNIVERSAL_MAX_PAGES, identifyImage, pauseBetweenChapterRequests, retryDelay, UniversalChapterError } from "./universalChapter";
 import { sanitizeArtifactFilename } from "./artifactName";
 
 var JSZip = require("jszip");
@@ -26,6 +26,16 @@ export interface UniversalBatchIO {
 export interface UniversalBatchOptions {
     /** Save the pages collected before a recoverable failure, clearly marked. */
     salvagePartial?: boolean;
+    /** Ask again after a transient failure (never after 429/403/cancel). */
+    retry?: boolean;
+}
+
+export interface ComicInfoMeta {
+    series: string;
+    title: string;
+    number?: string | null;
+    pageCount: number;
+    notes?: string;
 }
 export interface IncompleteChapter {
     label: string;
@@ -54,6 +64,42 @@ function errorText(error: any): string {
     return error && typeof error.message === "string" && error.message !== "" ? error.message : "Unknown failure";
 }
 
+function xmlEscape(value: string): string {
+    return String(value)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+        // XML 1.0 forbids most control characters outright.
+        .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+}
+
+/** First number in a chapter label, e.g. "Chapter 36.10" -> "36.10". */
+export function chapterNumberFromLabel(label: string): string | null {
+    const match = /(\d+(?:\.\d+)?)/.exec(String(label || ""));
+    return match ? match[1] : null;
+}
+
+/**
+ * Minimal ComicInfo.xml (ComicRack schema), the file comic readers look for.
+ * Only values this tool actually knows are written: no invented writer, artist,
+ * genre or summary. Readers that do not understand it ignore it harmlessly.
+ */
+export function buildComicInfoXml(meta: ComicInfoMeta): string {
+    const lines = ['<?xml version="1.0" encoding="utf-8"?>', '<ComicInfo xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">'];
+    const add = (tag: string, value: string | null | undefined): void => {
+        if (value === null || value === undefined) return;
+        const text = String(value).trim();
+        if (text === "") return;
+        lines.push("  <" + tag + ">" + xmlEscape(text) + "</" + tag + ">");
+    };
+    add("Title", meta.title);
+    add("Series", meta.series);
+    add("Number", meta.number);
+    add("PageCount", String(meta.pageCount));
+    add("Notes", meta.notes);
+    lines.push("</ComicInfo>");
+    return lines.join("\n") + "\n";
+}
+
 function safeSegment(text: string, fallback: string): string {
     const trimmed = String(text || "").replace(/[\/\\]/g, "_").slice(0, 80).trim();
     let name = sanitizeArtifactFilename(trimmed, fallback);
@@ -79,6 +125,27 @@ function decodePage(page: UniversalPagePayload): Uint8Array {
         throw new UniversalChapterError("format", "Page data has an invalid image signature.");
     }
     return bytes;
+}
+
+/**
+ * One page, with a bounded number of extra attempts for transient failures.
+ * Retry is opt-in and never applies to throttling, refusal, cancellation, a
+ * changed tab, an unapproved host or a stale inspection (see retryDelay).
+ */
+async function fetchPageWithRetry(
+    io: UniversalBatchIO, chapterId: string, page: number, options: UniversalBatchOptions, signal?: AbortSignal
+): Promise<UniversalPagePayload> {
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return await io.getPage(chapterId, page);
+        } catch (error) {
+            aborted(signal);
+            const delay = options.retry === true ? retryDelay(errorCode(error), attempt) : null;
+            if (delay === null) throw error;
+            if (io.progress) io.progress("Retrying page " + (page + 1) + " after " + delay + " ms");
+            await pauseBetweenChapterRequests(signal, delay);
+        }
+    }
 }
 
 /** Returns only after each archive is confirmed saved by the supplied IO. */
@@ -113,7 +180,7 @@ export async function runUniversalChapterBatch(
             try {
                 if (fetchedPage) await pauseBetweenChapterRequests(signal);
                 if (io.progress) io.progress("Chapter " + (i + 1) + "/" + chapters.length + ", page " + (j + 1) + "/" + chapter.count);
-                const page = await io.getPage(chapter.id, j);
+                const page = await fetchPageWithRetry(io, chapter.id, j, options, signal);
                 fetchedPage = true;
                 aborted(signal);
                 const bytes = decodePage(page);
@@ -132,6 +199,17 @@ export async function runUniversalChapterBatch(
             }
         }
         const stem = String(i + 1).padStart(3, "0") + " - " + safeSegment(chapter.label, "Chapter");
+        if (format === "cbz" && (failure === null || options.salvagePartial === true && savedPages > 0)) {
+            // ComicRack's ComicInfo.xml: readers show the series/chapter/page
+            // count instead of "unknown". Only facts this tool knows are written.
+            zip.file("ComicInfo.xml", buildComicInfoXml({
+                series: title,
+                title: chapter.label,
+                number: chapterNumberFromLabel(chapter.label),
+                pageCount: savedPages,
+                notes: failure === null ? undefined : "Incomplete archive: " + savedPages + " of " + chapter.count + " pages."
+            }));
+        }
         if (failure === null) {
             aborted(signal);
             const blob: Blob = await zip.generateAsync({ type: "blob", compression: "STORE" });

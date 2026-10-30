@@ -243,6 +243,7 @@ async function download(): Promise<void> {
     }
     const format = el<HTMLSelectElement>("format").value === "zip" ? "zip" : "cbz";
     const salvagePartial = el<HTMLInputElement>("salvage").checked;
+    const retry = el<HTMLInputElement>("retry").checked;
     const hostCopy = approvedHosts.slice();
     const chapters = inspected.slice();
     const controller = new AbortController();
@@ -255,7 +256,7 @@ async function download(): Promise<void> {
             },
             save: saveBlob,
             progress: setStatus
-        }, controller.signal, { salvagePartial: salvagePartial });
+        }, controller.signal, { salvagePartial: salvagePartial, retry: retry });
         let text = "Saved " + result.completed + " complete chapter archive(s)";
         if (result.incomplete.length) {
             text += "; " + result.incomplete.length + " incomplete: " + result.incomplete

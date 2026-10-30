@@ -6,9 +6,10 @@ const {
     publicHttpsUrl, discoverChapters, collectChapterImages, collectStaticChapterImages,
     collectChapterPages, collectStaticChapterPages, orderChapterPages,
     identifyImage, readBoundedResponse, checkResponse, UNIVERSAL_MAX_CHAPTERS,
-    detectAdvertisedPageCount, detectStaticPageCount, planScrollSteps, sweepScroll
+    detectAdvertisedPageCount, detectStaticPageCount, planScrollSteps, sweepScroll,
+    retryDelay, RETRYABLE_CODES
 } = require('../build/test/utils/universalChapter.js');
-const { runUniversalChapterBatch } = require('../build/test/utils/universalChapterBatch.js');
+const { runUniversalChapterBatch, buildComicInfoXml, chapterNumberFromLabel } = require('../build/test/utils/universalChapterBatch.js');
 
 function dom(html, url = 'https://reader.example/series/book/') {
     return new JSDOM(html, { url });
@@ -248,7 +249,8 @@ describe('universal chapter archive execution (synthetic)', () => {
         assert.deepStrictEqual(calls, [['chapter-0', 0], ['chapter-0', 1], ['chapter-1', 0]]);
         assert.deepStrictEqual(saves.map(x => x.filename), ['Synthetic Title/001 - Chapter 1.cbz', 'Synthetic Title/002 - Chapter 2.cbz']);
         const zip = await JSZip.loadAsync(saves[0].bytes);
-        assert.deepStrictEqual(Object.keys(zip.files), ['001.jpg', '002.png']);
+        // CBZ carries ComicInfo.xml; the pages keep their order and bytes.
+        assert.deepStrictEqual(Object.keys(zip.files), ['001.jpg', '002.png', 'ComicInfo.xml']);
         assert.deepStrictEqual(await zip.file('001.jpg').async('nodebuffer'), Buffer.from(jpeg));
         assert.deepStrictEqual(await zip.file('002.png').async('nodebuffer'), Buffer.from(png));
     });
@@ -334,6 +336,91 @@ describe('universal chapter archive execution (synthetic)', () => {
             save: async (_blob, filename) => { saves.push(filename); }
         }, controller.signal, { salvagePartial: true }), /Cancelled/);
         assert.deepStrictEqual(saves, []);
+    });
+    it('retries only transient failures, with a bounded number of attempts', async () => {
+        assert.deepStrictEqual(RETRYABLE_CODES, ['transfer', 'timeout', 'http', 'network']);
+        assert.strictEqual(retryDelay('transfer', 1), 400);
+        assert.strictEqual(retryDelay('transfer', 2), 1200);
+        assert.strictEqual(retryDelay('transfer', 3), null, 'bounded');
+        for (const code of ['rate-limit', 'blocked', 'cancelled', 'tab-changed', 'approval', 'stale', 'format', '']) {
+            assert.strictEqual(retryDelay(code, 1), null, code + ' must never be retried');
+        }
+    });
+    it('recovers a page after a transient error when retry is on', async () => {
+        const attempts = [];
+        const saves = [];
+        const outcome = await runUniversalChapterBatch([chapters[0]], 'Title', 'cbz', {
+            getPage: async (id, index) => {
+                attempts.push([id, index]);
+                const failures = attempts.filter(a => a[1] === 1).length;
+                if (index === 1 && failures === 1) {
+                    const error = new Error('network blip'); error.code = 'transfer'; throw error;
+                }
+                return page(jpeg, 'jpg');
+            },
+            save: async (blob, filename) => { saves.push({ filename, bytes: Buffer.from(await blob.arrayBuffer()) }); }
+        }, undefined, { retry: true });
+        assert.strictEqual(outcome.completed, 1);
+        assert.deepStrictEqual(attempts, [['chapter-0', 0], ['chapter-0', 1], ['chapter-0', 1]]);
+        assert.strictEqual(saves.length, 1);
+    });
+    it('does not retry by default, and never retries throttling', async () => {
+        let calls = 0;
+        const withoutRetry = await runUniversalChapterBatch([chapters[1]], 'Title', 'zip', {
+            getPage: async () => { calls++; const e = new Error('blip'); e.code = 'transfer'; throw e; },
+            save: async () => {}
+        });
+        assert.strictEqual(calls, 1, 'no retry unless asked');
+        assert.strictEqual(withoutRetry.failed.length, 1);
+        calls = 0;
+        // Throttling stops the whole run (even with salvage and retry on), and is
+        // attempted exactly once: no retry, no partial file.
+        await assert.rejects(runUniversalChapterBatch([chapters[1]], 'Title', 'zip', {
+            getPage: async () => { calls++; const e = new Error('rate limited'); e.code = 'rate-limit'; throw e; },
+            save: async () => {}
+        }, undefined, { retry: true, salvagePartial: true }), /rate limited/);
+        assert.strictEqual(calls, 1, '429 is attempted exactly once');
+    });
+    it('writes a minimal, escaped ComicInfo.xml into CBZ chapters only', async () => {
+        assert.strictEqual(chapterNumberFromLabel('Chapter 36.10'), '36.10');
+        assert.strictEqual(chapterNumberFromLabel('Extra'), null);
+        const xml = buildComicInfoXml({ series: 'A & B <x>', title: 'Chapter "1"', number: '1', pageCount: 3, notes: 'it\'s ok' });
+        assert.match(xml, /<Series>A &amp; B &lt;x&gt;<\/Series>/);
+        assert.match(xml, /<Title>Chapter &quot;1&quot;<\/Title>/);
+        assert.match(xml, /<Number>1<\/Number>/);
+        assert.match(xml, /<PageCount>3<\/PageCount>/);
+        assert.match(xml, /<Notes>it&apos;s ok<\/Notes>/);
+        assert.ok(xml.trimEnd().endsWith('</ComicInfo>'));
+        assert.ok(!/Writer|Artist|Genre|Summary|LanguageISO/.test(xml), 'no invented metadata');
+
+        let zipped = null;
+        await runUniversalChapterBatch([{ id: 'chapter-0', label: 'Chapter 36.10', count: 1, hosts: ['reader.example'] }],
+            'Series & Title', 'cbz', {
+                getPage: async () => page(jpeg, 'jpg'),
+                save: async (blob) => { zipped = await JSZip.loadAsync(Buffer.from(await blob.arrayBuffer())); }
+            });
+        const info = await zipped.file('ComicInfo.xml').async('string');
+        assert.match(info, /<Series>Series &amp; Title<\/Series>/);
+        assert.match(info, /<Number>36.10<\/Number>/);
+        assert.match(info, /<PageCount>1<\/PageCount>/);
+        assert.deepStrictEqual(Object.keys(zipped.files).sort(), ['001.jpg', 'ComicInfo.xml']);
+
+        let plain = null;
+        await runUniversalChapterBatch([{ id: 'chapter-0', label: 'Chapter 1', count: 1, hosts: ['reader.example'] }], 'T', 'zip', {
+            getPage: async () => page(jpeg, 'jpg'),
+            save: async (blob) => { plain = await JSZip.loadAsync(Buffer.from(await blob.arrayBuffer())); }
+        });
+        assert.deepStrictEqual(Object.keys(plain.files), ['001.jpg'], 'a plain ZIP stays plain');
+    });
+    it('marks the page count in ComicInfo for a salvaged chapter', async () => {
+        let zipped = null;
+        await runUniversalChapterBatch([chapters[0]], 'Title', 'cbz', {
+            getPage: async (id, index) => { if (index === 1) throw new Error('image failed'); return page(jpeg, 'jpg'); },
+            save: async (blob) => { zipped = await JSZip.loadAsync(Buffer.from(await blob.arrayBuffer())); }
+        }, undefined, { salvagePartial: true });
+        const info = await zipped.file('ComicInfo.xml').async('string');
+        assert.match(info, /<PageCount>1<\/PageCount>/);
+        assert.match(info, /<Notes>Incomplete archive: 1 of 2 pages\.<\/Notes>/);
     });
     it('rejects duplicate/invalid chapters before any request and sanitizes filenames', async () => {
         let calls = 0;

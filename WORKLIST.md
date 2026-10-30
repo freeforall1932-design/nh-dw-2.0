@@ -21,25 +21,48 @@ The owner reports the nhentai website download and reader have the same original
 file size; this is not an independently checked hash, quality or provenance
 comparison. The native button's click flow remains unobserved.
 
+**Owner decisions (2026-10-30, recorded):**
+
+- **Retry: allowed.** Implemented — up to two extra attempts (400 ms, 1200 ms)
+  for transient transport/timeout/5xx failures only; 429, 401/403, Cancel, a
+  changed tab, an unapproved host and a stale inspection are never retried.
+- **ComicInfo.xml: yes.** Implemented in CBZ output with the fields this tool
+  actually knows: `Title` (chapter label), `Series` (title folder), `Number`
+  (first number in the label), `PageCount`, and `Notes` only for a salvaged
+  archive. No invented writer/artist/genre/summary; readers ignore it harmlessly.
+- **Entry point: a separate tab** (already the case) — keeps the tool out of the
+  popup/side panel.
+- **Firefox: Chromium-only for now**, revisit only if installing an unsigned
+  build stops requiring a signed/licensed add-on. The Firefox tree stays.
+- **Tailspace (answered):** scroll mode serves full-size files; only gallery mode
+  serves `-mini` thumbnails.
+- **nhentai's own Download (owner's live observation, not independently
+  verified):** the control is an embedded link; the resulting file is a ZIP whose
+  name carries the id, title and artist (similar to what this extension builds),
+  and the unpacked images are byte-for-byte the same as reader mode. The
+  extension already targets `/api/v2/galleries/{id}/download?format=`; this
+  report supports the *quality* assumption but does not exercise the delivery
+  path or the native click flow. Recorded as evidence, not as verification.
+
 **Audit 2026-10-30 — gaps found now, not previously recorded.** Each item below
 was checked against the code, not assumed. All remain unverified against a live
 site unless stated.
 
 *Chapter tool — correctness and robustness*
 
-- [ ] **CBZ metadata.** Archives contain only `001.jpg…`; there is no
-  `ComicInfo.xml`, so readers (CDisplayEx, Komga, Kavita) show "unknown title".
-  Add a minimal one from the title folder + chapter label + page count, with
-  XML escaping and a test on the generated archive.
+- [x] **CBZ metadata — done 2026-10-30** (`buildComicInfoXml`,
+  `chapterNumberFromLabel`): escaped XML, CBZ only, salvaged archives carry their
+  real page count and an "Incomplete archive" note. Optional later: Writer/Artist
+  once a site page actually supplies them.
 - [ ] **Memory on long chapters.** Every page crosses the extension message
   channel as base64 (a 12 MiB page becomes a ~16 MiB string) and JSZip holds the
   whole chapter (limit 128 MiB) before saving. `streamingZip.ts`/OPFS already
   exist for the gallery path; reuse or chunk the chapter path and measure a
   100+ page chapter. Today a very long Tailspace/Breaking-Tail title can spike
   memory or hit the per-message cost.
-- [ ] **Bounded retry.** One network blip currently turns a chapter into
-  "incomplete". Allow 1–2 retries with backoff for transport errors and 5xx —
-  never for 429/401/403/cancel (already fatal by design).
+- [x] **Bounded retry — done 2026-10-30** (`retryDelay`, `fetchPageWithRetry`,
+  on by default in the panel): two extra attempts with 400/1200 ms waits for
+  `transfer`/`timeout`/`http`/`network` only.
 - [ ] **Inner scroll containers.** `sweepScroll` moves `window` only. A reader
   that scrolls an inner `<div>` (overflow container) will not lazy-load and the
   sweep silently does nothing. Detect the scrollable element.
@@ -90,6 +113,31 @@ site unless stated.
 - [ ] **Firefox:** that tree has no Chapters button and no chapter bundles. Add a
   one-line note to its README so it does not read as broken, and decide on porting
   (`activeTab`/`scripting` exist in Firefox; the `chrome.*` shim differs).
+
+*Next session: evidence still needed (owner asked to defer items 1, 2, 3 and 5)*
+
+- [ ] One loaded-reader snapshot per site (Sasangeyou ordinary chapter, Yurilab
+  chapter, Tailspace **scroll** mode, DoujinDesu after scrolling).
+- [ ] Per site: iframe or inner scroll container? “Server 1/2/3”? A stated page
+  total (`3 / 57`)?
+- [ ] DoujinDesu: `<img>` count after scrolling vs pages actually visible, and
+  whether the batch link only appears past a chapter count.
+- [ ] Real-browser run of the unpacked build (Chrome version, checklist output).
+
+*New candidate feature: use the site's own Download control*
+
+- [ ] **`Use the site's own Download` mode.** The owner's report is that
+  nhentai's control is an ordinary embedded link and the delivered ZIP equals the
+  reader byte-for-byte. Design: locate an anchor/button on the *supported* site
+  whose text or `href` matches `/download/i`, require an `https:` URL on that
+  site's own origin, hand that URL to `chrome.downloads` with strict completion,
+  and never synthesise or sign it. The browser names the file, so this cannot
+  rename, verify bytes or work in the panel. Needs one sanitized sample of the
+  anchor markup (tag, attributes, whether it needs a click handler) before
+  implementation — text matching alone is not enough because many sites also have
+  “Download app” ads.
+- [ ] Decide whether that mode replaces the unverified API archive path for
+  nhentai, or sits beside it.
 
 *Evidence and decisions needed from the owner* (sanitized only — see
 `SITE_CAPTURE_GUIDE.md`; never media, signed URLs, cookies or raw HARs)

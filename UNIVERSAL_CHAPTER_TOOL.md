@@ -147,6 +147,38 @@ page failure does:
 - **Cancel** aborts the in-flight fetch, stops the loop and cancels the current
   browser download.
 
+## Decisions and their trade-offs
+
+**“Remember approved hosts per site”** — before saving, the tool lists every
+image host it would contact (e.g. `images.example`, `cdn.other.example`) and you
+tick each one. Today that resets on every run. Remembering the choice per origin
+would skip that step for a site you already trusted: faster, but a host could
+later be re-pointed at something else, so the approval would silently carry over.
+The safer middle ground is “remember for this tab session only”. Default if
+nothing is chosen: keep asking (current behaviour).
+
+**`ComicInfo.xml`** — the file comic readers (Komga, Kavita, CDisplayEx, YACReader)
+read from inside a CBZ. Without it a chapter shows as an unnamed grey box; with
+it the reader shows the series and chapter. This tool writes only what it truly
+knows:
+
+| Field | Source | Why |
+|---|---|---|
+| `Series` | the title folder you typed | groups chapters of one title |
+| `Title` | the chapter label | what the reader shows per file |
+| `Number` | first number in the label (`36.10`) | correct sort order in a library |
+| `PageCount` | pages actually written | a short file is visible as short |
+| `Notes` | only for a salvaged archive | records “Incomplete archive: 4 of 12 pages” |
+
+It does **not** write Writer, Artist, Genre, Summary, LanguageISO or Manga —
+the tool has no trustworthy source for them, and a wrong value is worse than an
+empty one. If you want author/genre, those must come from the site page, which
+is a separate (adapter) job.
+
+**Retry** — enabled by default: two extra attempts with 400 ms and 1200 ms waits,
+only for transport/timeout/server errors. Throttling, access denial, Cancel, a
+changed tab, an unapproved host and a stale inspection are never retried.
+
 ## Known gaps
 
 A full audit (memory, retry, resume, CBZ metadata, inner-scroll containers,

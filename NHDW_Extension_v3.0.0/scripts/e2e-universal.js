@@ -141,7 +141,11 @@ async function main() {
     ]);
     const zip1 = await JSZip.loadAsync(await downloads[0].blob.arrayBuffer());
     const zip2 = await JSZip.loadAsync(await downloads[1].blob.arrayBuffer());
-    assert.deepStrictEqual(Object.keys(zip1.files), ['001.jpg', '002.png']);
+    assert.deepStrictEqual(Object.keys(zip1.files).sort(), ['001.jpg', '002.png', 'ComicInfo.xml']);
+    const info = await zip1.file('ComicInfo.xml').async('string');
+    assert.match(info, /<Series>Fixture Title<\/Series>/);
+    assert.match(info, /<Title>Chapter 1<\/Title>/);
+    assert.match(info, /<PageCount>2<\/PageCount>/);
     assert.deepStrictEqual(await zip1.file('001.jpg').async('nodebuffer'), page1);
     assert.deepStrictEqual(await zip1.file('002.png').async('nodebuffer'), page2);
     assert.deepStrictEqual(await zip2.file('001.jpg').async('nodebuffer'), page3);

@@ -471,6 +471,24 @@ export async function sweepScroll(host: ScrollSweepHost, maxSteps: number = 80):
     return { steps: steps, reachedBottom: false };
 }
 
+/**
+ * Which failures are worth one more attempt, and how long to wait.
+ *
+ * Retrying is bounded and only for transient transport problems. Throttling
+ * (429), refusal (401/403), cancellation, a changed tab, an unapproved host and
+ * a stale inspection are NOT retried: repeating them either hammers a site that
+ * asked us to stop or cannot succeed.
+ */
+export const RETRYABLE_CODES = ["transfer", "timeout", "http", "network"];
+export const RETRY_DELAYS_MS = [400, 1200];
+
+export function retryDelay(code: string, attempt: number, maxAttempts: number = 3): number | null {
+    if (attempt < 1 || attempt >= maxAttempts) return null;
+    if (RETRYABLE_CODES.indexOf(String(code || "")) === -1) return null;
+    const index = Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1);
+    return RETRY_DELAYS_MS[index];
+}
+
 export function identifyImage(bytes: Uint8Array): string | null {
     const ascii = (a: number, b: number) => String.fromCharCode.apply(null, Array.from(bytes.slice(a, b)));
     if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return "jpg";
