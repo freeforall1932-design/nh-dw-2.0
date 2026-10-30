@@ -49,6 +49,12 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
 6. **Save**: pick a folder name and CBZ/ZIP, approve each discovered image host,
    tick the confirmation, and press the save button. One archive per chapter,
    named `001 - <label>.cbz` under the title folder, pages `001.jpg`, `002.png`…
+   Hosts approved for this exact site are remembered (pre-ticked next time, still
+   listed so any one can be unticked for a run), and chapters recorded as already
+   saved are skipped — both on by default, both revocable in the same step.
+7. **If something went wrong**: press **Run benchmark and save log** (step 04).
+   It re-checks the open page read-only and writes `nhdw-log-<timestamp>.txt` to
+   your downloads. See [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
 
 ## Page order when image names are meaningless
 
@@ -149,13 +155,30 @@ page failure does:
 
 ## Decisions and their trade-offs
 
-**“Remember approved hosts per site”** — before saving, the tool lists every
-image host it would contact (e.g. `images.example`, `cdn.other.example`) and you
-tick each one. Today that resets on every run. Remembering the choice per origin
-would skip that step for a site you already trusted: faster, but a host could
-later be re-pointed at something else, so the approval would silently carry over.
-The safer middle ground is “remember for this tab session only”. Default if
-nothing is chosen: keep asking (current behaviour).
+**“Remember approved hosts per site” — implemented, on by default.** Before
+saving, the tool lists every image host it would contact and you tick each one.
+The choice is stored per **exact HTTPS origin** (max 30 hosts per origin) and
+pre-ticked on the next inspection of that same site; every host is still listed
+with a *(remembered)* marker, so it can be unticked for one run, and *Forget
+remembered hosts* clears the site. Trade-off, as accepted: a host that later
+re-points at something else would not be asked about again — which is why the
+list stays visible and revocable rather than becoming invisible.
+
+**Skipping chapters already saved.** A chapter is recorded (bounded: 500 per
+title, 100 titles, oldest evicted) only when the browser confirmed the archive
+**complete**, keyed by its exact URL. Salvaged/partial archives are deliberately
+not recorded, so they are retried rather than silently skipped. Skipped chapters
+stay visible in the review with their page counts; *Forget saved chapters for
+this title* clears one title.
+
+**Log and benchmark.** Two diagnostics were added rather than relying on the
+browser console, which is gone after a reload. The log redacts on the way in
+(query/fragment dropped, cookie/token/body keys dropped, base64 and `data:`
+payloads replaced), keeps 500 entries in `chrome.storage.local`, and exports as a
+text file. The benchmark runs the same read-only checks from whatever page the
+source tab is on; its only network request is one page image **from a host you
+already approved for that site**, plus a twenty-step scroll that restores the
+position. Nothing it does can approve a host or start a download.
 
 **`ComicInfo.xml`** — the file comic readers (Komga, Kavita, CDisplayEx, YACReader)
 read from inside a CBZ. Without it a chapter shows as an unnamed grey box; with
@@ -184,7 +207,33 @@ changed tab, an unapproved host and a stale inspection are never retried.
 A full audit (memory, retry, resume, CBZ metadata, inner-scroll containers,
 iframes, tiny images, host approvals, release hygiene) is recorded in
 [WORKLIST.md](WORKLIST.md#audit-2026-10-30--gaps-found-now-not-previously-recorded),
-together with the sanitized evidence and decisions still needed.
+together with the sanitized evidence and decisions still needed. Closed since:
+tiny/placeholder images, inner-scroll containers, remembered hosts, resume, the
+log and the benchmark.
+
+Still open, in order of what unblocks most:
+
+- **A real-browser run** ([BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md)) — nothing in
+  the chapter tool has been exercised against a live site. Its log file is the
+  first artifact to collect.
+- **Per-site outer-HTML captures** ([OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md)) —
+  which site needs a capture, where to go, what to pick, what to paste. Without
+  one, every site runs on the generic selector defaults.
+- **Iframes** — the probe injects in the main frame only; an embedded reader is
+  invisible. Decide `allFrames` support and how the review names the frame.
+- **Server picker** — sites that switch between "Server 1/2/3" still cannot have
+  the server chosen explicitly.
+- **Memory on very long chapters** — every page crosses the message channel as
+  base64 and JSZip holds the whole chapter; `streamingZip.ts`/OPFS exists for the
+  gallery path but is not reused here.
+- **Click-to-select picker** — the last usability item; still requires a
+  hand-written CSS selector.
+- **Release hygiene** — version bump; the Firefox tree has none of this and must
+  not be described as having it.
+
+The dropped "use the site's own Download control" idea is archived in
+[SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md); do not
+re-propose it without a sanitized anchor capture *and* a new owner decision.
 
 ## Limits (do not overstate this feature)
 
@@ -203,10 +252,16 @@ together with the sanitized evidence and decisions still needed.
   [`chapterPlan.ts`](NHDW_Extension_v3.0.0/src/utils/chapterPlan.ts) still says a
   usable same-title batch has priority; that preference is stated in the UI but
   not automated here.
-- **No history, no resume, no metadata.** Nothing is recorded in the download
-  history; re-running re-fetches pages. Chapter numbering comes from the supplied
-  order, not from the site. A salvaged chapter is a genuinely short archive —
-  the marker in the name is the only thing distinguishing it from a complete one.
+- **No download history, and metadata is minimal.** Nothing is written to the
+  extension's download history. What *is* stored locally: remembered hosts per
+  origin, saved-chapter records (file name, page count, timestamp — never page
+  bytes) and the redacted log. Chapter numbering comes from the supplied order,
+  not from the site. A salvaged chapter is a genuinely short archive — the marker
+  in its name and `ComicInfo` is the only thing distinguishing it from a complete
+  one, and it is never recorded as saved.
+- **No live-browser validation yet.** The benchmark and log have only run in the
+  bundled VM harness; the first real run is the next step and its log is the
+  artifact to send back.
 - **Firefox is not ported.** `NHDW_Firefox_v1.0.0` has none of this.
 - **Content responsibility stays with the user.** The tool has no age or
   entitlement check and cannot grant access. Only save material you can
@@ -227,5 +282,12 @@ together with the sanitized evidence and decisions still needed.
   the exact ordered bytes; an interrupted browser download is reported as
   `Stopped after 0 completed archive(s)`.
 - `scripts/e2e-chapter-relay.js` — the worker relay trust boundary.
+- `test/chapter-support.test.js` — the supporting pieces on their own: image
+  header parsing (PNG/GIF/WebP/JPEG, AVIF accepted with unknown dimensions), the
+  128 px gate and its error codes, scroll-target selection, per-origin host
+  approvals (exact origin only, cap, forget), saved-chapter records
+  (partition/record/forget, caps, partial archives never recorded) and the log
+  (redaction of query strings, cookies, tokens, base64 and `data:` payloads,
+  entry cap, formatted output).
 - `test/manifest.test.js`, `test/package-chrome.test.js` — no broad host access,
   no auto-injection, CSP-safe page, files present in the generated package.

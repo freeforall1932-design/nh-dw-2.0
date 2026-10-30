@@ -1,52 +1,60 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Latest owner direction (2026-10-28):** Chromium is primary; retain Firefox
-but do not claim parity. The owner authorized Sasangeyou chapter work and
-nhentai archive progress, says batch choices can vary and they can identify the
-wanted option, and reports native nhentai download and reader use the same
-original file size. That is not independent byte-identity, quality or
-original-upload verification. The native button flow is still unobserved.
-External video/game mirror work remains on hold; DoujinDesu is not implemented.
+**Latest state (2026-10-30, branch `arena/e012b75a-nh-dw-2-0`):** the owner's
+approved queue is implemented and green offline. Chromium's last full run:
+**773 passing / 4 pending** (`npm test`, now including
+`test/chapter-support.test.js`), `npm run build`, `npm run test:smoke` and both
+chapter e2e harnesses (`e2e-universal.js`, `e2e-chapter-relay.js`) pass. No live
+site and no real browser were used; that is the next step, not more code.
 
-**Latest Chromium state (2026-10-29):** A new, explicitly opt-in
-**universal chapter collector** ships in the Chromium tree: `Chapters ↗` in the
-panel opens `chapters.html`, which uses `activeTab` + `chrome.scripting` to
-inject a probe into the user's own tab, discovers chapter links by a supplied
-CSS selector, inspects static reader HTML as data (`htmlparser2`/`css-select`,
-no DOM construction or subresource requests), requires explicit host approval,
-streams and signature-checks each page, and saves one strict-completion
-CBZ/ZIP per chapter through the worker's tracked `blob:` relay. Top-down readers
-use DOM order (page 1 = first image) with an advertised-count check and a bounded
-scroll sweep for lazy loading. Retry (2 extra attempts, transient failures only)
-and a minimal `ComicInfo.xml` in CBZ output are on by default. The owner directs:
-tool in its own tab, Chromium only for now, Firefox revisited only if unsigned
-installation stops requiring a signed add-on. A recoverable
-page failure can keep a clearly marked partial archive; 429/403 and Cancel stop
-the run without salvage. It has **no**
-wildcard host access, no automatic injection, no batch/mirror resolution and no
-live-site validation. See [UNIVERSAL_CHAPTER_TOOL.md](UNIVERSAL_CHAPTER_TOOL.md).
+What landed in this pass, on top of retry + `ComicInfo.xml`:
 
-The offline chapter planner requires an explicit
-batch option and does not infer that alternatives expired; a non-executing
-synthetic `ts_reader.run` candidate parser preserves one chosen server's ordered
-references. Neither is wired to the extension or verified against site DOM.
-The API archive path now has bounded ZIP/CRC/signature/count checks, restrictive
-HTTPS/expiry/redirect handling, explicit failures, full long `Retry-After`
-handling, same-batch deferral and strict browser-completion tracking in mocks.
-Keep the option **off**: real delivery hosts, CORS, actual save completion,
-page identity and quality remain unverified; a cross-context/restart cooldown
-is not implemented. Firefox retains its earlier behavior and was not ported in
-this pass. Normal per-page image signature validation remains unfixed. Old
-installed/queued jobs can still use previous code.
+- **Tiny/placeholder rejection.** `readImageSize` parses real headers (PNG, GIF,
+  WebP VP8X/VP8/VP8L, JPEG SOF walk) and `assertUsablePage` refuses a page under
+  `MIN_PAGE_DIMENSION = 128` px or with an unparsable header (`too-small` /
+  `format`). Checked at fetch time **and** again before zipping, so an archive can
+  no longer be padded with spacers. AVIF has no parser and is accepted with
+  unknown dimensions.
+- **Inner scroll containers.** `pickScrollTarget` chooses the element with
+  >200 px hidden overflow and ≥200 px visible height/width (largest wins, never
+  from class names); the probe drives it, restores the position, and reports
+  `scrolledElement` plus the iframe count.
+- **Remembered hosts** (`src/utils/hostApprovals.ts`) per exact HTTPS origin, max
+  30 hosts, pre-ticked but still individually listed, on by default, cleared by
+  *Forget remembered hosts*.
+- **Resume** (`src/utils/chapterProgress.ts`): bounded saved-chapter records
+  (500/title, 100 titles), written only for browser-confirmed **complete**
+  archives; *Skip chapters already saved* is on by default and skipped chapters
+  stay visible with their counts. Salvaged archives are intentionally not
+  recorded, so they are retried.
+- **Logger** (`src/utils/extensionLog.ts`): redaction on the way in (URL query and
+  fragment dropped, cookie/token/body keys dropped, base64 and `data:` payloads
+  replaced), 500-entry cap in `chrome.storage.local` under `nhdwExtensionLog`,
+  exportable as `nhdw-log-<timestamp>.txt`.
+- **Benchmark** (panel step 04): five read-only checks from whatever page the
+  source tab is on — tab reach, chapter-link count, reader page images, one page
+  image *only from an already-approved host* plus scroll-container detection, and
+  a storage round-trip — then saves the log. It builds no archive, starts no
+  download and approves no host. See
+  [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+- **"Use the site's own Download control" is dropped** by owner decision; the
+  effort is archived in
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The
+  API-key archive path stays the supported route and stays off by default until
+  delivery is verified.
+- **Outer-HTML hand-off written**: [OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md) —
+  per site (sasangeyou.net, tailspace.com `/c/Scale%20Train`, doujin.desu.xxx
+  `/manga/irodori-kazoku` and `/manga/stop-smoking`, mirrored.to batch
+  directories) says where to go, what to click, what to paste and which five
+  questions to answer. No capture exists yet; Yurilab has no tailored steps.
 
-Chromium's latest offline run: **758 passing / 4 pending**, build, smoke and all
-VM e2e scripts (including the new bundled chapter integration and relay-guard
-harness) passed, as did capture-helper tests. A Chromium 153 headless-shell
-attempt failed to register the extension, so no real-browser test ran. Firefox's
-prior run was **703 passing / 4 pending**; it was not retested for this pass.
-No real key, media transfer or native-button click occurred. See
-[WORKLIST.md](WORKLIST.md), [NEW_DOMAIN_PLANNING.md](NEW_DOMAIN_PLANNING.md) and
-[SITE_CAPTURE_GUIDE.md](SITE_CAPTURE_GUIDE.md).
+**Still unverified / limits:** nothing in this pass was exercised against a live
+site or a real Chromium profile. The `Chapters ↗` page and its new benchmark
+button have only run in the bundled VM e2e. Cross-origin images still need CORS;
+JS-only readers still need *Use open chapter* one chapter at a time; there is
+still no server picker and no iframe support; the archive server mode is off; the
+native nhentai Download button remains unobserved. Firefox has none of this and
+must not be claimed to.
 
 **Historical handoff below:** Earlier session status, test counts and priorities
 are archival; the latest state above and the actual current Git branch take precedence.

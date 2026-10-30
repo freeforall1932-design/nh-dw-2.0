@@ -63,32 +63,48 @@ site unless stated.
 - [x] **Bounded retry — done 2026-10-30** (`retryDelay`, `fetchPageWithRetry`,
   on by default in the panel): two extra attempts with 400/1200 ms waits for
   `transfer`/`timeout`/`http`/`network` only.
-- [ ] **Inner scroll containers.** `sweepScroll` moves `window` only. A reader
-  that scrolls an inner `<div>` (overflow container) will not lazy-load and the
-  sweep silently does nothing. Detect the scrollable element.
+- [x] **Inner scroll containers — done 2026-10-30** (`pickScrollTarget`,
+  `findScrollElement`): the element that actually scrolls is detected from
+  measured overflow (>200 px hidden, ≥200 px visible height and width, largest
+  wins — never from class names), the sweep drives it, the position is restored,
+  and the probe now reports `scrolledElement` (`window` or `tag#id`) and the
+  iframe count. Not yet confirmed against a live site.
 - [ ] **Iframes.** Injection targets the main frame, so a reader embedded in an
   iframe is invisible. Decide whether to support `allFrames` (and how the review
   names the frame that matched).
-- [ ] **Tiny/placeholder images.** `identifyImage` checks magic bytes only, so a
-  1×1 tracking GIF passes. Parse JPEG SOF / PNG IHDR / WebP dimensions (the
-  gallery path already has a JPEG parser) and reject implausible pages.
+- [x] **Tiny/placeholder images — done 2026-10-30** (`readImageSize`,
+  `assertUsablePage`, `MIN_PAGE_DIMENSION = 128`): real header parsing for PNG,
+  GIF, WebP (VP8X/VP8/VP8L) and JPEG (SOF walk); a page under 128 px in either
+  direction, or with an unparsable header, is refused with `too-small`/`format`
+  instead of being zipped. AVIF is accepted with unknown dimensions (no parser).
+  The gate runs at probe fetch time **and** again before the archive is built, so
+  a spacer can no longer pad a chapter.
 - [ ] **Multi-server readers.** There is no "Server 1/2/3" picker; a selection
   mixing servers is refused rather than surfaced. Sites like Sasangeyou need the
   choice made explicit in the chapter tool.
 - [ ] **Cooldown for the chapter tool.** Fixed 250 ms spacing between pages, no
   jitter, no backoff, no persisted cooldown across runs (the nhentai API path has
   its own, also not restart-persistent).
-- [ ] **Resume.** An interrupted batch restarts from chapter 1; nothing records
-  which chapters were saved. Add a small local record plus "skip already saved"
-  that still requires the same strict-completion evidence.
+- [x] **Resume — done 2026-10-30** (`chapterProgress.ts`): a bounded local record
+  (500 chapters per title, 100 titles, oldest evicted first) keyed by exact
+  chapter URL, written only for archives the browser confirmed **complete**.
+  "Skip chapters already saved" is on by default; skipped chapters stay visible in
+  the review with their page counts, and *Forget saved chapters for this title*
+  clears the record. Partial/salvaged archives are deliberately **not** recorded,
+  so they are retried.
 
 *Chapter tool — usability*
 
 - [ ] **Click-to-select picker.** Requiring a hand-written CSS selector is the
   main thing keeping this from being usable as "universal". Add "pick the first
   page image" (and "pick the chapter links") using an injected overlay.
-- [ ] **Remember approved image hosts per origin**, revocable in Settings,
-  instead of re-approving every run. Trade-off: less explicit per run.
+- [x] **Remember approved image hosts per origin — done 2026-10-30**
+  (`hostApprovals.ts`): approvals are stored per **exact HTTPS origin** (max 30
+  hosts per origin), pre-ticked on the next inspection for that same site, still
+  listed individually so any one can be unticked for a run, on by default with a
+  checkbox, and cleared by *Forget remembered hosts*. Trade-off accepted: after
+  the first run, a site's hosts no longer need re-approval each time — which is
+  exactly why the per-run list stays visible.
 - [ ] **Re-bind the source tab** when it was closed/reloaded instead of a dead-end
   error (the page knows the old tab id only).
 - [ ] **Entry point.** The tool opens a new tab even in side-panel mode; decide
@@ -124,20 +140,35 @@ site unless stated.
   whether the batch link only appears past a chapter count.
 - [ ] Real-browser run of the unpacked build (Chrome version, checklist output).
 
-*New candidate feature: use the site's own Download control*
+*Dropped: use the site's own Download control*
 
-- [ ] **`Use the site's own Download` mode.** The owner's report is that
-  nhentai's control is an ordinary embedded link and the delivered ZIP equals the
-  reader byte-for-byte. Design: locate an anchor/button on the *supported* site
-  whose text or `href` matches `/download/i`, require an `https:` URL on that
-  site's own origin, hand that URL to `chrome.downloads` with strict completion,
-  and never synthesise or sign it. The browser names the file, so this cannot
-  rename, verify bytes or work in the panel. Needs one sanitized sample of the
-  anchor markup (tag, attributes, whether it needs a click handler) before
-  implementation — text matching alone is not enough because many sites also have
-  “Download app” ads.
-- [ ] Decide whether that mode replaces the unverified API archive path for
-  nhentai, or sits beside it.
+- [x] **Dropped 2026-10-30 by owner decision** ("if the site download button is
+  too hard, drop it and stick with the API keys"). No code was written. The
+  proposal, the unobserved evidence, the reasons and the two conditions that
+  would reopen it are archived in
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The API-key
+  archive path stays the supported route.
+
+*Diagnostics (added 2026-10-30 at the owner's request)*
+
+- [x] **Extension log with its own file — done** (`extensionLog.ts`): every
+  entry is redacted on the way in (URL query/fragment dropped, cookie/token/body
+  keys dropped, base64 and `data:` payloads replaced, 300-character strings), the
+  buffer is capped at 500 entries and persisted under `nhdwExtensionLog`, so it
+  survives closing the tab. *Save log* writes `nhdw-log-<timestamp>.txt` through
+  `chrome.downloads`.
+- [x] **Benchmark button — done** (panel step 04): five read-only checks from
+  whatever page the source tab is on — tab reach, chapter-link count, reader page
+  images, one page image (only from an already-approved host on that site) plus
+  scroll-container detection, and a storage round-trip — then saves the log and
+  reports a problem count. It builds no archive, starts no download and approves
+  no host. How to read it: [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+- [ ] **Benchmark against real sites.** The button has only run in the bundled
+  VM e2e, never in a real Chromium profile. First real run pending the owner's
+  browser session.
+- [ ] **Outer-HTML captures.** The per-site capture hand-off (which site, where to
+  go, what to pick, what to paste, the five questions per site) is written in
+  [OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md); no capture has been made yet.
 
 *Evidence and decisions needed from the owner* (sanitized only — see
 `SITE_CAPTURE_GUIDE.md`; never media, signed URLs, cookies or raw HARs)
@@ -155,15 +186,20 @@ site unless stated.
   unpacked build — I can supply a checklist whose output you paste back.
 - [ ] nhentai's own Download button: still unobserved. A screenshot plus the
   resulting file's name/size is enough; no cookies or signed URLs.
-- [ ] Decisions: remember approved hosts per site? automatic retry allowed?
-  `ComicInfo.xml` yes/no and which fields? tool in a tab or the side panel?
-  Firefox port or Chromium-only?
+- [x] Decisions — answered 2026-10-30: remember hosts per site **yes**
+  (implemented), automatic retry **yes** by default (implemented), `ComicInfo.xml`
+  **yes** with the fields this tool knows (implemented), own tab (as built),
+  Chromium-only for now. Still open: the real-browser run below.
 
-**My next-step recommendation:** (1) `ComicInfo.xml`, tiny-image rejection,
-inner-scroll and iframe handling — all testable without a site; (2) retry and
-resume so a long title survives one blip; (3) the click-to-select picker, which
-removes the selector requirement. Items (2) and (3) are much better with one real
-reader snapshot.
+**My next-step recommendation:** the offline queue the owner approved is done —
+`ComicInfo.xml`, bounded retry, tiny-image rejection, inner-scroll containers,
+remembered hosts, resume and the diagnostic log/benchmark. What is left needs a
+**real browser** rather than more code: load the unpacked build, press
+**Run benchmark and save log** on one ordinary chapter, then work the remaining
+evidence items (iframe/scroll answers, stated page totals) with
+[BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) and
+[OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md). The click-to-select picker is the
+last usability item and is much better after one captured reader.
 
 **Latest Chromium progress (offline, not new-site support):**
 

@@ -1,5 +1,8 @@
 import { runUniversalChapterBatch, InspectedUniversalChapter, UniversalPagePayload, UniversalBatchResult } from "../utils/universalChapterBatch";
 import { pauseBetweenChapterRequests } from "../utils/universalChapter";
+import { approvedHostsFor, rememberHosts, forgetOrigin, HostApprovalMap } from "../utils/hostApprovals";
+import { progressTitleKey, partitionSaved, recordSaved, forgetSaved, ChapterProgressMap } from "../utils/chapterProgress";
+import { makeLogEntry, appendLog, formatLog, summarizeError, LogEntry, LOG_CAP, LOG_STORAGE_KEY } from "../utils/extensionLog";
 
 const COMPLETION_MAX_WAIT_MS = 30 * 60 * 1000;
 
@@ -19,14 +22,76 @@ let origin = "";
 let sourcePath = "";
 let mode: "title" | "current" | "" = "";
 let candidates: Candidate[] = [];
-type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null };
+type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null; url: string; skipped?: boolean };
 let inspected: ReviewedChapter[] = [];
 let approvedHosts: string[] = [];
 let isBusy = false;
 let runController: AbortController | null = null;
 let savedCount = 0;
+const HOSTS_KEY = "nhdwHostApprovals";
+const PROGRESS_KEY = "nhdwChapterProgress";
+let hostMap: HostApprovalMap = {};
+let progressMap: ChapterProgressMap = {};
+let logBuffer: LogEntry[] = [];
+let logFlushTimer: any = null;
 
 function setStatus(text: string): void { status.textContent = text; }
+
+// ---- log ---------------------------------------------------------------
+// Every entry is redacted on the way in (see extensionLog.ts): URLs lose their
+// query/fragment, secrets and payloads are replaced, and nothing media-sized is
+// ever stored. The file can be saved from the panel for a bug report.
+function log(level: "info" | "warn" | "error", area: string, message: string, data?: any): void {
+    logBuffer = appendLog(logBuffer, makeLogEntry(level, area, message, data), LOG_CAP);
+    try {
+        if (logFlushTimer === null) {
+            logFlushTimer = setTimeout(() => {
+                logFlushTimer = null;
+                try { chrome.storage.local.set({ [LOG_STORAGE_KEY]: logBuffer }); } catch (_) { /* storage gone */ }
+            }, 800);
+        }
+    } catch (_) { /* logging must never break the tool */ }
+}
+function logError(area: string, message: string, error: any): void {
+    log("error", area, message, summarizeError(error));
+}
+function readLocal(defaults: Record<string, any>): Promise<any> {
+    return new Promise(resolve => {
+        try { chrome.storage.local.get(defaults, (value: any) => resolve(value || defaults)); }
+        catch (_) { resolve(defaults); }
+    });
+}
+function writeLocal(value: Record<string, any>): void {
+    try { chrome.storage.local.set(value); } catch (_) { /* storage unavailable */ }
+}
+function extensionVersion(): string {
+    try { return chrome.runtime.getManifest().version; } catch (_) { return "unknown"; }
+}
+function logHeader(): Record<string, string> {
+    return {
+        extension: extensionVersion(),
+        page: String(location.href).split("?")[0],
+        userAgent: navigator.userAgent,
+        rememberedApprovalOrigins: String(Object.keys(hostMap).length),
+        recordedTitles: String(Object.keys(progressMap).length)
+    };
+}
+function saveLogFile(): void {
+    const text = formatLog(logBuffer, logHeader());
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const blob = new Blob([text], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    try {
+        chrome.downloads.download({ url: url, filename: "nhdw-log-" + stamp + ".txt", conflictAction: "uniquify" }, () => {
+            void chrome.runtime.lastError;
+            setTimeout(() => URL.revokeObjectURL(url), 60000);
+        });
+        setStatus("Log saved to your downloads (nhdw-log-" + stamp + ".txt, " + logBuffer.length + " entries).");
+    } catch (error) {
+        logError("log", "Could not save the log file", error);
+        setStatus("Could not save the log file.");
+    }
+}
 function invalidateReview(): void {
     inspected = [];
     approvedHosts = [];
@@ -131,6 +196,7 @@ function renderReview(): void {
         const li = document.createElement("li");
         let text = chapter.label + " — " + chapter.count + " image reference(s)";
         if (chapter.orderNote) text += " · " + chapter.orderNote;
+        if (chapter.skipped) text += " · already saved, will be skipped";
         li.textContent = text;
         ul.appendChild(li);
     }
@@ -145,13 +211,29 @@ function renderReview(): void {
             ". A top-down reader may not have loaded every page yet — open the chapter, press “Load all pages (top-down)”, then inspect again.";
         review.appendChild(warning);
     }
-    const hostHeader = document.createElement("p"); hostHeader.textContent = "Approve every image host to be contacted:"; review.appendChild(hostHeader);
+    const remembered = approvedHostsFor(hostMap, origin);
+    const hostHeader = document.createElement("p");
+    hostHeader.textContent = "Approve every image host to be contacted" + (remembered.length ? " (remembered hosts are pre-ticked):" : ":");
+    review.appendChild(hostHeader);
     for (const host of approvedHosts) {
         const label = document.createElement("label"); label.className = "check";
         const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.dataset.host = host;
-        const text = document.createElement("span"); text.textContent = host;
+        // A remembered approval for this exact site pre-ticks the box; it still
+        // appears in the list so it can be unchecked for this run.
+        checkbox.checked = remembered.indexOf(host) !== -1;
+        const text = document.createElement("span");
+        text.textContent = host + (remembered.indexOf(host) !== -1 ? " (remembered)" : "");
         label.appendChild(checkbox); label.appendChild(text); review.appendChild(label);
     }
+}
+function refreshApprovalHint(): void {
+    const hint = document.getElementById("approvalHint");
+    if (!hint) return;
+    const remembered = approvedHostsFor(hostMap, origin);
+    hint.textContent = !origin ? "No source site selected yet."
+        : remembered.length
+            ? remembered.length + " host(s) remembered for " + origin + "."
+            : "No hosts remembered for " + origin + " yet.";
 }
 async function inspectSelected(): Promise<void> {
     if (isBusy) return;
@@ -182,14 +264,32 @@ async function inspectSelected(): Promise<void> {
             if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
             const advertised = Number.isInteger(result.advertised) ? Number(result.advertised) : null;
             results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts,
-                orderNote: orderNote, advertised: advertised });
+                orderNote: orderNote, advertised: advertised, url: chapter.url });
+            log("info", "inspect", "Chapter inspected", {
+                label: chapter.label, chapter: chapter.url, pages: result.count, hosts: result.hosts,
+                order: result.order, differs: !!result.readerOrderDiffers, advertised: advertised
+            });
             for (const host of result.hosts) hosts.add(String(host));
+        }
+        // Chapters already recorded as saved can be skipped; the checkbox only
+        // changes what is downloaded, never what was found (counts stay visible).
+        const skipSaved = el<HTMLInputElement>("skipSaved").checked;
+        const titleKey = progressTitleKey(origin, titleInput.value || "Title");
+        let skipped = 0;
+        if (skipSaved && titleKey) {
+            for (const chapter of results) {
+                const split = partitionSaved(progressMap, titleKey, [{ chapterUrl: chapter.url }]);
+                chapter.skipped = split.alreadySaved.length === 1;
+                if (chapter.skipped) skipped++;
+            }
         }
         inspected = results;
         approvedHosts = Array.from(hosts).sort();
         renderReview();
-        setStatus("Inspection finished. Review chapter order, page counts and image hosts before saving.");
+        setStatus("Inspection finished" + (skipped ? " (" + skipped + " chapter(s) already saved will be skipped)" : "") +
+            ". Review chapter order, page counts and image hosts before saving.");
     } catch (error: any) {
+        logError("inspect", "Inspection failed", error);
         invalidateReview(); setStatus(error && error.message ? error.message : "Inspection failed.");
     } finally { runController = null; setBusy(false); }
 }
@@ -244,12 +344,25 @@ async function download(): Promise<void> {
     const format = el<HTMLSelectElement>("format").value === "zip" ? "zip" : "cbz";
     const salvagePartial = el<HTMLInputElement>("salvage").checked;
     const retry = el<HTMLInputElement>("retry").checked;
+    const remember = el<HTMLInputElement>("rememberHosts").checked;
     const hostCopy = approvedHosts.slice();
-    const chapters = inspected.slice();
+    const title = titleInput.value || "Title";
+    const titleKey = progressTitleKey(origin, title);
+    const chapters = inspected.filter(chapter => !chapter.skipped);
+    if (!chapters.length) { setStatus("Every selected chapter is already saved. Clear “Skip chapters already saved” to download them again."); return; }
+    if (remember && origin) {
+        hostMap = rememberHosts(hostMap, origin, hostCopy);
+        writeLocal({ [HOSTS_KEY]: hostMap });
+        refreshApprovalHint();
+    }
+    log("info", "download", "Batch started", {
+        origin: origin, title: title, chapters: chapters.length, format: format,
+        salvage: salvagePartial, retry: retry, hosts: hostCopy, remembered: remember
+    });
     const controller = new AbortController();
     runController = controller; savedCount = 0; setBusy(true);
     try {
-        const result: UniversalBatchResult = await runUniversalChapterBatch(chapters, titleInput.value || "Title", format, {
+        const result: UniversalBatchResult = await runUniversalChapterBatch(chapters, title, format, {
             getPage: async (id, index): Promise<UniversalPagePayload> => {
                 const answer = await send("page", { origin: origin, id: id, index: index, approvedHosts: hostCopy });
                 return { base64: answer.base64, extension: answer.extension, size: answer.size };
@@ -266,8 +379,26 @@ async function download(): Promise<void> {
             text += "; " + result.failed.length + " failed: " + result.failed
                 .map(item => item.label + " — " + item.reason).join(", ");
         }
+        // Record what actually reached disk so the next run can skip it. Only
+        // complete archives are recorded: a partial one should be retried.
+        if (titleKey && Array.isArray(result.savedFiles)) {
+            const complete = result.savedFiles.filter(file => file.complete);
+            if (complete.length) {
+                progressMap = recordSaved(progressMap, titleKey, complete.map(file => ({
+                    chapterUrl: chapters.filter(chapter => chapter.id === file.id)[0]?.url || file.id,
+                    filename: file.filename, pages: file.pages
+                })));
+                writeLocal({ [PROGRESS_KEY]: progressMap });
+            }
+        }
+        log(result.failed.length || result.incomplete.length ? "warn" : "info", "download", "Batch finished", {
+            completed: result.completed, incomplete: result.incomplete.map(item => ({ label: item.label, saved: item.savedPages, expected: item.expectedPages })),
+            failed: result.failed.map(item => ({ label: item.label, reason: item.reason })),
+            savedFiles: result.savedFiles
+        });
         setStatus(text + ". Check browser downloads for the actual filenames.");
     } catch (error: any) {
+        logError("download", "Batch stopped after " + savedCount + " archive(s)", error);
         setStatus("Stopped after " + savedCount + " saved archive(s): " + (error && error.message ? error.message : "download failed."));
     } finally { runController = null; setBusy(false); }
 }
@@ -348,6 +479,193 @@ function loadAllPages(): void {
         .then(() => { runController = null; setBusy(false); });
 }
 el<HTMLButtonElement>("loadAll").addEventListener("click", loadAllPages);
+
+// ---- remembered approvals / saved chapters ------------------------------
+function forgetHostsHere(): void {
+    if (!origin) { setStatus("Scan a source site first, so the tool knows which site to forget."); return; }
+    if (!approvedHostsFor(hostMap, origin).length) { setStatus("No hosts are remembered for " + origin + "."); return; }
+    hostMap = forgetOrigin(hostMap, origin);
+    writeLocal({ [HOSTS_KEY]: hostMap });
+    refreshApprovalHint();
+    log("info", "approvals", "Forgot remembered hosts for this site", { origin: origin });
+    setStatus("Remembered hosts cleared for " + origin + ". The next inspection asks for every host again.");
+}
+function forgetTitleProgress(): void {
+    if (!origin) { setStatus("Scan a source site and set the title folder first."); return; }
+    const key = progressTitleKey(origin, titleInput.value || "Title");
+    if (!key || !progressMap[key]) { setStatus("No saved chapters are recorded for this title."); return; }
+    const count = Object.keys(progressMap[key]).length;
+    progressMap = forgetSaved(progressMap, key);
+    writeLocal({ [PROGRESS_KEY]: progressMap });
+    log("info", "progress", "Forgot saved-chapter records for this title", { origin: origin, title: titleInput.value, chapters: count });
+    setStatus("Cleared " + count + " saved-chapter record(s) for this title. Chapters will no longer be skipped.");
+}
+el<HTMLButtonElement>("forgetSite").addEventListener("click", forgetHostsHere);
+el<HTMLButtonElement>("forgetTitle").addEventListener("click", forgetTitleProgress);
+el<HTMLButtonElement>("saveLog").addEventListener("click", saveLogFile);
+
+// ---- benchmark ----------------------------------------------------------
+function benchStatus(text: string): void {
+    const node = document.getElementById("benchmarkStatus");
+    if (node) node.textContent = text;
+}
+function within<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(label + " did not finish within " + Math.round(ms / 1000) + " s.")), ms);
+        work.then(value => { clearTimeout(timer); resolve(value); },
+            error => { clearTimeout(timer); reject(error); });
+    });
+}
+function timed(): () => number {
+    const began = Date.now();
+    return () => Date.now() - began;
+}
+/**
+ * Read-only self-check, driven from whatever page the source tab is on.
+ * Nothing here starts an archive or a download; the only network request is one
+ * page image from a host the user has already approved for this exact site.
+ */
+async function runBenchmark(): Promise<void> {
+    if (isBusy) { benchStatus("Wait for the current operation to finish."); return; }
+    const controller = new AbortController();
+    runController = controller; setBusy(true);
+    const notes: string[] = [];
+    let failures = 0;
+    const note = (text: string) => { notes.push(text); benchStatus(text); };
+    log("info", "benchmark", "Benchmark started", { step: "start", tabId: tabId });
+    try {
+        benchStatus("Step 1 of 5: reaching the source tab…");
+        await within(inject(), 15000, "Reaching the source tab");
+        let elapsed = timed();
+        const here: any = await within(send("scan", { mode: "current" }), 15000, "Reading the open page");
+        const pageOrigin = String(here.origin || "");
+        const pageUrl = here.chapters && here.chapters[0] ? String(here.chapters[0].url) : "";
+        note("Tab reached in " + elapsed() + " ms — " + pageOrigin + ".");
+        log("info", "benchmark", "Source tab reached", { ms: elapsed(), origin: pageOrigin, page: pageUrl, title: here.title });
+
+        benchStatus("Step 2 of 5: counting chapter links on this page…");
+        elapsed = timed();
+        const listing: any = await within(send("scan", {
+            selector: el<HTMLInputElement>("linkSelector").value,
+            includeOutsideTitlePath: el<HTMLInputElement>("outsideLinks").checked,
+            filterChapterLabels: el<HTMLInputElement>("chapterFilter").checked
+        }), 20000, "Scanning chapter links");
+        const linkCount = Array.isArray(listing.chapters) ? listing.chapters.length : 0;
+        note(linkCount
+            ? "Found " + linkCount + " chapter link(s) here in " + elapsed() + " ms" + (listing.truncated ? " (list limit reached)" : "") + "."
+            : "No chapter links on this page (normal on a chapter page) — " + elapsed() + " ms.");
+        log("info", "benchmark", "Chapter links scanned", {
+            ms: elapsed(), count: linkCount, truncated: !!listing.truncated,
+            first: linkCount ? listing.chapters[0].url : null
+        });
+
+        benchStatus("Step 3 of 5: reading page images from the open page…");
+        elapsed = timed();
+        let reader: any = null;
+        try {
+            reader = await within(send("inspect", {
+                origin: pageOrigin, id: "benchmark", chapterUrl: pageUrl, current: true,
+                selector: el<HTMLInputElement>("imageSelector").value,
+                attribute: el<HTMLSelectElement>("imageAttribute").value,
+                order: el<HTMLSelectElement>("pageOrder").value
+            }), 20000, "Reading page images");
+            const hosts = Array.isArray(reader.hosts) ? reader.hosts : [];
+            const advertised = Number.isInteger(reader.advertised) ? " of " + reader.advertised + " advertised" : "";
+            note("Reader: " + reader.count + " page image(s)" + advertised + " on " + hosts.length + " host(s) in " + elapsed() + " ms.");
+            log("info", "benchmark", "Reader inspected", {
+                ms: elapsed(), pages: reader.count, advertised: reader.advertised, hosts: hosts,
+                order: reader.order, differs: !!reader.readerOrderDiffers, preview: reader.preview
+            });
+        } catch (error: any) {
+            note("Reader: no usable page images on this page (" + (error && error.message ? error.message : "unknown reason") + ").");
+            logError("benchmark", "Reader inspection found nothing usable", error);
+        }
+
+        benchStatus("Step 4 of 5: checking a page image and the scroll container…");
+        const approved = approvedHostsFor(hostMap, pageOrigin);
+        const pageHosts: string[] = reader && Array.isArray(reader.pageHosts) ? reader.pageHosts : [];
+        const index = pageHosts.findIndex(host => approved.indexOf(host) !== -1);
+        if (!reader || !reader.count) {
+            note("Page image: skipped, no page images to fetch.");
+        } else if (index === -1) {
+            note(approved.length
+                ? "Page image: skipped, no page image is on a host already approved for this site."
+                : "Page image: skipped, no host is remembered for this site yet. Approve hosts once in a normal save, then re-run.");
+            log("info", "benchmark", "Page fetch skipped", { approved: approved.length, hosts: reader.hosts });
+        } else {
+            const fetchBegan = timed();
+            try {
+                const page: any = await within(send("page", { origin: pageOrigin, id: "benchmark", index: index, approvedHosts: approved }),
+                    45000, "Fetching one page image");
+                note("Page image: " + Math.round(Number(page.size || 0) / 1024) + " KB, " + page.width + "×" + page.height + ", " +
+                    page.extension + " from " + page.pageHost + " in " + fetchBegan() + " ms.");
+                log("info", "benchmark", "Page image fetched", {
+                    ms: fetchBegan(), bytes: page.size, width: page.width, height: page.height,
+                    extension: page.extension, host: page.pageHost
+                });
+            } catch (error: any) {
+                failures++;
+                note("Page image: failed (" + (error && error.message ? error.message : "unknown reason") + ").");
+                logError("benchmark", "Page image fetch failed", error);
+            }
+        }
+        if (reader && reader.count) {
+            const scrollBegan = timed();
+            try {
+                const sweep: any = await within(send("loadall", { origin: pageOrigin, chapterUrl: pageUrl, maxSteps: 20 }),
+                    90000, "Scrolling the open reader");
+                note("Scroll: " + sweep.steps + " step(s) on " + sweep.scrolledElement + ", " + sweep.images + " image(s), " +
+                    sweep.iframes + " iframe(s), " + (sweep.reachedBottom ? "reached the bottom" : "did not reach the bottom") + " in " + scrollBegan() + " ms.");
+                log("info", "benchmark", "Scroll container measured", {
+                    ms: scrollBegan(), steps: sweep.steps, reachedBottom: !!sweep.reachedBottom,
+                    scrolledElement: sweep.scrolledElement, images: sweep.images, iframes: sweep.iframes, advertised: sweep.advertised
+                });
+            } catch (error: any) {
+                failures++;
+                note("Scroll: could not be measured (" + (error && error.message ? error.message : "unknown reason") + ").");
+                logError("benchmark", "Scroll measurement failed", error);
+            }
+        }
+
+        benchStatus("Step 5 of 5: checking extension storage…");
+        const storeBegan = timed();
+        try {
+            const probeKey = "nhdwBenchmarkProbe";
+            const stamp = Date.now();
+            writeLocal({ [probeKey]: stamp });
+            const back: any = await readLocal({ [probeKey]: 0 });
+            try { chrome.storage.local.remove(probeKey); } catch (_) { /* nothing to clean */ }
+            const roundTrip = Number(back[probeKey]) === stamp;
+            note("Storage: " + (roundTrip ? "round-trip ok" : "round-trip returned another value") + " in " + storeBegan() + " ms.");
+            log(roundTrip ? "info" : "warn", "benchmark", "Storage round-trip", { ms: storeBegan(), ok: roundTrip });
+            if (!roundTrip) failures++;
+        } catch (error: any) {
+            failures++;
+            note("Storage: failed (" + (error && error.message ? error.message : "unknown reason") + ").");
+            logError("benchmark", "Storage round-trip failed", error);
+        }
+
+        log(failures ? "warn" : "info", "benchmark", "Benchmark finished", { steps: notes, failures: failures });
+        setStatus("Benchmark finished with " + failures + " problem(s). " + (notes.length ? notes[notes.length - 1] : ""));
+        saveLogFile();
+    } catch (error: any) {
+        failures++;
+        logError("benchmark", "Benchmark could not run", error);
+        note("Benchmark stopped: " + (error && error.message ? error.message : "unknown reason") + ".");
+        saveLogFile();
+    } finally {
+        runController = null; setBusy(false);
+    }
+}
+el<HTMLButtonElement>("benchmark").addEventListener("click", runBenchmark);
+
+readLocal({ [HOSTS_KEY]: {}, [PROGRESS_KEY]: {}, [LOG_STORAGE_KEY]: [] }).then((stored: any) => {
+    hostMap = stored[HOSTS_KEY] && typeof stored[HOSTS_KEY] === "object" ? stored[HOSTS_KEY] : {};
+    progressMap = stored[PROGRESS_KEY] && typeof stored[PROGRESS_KEY] === "object" ? stored[PROGRESS_KEY] : {};
+    logBuffer = Array.isArray(stored[LOG_STORAGE_KEY]) ? stored[LOG_STORAGE_KEY].slice(-LOG_CAP) : [];
+    log("info", "start", "Chapter tool opened", { tabId: tabId, version: extensionVersion() });
+    if (origin) refreshApprovalHint();
+});
 
 renderList();
 if (!Number.isSafeInteger(tabId) || tabId < 0 || !new URL(location.href).searchParams.has("tab")) {

@@ -424,6 +424,36 @@ export function planScrollSteps(totalHeight: number, viewportHeight: number, max
     return steps;
 }
 
+export interface ScrollCandidate {
+    /** "window" or a stable label such as "div#reader" for the log. */
+    name: string;
+    scrollHeight: number;
+    clientHeight: number;
+    /** Border-box width; a 1px-wide scroller is a layout artefact. */
+    clientWidth?: number;
+}
+
+/**
+ * Pick the element that actually scrolls the reader. A window-only sweep does
+ * nothing when the site scrolls an inner <div>, which is common for "infinite"
+ * readers. The largest scrollable area wins; ties keep document order, and a
+ * candidate must be genuinely scrollable (more than 200px of hidden content and
+ * a visible height) so a tiny overflow box is never mistaken for the reader.
+ */
+export function pickScrollTarget(candidates: ScrollCandidate[]): ScrollCandidate | null {
+    let best: ScrollCandidate | null = null;
+    let bestOverflow = 0;
+    for (const candidate of candidates) {
+        if (!candidate) continue;
+        const overflow = Number(candidate.scrollHeight) - Number(candidate.clientHeight);
+        if (!Number.isFinite(overflow) || overflow <= 200) continue;
+        if (!Number.isFinite(Number(candidate.clientHeight)) || Number(candidate.clientHeight) < 200) continue;
+        if (candidate.clientWidth !== undefined && Number(candidate.clientWidth) < 200) continue;
+        if (overflow > bestOverflow) { best = candidate; bestOverflow = overflow; }
+    }
+    return best;
+}
+
 export interface ScrollSweepHost {
     scrollTo(y: number): void;
     scrollY(): number;
@@ -487,6 +517,96 @@ export function retryDelay(code: string, attempt: number, maxAttempts: number = 
     if (RETRYABLE_CODES.indexOf(String(code || "")) === -1) return null;
     const index = Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1);
     return RETRY_DELAYS_MS[index];
+}
+
+/**
+ * Smallest believable comic page side, in pixels. Below this an "image" is a
+ * spacer, tracker, lazy-load placeholder or thumbnail rather than a page, and
+ * saving it would silently shrink the archive.
+ */
+export const MIN_PAGE_DIMENSION = 128;
+
+export interface ImageSize { format: string; width: number; height: number; }
+
+function u16be(bytes: Uint8Array, offset: number): number {
+    return (bytes[offset] << 8) | bytes[offset + 1];
+}
+function u16le(bytes: Uint8Array, offset: number): number {
+    return bytes[offset] | (bytes[offset + 1] << 8);
+}
+function u24le(bytes: Uint8Array, offset: number): number {
+    return bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+}
+function u32le(bytes: Uint8Array, offset: number): number {
+    return (bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16) | (bytes[offset + 3] << 24)) >>> 0;
+}
+
+/**
+ * Read the real pixel dimensions from the file header. Only formats the probe
+ * already accepts are parsed; anything unparsable returns null and is treated
+ * as suspicious rather than saved blind.
+ */
+export function readImageSize(bytes: Uint8Array): ImageSize | null {
+    const format = identifyImage(bytes);
+    if (!format) return null;
+    try {
+        if (format === "png" && bytes.length >= 24) {
+            const width = ((bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19]) >>> 0;
+            const height = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
+            return width && height ? { format, width, height } : null;
+        }
+        if (format === "gif" && bytes.length >= 10) {
+            const width = u16le(bytes, 6), height = u16le(bytes, 8);
+            return width && height ? { format, width, height } : null;
+        }
+        if (format === "webp" && bytes.length >= 30) {
+            const chunk = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+            if (chunk === "VP8X") {
+                return { format, width: u24le(bytes, 24) + 1, height: u24le(bytes, 27) + 1 };
+            }
+            if (chunk === "VP8 ") {
+                return { format, width: u16le(bytes, 26) & 0x3fff, height: u16le(bytes, 28) & 0x3fff };
+            }
+            if (chunk === "VP8L" && bytes.length >= 25) {
+                const bits = u32le(bytes, 21);
+                return { format, width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 };
+            }
+            return null;
+        }
+        if (format === "jpg") {
+            // Walk the segment chain to the first Start-Of-Frame marker.
+            let offset = 2;
+            while (offset + 9 < bytes.length) {
+                if (bytes[offset] !== 0xff) { offset++; continue; }
+                const marker = bytes[offset + 1];
+                if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
+                const length = u16be(bytes, offset + 2);
+                if (length < 2) return null;
+                const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+                if (isSof) {
+                    const height = u16be(bytes, offset + 5), width = u16be(bytes, offset + 7);
+                    return width && height ? { format, width, height } : null;
+                }
+                offset += 2 + length;
+            }
+            return null;
+        }
+    } catch (_) { return null; }
+    // AVIF dimensions live in an ISO-BMFF box tree; treat as unknown (accepted,
+    // never rejected for size) rather than guessing from partial headers.
+    return format === "avif" ? { format, width: NaN, height: NaN } : null;
+}
+
+/** Reject spacer/tracker/placeholder images before they reach an archive. */
+export function assertUsablePage(bytes: Uint8Array, minDimension: number = MIN_PAGE_DIMENSION): ImageSize {
+    const size = readImageSize(bytes);
+    if (!size) throw new UniversalChapterError("format", "The page image has no readable dimensions.");
+    if (Number.isFinite(size.width) && Number.isFinite(size.height) &&
+        (size.width < minDimension || size.height < minDimension)) {
+        throw new UniversalChapterError("too-small",
+            "The page image is too small to be a page (" + size.width + "×" + size.height + ").");
+    }
+    return size;
 }
 
 export function identifyImage(bytes: Uint8Array): string | null {

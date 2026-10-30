@@ -4,7 +4,8 @@ import {
     UNIVERSAL_MAX_HTML_BYTES, UNIVERSAL_MAX_IMAGE_BYTES,
     UniversalChapterError, ImageAttribute, UniversalPageReference,
     publicHttpsUrl, discoverChapters, collectChapterPages, collectStaticChapterPages, PageOrderStrategy,
-    detectAdvertisedPageCount, detectStaticPageCount, sweepScroll,
+    detectAdvertisedPageCount, detectStaticPageCount, sweepScroll, pickScrollTarget,
+    assertUsablePage, ScrollCandidate, MIN_PAGE_DIMENSION,
     readBoundedResponse, checkResponse, identifyImage
 } from "../utils/universalChapter";
 
@@ -65,6 +66,35 @@ if (!scope.__nhdwChapterProbe) {
         }
         return btoa(result);
     }
+    /**
+     * Which element scrolls this reader? A window-only sweep does nothing on an
+     * "infinite" reader that scrolls an inner div, so the inner container is
+     * detected and named (never guessed from CSS class names).
+     */
+    function findScrollElement(): { element: Element; name: string } | "window" {
+        const candidates: { candidate: ScrollCandidate; element: Element | null }[] = [
+            { candidate: { name: "window", scrollHeight: Math.max(document.documentElement.scrollHeight || 0, (document.body && document.body.scrollHeight) || 0), clientHeight: window.innerHeight || 0, clientWidth: window.innerWidth || 0 }, element: null }
+        ];
+        const nodes = Array.from(document.querySelectorAll("body *")).slice(0, 4000);
+        for (const node of nodes) {
+            const el = node as HTMLElement;
+            try {
+                if (!el.clientHeight || el.clientHeight >= (window.innerHeight || 0) * 1.5) continue;
+                const overflow = window.getComputedStyle ? window.getComputedStyle(el).overflowY : "";
+                if (overflow !== "auto" && overflow !== "scroll" && overflow !== "overlay") continue;
+                candidates.push({
+                    candidate: { name: el.tagName.toLowerCase() + (el.id ? "#" + el.id : ""), scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, clientWidth: el.clientWidth },
+                    element: el
+                });
+            } catch (_) { /* detached or restricted node */ }
+        }
+        const best = pickScrollTarget(candidates.map(entry => entry.candidate));
+        if (!best) return "window";
+        if (best.name === "window") return "window";
+        const match = candidates.find(entry => entry.element !== null && entry.candidate.name === best.name);
+        return match && match.element ? { element: match.element, name: best.name } : "window";
+    }
+
     async function handle(message: any): Promise<any> {
         if (message.op === "cancel") {
             cancelled = true;
@@ -108,7 +138,10 @@ if (!scope.__nhdwChapterProbe) {
             }
             const pages = collection.pages;
             inspected.set(id, { url: chapter.href, pages: pages });
+            // pageHosts lets the panel (and the benchmark) pick a page on a host
+            // the user has already approved, instead of trial and error.
             return { ok: true, count: pages.length, hosts: Array.from(new Set(pages.map(page => page.host))),
+                pageHosts: pages.slice(0, 400).map(page => page.host),
                 order: collection.order, readerOrderDiffers: collection.readerOrderDiffers, preview: collection.preview,
                 advertised: message.current === true ? detectAdvertisedPageCount(document) : advertised };
         }
@@ -119,17 +152,29 @@ if (!scope.__nhdwChapterProbe) {
                 throw new UniversalChapterError("tab-changed", "Open the chapter itself in the source tab before loading all pages.");
             }
             cancelled = false;
-            const original = window.scrollY || document.documentElement.scrollTop || 0;
+            const target = findScrollElement();
+            const element: any = target === "window" ? null : target.element;
+            const originalWindow = window.scrollY || document.documentElement.scrollTop || 0;
+            const originalElement = element ? element.scrollTop : 0;
             const result = await sweepScroll({
-                scrollTo: (y: number) => { try { window.scrollTo(0, y); } catch (_) { /* jsdom/odd contexts */ } },
-                scrollY: () => window.scrollY || document.documentElement.scrollTop || 0,
-                scrollHeight: () => Math.max(document.documentElement.scrollHeight || 0, (document.body && document.body.scrollHeight) || 0),
-                viewportHeight: () => window.innerHeight || 800,
+                scrollTo: (y: number) => {
+                    try {
+                        if (element) element.scrollTop = y;
+                        else window.scrollTo(0, y);
+                    } catch (_) { /* jsdom/odd contexts */ }
+                },
+                scrollY: () => element ? element.scrollTop : (window.scrollY || document.documentElement.scrollTop || 0),
+                scrollHeight: () => element ? element.scrollHeight : Math.max(document.documentElement.scrollHeight || 0, (document.body && document.body.scrollHeight) || 0),
+                viewportHeight: () => element ? element.clientHeight : (window.innerHeight || 800),
                 wait: (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)),
                 isCancelled: () => cancelled
             }, Number.isInteger(message.maxSteps) ? message.maxSteps : 80);
-            try { window.scrollTo(0, original); } catch (_) { /* cosmetic */ }
-            return { ok: true, steps: result.steps, reachedBottom: result.reachedBottom,
+            try {
+                if (element) element.scrollTop = originalElement;
+                else window.scrollTo(0, originalWindow);
+            } catch (_) { /* cosmetic */ }
+            return { ok: true, steps: result.steps, reachedBottom: result.reachedBottom, scrolledElement: target === "window" ? "window" : target.name,
+                iframes: document.querySelectorAll("iframe").length,
                 images: document.querySelectorAll("img").length, advertised: detectAdvertisedPageCount(document) };
         }
         if (message.op === "page") {
@@ -147,7 +192,10 @@ if (!scope.__nhdwChapterProbe) {
             const bytes = await boundedFetch(page.url, "image");
             const ext = identifyImage(bytes);
             if (!ext) throw new UniversalChapterError("format", "The page bytes do not have a supported image signature.");
-            return { ok: true, base64: base64(bytes), extension: ext, size: bytes.length };
+            // Spacers, lazy-load placeholders and 1x1 trackers are not pages.
+            const dimensions = assertUsablePage(bytes, MIN_PAGE_DIMENSION);
+            return { ok: true, base64: base64(bytes), extension: ext, size: bytes.length,
+                width: dimensions.width, height: dimensions.height, pageHost: page.host };
         }
         throw new UniversalChapterError("command", "Unknown chapter command.");
     }

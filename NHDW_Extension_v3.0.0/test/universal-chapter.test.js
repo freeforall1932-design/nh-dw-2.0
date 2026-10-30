@@ -14,8 +14,23 @@ const { runUniversalChapterBatch, buildComicInfoXml, chapterNumberFromLabel } = 
 function dom(html, url = 'https://reader.example/series/book/') {
     return new JSDOM(html, { url });
 }
-const jpeg = Uint8Array.from([255, 216, 255, 224, 1, 2, 3]);
-const png = Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 2]);
+// Real headers: the archive stage now reads pixel dimensions, so a fixture
+// must be a plausible page rather than a bare signature.
+function jpegOf(width, height) {
+    return Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
+        0xff, 0xc0, 0x00, 0x11, 0x08, (height >> 8) & 255, height & 255,
+        (width >> 8) & 255, width & 255, 0x03,
+        0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
+}
+function pngOf(width, height) {
+    return Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+        (width >>> 24) & 255, (width >>> 16) & 255, (width >>> 8) & 255, width & 255,
+        (height >>> 24) & 255, (height >>> 16) & 255, (height >>> 8) & 255, height & 255,
+        8, 6, 0, 0, 0]);
+}
+const jpeg = jpegOf(800, 1200);
+const png = pngOf(640, 480);
+const tinyGif = Uint8Array.from([...Buffer.from('GIF89a'), 1, 0, 1, 0, 0, 0, 0]);
 const page = (bytes, extension) => ({ base64: Buffer.from(bytes).toString('base64'), size: bytes.length, extension });
 
 describe('universal chapter discovery (synthetic DOM)', () => {
@@ -245,7 +260,10 @@ describe('universal chapter archive execution (synthetic)', () => {
             getPage: async (id, index) => { calls.push([id, index]); return index === 0 ? page(jpeg, 'jpg') : page(png, 'png'); },
             save: async (blob, filename) => { saves.push({ filename, bytes: Buffer.from(await blob.arrayBuffer()) }); }
         });
-        assert.deepStrictEqual(outcome, { completed: 2, incomplete: [], failed: [] });
+        assert.deepStrictEqual(outcome.completed, 2);
+        assert.deepStrictEqual(outcome.incomplete, []);
+        assert.deepStrictEqual(outcome.failed, []);
+        assert.deepStrictEqual(outcome.savedFiles.map(x => [x.id, x.complete, x.pages]), [['chapter-0', true, 2], ['chapter-1', true, 1]]);
         assert.deepStrictEqual(calls, [['chapter-0', 0], ['chapter-0', 1], ['chapter-1', 0]]);
         assert.deepStrictEqual(saves.map(x => x.filename), ['Synthetic Title/001 - Chapter 1.cbz', 'Synthetic Title/002 - Chapter 2.cbz']);
         const zip = await JSZip.loadAsync(saves[0].bytes);
@@ -262,10 +280,10 @@ describe('universal chapter archive execution (synthetic)', () => {
         });
         assert.deepStrictEqual(calls, [['chapter-0', 0], ['chapter-0', 1], ['chapter-1', 0]]);
         assert.deepStrictEqual(saves, ['Title/002 - Chapter 2.zip']);
-        assert.deepStrictEqual(outcome, {
-            completed: 1, incomplete: [],
-            failed: [{ label: 'Chapter 1', savedPages: 1, expectedPages: 2, reason: 'boom' }]
-        });
+        assert.strictEqual(outcome.completed, 1);
+        assert.deepStrictEqual(outcome.incomplete, []);
+        assert.deepStrictEqual(outcome.failed, [{ label: 'Chapter 1', savedPages: 1, expectedPages: 2, reason: 'boom' }]);
+        assert.deepStrictEqual(outcome.savedFiles.map(x => [x.filename, x.complete]), [['Title/002 - Chapter 2.zip', true]]);
     });
     it('salvages the pages already fetched, marked incomplete, and continues to later chapters', async () => {
         const saves = [], outcome = await runUniversalChapterBatch(chapters, 'Title', 'cbz', {
@@ -294,10 +312,9 @@ describe('universal chapter archive execution (synthetic)', () => {
             },
             save: async (_blob, filename) => { saves.push(filename); }
         }, undefined, { salvagePartial: true });
-        assert.deepStrictEqual(outcome, {
-            completed: 1, incomplete: [],
-            failed: [{ label: 'Chapter 1', savedPages: 0, expectedPages: 2, reason: 'first page failed' }]
-        });
+        assert.strictEqual(outcome.completed, 1);
+        assert.deepStrictEqual(outcome.incomplete, []);
+        assert.deepStrictEqual(outcome.failed, [{ label: 'Chapter 1', savedPages: 0, expectedPages: 2, reason: 'first page failed' }]);
         assert.deepStrictEqual(saves, ['Title/002 - Chapter 2.zip']);
     });
     it('never salvages throttling, access denial or cancellation into a file', async () => {
@@ -421,6 +438,16 @@ describe('universal chapter archive execution (synthetic)', () => {
         const info = await zipped.file('ComicInfo.xml').async('string');
         assert.match(info, /<PageCount>1<\/PageCount>/);
         assert.match(info, /<Notes>Incomplete archive: 1 of 2 pages\.<\/Notes>/);
+    });
+    it('refuses to pad an archive with spacer images', async () => {
+        let saved = false;
+        const outcome = await runUniversalChapterBatch([{ id: 'chapter-0', label: 'Chapter 1', count: 1, hosts: ['reader.example'] }], 'T', 'zip', {
+            getPage: async () => page(tinyGif, 'gif'),
+            save: async () => { saved = true; }
+        });
+        assert.strictEqual(saved, false);
+        assert.strictEqual(outcome.completed, 0);
+        assert.match(outcome.failed[0].reason, /too small/);
     });
     it('rejects duplicate/invalid chapters before any request and sanitizes filenames', async () => {
         let calls = 0;

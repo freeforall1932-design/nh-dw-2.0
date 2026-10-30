@@ -45,6 +45,10 @@
     <div class="buttons"><button id="inspect" type="button">Inspect selected chapters</button><button id="loadAll" class="secondary" type="button">Load all pages (top-down)</button></div>
     <p class="hint">Top-down / scroll readers list every page as an image in DOM order, so that order is the page order even when the file names are random hashes. If a reader only loads near the viewport, open one chapter with “Use open chapter”, press <strong>Load all pages (top-down)</strong> (it scrolls the source tab), then inspect. A page count the reader advertises is compared with what was found.</p>
     <div id="review" aria-live="polite"></div>
+    <label class="check"><input id="rememberHosts" type="checkbox" checked> Remember approved image hosts for this site (revocable below)</label>
+    <label class="check"><input id="skipSaved" type="checkbox" checked> Skip chapters already saved to this title (see “Forget saved chapters” below)</label>
+    <p id="approvalHint" class="hint">No source site selected yet.</p>
+    <div class="buttons"><button id="forgetSite" class="secondary" type="button">Forget remembered hosts</button><button id="forgetTitle" class="secondary" type="button">Forget saved chapters for this title</button></div>
   </section>
   <section aria-labelledby="saveHeading">
     <div class="step">03</div><h2 id="saveHeading">Save</h2>
@@ -55,8 +59,15 @@
     <label class="check"><input id="retry" type="checkbox" checked> Retry a page twice after a network hiccup or server error (never after 429/403 or Cancel)</label>
     <label class="check"><input id="confirm" type="checkbox"> I reviewed the chapters and page hosts, and can normally access them. No usable site batch is being overlooked.</label>
     <div class="buttons"><button id="download" type="button" disabled>Save selected chapters</button><button id="cancel" class="secondary" type="button" disabled>Cancel</button></div>
-    <p class="hint">CBZ chapters get a minimal <code>ComicInfo.xml</code> (series, chapter, page count) so comic readers show a title. One archive per chapter; keep this page and the source tab open. No history or credentials are stored by this tool. Image signatures are checked, not full image decoding. Throttling (429) or access denial (401/403) always stops the run and never produces a salvaged file.</p>
+    <p class="hint">CBZ chapters get a minimal <code>ComicInfo.xml</code> (series, chapter, page count) so comic readers show a title. One archive per chapter; keep this page and the source tab open. This tool stores no credentials and no page images: only the hosts you approved for each site, the chapter file names it finished saving, and its own diagnostic log. Image signatures and header dimensions are checked, not fully decoded. Throttling (429) or access denial (401/403) always stops the run and never produces a salvaged file.</p>
     <p id="status" role="status" aria-live="polite"></p>
+  </section>
+  <section aria-labelledby="benchmarkHeading">
+    <div class="step">04</div><h2 id="benchmarkHeading">Benchmark and log</h2>
+    <p>The log records what this tool did — which page it inspected, how many pages it found, which host failed and why — with URL queries, secrets and image data removed. It survives closing this tab and can be saved as a text file.</p>
+    <p>The benchmark runs the same read-only checks on whatever tab you have open, then saves the log. It needs no setup on a chapter page; on a title page it also reports how many chapter links it can see. It fetches a page image only for hosts you have already approved for that site, scrolls the source tab briefly when a reader is open (then restores the position), and never starts a download or an archive.</p>
+    <div class="buttons"><button id="benchmark" type="button">Run benchmark and save log</button><button id="saveLog" class="secondary" type="button">Save log without benchmark</button></div>
+    <p id="benchmarkStatus" class="hint" role="status" aria-live="polite"></p>
   </section>
 </main>
 </body>

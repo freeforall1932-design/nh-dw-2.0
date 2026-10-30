@@ -11,9 +11,22 @@ const root = path.join(__dirname, '..');
 const appCode = fs.readFileSync(path.join(root, 'js/chapters.js'), 'utf8');
 const probeCode = fs.readFileSync(path.join(root, 'js/universalChapterProbe.js'), 'utf8');
 const pageHtml = fs.readFileSync(path.join(root, 'chapters.html'), 'utf8');
-const page1 = Buffer.from([255, 216, 255, 224, 1]);
-const page2 = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 2]);
-const page3 = Buffer.from([255, 216, 255, 224, 3]);
+// Realistic headers: the probe and the archive stage both read dimensions now.
+function jpegOf(width, height) {
+    return Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00,
+        0xff, 0xc0, 0x00, 0x11, 0x08, (height >> 8) & 255, height & 255,
+        (width >> 8) & 255, width & 255, 0x03,
+        0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
+}
+function pngOf(width, height) {
+    return Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+        (width >>> 24) & 255, (width >>> 16) & 255, (width >>> 8) & 255, width & 255,
+        (height >>> 24) & 255, (height >>> 16) & 255, (height >>> 8) & 255, height & 255,
+        8, 6, 0, 0, 0]);
+}
+const page1 = jpegOf(900, 1400);
+const page2 = pngOf(800, 1200);
+const page3 = jpegOf(700, 1000);
 
 const fixtures = {
     // Tailspace-style: random image names, page number only in the link, and
@@ -34,6 +47,9 @@ const app = new JSDOM(pageHtml, { url: 'chrome-extension://fixture/chapters.html
 const sw = source.window, aw = app.window;
 const runtime = { id: 'fixture', lastError: null, onMessage: { addListener(fn) { listener = fn; } } };
 sw.chrome = { runtime };
+// jsdom has no layout and no scrolling; a no-op keeps the sweep's jsdom warning
+// out of the log without pretending the page scrolled.
+sw.scrollTo = () => {};
 sw.fetch = async (url, options) => {
     requests.push({ url: String(url), options });
     assert.strictEqual(options.credentials, 'same-origin');
@@ -53,8 +69,11 @@ ObjectURL.revokeObjectURL = url => blobs.delete(url);
 aw.URL = ObjectURL;
 aw.Blob = Blob;
 aw.AbortController = AbortController;
+const storage = {};
+const logFiles = [];
 aw.chrome = {
     runtime: {
+        getManifest() { return { version: 'fixture' }; },
         id: 'fixture', lastError: null,
         sendMessage(message, cb) {
             assert.strictEqual(message.from, 'chapters');
@@ -68,6 +87,19 @@ aw.chrome = {
                 queueMicrotask(() => cb(interrupted ? { result: true, ok: false, state: 'interrupted', error: 'Synthetic interruption' } : { result: true, ok: true, state: 'complete' }));
             } else if (message.action === 'cancelDownload') queueMicrotask(() => cb({ result: true }));
             else throw new Error('Unexpected worker message');
+        }
+    },
+    downloads: {
+        download(options, cb) {
+            logFiles.push({ filename: String(options.filename), blob: blobs.get(String(options.url)) });
+            queueMicrotask(() => cb(logFiles.length));
+        }
+    },
+    storage: {
+        local: {
+            get(defaults, cb) { queueMicrotask(() => cb(Object.assign({}, defaults, storage))); },
+            set(values, cb) { Object.assign(storage, values); if (cb) queueMicrotask(() => cb()); },
+            remove(key, cb) { delete storage[key]; if (cb) queueMicrotask(() => cb()); }
         }
     },
     scripting: {
@@ -166,7 +198,50 @@ async function main() {
     // Browser handoff alone is not success.
     interrupted = true; click('download');
     await until(() => /Stopped after 0 saved archive/.test(aw.document.getElementById('status').textContent), 'interrupted download');
-    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion (synthetic VM)');
+    interrupted = false;
+    // Chapters the browser confirmed complete were recorded; re-inspecting marks
+    // them as already saved and a save run refuses to duplicate them.
+    const savedBefore = downloads.length;
+    click('inspect');
+    await until(() => aw.document.querySelectorAll('#review li').length === 2 && !aw.document.getElementById('inspect').disabled, 're-inspect');
+    assert.match(Array.from(aw.document.querySelectorAll('#review li'), x => x.textContent).join('\n'),
+        /already saved, will be skipped/);
+    assert.match(aw.document.getElementById('status').textContent, /already saved will be skipped/);
+    aw.document.getElementById('confirm').checked = true;
+    aw.document.querySelector('#review input[data-host]').checked = true;
+    click('download');
+    await until(() => /Every selected chapter is already saved/.test(aw.document.getElementById('status').textContent), 'skip saved');
+    assert.strictEqual(downloads.length, savedBefore, 'a skipped chapter must not be downloaded again');
+    assert.ok(storage.nhdwChapterProgress, 'saved-chapter records must persist');
+    // Benchmark: read-only checks from an open chapter page, then the log file.
+    source.window.history.pushState({}, '', 'chapter-1/');
+    const reader = source.window.document.createElement('div');
+    reader.id = 'readerarea';
+    reader.innerHTML = '<img src="https://images.example/one.jpg"><img src="https://images.example/two.png">';
+    source.window.document.body.appendChild(reader);
+    aw.document.getElementById('pageOrder').value = 'reader';
+    const fetchesBefore = requests.length;
+    click('benchmark');
+    await until(() => logFiles.length === 1 && !aw.document.getElementById('benchmark').disabled, 'benchmark');
+    assert.match(logFiles[0].filename, /^nhdw-log-\d{4}-\d{2}-\d{2}T[\d-]+Z\.txt$/);
+    const logText = await logFiles[0].blob.text();
+    assert.match(logText, /NHDW extension log/);
+    assert.match(logText, /Source tab reached/);
+    assert.match(logText, /Reader inspected/);
+    assert.match(logText, /Page image fetched/);
+    assert.match(logText, /Scroll container measured|Scroll measurement failed/);
+    assert.match(logText, /Storage round-trip/);
+    assert.match(logText, /Benchmark finished/);
+    assert.strictEqual(requests.length, fetchesBefore + 1, 'the benchmark fetches exactly one page image');
+    assert.strictEqual(requests[requests.length - 1].url, 'https://images.example/one.jpg');
+    assert.ok(!/\?(?!.*")/.test(logText.split('{')[0]), 'log header carries no query string');
+    // Forgetting the site clears the remembered approvals but keeps the records.
+    click('forgetSite');
+    assert.match(aw.document.getElementById('status').textContent, /Remembered hosts cleared/);
+    assert.match(aw.document.getElementById('approvalHint').textContent, /No hosts remembered for https:\/\/reader\.example yet\./);
+    click('forgetTitle');
+    assert.match(aw.document.getElementById('status').textContent, /Cleared 2 saved-chapter record\(s\)/);
+    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, benchmark log (synthetic VM)');
 }
 main().then(() => { app.window.close(); source.window.close(); }).catch(error => {
     console.error('FAIL: bundled chapter integration:', error); app.window.close(); source.window.close(); process.exitCode = 1;

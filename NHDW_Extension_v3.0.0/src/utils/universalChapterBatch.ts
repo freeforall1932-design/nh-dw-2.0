@@ -6,7 +6,7 @@
  * are still saved, but the filename and the returned result say plainly that
  * the archive is incomplete. Throttling and access denial are never salvaged:
  * those stop the whole run so the site is not hammered. */
-import { UNIVERSAL_MAX_CHAPTER_BYTES, UNIVERSAL_MAX_IMAGE_BYTES, UNIVERSAL_MAX_PAGES, identifyImage, pauseBetweenChapterRequests, retryDelay, UniversalChapterError } from "./universalChapter";
+import { UNIVERSAL_MAX_CHAPTER_BYTES, UNIVERSAL_MAX_IMAGE_BYTES, UNIVERSAL_MAX_PAGES, identifyImage, assertUsablePage, pauseBetweenChapterRequests, retryDelay, UniversalChapterError } from "./universalChapter";
 import { sanitizeArtifactFilename } from "./artifactName";
 
 var JSZip = require("jszip");
@@ -50,6 +50,8 @@ export interface UniversalBatchResult {
     incomplete: IncompleteChapter[];
     /** Chapters dropped entirely; later chapters are still attempted. */
     failed: IncompleteChapter[];
+    /** Exactly what was handed to the browser and confirmed, for progress records. */
+    savedFiles: { id: string; filename: string; pages: number; complete: boolean }[];
 }
 
 // A throttled or refused site must stop the run, not be retried chapter after
@@ -124,6 +126,9 @@ function decodePage(page: UniversalPagePayload): Uint8Array {
     if (!identifyImage(bytes) || identifyImage(bytes) !== page.extension) {
         throw new UniversalChapterError("format", "Page data has an invalid image signature.");
     }
+    // Second gate: a spacer or placeholder that slipped through must not pad
+    // the archive to the right page count with unusable images.
+    assertUsablePage(bytes);
     return bytes;
 }
 
@@ -165,7 +170,7 @@ export async function runUniversalChapterBatch(
         }
         ids.add(chapter.id);
     }
-    const result: UniversalBatchResult = { completed: 0, incomplete: [], failed: [] };
+    const result: UniversalBatchResult = { completed: 0, incomplete: [], failed: [], savedFiles: [] };
     let fetchedPage = false;
     const directory = safeSegment(title, "Title");
     for (let i = 0; i < chapters.length; i++) {
@@ -216,6 +221,7 @@ export async function runUniversalChapterBatch(
             aborted(signal);
             await io.save(blob, directory + "/" + stem + "." + format, signal);
             result.completed++;
+            result.savedFiles.push({ id: chapter.id, filename: directory + "/" + stem + "." + format, pages: savedPages, complete: true });
             continue;
         }
         const entry: IncompleteChapter = {
@@ -238,6 +244,7 @@ export async function runUniversalChapterBatch(
         aborted(signal);
         const marker = " (incomplete " + savedPages + " of " + chapter.count + " pages)";
         await io.save(blob, directory + "/" + stem + marker + "." + format, signal);
+        result.savedFiles.push({ id: chapter.id, filename: directory + "/" + stem + marker + "." + format, pages: savedPages, complete: false });
         result.incomplete.push(entry);
         if (io.progress) {
             io.progress("Chapter " + (i + 1) + "/" + chapters.length + " saved incomplete: " + savedPages + " of " + chapter.count + " pages.");
