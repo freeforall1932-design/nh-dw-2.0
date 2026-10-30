@@ -65,7 +65,13 @@
   <section aria-labelledby="benchmarkHeading">
     <div class="step">04</div><h2 id="benchmarkHeading">Benchmark and log</h2>
     <p>The log records what this tool did — which page it inspected, how many pages it found, which host failed and why — with URL queries, secrets and image data removed. It survives closing this tab and can be saved as a text file.</p>
-    <p>The benchmark runs the same read-only checks on whatever tab you have open, then saves the log. It needs no setup on a chapter page; on a title page it also reports how many chapter links it can see. It fetches a page image only for hosts you have already approved for that site, scrolls the source tab briefly when a reader is open (then restores the position), and never starts a download or an archive.</p>
+    <p>The benchmark checks this page and the open site for you, then saves the log:</p>
+    <ol class="hint">
+      <li>It presses this page's own controls the way you would — tick and untick each checkbox, pick another option, type a marker — confirms each control accepted the change and then puts every value back. Buttons with a side effect (Scan, Inspect, Save, Cancel, Load all pages, Forget) are only inspected, never pressed, and controls that would throw away a review on screen are skipped and named in the log.</li>
+      <li>It asks the download service for a reply and round-trips one storage value, so a broken message path or storage shows up as a named failure.</li>
+      <li>It reads whatever site tab you have open: chapter links on a title page, page images on a chapter page, one page image from a host you already approved for that site, and the scroll container (it scrolls briefly, then restores the position).</li>
+    </ol>
+    <p class="hint">It builds no archive, starts no download and approves no host. The log is the artifact to keep: one file, every step, with URL queries and secrets removed.</p>
     <div class="buttons"><button id="benchmark" type="button">Run benchmark and save log</button><button id="saveLog" class="secondary" type="button">Save log without benchmark</button></div>
     <p id="benchmarkStatus" class="hint" role="status" aria-live="polite"></p>
   </section>

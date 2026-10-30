@@ -9,6 +9,10 @@ const {
 const {
     makeLogEntry, appendLog, redactUrl, redactLogValue, formatLog, summarizeError, LOG_CAP
 } = require('../build/test/utils/extensionLog.js');
+const {
+    selfTestPlan, skippedForReview, summarizeSelfTest, formatSelfTest,
+    alternateSelectValue, markerValue, SELF_TEST_MARKER, REVIEW_INVALIDATING
+} = require('../build/test/utils/uiSelfTest.js');
 
 // --- tiny binary builders so the tests describe real headers -----------------
 function u16(n) { return [(n >> 8) & 255, n & 255]; }
@@ -183,5 +187,59 @@ describe('extension log (redacted, bounded, exportable)', () => {
         assert.deepStrictEqual(summarizeError(error), { message: 'boom', code: 'transfer', name: 'Error' });
         assert.deepStrictEqual(summarizeError('plain'), { message: 'plain' });
         assert.strictEqual(summarizeError(null).message, 'Unknown error');
+    });
+});
+
+describe('UI self-test plan (synthetic control exercise)', () => {
+    const ids = plan => plan.map(target => target.id);
+
+    it('drives checkboxes, selects and text fields, but never a button', () => {
+        const plan = selfTestPlan(false);
+        assert.deepStrictEqual(ids(plan).slice(0, 3), ['chapterFilter', 'outsideLinks', 'otherListPages']);
+        for (const id of ['salvage', 'retry', 'rememberHosts', 'skipSaved', 'confirm']) assert.ok(ids(plan).includes(id), id);
+        for (const id of ['order', 'imageAttribute', 'pageOrder', 'format', 'titleName', 'linkSelector', 'imageSelector']) {
+            assert.ok(ids(plan).includes(id), id);
+        }
+        // Every button has a side effect: scan, inspect, save, cancel, sweep, forget.
+        for (const id of ['scanTitle', 'scanCurrent', 'inspect', 'download', 'cancel', 'loadAll', 'benchmark',
+            'saveLog', 'forgetSite', 'forgetTitle', 'reset', 'selectAll', 'selectNone', 'addUrls']) {
+            assert.ok(!ids(plan).includes(id), id + ' must never be driven');
+        }
+        for (const target of plan) assert.ok(['checkbox', 'select', 'text'].includes(target.kind));
+    });
+
+    it('leaves review-wiping controls alone while a review is on screen', () => {
+        const withReview = ids(selfTestPlan(true));
+        for (const id of REVIEW_INVALIDATING) assert.ok(!withReview.includes(id), id + ' would discard the review');
+        assert.ok(withReview.includes('format') && withReview.includes('titleName') && withReview.includes('linkSelector'));
+        assert.deepStrictEqual(skippedForReview(true).sort(), REVIEW_INVALIDATING.slice().sort());
+        assert.deepStrictEqual(skippedForReview(false), []);
+        assert.deepStrictEqual(selfTestPlan(true).length, selfTestPlan(false).length - REVIEW_INVALIDATING.length);
+    });
+
+    it('picks a real alternative option and refuses when there is none', () => {
+        assert.strictEqual(alternateSelectValue(['', 'cbz', 'zip'], ''), 'cbz');
+        assert.strictEqual(alternateSelectValue(['', 'cbz', 'zip'], 'cbz'), 'zip');
+        assert.strictEqual(alternateSelectValue(['reader', ''], 'reader'), '');
+        assert.strictEqual(alternateSelectValue(['cbz'], 'cbz'), null);
+        assert.strictEqual(alternateSelectValue([], ''), null);
+    });
+
+    it('uses a distinctive marker that always differs from the current text', () => {
+        assert.strictEqual(markerValue('Fixture Title'), SELF_TEST_MARKER);
+        assert.notStrictEqual(markerValue(SELF_TEST_MARKER), SELF_TEST_MARKER);
+        assert.strictEqual(markerValue(''), SELF_TEST_MARKER);
+    });
+
+    it('summarises and formats outcomes without hiding a failure', () => {
+        const checks = [
+            { id: 'retry', kind: 'checkbox', action: 'click twice', before: 'true', after: 'false', restored: true, ok: true },
+            { id: 'format', kind: 'select', action: 'select', before: 'cbz', after: 'zip', restored: false, ok: false, note: 'did not return' }
+        ];
+        assert.deepStrictEqual(summarizeSelfTest(checks, 4), { checked: 2, failed: 1, skipped: 4 });
+        const lines = formatSelfTest(checks);
+        assert.match(lines[0], /^retry \(checkbox\): click twice — ok$/);
+        assert.match(lines[1], /^format \(select\): select — FAILED \(did not return\)$/);
+        assert.deepStrictEqual(summarizeSelfTest([]), { checked: 0, failed: 0, skipped: 0 });
     });
 });

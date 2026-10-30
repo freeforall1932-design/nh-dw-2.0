@@ -2,9 +2,10 @@
 
 **Latest state (2026-10-30, branch `arena/e012b75a-nh-dw-2-0`):** the owner's
 approved queue is implemented and green offline. Chromium's last full run:
-**773 passing / 4 pending** (`npm test`, now including
-`test/chapter-support.test.js`), `npm run build`, `npm run test:smoke` and both
-chapter e2e harnesses (`e2e-universal.js`, `e2e-chapter-relay.js`) pass. No live
+**778 passing / 4 pending** (`npm test`, now including
+`test/chapter-support.test.js`), `npm run build`, `npm run test:smoke` and the
+whole e2e suite (**196 PASS**, 0 FAIL) including both chapter harnesses
+(`e2e-universal.js`, `e2e-chapter-relay.js`). No live
 site and no real browser were used; that is the next step, not more code.
 
 What landed in this pass, on top of retry + `ComicInfo.xml`:
@@ -35,22 +36,40 @@ What landed in this pass, on top of retry + `ComicInfo.xml`:
   source tab is on — tab reach, chapter-link count, reader page images, one page
   image *only from an already-approved host* plus scroll-container detection, and
   a storage round-trip — then saves the log. It builds no archive, starts no
-  download and approves no host. See
-  [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+  download and approves no host.
+- **The benchmark also tests the extension itself** (`src/utils/uiSelfTest.ts`):
+  it presses the page's own checkboxes, selects and text fields the way a user
+  would, confirms each accepted the change, and puts every value back. Buttons
+  with a side effect are only inspected, controls that would discard a review on
+  screen are skipped and named in the log, and the worker round-trip is proven
+  with a new read-only `ping` action. A broken control is now a named `FAILED`
+  line instead of something to discover by hand.
 - **"Use the site's own Download control" is dropped** by owner decision; the
   effort is archived in
   [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The
   API-key archive path stays the supported route and stays off by default until
   delivery is verified.
-- **Outer-HTML hand-off written**: [OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md) —
-  per site (sasangeyou.net, tailspace.com `/c/Scale%20Train`, doujin.desu.xxx
-  `/manga/irodori-kazoku` and `/manga/stop-smoking`, mirrored.to batch
-  directories) says where to go, what to click, what to paste and which five
-  questions to answer. No capture exists yet; Yurilab has no tailored steps.
+- **The capture guide is the owner's manual task**:
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) — setup, chapter-list
+  capture, reader capture, the six questions per reader, per-site walkthrough
+  (sasangeyou.net first, then tailspace.com `/c/Scale%20Train`, doujin.desu.xxx
+  `/manga/irodori-kazoku` and `/manga/stop-smoking`, mirrored.to directories), and
+  exactly what to send back. No capture exists yet; Yurilab has no tailored steps.
+  The benchmark log is delivered by pressing one button; there is no guide to
+  read first.
+- **No separate benchmark guide** (owner: "instead of guide just focus on
+  logging it"). The page's own step-04 text explains what it does; everything it
+  learns goes into the log file.
+
+**Docs shape:** `BENCHMARK_GUIDE.md` and `OUTER_HTML_GUIDE.md` were removed (the
+owner asked for no benchmark guide and for one real capture walkthrough).
+[DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) is now the single manual
+task; `SITE_DOWNLOAD_CONTROL_EFFORT.md` records the nhentai-only drop and the
+on-site extraction route for every other site.
 
 **Still unverified / limits:** nothing in this pass was exercised against a live
-site or a real Chromium profile. The `Chapters ↗` page and its new benchmark
-button have only run in the bundled VM e2e. Cross-origin images still need CORS;
+site or a real Chromium profile. The `Chapters ↗` page, its self-test and the
+benchmark have only run in the bundled VM e2e. Cross-origin images still need CORS;
 JS-only readers still need *Use open chapter* one chapter at a time; there is
 still no server picker and no iframe support; the archive server mode is off; the
 native nhentai Download button remains unobserved. Firefox has none of this and

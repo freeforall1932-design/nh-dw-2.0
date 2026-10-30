@@ -206,7 +206,7 @@ unset or invalid value inherits the single-title choice without writing
 defaults back. A 36-case matrix covers the real reader, the built
 popup/panel Settings and the in-page card + bar controls in both trees.
 
-Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (last session's rules) · [`IMPROVEMENT_BACKLOG.md`](IMPROVEMENT_BACKLOG.md) (full specs & history) · [`BENCHMARK_GUIDE.md`](BENCHMARK_GUIDE.md) (how to run the self-check and read its log) · [`OUTER_HTML_GUIDE.md`](OUTER_HTML_GUIDE.md) (per-site reader captures) · [`SITE_DOWNLOAD_CONTROL_EFFORT.md`](SITE_DOWNLOAD_CONTROL_EFFORT.md) (dropped idea, archived).
+Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (last session's rules) · [`IMPROVEMENT_BACKLOG.md`](IMPROVEMENT_BACKLOG.md) (full specs & history) · [`DATA_COLLECTION_GUIDE.md`](DATA_COLLECTION_GUIDE.md) (the manual website-capture task, step by step) · [`SITE_DOWNLOAD_CONTROL_EFFORT.md`](SITE_DOWNLOAD_CONTROL_EFFORT.md) (nhentai-only drop, archived).
 
 ## 📝 Version history
 

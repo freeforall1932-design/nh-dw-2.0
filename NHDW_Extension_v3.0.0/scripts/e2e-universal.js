@@ -85,7 +85,8 @@ aw.chrome = {
                 queueMicrotask(() => cb({ result: id }));
             } else if (message.action === 'awaitDownload') {
                 queueMicrotask(() => cb(interrupted ? { result: true, ok: false, state: 'interrupted', error: 'Synthetic interruption' } : { result: true, ok: true, state: 'complete' }));
-            } else if (message.action === 'cancelDownload') queueMicrotask(() => cb({ result: true }));
+            } else if (message.action === 'ping') queueMicrotask(() => cb({ result: true, version: 'fixture', downloads: true, offscreen: true, completion: true }));
+            else if (message.action === 'cancelDownload') queueMicrotask(() => cb({ result: true }));
             else throw new Error('Unexpected worker message');
         }
     },
@@ -232,6 +233,18 @@ async function main() {
     assert.match(logText, /Scroll container measured|Scroll measurement failed/);
     assert.match(logText, /Storage round-trip/);
     assert.match(logText, /Benchmark finished/);
+    // The self-test pressed the page's own controls and put them back.
+    assert.match(logText, /Controls exercised/);
+    assert.match(logText, /"id":"salvage","kind":"checkbox","ok":true/);
+    assert.match(logText, /"id":"format","kind":"select","ok":true/);
+    assert.match(logText, /"id":"titleName","kind":"text","ok":true/);
+    assert.match(logText, /"id":"download","kind":"state","ok":true/);
+    assert.match(logText, /"id":"download service","kind":"message","ok":true/);
+    assert.match(logText, /"skipped":4/, 'a review on screen must not be discarded by the self-test');
+    assert.strictEqual(aw.document.getElementById('salvage').checked, true, 'controls must return to their values');
+    assert.strictEqual(aw.document.getElementById('titleName').value, 'Fixture Title');
+    assert.strictEqual(aw.document.getElementById('pageOrder').value, 'reader');
+    assert.strictEqual(aw.document.querySelectorAll('#review li').length, 2, 'the review must survive the self-test');
     assert.strictEqual(requests.length, fetchesBefore + 1, 'the benchmark fetches exactly one page image');
     assert.strictEqual(requests[requests.length - 1].url, 'https://images.example/one.jpg');
     assert.ok(!/\?(?!.*")/.test(logText.split('{')[0]), 'log header carries no query string');

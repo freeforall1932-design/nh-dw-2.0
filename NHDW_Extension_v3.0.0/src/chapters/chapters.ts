@@ -3,6 +3,10 @@ import { pauseBetweenChapterRequests } from "../utils/universalChapter";
 import { approvedHostsFor, rememberHosts, forgetOrigin, HostApprovalMap } from "../utils/hostApprovals";
 import { progressTitleKey, partitionSaved, recordSaved, forgetSaved, ChapterProgressMap } from "../utils/chapterProgress";
 import { makeLogEntry, appendLog, formatLog, summarizeError, LogEntry, LOG_CAP, LOG_STORAGE_KEY } from "../utils/extensionLog";
+import {
+    selfTestPlan, skippedForReview, summarizeSelfTest, formatSelfTest, alternateSelectValue, markerValue,
+    SelfTestResult
+} from "../utils/uiSelfTest";
 
 const COMPLETION_MAX_WAIT_MS = 30 * 60 * 1000;
 
@@ -525,16 +529,134 @@ function timed(): () => number {
  * Nothing here starts an archive or a download; the only network request is one
  * page image from a host the user has already approved for this exact site.
  */
+/**
+ * Press the page's own controls the way a user would, then put them back.
+ *
+ * Read-only with respect to the network and to the user's settings: checkboxes
+ * are clicked twice, selects and text fields are set to a marker and restored,
+ * and buttons are only inspected (never pressed — Scan, Inspect, Save, Cancel,
+ * Load all pages, Forget and Benchmark all have side effects).
+ */
+async function runSelfTest(): Promise<{ results: SelfTestResult[]; skipped: number }> {
+    const results: SelfTestResult[] = [];
+    const hasReview = inspected.length > 0;
+    const fail = (id: string, kind: SelfTestResult["kind"], action: string, note: string) => {
+        results.push({ id: id, kind: kind, action: action, before: "", after: "", restored: false, ok: false, note: note });
+    };
+    for (const target of selfTestPlan(hasReview)) {
+        const node: any = document.getElementById(target.id);
+        if (!node) { fail(target.id, target.kind, "found", "control is missing from the page"); continue; }
+        try {
+            if (target.kind === "checkbox") {
+                const before = !!node.checked;
+                node.click(); const flipped = !!node.checked;
+                node.click(); const restored = !!node.checked === before;
+                results.push({
+                    id: target.id, kind: target.kind, action: "click, then click again",
+                    before: String(before), after: String(flipped), restored: restored,
+                    ok: flipped !== before && restored,
+                    note: flipped === before ? "the box ignored the click" : (restored ? undefined : "the box did not return to its value")
+                });
+            } else if (target.kind === "select") {
+                const before = String(node.value);
+                const options = Array.from(node.options as any[]).map((option: any) => String(option.value));
+                const alternate = alternateSelectValue(options, before);
+                if (alternate === null) { fail(target.id, target.kind, "pick another option", "the control has only one option"); continue; }
+                node.value = alternate; node.dispatchEvent(new Event("change"));
+                const after = String(node.value);
+                node.value = before; node.dispatchEvent(new Event("change"));
+                const restored = String(node.value) === before;
+                results.push({
+                    id: target.id, kind: target.kind, action: "select another option, then restore",
+                    before: before, after: after, restored: restored, ok: after === alternate && restored,
+                    note: after !== alternate ? "the control rejected the new option" : (restored ? undefined : "the control did not return to its value")
+                });
+            } else {
+                const before = String(node.value);
+                const marker = markerValue(before);
+                node.value = marker; node.dispatchEvent(new Event("input"));
+                const after = String(node.value);
+                node.value = before; node.dispatchEvent(new Event("input"));
+                const restored = String(node.value) === before;
+                results.push({
+                    id: target.id, kind: target.kind, action: "type a marker, then restore",
+                    before: before, after: after, restored: restored, ok: after === marker && restored,
+                    note: after !== marker ? "the field rejected the text" : (restored ? undefined : "the field did not return to its value")
+                });
+            }
+        } catch (error: any) {
+            fail(target.id, target.kind, "drive the control", String(error && error.message ? error.message : error));
+        }
+    }
+    // Resting state of the buttons: a wrong disabled flag is exactly the kind of
+    // breakage that makes the page feel dead, and reading it changes nothing.
+    const stateCheck = (id: string, expectedDisabled: boolean, why: string) => {
+        const node = document.getElementById(id) as HTMLButtonElement | null;
+        if (!node) { fail(id, "state", "read the button state", "button is missing from the page"); return; }
+        const disabled = !!node.disabled;
+        results.push({
+            id: id, kind: "state", action: "read the resting disabled state",
+            before: String(disabled), after: String(expectedDisabled), restored: true,
+            ok: disabled === expectedDisabled, note: disabled === expectedDisabled ? why : "expected disabled=" + expectedDisabled
+        });
+    };
+    stateCheck("cancel", true, "Cancel is only enabled while a run is in progress");
+    stateCheck("download", inspected.length === 0, inspected.length === 0
+        ? "Save stays disabled until a review exists" : "Save is enabled because a review exists");
+    stateCheck("inspect", false, "Inspect is always available");
+    stateCheck("benchmark", false, "the benchmark itself is always available");
+    // The worker is the only path to a browser save, so prove it answers.
+    try {
+        const pong: any = await within(askWorker({ action: "ping" }), 10000, "Asking the download service");
+        const answered = pong && pong.result === true;
+        results.push({
+            id: "download service", kind: "message", action: "round-trip to the extension worker",
+            before: "", after: answered ? "version " + String(pong.version || "?") : String(pong && pong.error || "no answer"),
+            restored: true, ok: answered, note: answered ? undefined : "the worker did not answer the ping"
+        });
+    } catch (error: any) {
+        fail("download service", "message", "round-trip to the extension worker",
+            String(error && error.message ? error.message : error));
+    }
+    return { results: results, skipped: skippedForReview(hasReview).length };
+}
+/**
+ * Read-only self-check, driven from whatever page the source tab is on.
+ * Nothing here starts an archive or a download; the only network request is one
+ * page image from a host the user has already approved for this exact site.
+ */
 async function runBenchmark(): Promise<void> {
     if (isBusy) { benchStatus("Wait for the current operation to finish."); return; }
-    const controller = new AbortController();
-    runController = controller; setBusy(true);
     const notes: string[] = [];
     let failures = 0;
     const note = (text: string) => { notes.push(text); benchStatus(text); };
+    benchStatus("Step 1 of 6: testing this page's own controls…");
     log("info", "benchmark", "Benchmark started", { step: "start", tabId: tabId });
+    // The self-test drives the real controls, so it must run before the page is
+    // put into its busy state (which disables every control).
+    let selfTest: { results: SelfTestResult[]; skipped: number } = { results: [], skipped: 0 };
     try {
-        benchStatus("Step 1 of 5: reaching the source tab…");
+        selfTest = await runSelfTest();
+        const summary = summarizeSelfTest(selfTest.results, selfTest.skipped);
+        failures += summary.failed;
+        note("Controls: " + summary.checked + " check(s), " + summary.failed + " failed" +
+            (summary.skipped ? ", " + summary.skipped + " skipped to keep the current review" : "") + ".");
+        log(summary.failed ? "warn" : "info", "selftest", "Controls exercised", {
+            checked: summary.checked, failed: summary.failed, skipped: summary.skipped,
+            checks: selfTest.results.map(result => ({
+                id: result.id, kind: result.kind, ok: result.ok, note: result.note || null,
+                before: result.before, after: result.after, restored: result.restored
+            }))
+        });
+    } catch (error: any) {
+        failures++;
+        logError("selftest", "The control self-test could not run", error);
+        note("Controls: the self-test could not run (" + (error && error.message ? error.message : "unknown reason") + ").");
+    }
+    const controller = new AbortController();
+    runController = controller; setBusy(true);
+    try {
+        benchStatus("Step 2 of 6: reaching the source tab…");
         await within(inject(), 15000, "Reaching the source tab");
         let elapsed = timed();
         const here: any = await within(send("scan", { mode: "current" }), 15000, "Reading the open page");
@@ -543,7 +665,7 @@ async function runBenchmark(): Promise<void> {
         note("Tab reached in " + elapsed() + " ms — " + pageOrigin + ".");
         log("info", "benchmark", "Source tab reached", { ms: elapsed(), origin: pageOrigin, page: pageUrl, title: here.title });
 
-        benchStatus("Step 2 of 5: counting chapter links on this page…");
+        benchStatus("Step 3 of 6: counting chapter links on this page…");
         elapsed = timed();
         const listing: any = await within(send("scan", {
             selector: el<HTMLInputElement>("linkSelector").value,
@@ -559,7 +681,7 @@ async function runBenchmark(): Promise<void> {
             first: linkCount ? listing.chapters[0].url : null
         });
 
-        benchStatus("Step 3 of 5: reading page images from the open page…");
+        benchStatus("Step 4 of 6: reading page images from the open page…");
         elapsed = timed();
         let reader: any = null;
         try {
@@ -581,7 +703,7 @@ async function runBenchmark(): Promise<void> {
             logError("benchmark", "Reader inspection found nothing usable", error);
         }
 
-        benchStatus("Step 4 of 5: checking a page image and the scroll container…");
+        benchStatus("Step 5 of 6: checking a page image and the scroll container…");
         const approved = approvedHostsFor(hostMap, pageOrigin);
         const pageHosts: string[] = reader && Array.isArray(reader.pageHosts) ? reader.pageHosts : [];
         const index = pageHosts.findIndex(host => approved.indexOf(host) !== -1);
@@ -627,7 +749,7 @@ async function runBenchmark(): Promise<void> {
             }
         }
 
-        benchStatus("Step 5 of 5: checking extension storage…");
+        benchStatus("Step 6 of 6: checking extension storage…");
         const storeBegan = timed();
         try {
             const probeKey = "nhdwBenchmarkProbe";
@@ -645,7 +767,10 @@ async function runBenchmark(): Promise<void> {
             logError("benchmark", "Storage round-trip failed", error);
         }
 
-        log(failures ? "warn" : "info", "benchmark", "Benchmark finished", { steps: notes, failures: failures });
+        const selfTestLines = formatSelfTest(selfTest.results);
+        log(failures ? "warn" : "info", "benchmark", "Benchmark finished", {
+            steps: notes, failures: failures, selfTest: selfTestLines, skippedControls: selfTest.skipped
+        });
         setStatus("Benchmark finished with " + failures + " problem(s). " + (notes.length ? notes[notes.length - 1] : ""));
         saveLogFile();
     } catch (error: any) {

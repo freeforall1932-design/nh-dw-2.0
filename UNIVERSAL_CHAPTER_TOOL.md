@@ -53,8 +53,9 @@ serves ordinary HTML. Nothing has been validated against a live site yet.
    listed so any one can be unticked for a run), and chapters recorded as already
    saved are skipped — both on by default, both revocable in the same step.
 7. **If something went wrong**: press **Run benchmark and save log** (step 04).
-   It re-checks the open page read-only and writes `nhdw-log-<timestamp>.txt` to
-   your downloads. See [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+   It first presses this page's own controls and puts them back, then re-checks
+   the open page read-only, and writes `nhdw-log-<timestamp>.txt` to your
+   downloads. There is no guide to read: the log is the artifact.
 
 ## Page order when image names are meaningless
 
@@ -213,12 +214,13 @@ log and the benchmark.
 
 Still open, in order of what unblocks most:
 
-- **A real-browser run** ([BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md)) — nothing in
-  the chapter tool has been exercised against a live site. Its log file is the
-  first artifact to collect.
-- **Per-site outer-HTML captures** ([OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md)) —
-  which site needs a capture, where to go, what to pick, what to paste. Without
-  one, every site runs on the generic selector defaults.
+- **A real-browser run** — nothing in the chapter tool has been exercised
+  against a live site. Press **Run benchmark and save log**, which also exercises
+  the page's own controls (`uiSelfTest.ts`), and keep the file.
+- **Per-site captures** ([DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md)) —
+  the owner's manual extraction task: setup, chapter-list capture, reader
+  capture, six questions per reader, per-site walkthrough. Without one, every site
+  runs on the generic selector defaults.
 - **Iframes** — the probe injects in the main frame only; an embedded reader is
   invisible. Decide `allFrames` support and how the review names the frame.
 - **Server picker** — sites that switch between "Server 1/2/3" still cannot have
@@ -282,7 +284,9 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
   the exact ordered bytes; an interrupted browser download is reported as
   `Stopped after 0 completed archive(s)`.
 - `scripts/e2e-chapter-relay.js` — the worker relay trust boundary.
-- `test/chapter-support.test.js` — the supporting pieces on their own: image
+- `test/chapter-support.test.js` — the supporting pieces on their own, including
+  the self-test plan (never drives a button, skips review-wiping controls when a
+  review exists, alternative-option and marker selection, failure formatting): image
   header parsing (PNG/GIF/WebP/JPEG, AVIF accepted with unknown dimensions), the
   128 px gate and its error codes, scroll-target selection, per-origin host
   approvals (exact origin only, cap, forget), saved-chapter records

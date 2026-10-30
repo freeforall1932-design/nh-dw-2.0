@@ -1344,10 +1344,23 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     }
     if (request.from === "chapters" && _sender && _sender.id === chrome.runtime.id &&
         typeof _sender.url === "string" && _sender.url.split("?")[0] === chrome.runtime.getURL("chapters.html") &&
-        ["saveDownload", "awaitDownload", "cancelDownload"].indexOf(request.action) !== -1) {
+        ["saveDownload", "awaitDownload", "cancelDownload", "ping"].indexOf(request.action) !== -1) {
         // The extension page uses the worker's single naming/completion guard,
         // rather than maintaining a second, conflicting storage/session map.
         // Accept only extension-owned blob artifacts, never arbitrary URLs.
+        if (request.action === "ping") {
+            // Used by the chapter page's self-test: proves the worker answers a
+            // message from that exact page and reports which browser APIs the
+            // save path depends on. Changes nothing.
+            let completion = false;
+            try { completion = completionTrackingAvailable(); } catch (_) { /* older browser */ }
+            sendResponse({
+                result: true, version: chrome.runtime.getManifest().version,
+                downloads: typeof chrome.downloads !== "undefined" && !!chrome.downloads.download,
+                offscreen: typeof (chrome as any).offscreen !== "undefined", completion: completion
+            });
+            return false;
+        }
         if (request.action === "saveDownload" && (request.requireCompletion !== true ||
             typeof request.url !== "string" || !request.url.startsWith("blob:" + chrome.runtime.getURL("")))) {
             sendResponse({ result: false, error: "Invalid chapter artifact." });

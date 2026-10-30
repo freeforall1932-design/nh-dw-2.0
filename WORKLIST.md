@@ -32,6 +32,15 @@ comparison. The native button's click flow remains unobserved.
   archive. No invented writer/artist/genre/summary; readers ignore it harmlessly.
 - **Entry point: a separate tab** (already the case) — keeps the tool out of the
   popup/side panel.
+- **The "site's own Download control" drop is nhentai-only** (second pass,
+  2026-10-30). Other sites use on-site page extraction — a pseudo-batch from the
+  title list, one chapter archive at a time, with no mirror or shortener
+  clicking. See [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md).
+- **Benchmark = logging + the extension testing itself, not a guide.** The owner
+  asked for no benchmark guide: the button presses the page's own controls, runs
+  the site checks and writes the log file to hand over. The owner's manual task is
+  the website capture walkthrough in
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md).
 - **Firefox: Chromium-only for now**, revisit only if installing an unsigned
   build stops requiring a signed/licensed add-on. The Firefox tree stays.
 - **Tailspace (answered):** scroll mode serves full-size files; only gallery mode
@@ -140,14 +149,22 @@ site unless stated.
   whether the batch link only appears past a chapter count.
 - [ ] Real-browser run of the unpacked build (Chrome version, checklist output).
 
-*Dropped: use the site's own Download control*
+*Dropped / replaced: use the site's own Download control*
 
-- [x] **Dropped 2026-10-30 by owner decision** ("if the site download button is
-  too hard, drop it and stick with the API keys"). No code was written. The
-  proposal, the unobserved evidence, the reasons and the two conditions that
-  would reopen it are archived in
-  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The API-key
-  archive path stays the supported route.
+- [x] **Dropped for nhentai only — 2026-10-30, owner decision.** nhentai keeps the
+  API-key archive path; the native control is not pursued and no code was written
+  for it. Reasons and the unobserved evidence:
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md).
+- [x] **Replaced for every other site by on-site page extraction** (the owner's
+  instruction): a title page scan is a pseudo-batch that reads the reader pages
+  for each selected chapter and builds one archive locally, with **no** mirror or
+  ad-link-shortener clicking. That is the existing chapter tool, so no new mode is
+  needed; the decision and the numbering caveat (clear numbering required, hashed
+  names only via top-down DOM order, otherwise a refusal) are recorded in
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md#part-b--other-sites-the-on-site-extraction-route).
+- [ ] **Per-site extraction settings** still need the captures in
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md): without them every site
+  runs on the generic selector defaults.
 
 *Diagnostics (added 2026-10-30 at the owner's request)*
 
@@ -162,13 +179,21 @@ site unless stated.
   images, one page image (only from an already-approved host on that site) plus
   scroll-container detection, and a storage round-trip — then saves the log and
   reports a problem count. It builds no archive, starts no download and approves
-  no host. How to read it: [BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md).
+  no host. There is deliberately no guide: the log is the artifact.
+- [x] **The benchmark tests the extension itself — done 2026-10-30**
+  (`src/utils/uiSelfTest.ts`): it presses the page's checkboxes, selects and text
+  fields as a user would, verifies each accepted the change, and restores every
+  value. Buttons with side effects are only inspected for their resting disabled
+  state; controls whose change would discard a review are skipped and named; a
+  new read-only `ping` action proves the worker answers the page. Failures appear
+  as named `FAILED` lines in the log.
 - [ ] **Benchmark against real sites.** The button has only run in the bundled
   VM e2e, never in a real Chromium profile. First real run pending the owner's
   browser session.
-- [ ] **Outer-HTML captures.** The per-site capture hand-off (which site, where to
-  go, what to pick, what to paste, the five questions per site) is written in
-  [OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md); no capture has been made yet.
+- [ ] **Website captures.** The owner's manual extraction task is written out in
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) (setup, chapter-list
+  capture, reader capture, six questions per reader, per-site walkthrough,
+  sanitizing snippets); no capture has been made yet.
 
 *Evidence and decisions needed from the owner* (sanitized only — see
 `SITE_CAPTURE_GUIDE.md`; never media, signed URLs, cookies or raw HARs)
@@ -197,8 +222,7 @@ remembered hosts, resume and the diagnostic log/benchmark. What is left needs a
 **real browser** rather than more code: load the unpacked build, press
 **Run benchmark and save log** on one ordinary chapter, then work the remaining
 evidence items (iframe/scroll answers, stated page totals) with
-[BENCHMARK_GUIDE.md](BENCHMARK_GUIDE.md) and
-[OUTER_HTML_GUIDE.md](OUTER_HTML_GUIDE.md). The click-to-select picker is the
+[DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md). The click-to-select picker is the
 last usability item and is much better after one captured reader.
 
 **Latest Chromium progress (offline, not new-site support):**
