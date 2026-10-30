@@ -147,6 +147,13 @@ page failure does:
 - **Cancel** aborts the in-flight fetch, stops the loop and cancels the current
   browser download.
 
+## Known gaps
+
+A full audit (memory, retry, resume, CBZ metadata, inner-scroll containers,
+iframes, tiny images, host approvals, release hygiene) is recorded in
+[WORKLIST.md](WORKLIST.md#audit-2026-10-30--gaps-found-now-not-previously-recorded),
+together with the sanitized evidence and decisions still needed.
+
 ## Limits (do not overstate this feature)
 
 - **No live validation.** Everything above is synthetic (jsdom, `Response`

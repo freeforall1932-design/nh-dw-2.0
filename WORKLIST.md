@@ -21,6 +21,102 @@ The owner reports the nhentai website download and reader have the same original
 file size; this is not an independently checked hash, quality or provenance
 comparison. The native button's click flow remains unobserved.
 
+**Audit 2026-10-30 — gaps found now, not previously recorded.** Each item below
+was checked against the code, not assumed. All remain unverified against a live
+site unless stated.
+
+*Chapter tool — correctness and robustness*
+
+- [ ] **CBZ metadata.** Archives contain only `001.jpg…`; there is no
+  `ComicInfo.xml`, so readers (CDisplayEx, Komga, Kavita) show "unknown title".
+  Add a minimal one from the title folder + chapter label + page count, with
+  XML escaping and a test on the generated archive.
+- [ ] **Memory on long chapters.** Every page crosses the extension message
+  channel as base64 (a 12 MiB page becomes a ~16 MiB string) and JSZip holds the
+  whole chapter (limit 128 MiB) before saving. `streamingZip.ts`/OPFS already
+  exist for the gallery path; reuse or chunk the chapter path and measure a
+  100+ page chapter. Today a very long Tailspace/Breaking-Tail title can spike
+  memory or hit the per-message cost.
+- [ ] **Bounded retry.** One network blip currently turns a chapter into
+  "incomplete". Allow 1–2 retries with backoff for transport errors and 5xx —
+  never for 429/401/403/cancel (already fatal by design).
+- [ ] **Inner scroll containers.** `sweepScroll` moves `window` only. A reader
+  that scrolls an inner `<div>` (overflow container) will not lazy-load and the
+  sweep silently does nothing. Detect the scrollable element.
+- [ ] **Iframes.** Injection targets the main frame, so a reader embedded in an
+  iframe is invisible. Decide whether to support `allFrames` (and how the review
+  names the frame that matched).
+- [ ] **Tiny/placeholder images.** `identifyImage` checks magic bytes only, so a
+  1×1 tracking GIF passes. Parse JPEG SOF / PNG IHDR / WebP dimensions (the
+  gallery path already has a JPEG parser) and reject implausible pages.
+- [ ] **Multi-server readers.** There is no "Server 1/2/3" picker; a selection
+  mixing servers is refused rather than surfaced. Sites like Sasangeyou need the
+  choice made explicit in the chapter tool.
+- [ ] **Cooldown for the chapter tool.** Fixed 250 ms spacing between pages, no
+  jitter, no backoff, no persisted cooldown across runs (the nhentai API path has
+  its own, also not restart-persistent).
+- [ ] **Resume.** An interrupted batch restarts from chapter 1; nothing records
+  which chapters were saved. Add a small local record plus "skip already saved"
+  that still requires the same strict-completion evidence.
+
+*Chapter tool — usability*
+
+- [ ] **Click-to-select picker.** Requiring a hand-written CSS selector is the
+  main thing keeping this from being usable as "universal". Add "pick the first
+  page image" (and "pick the chapter links") using an injected overlay.
+- [ ] **Remember approved image hosts per origin**, revocable in Settings,
+  instead of re-approving every run. Trade-off: less explicit per run.
+- [ ] **Re-bind the source tab** when it was closed/reloaded instead of a dead-end
+  error (the page knows the old tab id only).
+- [ ] **Entry point.** The tool opens a new tab even in side-panel mode; decide
+  whether the panel should host the same page.
+
+*Release hygiene*
+
+- [ ] **Version bump and release notes.** `manifest.json` is still 3.14.0 and
+  `package.json` 2.2.0, although a new page and two new bundles ship. Decide the
+  version and note the feature as experimental.
+- [x] **Licence/attribution review — done 2026-10-30.** All new runtime
+  dependencies are permissive: `htmlparser2` MIT; `css-select`, `css-what`,
+  `domhandler`, `domutils`, `domelementtype`, `entities`, `nth-check` BSD-2-Clause;
+  `dom-serializer` MIT; `boolbase` ISC; `pako` MIT/Zlib; existing `jszip`
+  MIT-or-GPL-3.0. `jsdom` (dev-only) is MIT. **Finding:** the probe bundle
+  contained BSD-2/ISC code with *no* notice file, because terser only emits
+  `*.LICENSE.txt` for `/*!`-marked sources. Fixed by adding and packaging
+  [`THIRD_PARTY_NOTICES.txt`](NHDW_Extension_v3.0.0/THIRD_PARTY_NOTICES.txt) with
+  a test that every bundled library is named and the file ships. Still open: the
+  bundle growth (≈200 KB `chapters.js`, ≈160 KB `universalChapterProbe.js`) and
+  whether shipping `jsdom` in devDependencies is acceptable for CI size.
+- [ ] **Firefox:** that tree has no Chapters button and no chapter bundles. Add a
+  one-line note to its README so it does not read as broken, and decide on porting
+  (`activeTab`/`scripting` exist in Firefox; the `chrome.*` shim differs).
+
+*Evidence and decisions needed from the owner* (sanitized only — see
+`SITE_CAPTURE_GUIDE.md`; never media, signed URLs, cookies or raw HARs)
+
+- [ ] One reader snapshot per site, taken from the **loaded** page (DevTools →
+  copy the reader container's `outerHTML`, or the capture helper's output):
+  Sasangeyou ordinary chapter, Yurilab chapter, Tailspace **scroll mode**,
+  DoujinDesu chapter after scrolling.
+- [ ] For each: iframe or inner scroll container? Does it show "Server 1/2/3"?
+  Does the page state a page total (`3 / 57`, `57 pages`)?
+- [ ] Desu: `<img>` count after scrolling versus pages you actually see, and
+  whether the batch link only appears beyond a chapter count.
+- [ ] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
+- [ ] Real-browser run: your Chrome version, and confirmation you can load the
+  unpacked build — I can supply a checklist whose output you paste back.
+- [ ] nhentai's own Download button: still unobserved. A screenshot plus the
+  resulting file's name/size is enough; no cookies or signed URLs.
+- [ ] Decisions: remember approved hosts per site? automatic retry allowed?
+  `ComicInfo.xml` yes/no and which fields? tool in a tab or the side panel?
+  Firefox port or Chromium-only?
+
+**My next-step recommendation:** (1) `ComicInfo.xml`, tiny-image rejection,
+inner-scroll and iframe handling — all testable without a site; (2) retry and
+resume so a long title survives one blip; (3) the click-to-select picker, which
+removes the selector requirement. Items (2) and (3) are much better with one real
+reader snapshot.
+
 **Latest Chromium progress (offline, not new-site support):**
 
 **Deferred owner options (recorded 2026-10-30, not started):** the owner asked

@@ -9,10 +9,12 @@ const JSZip = require('jszip');
 // Icon-crow-*.png are project-master candidates (ASSET_PLAN.md family 1):
 // they ride beside Icon.png so the owner can compare marks by renaming
 // files in the shipped/unpacked extension without any rebuild.
+// BSD-2/ISC/MIT notices for the libraries webpack bundles must ship with the
+// build (THIRD_PARTY_NOTICES.txt), not only live in the repository.
 const CORE = ['Icon-crow-mist-arrow-grey.png', 'Icon-crow-mist-arrow.png',
     'Icon-crow-mist-grey.png', 'Icon-crow-mist-redeye-grey.png',
     'Icon-crow-mist-redeye.png', 'Icon-crow-mist.png',
-    'Icon-grey.png', 'Icon.png', 'LICENSE', 'index.html', 'chapters.html',
+    'Icon-grey.png', 'Icon.png', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'index.html', 'chapters.html',
     'manifest.json', 'offscreen.html', 'options.html'];
 const RUNTIME_EXT = {
     css: /\.(?:css|png|svg|webp|jpe?g|woff2?)$/i,
