@@ -7,6 +7,10 @@ import {
     selfTestPlan, skippedForReview, summarizeSelfTest, formatSelfTest, alternateSelectValue, markerValue,
     SelfTestResult
 } from "../utils/uiSelfTest";
+import {
+    profileFor, saveProfile, forgetProfile, checkProfile, ReaderProfileMap, PROFILE_STORAGE_KEY, MAX_PROFILES
+} from "../utils/siteProfiles";
+import { normalizeFullSizeSuffix } from "../utils/universalChapter";
 
 const COMPLETION_MAX_WAIT_MS = 30 * 60 * 1000;
 
@@ -36,6 +40,7 @@ const HOSTS_KEY = "nhdwHostApprovals";
 const PROGRESS_KEY = "nhdwChapterProgress";
 let hostMap: HostApprovalMap = {};
 let progressMap: ChapterProgressMap = {};
+let profileMap: ReaderProfileMap = {};
 let logBuffer: LogEntry[] = [];
 let logFlushTimer: any = null;
 
@@ -254,11 +259,14 @@ async function inspectSelected(): Promise<void> {
             if (i > 0) await pauseBetweenChapterRequests(controller.signal);
             setStatus("Inspecting chapter " + (i + 1) + "/" + selection.length + "…");
             const chapter = selection[i];
+            const suffix = normalizeFullSizeSuffix(el<HTMLInputElement>("fullSizeSuffix").value);
+            if (suffix === null) throw new Error("The thumbnail suffix must look like \"-mini\" (a dash or underscore, then letters or digits).");
             const result = await send("inspect", {
                 origin: origin, id: chapter.id, chapterUrl: chapter.url, current: chapter.current,
                 selector: el<HTMLInputElement>("imageSelector").value,
                 attribute: el<HTMLSelectElement>("imageAttribute").value,
-                order: el<HTMLSelectElement>("pageOrder").value
+                order: el<HTMLSelectElement>("pageOrder").value,
+                fullSizeSuffix: suffix
             });
             if (controller.signal.aborted) throw new Error("Cancelled.");
             if (!Number.isInteger(result.count) || !Array.isArray(result.hosts)) throw new Error("The reader inspection was incomplete.");
@@ -267,6 +275,9 @@ async function inspectSelected(): Promise<void> {
             // A page list recovered from the reader's embedded script is the
             // site's own list; say so, because no <img> element was involved.
             if (result.source === "reader-script") orderNote = "read from the reader's own embedded page list";
+            if (Number.isInteger(result.suffixChanged) && result.suffixChanged > 0) {
+                orderNote += " · full-size rule removed “" + suffix + "” from " + result.suffixChanged + " URL(s)";
+            }
             if (result.order !== "reader" && result.readerOrderDiffers) orderNote += " (differs from reader order — verify)";
             if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
             const advertised = Number.isInteger(result.advertised) ? Number(result.advertised) : null;
@@ -512,6 +523,60 @@ function forgetTitleProgress(): void {
     log("info", "progress", "Forgot saved-chapter records for this title", { origin: origin, title: titleInput.value, chapters: count });
     setStatus("Cleared " + count + " saved-chapter record(s) for this title. Chapters will no longer be skipped.");
 }
+function refreshProfileHint(): void {
+    const hint = document.getElementById("profileHint");
+    if (!hint) return;
+    const saved = profileFor(profileMap, origin);
+    hint.textContent = !origin ? "No source site selected yet."
+        : saved
+            ? "Reader settings saved for " + origin + ": selector “" + saved.selector + "”, attribute " + saved.attribute +
+              ", order " + saved.order + (saved.fullSizeSuffix ? ", suffix " + saved.fullSizeSuffix : "") + "."
+            : "No reader settings are saved for " + origin + " yet.";
+}
+/** Prefill the panel from this site's profile, without touching anything else. */
+function applyProfile(): void {
+    const saved = profileFor(profileMap, origin);
+    if (!saved) { refreshProfileHint(); return; }
+    el<HTMLInputElement>("imageSelector").value = saved.selector;
+    el<HTMLSelectElement>("imageAttribute").value = saved.attribute;
+    el<HTMLSelectElement>("pageOrder").value = saved.order;
+    el<HTMLInputElement>("fullSizeSuffix").value = saved.fullSizeSuffix;
+    refreshProfileHint();
+    log("info", "profile", "Reader settings loaded for this site", {
+        origin: origin, selector: saved.selector, attribute: saved.attribute, order: saved.order,
+        suffix: saved.fullSizeSuffix || null
+    });
+}
+function rememberSettingsHere(): void {
+    if (!origin) { setStatus("Scan a source site first, so the tool knows which site to remember."); return; }
+    const candidate = {
+        selector: el<HTMLInputElement>("imageSelector").value,
+        attribute: el<HTMLSelectElement>("imageAttribute").value,
+        order: el<HTMLSelectElement>("pageOrder").value,
+        fullSizeSuffix: el<HTMLInputElement>("fullSizeSuffix").value
+    };
+    const check = checkProfile(candidate);
+    if (!check.ok) { setStatus(String(check.reason)); return; }
+    profileMap = saveProfile(profileMap, origin, candidate);
+    writeLocal({ [PROFILE_STORAGE_KEY]: profileMap });
+    refreshProfileHint();
+    log("info", "profile", "Reader settings saved for this site", {
+        origin: origin, selector: candidate.selector, attribute: candidate.attribute,
+        order: candidate.order, suffix: candidate.fullSizeSuffix || null, profiles: Object.keys(profileMap).length
+    });
+    setStatus("Saved these reader settings for " + origin + ". They will be filled in automatically next time.");
+}
+function forgetSettingsHere(): void {
+    if (!origin) { setStatus("Scan a source site first, so the tool knows which site to forget."); return; }
+    if (!profileFor(profileMap, origin)) { setStatus("No reader settings are saved for " + origin + "."); return; }
+    profileMap = forgetProfile(profileMap, origin);
+    writeLocal({ [PROFILE_STORAGE_KEY]: profileMap });
+    refreshProfileHint();
+    log("info", "profile", "Reader settings forgotten for this site", { origin: origin });
+    setStatus("Cleared the saved reader settings for " + origin + ". The current values stay as they are.");
+}
+el<HTMLButtonElement>("saveProfile").addEventListener("click", rememberSettingsHere);
+el<HTMLButtonElement>("forgetProfile").addEventListener("click", forgetSettingsHere);
 el<HTMLButtonElement>("forgetSite").addEventListener("click", forgetHostsHere);
 el<HTMLButtonElement>("forgetTitle").addEventListener("click", forgetTitleProgress);
 el<HTMLButtonElement>("saveLog").addEventListener("click", saveLogFile);
@@ -792,12 +857,13 @@ async function runBenchmark(): Promise<void> {
 }
 el<HTMLButtonElement>("benchmark").addEventListener("click", runBenchmark);
 
-readLocal({ [HOSTS_KEY]: {}, [PROGRESS_KEY]: {}, [LOG_STORAGE_KEY]: [] }).then((stored: any) => {
+readLocal({ [HOSTS_KEY]: {}, [PROGRESS_KEY]: {}, [PROFILE_STORAGE_KEY]: {}, [LOG_STORAGE_KEY]: [] }).then((stored: any) => {
     hostMap = stored[HOSTS_KEY] && typeof stored[HOSTS_KEY] === "object" ? stored[HOSTS_KEY] : {};
     progressMap = stored[PROGRESS_KEY] && typeof stored[PROGRESS_KEY] === "object" ? stored[PROGRESS_KEY] : {};
+    profileMap = stored[PROFILE_STORAGE_KEY] && typeof stored[PROFILE_STORAGE_KEY] === "object" ? stored[PROFILE_STORAGE_KEY] : {};
     logBuffer = Array.isArray(stored[LOG_STORAGE_KEY]) ? stored[LOG_STORAGE_KEY].slice(-LOG_CAP) : [];
     log("info", "start", "Chapter tool opened", { tabId: tabId, version: extensionVersion() });
-    if (origin) refreshApprovalHint();
+    if (origin) { refreshApprovalHint(); refreshProfileHint(); }
 });
 
 renderList();

@@ -49,6 +49,15 @@ What landed in this pass, on top of retry + `ComicInfo.xml`:
   [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The
   API-key archive path stays the supported route and stays off by default until
   delivery is verified.
+- **Focus switched (owner, 2026-10-31): Tailspace first.** DoujinDesu and
+  Sasangeyou are on hold — see the likelihood table in
+  [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md#6-how-likely-is-each-site-now)
+  (~60–70 % tailspace, ~75 % sasangeyou ordinary chapters, ~35–45 % desu whole
+  title) and the Tailspace checklist in [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md).
+  Added for it: an **explicit thumbnail suffix rule** (`-mini` → full size, all
+  pages or refuse) and **remembered reader settings per site** (`siteProfiles.ts`,
+  max 50 origins, re-validated on read, no host access granted). Nothing was
+  removed for the hold.
 - **Extension-source research (2026-10-31)**: [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md)
   answers the owner's "should we pivot to bypassing the ad-link?" question — no;
   the Mihon/Keiyoushi extensions read the reader/API and never touch a download

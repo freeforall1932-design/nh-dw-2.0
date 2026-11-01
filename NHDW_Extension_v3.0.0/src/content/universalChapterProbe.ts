@@ -5,7 +5,7 @@ import {
     UniversalChapterError, ImageAttribute, UniversalPageReference,
     publicHttpsUrl, discoverChapters, collectChapterPages, collectStaticChapterPages, PageOrderStrategy,
     detectAdvertisedPageCount, detectStaticPageCount, sweepScroll, pickScrollTarget,
-    collectReaderScriptPages, hasReaderScript,
+    collectReaderScriptPages, hasReaderScript, applyFullSizeSuffix,
     assertUsablePage, ScrollCandidate, MIN_PAGE_DIMENSION,
     readBoundedResponse, checkResponse, identifyImage
 } from "../utils/universalChapter";
@@ -174,11 +174,20 @@ if (!scope.__nhdwChapterProbe) {
                     source = "reader-script";
                 }
             }
-            const pages = collection.pages;
+            // An explicit thumbnail rule may rewrite every page URL; it is all or
+            // nothing, and it happens before hosts are reported for approval.
+            let pages = collection.pages;
+            let suffixChanged = 0;
+            const suffix = typeof message.fullSizeSuffix === "string" ? message.fullSizeSuffix : "";
+            if (suffix !== "") {
+                const applied = applyFullSizeSuffix(pages, suffix);
+                pages = applied.pages;
+                suffixChanged = applied.changed;
+            }
             inspected.set(id, { url: chapter.href, pages: pages });
             // pageHosts lets the panel (and the benchmark) pick a page on a host
             // the user has already approved, instead of trial and error.
-            return { ok: true, count: pages.length, source: source,
+            return { ok: true, count: pages.length, source: source, suffixChanged: suffixChanged,
                 hosts: Array.from(new Set(pages.map(page => page.host))),
                 pageHosts: pages.slice(0, 400).map(page => page.host),
                 order: collection.order, readerOrderDiffers: collection.readerOrderDiffers, preview: collection.preview,

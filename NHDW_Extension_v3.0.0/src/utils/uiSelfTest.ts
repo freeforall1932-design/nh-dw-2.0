@@ -41,7 +41,7 @@ export const SELF_TEST_CHECKBOXES = [
     "chapterFilter", "outsideLinks", "otherListPages", "salvage", "retry", "rememberHosts", "skipSaved", "confirm"
 ];
 export const SELF_TEST_SELECTS = ["order", "imageAttribute", "pageOrder", "format"];
-export const SELF_TEST_TEXTS = ["titleName", "linkSelector", "imageSelector"];
+export const SELF_TEST_TEXTS = ["titleName", "linkSelector", "imageSelector", "fullSizeSuffix"];
 
 /**
  * Controls whose change handler discards the inspected chapters. Driving these

@@ -36,6 +36,12 @@ comparison. The native button's click flow remains unobserved.
   2026-10-30). Other sites use on-site page extraction — a pseudo-batch from the
   title list, one chapter archive at a time, with no mirror or shortener
   clicking. See [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md).
+- **Focus order (2026-10-31, owner):** Tailspace is the active target; DoujinDesu
+  and Sasangeyou are **on hold** pending a real run. Estimates and the reasoning
+  behind each: [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md#6-how-likely-is-each-site-now).
+  Tailspace checklist: [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md). Nothing was deleted
+  for the hold — the MangaThemesia reader-script fallback ships because it is
+  already tested and is what sasangeyou will need on resumption.
 - **Mihon/Keiyoushi extension source is the evidence source, not a pivot to
   shortcut bypassing** (2026-10-31). The extensions read the site's reader/API and
   never touch a download button, `mirrored.to` or a shortener; bypassing an
@@ -64,6 +70,19 @@ was checked against the code, not assumed. All remain unverified against a live
 site unless stated.
 
 *Chapter tool — correctness and robustness*
+
+- [x] **Explicit thumbnail suffix rule — done 2026-10-31**
+  (`normalizeFullSizeSuffix`, `stripFullSizeSuffix`, `applyFullSizeSuffix`): a
+  typed suffix such as `-mini` is removed from the file name before its
+  extension, for **every** page or the chapter is refused; duplicates and
+  non-HTTPS results are refused; off unless typed; the review reports how many
+  URLs changed. Built for Tailspace gallery mode; nothing is inferred from a
+  file name.
+- [x] **Remembered reader settings per site — done 2026-10-31**
+  (`siteProfiles.ts`): selector, attribute, order and suffix stored per exact
+  HTTPS origin (max 50), re-validated on read, pre-filled on the next scan,
+  forgettable. A profile grants no host access and never auto-approves an image
+  host.
 
 - [x] **Page lists hidden in a reader script — done 2026-10-31**
   (`readerScriptPayloads`, `readerScriptImageUrls`, `collectReaderScriptPages`):

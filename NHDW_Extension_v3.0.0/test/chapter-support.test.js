@@ -2,8 +2,11 @@ const assert = require('assert');
 const {
     readImageSize, assertUsablePage, MIN_PAGE_DIMENSION, identifyImage, pickScrollTarget,
     readerScriptPayloads, readerScriptImageUrls, collectReaderScriptPages, hasReaderScript,
-    collectStaticChapterPages
+    collectStaticChapterPages, normalizeFullSizeSuffix, stripFullSizeSuffix, applyFullSizeSuffix
 } = require('../build/test/utils/universalChapter.js');
+const {
+    profileFor, saveProfile, forgetProfile, checkProfile, profileOrigin, MAX_PROFILES, PROFILE_STORAGE_KEY
+} = require('../build/test/utils/siteProfiles.js');
 const { approvedHostsFor, rememberHosts, forgetOrigin, MAX_HOSTS_PER_ORIGIN } = require('../build/test/utils/hostApprovals.js');
 const {
     progressTitleKey, partitionSaved, recordSaved, forgetSaved, MAX_CHAPTERS_PER_TITLE
@@ -308,5 +311,100 @@ describe('reader scripts that carry the page list (MangaThemesia family)', () =>
         ]);
         // The script is still there for the probe to use only when the selector found nothing.
         assert.strictEqual(hasReaderScript(html), true);
+    });
+});
+
+describe('explicit thumbnail suffix rule', () => {
+    const pages = suffix => [
+        { url: 'https://images.example/a1B2c3-mini.jpg', host: 'images.example' },
+        { url: 'https://images.example/d4E5f6-mini.jpg', host: 'images.example' }
+    ];
+
+    it('accepts only a literal suffix and rejects patterns or empty-ish values', () => {
+        assert.strictEqual(normalizeFullSizeSuffix(''), '');
+        assert.strictEqual(normalizeFullSizeSuffix('  '), '');
+        assert.strictEqual(normalizeFullSizeSuffix('-mini'), '-mini');
+        assert.strictEqual(normalizeFullSizeSuffix('_thumb'), '_thumb');
+        assert.strictEqual(normalizeFullSizeSuffix('mini'), null, 'no separator: a guess');
+        assert.strictEqual(normalizeFullSizeSuffix('-m*'), null);
+        assert.strictEqual(normalizeFullSizeSuffix('-mini.jpg'), null);
+        assert.strictEqual(normalizeFullSizeSuffix('-' + 'x'.repeat(20)), null);
+    });
+
+    it('derives the full-size URL only when the page carries the suffix', () => {
+        assert.strictEqual(stripFullSizeSuffix('https://images.example/a1B2c3-mini.jpg', '-mini'),
+            'https://images.example/a1B2c3.jpg');
+        assert.strictEqual(stripFullSizeSuffix('https://images.example/a1B2c3.jpg', '-mini'), null);
+        assert.strictEqual(stripFullSizeSuffix('https://images.example/a1B2c3-mini.jpg', ''), null);
+        assert.strictEqual(stripFullSizeSuffix('http://plain.example/a-mini.jpg', '-mini'), null, 'HTTPS only');
+        assert.strictEqual(stripFullSizeSuffix('https://images.example/mini', '-mini'), null, 'never an empty path');
+    });
+
+    it('applies to a whole chapter or refuses it — never a mixed batch', () => {
+        const applied = applyFullSizeSuffix(pages(), '-mini');
+        assert.deepStrictEqual(applied.pages.map(page => page.url), [
+            'https://images.example/a1B2c3.jpg', 'https://images.example/d4E5f6.jpg'
+        ]);
+        assert.strictEqual(applied.changed, 2);
+        assert.deepStrictEqual(applyFullSizeSuffix(pages(), '').pages.map(page => page.url),
+            pages().map(page => page.url), 'no rule means no rewrite');
+        assert.throws(() => applyFullSizeSuffix([
+            { url: 'https://images.example/a-mini.jpg', host: 'images.example' },
+            { url: 'https://images.example/b.jpg', host: 'images.example' }
+        ], '-mini'), /do not carry/);
+        assert.throws(() => applyFullSizeSuffix([
+            { url: 'https://images.example/x-mini.jpg', host: 'images.example' },
+            { url: 'https://images.example/x-mini.jpg', host: 'images.example' }
+        ], '-mini'), /duplicate/);
+        assert.throws(() => applyFullSizeSuffix(pages(), 'mini'), /must look like/);
+    });
+});
+
+describe('remembered reader settings per site', () => {
+    const good = { selector: '#readerarea img', attribute: 'auto', order: 'reader', fullSizeSuffix: '' };
+
+    it('accepts a normal profile and rejects values it would otherwise have to guess about', () => {
+        assert.strictEqual(checkProfile(good).ok, true);
+        assert.strictEqual(checkProfile(Object.assign({}, good, { selector: '  ' })).ok, false);
+        assert.strictEqual(checkProfile(Object.assign({}, good, { attribute: 'srcset' })).ok, false);
+        assert.strictEqual(checkProfile(Object.assign({}, good, { order: 'numeric' })).ok, false);
+        assert.strictEqual(checkProfile(Object.assign({}, good, { fullSizeSuffix: 'mini' })).ok, false);
+        assert.strictEqual(checkProfile(Object.assign({}, good, { selector: 'a'.repeat(501) })).ok, false);
+        assert.strictEqual(checkProfile(null).ok, false);
+    });
+
+    it('keys on the exact HTTPS origin and never on a bare hostname', () => {
+        assert.strictEqual(profileOrigin('https://reader.example'), 'https://reader.example');
+        assert.strictEqual(profileOrigin('HTTPS://Reader.Example'), 'https://reader.example');
+        assert.strictEqual(profileOrigin('http://reader.example'), null);
+        assert.strictEqual(profileOrigin('reader.example'), null);
+        assert.strictEqual(profileOrigin('https://reader.example/path'), null);
+        const map = saveProfile({}, 'https://reader.example', Object.assign({}, good, { fullSizeSuffix: '-mini' }), 1);
+        assert.strictEqual(profileFor(map, 'https://reader.example').fullSizeSuffix, '-mini');
+        assert.strictEqual(profileFor(map, 'https://other.example'), null, 'another site never inherits settings');
+        assert.strictEqual(profileFor(map, 'http://reader.example'), null, 'a non-HTTPS origin is a different key');
+    });
+
+    it('round-trips through storage and re-validates on read', () => {
+        const stored = JSON.parse(JSON.stringify(saveProfile({}, 'https://reader.example', good, 5)));
+        assert.strictEqual(stored[PROFILE_STORAGE_KEY], undefined, 'the map is stored under its own key, not nested');
+        assert.deepStrictEqual(profileFor(stored, 'https://reader.example'), {
+            selector: '#readerarea img', attribute: 'auto', order: 'reader', fullSizeSuffix: '', savedAt: 5
+        });
+        const tampered = JSON.parse(JSON.stringify(stored));
+        tampered['https://reader.example'].selector = '';
+        assert.strictEqual(profileFor(tampered, 'https://reader.example'), null, 'a hand-edited entry is ignored');
+    });
+
+    it('forgets one site, keeps the others, and caps the list oldest-first', () => {
+        let map = saveProfile({}, 'https://a.example', good, 1);
+        map = saveProfile(map, 'https://b.example', good, 2);
+        assert.deepStrictEqual(Object.keys(map).sort(), ['https://a.example', 'https://b.example']);
+        const after = forgetProfile(map, 'https://a.example');
+        assert.deepStrictEqual(Object.keys(after), ['https://b.example']);
+        assert.deepStrictEqual(Object.keys(forgetProfile(map, 'https://c.example')), ['https://a.example', 'https://b.example']);
+        for (let i = 0; i < MAX_PROFILES + 5; i++) map = saveProfile(map, 'https://s' + i + '.example', good, 100 + i);
+        assert.strictEqual(Object.keys(map).length, MAX_PROFILES);
+        assert.strictEqual(profileFor(map, 'https://s0.example'), null, 'the oldest entry is evicted');
     });
 });

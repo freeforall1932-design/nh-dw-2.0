@@ -36,6 +36,8 @@
     <p>Supply a selector that matches only ordered page images. Static chapter HTML is inspected for title batches; JavaScript-only readers may not work. “Use open chapter” inspects the already-rendered page. The counts are discovered references, not proof that the full chapter or the intended server was found.</p>
     <label>Page-image CSS selector <input id="imageSelector" value="#readerarea img, .reading-content img, .chapter-content img, .page-break img" spellcheck="false"></label>
     <label>Image URL attribute <select id="imageAttribute"><option value="auto">Automatic, only if unambiguous</option><option value="src">src</option><option value="data-src">data-src</option><option value="data-lazy-src">data-lazy-src</option><option value="data-original">data-original</option></select></label>
+    <label>Thumbnail suffix to remove from page URLs (optional) <input id="fullSizeSuffix" maxlength="16" spellcheck="false" placeholder="-mini"></label>
+    <p class="hint">Only when the reader lists thumbnails and you know the full-size name is the same URL without this tail. It is applied to every page or to none — a page without the tail refuses the whole chapter rather than mixing sizes. Leave it empty to use whatever URL the page gives.</p>
     <label>Page order <select id="pageOrder">
       <option value="reader">Reader order — the order the site lists them (safest)</option>
       <option value="link-index">Page links — sort by ?page=N / “page N” in the link</option>
@@ -48,7 +50,8 @@
     <label class="check"><input id="rememberHosts" type="checkbox" checked> Remember approved image hosts for this site (revocable below)</label>
     <label class="check"><input id="skipSaved" type="checkbox" checked> Skip chapters already saved to this title (see “Forget saved chapters” below)</label>
     <p id="approvalHint" class="hint">No source site selected yet.</p>
-    <div class="buttons"><button id="forgetSite" class="secondary" type="button">Forget remembered hosts</button><button id="forgetTitle" class="secondary" type="button">Forget saved chapters for this title</button></div>
+    <p id="profileHint" class="hint">No reader settings are saved for this site.</p>
+    <div class="buttons"><button id="saveProfile" class="secondary" type="button">Remember these reader settings for this site</button><button id="forgetProfile" class="secondary" type="button">Forget this site's reader settings</button><button id="forgetSite" class="secondary" type="button">Forget remembered hosts</button><button id="forgetTitle" class="secondary" type="button">Forget saved chapters for this title</button></div>
   </section>
   <section aria-labelledby="saveHeading">
     <div class="step">03</div><h2 id="saveHeading">Save</h2>

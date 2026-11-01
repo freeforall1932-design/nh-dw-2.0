@@ -147,3 +147,20 @@ Next best evidence, in order:
 2. A sanitized capture per [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md), for
    sites with no extension (Tailspace) or to confirm a variant.
 3. The benchmark log from a real run.
+
+## 6. How likely is each site now?
+
+Asked directly ("how likely are Desu and Sasa to be implemented?"), and answered
+with the work that is actually left. These are estimates, not guarantees, and all
+of them still assume a real-browser run.
+
+| Site | Estimate | Why | What is left |
+| --- | --- | --- | --- |
+| **sasangeyou** | **~75 %** for ordinary chapters on generic defaults | MangaThemesia base is well understood: `div#readerarea img` is inside the panel's default selector, and the `ts_reader.run` base64 fallback is now implemented. Chapter lists are plain `<a href>` rows. | A 2-minute confirmation run (does the review show images or "read from the reader's own embedded page list"). Premium chapters stay out; if a server switcher exists, that is a separate feature. |
+| **doujin.desu** | **~35–45 %** for a whole-title static read, **~70 %** for one chapter at a time via the open page | The reader API is encrypted with an hour-derived key, which we deliberately do not reproduce, so the served HTML has no page URLs. The rendered DOM path works but requires *Use open chapter* per chapter and depends on CORS for the CDN. | A capture of the rendered reader, then confirm lazy-loading behaviour. Whole-title pseudo-batch is unlikely without the decryption we refuse to do. |
+| **tailspace** | **~60–70 %** | Nothing conflicts: top-down scroll reader, hashed names, no numbering — the top-down path plus the new suffix rule is built for exactly this. | One live run (`TAILSPACE_PLAN.md`). Real blockers if it is canvas/iframe-based or the CDN has no CORS. |
+
+**Decision taken (owner's instruction, 2026-10-31):** Desu and Sasa go on **hold**;
+Tailspace is the focus. Nothing was removed — the MangaThemesia fallback stays in
+the build because it is already written, tested and harmless, and it is what
+sasangeyou will use when it is picked up again.

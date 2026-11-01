@@ -35,6 +35,12 @@ const fixtures = {
     'https://reader.example/series/book/chapter-2/': ['text/html', '<div id="readerarea"><a href="?page=1"><img data-src="https://images.example/three.jpg" alt="Fixture, page 1"></a></div>'],
     // MangaThemesia-style: no <img> at all, the page list lives in a base64 script.
     'https://reader.example/series/book/chapter-3/': ['text/html', '<div id="readerarea"></div><script src="data:text/javascript;base64,dHNfcmVhZGVyLnJ1bih7ImltYWdlcyI6IFsiaHR0cHM6Ly9pbWFnZXMuZXhhbXBsZS9vbmUuanBnIiwgImh0dHBzOi8vaW1hZ2VzLmV4YW1wbGUvdHdvLnBuZyJdLCAicGFnaW4iOiBmYWxzZX0p"></script>'],
+    'https://images.example/t1-mini.jpg': ['image/jpeg', page1],
+    'https://images.example/t2-mini.jpg': ['image/jpeg', page3],
+    'https://images.example/t1.jpg': ['image/jpeg', page1],
+    'https://images.example/t2.jpg': ['image/jpeg', page3],
+    // Gallery-mode style: thumbnails only, so the full-size name must be derived by rule.
+    'https://reader.example/series/book/chapter-4/': ['text/html', '<div id="readerarea"><img data-src="https://images.example/t1-mini.jpg"><img data-src="https://images.example/t2-mini.jpg"></div>'],
     'https://images.example/one.jpg': ['image/jpeg', page1],
     'https://images.example/two.png': ['image/png', page2],
     'https://images.example/three.jpg': ['image/jpeg', page3]
@@ -271,7 +277,41 @@ async function main() {
     assert.match(aw.document.querySelector('#review li').textContent, /read from the reader's own embedded page list/);
     assert.strictEqual(requests.length, beforeScript + 1, 'only the chapter HTML is fetched, no image yet');
     assert.match(requests[requests.length - 1].url, /chapter-3\/$/);
-    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, benchmark log (synthetic VM)');
+    // Thumbnail-only reader: the explicit suffix rule derives full-size URLs, and
+    // a chapter where only some pages carry the tail is refused, not half-converted.
+    aw.document.getElementById('fullSizeSuffix').value = '-mini';
+    moreUrls.value = 'https://reader.example/series/book/chapter-4/'; click('addUrls');
+    await until(() => aw.document.querySelectorAll('#chapterList input').length === 4, 'fourth chapter added');
+    click('selectNone');
+    const fourth = aw.document.querySelectorAll('#chapterList input')[3];
+    fourth.checked = true; fourth.dispatchEvent(new aw.Event('change'));
+    click('inspect');
+    await until(() => /full-size rule removed/.test(aw.document.getElementById('review').textContent), 'suffix rule');
+    assert.match(aw.document.querySelector('#review li').textContent, /removed “-mini” from 2 URL\(s\)/);
+    const miniReview = Array.from(aw.document.querySelectorAll('#review input[data-host]'), box => box.dataset.host);
+    assert.deepStrictEqual(miniReview, ['images.example'], 'only the derived host is offered for approval');
+    aw.document.getElementById('confirm').checked = true;
+    aw.document.querySelector('#review input[data-host]').checked = true;
+    const beforeMini = downloads.length;
+    click('download');
+    await until(() => downloads.length === beforeMini + 1, 'suffix archive saved');
+    const miniZip = await JSZip.loadAsync(await downloads[downloads.length - 1].blob.arrayBuffer());
+    assert.deepStrictEqual(await miniZip.file('001.jpg').async('nodebuffer'), page1);
+    assert.deepStrictEqual(await miniZip.file('002.jpg').async('nodebuffer'), page3);
+    assert.ok(requests.some(item => /\/t1\.jpg$/.test(item.url)), 'the derived full-size URL is what was fetched');
+    assert.ok(!requests.some(item => /t1-mini\.jpg$/.test(item.url)), 'the thumbnail URL must not be fetched');
+    aw.document.getElementById('fullSizeSuffix').value = '';
+    // Remembered reader settings for one site only.
+    aw.document.getElementById('imageSelector').value = '#readerarea img';
+    aw.document.getElementById('pageOrder').value = 'reader';
+    click('saveProfile');
+    assert.match(aw.document.getElementById('status').textContent, /Saved these reader settings/);
+    assert.ok(storage.nhdwSiteProfiles && storage.nhdwSiteProfiles['https://reader.example']);
+    aw.document.getElementById('pageOrder').value = 'link-index';
+    click('forgetProfile');
+    assert.match(aw.document.getElementById('status').textContent, /Cleared the saved reader settings/);
+    assert.deepStrictEqual(Object.keys(storage.nhdwSiteProfiles), []);
+    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, suffix rule, site profiles, benchmark log (synthetic VM)');
 }
 main().then(() => { app.window.close(); source.window.close(); }).catch(error => {
     console.error('FAIL: bundled chapter integration:', error); app.window.close(); source.window.close(); process.exitCode = 1;

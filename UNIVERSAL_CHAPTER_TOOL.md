@@ -75,6 +75,33 @@ The review line states which strategy ran, flags reordering that differs from th
 reader order, and previews the first four resolved pages so a wrong guess is
 visible before saving. Nothing is ever fuzzy-matched or silently re-sorted.
 
+## Thumbnail-only readers (the explicit suffix rule)
+
+Some readers list `…abc-mini.jpg` and only serve the full-size file at
+`…abc.jpg`. Deriving one name from the other is a guess, so it never happens on its
+own: type the tail in **Thumbnail suffix to remove from page URLs** (`-mini`,
+`_thumb`, …) and the rule is applied to the whole chapter or not at all.
+
+- Every page must carry the tail. One page without it refuses the chapter with a
+  clear message instead of mixing thumbnails and full-size files.
+- The derived URL must still be public HTTPS, must not collide with another page,
+  and must still pass the signature and 128 px dimension checks when fetched.
+- The review states what happened: `· full-size rule removed “-mini” from 7 URL(s)`,
+  and the log records it. An invalid tail (no `-`/`_` separator, a pattern, a dot)
+  is refused rather than interpreted.
+- Empty field = off. Streaming scroll readers normally need nothing here.
+
+## Remembered reader settings per site
+
+Once a site works, **Remember these reader settings for this site** stores the
+selector, image attribute, page order and suffix against that exact HTTPS origin
+(max 50 sites, oldest evicted). The next scan on that site fills the panel in and
+says so. The stored values are re-validated every time they are read, so a
+hand-edited or outdated entry is ignored rather than used. A profile is not a
+permission: it never approves an image host, never widens host access and never
+injects anything by itself. **Forget this site's reader settings** removes it and
+leaves the current field values alone.
+
 ## Readers whose page list is inside a script (MangaThemesia family)
 
 Some WordPress manga themes (the MangaThemesia base, which sasangeyou inherits)

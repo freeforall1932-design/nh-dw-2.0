@@ -429,6 +429,72 @@ export function hasReaderScript(html: string): boolean {
     return readerScriptPayloads(html).length > 0;
 }
 
+/*
+ * Thumbnail -> full-size URL by an EXPLICIT suffix.
+ *
+ * Some readers list `…abc-mini.jpg` (a thumbnail) even though the site also
+ * serves `…abc.jpg`. Deriving the second from the first is only safe when the
+ * user states the rule, so it is off unless a suffix is supplied, it is applied
+ * to every page or to none, and the result still has to pass the normal URL and
+ * image checks. Nothing is inferred from the file name pattern.
+ */
+export const FULL_SIZE_SUFFIX_PATTERN = /^[-_][A-Za-z0-9]{1,15}$/;
+
+/** "" stays "", a valid suffix is accepted, anything else returns null. */
+export function normalizeFullSizeSuffix(value: string): string | null {
+    const suffix = String(value === undefined || value === null ? "" : value).trim();
+    if (suffix === "") return "";
+    return FULL_SIZE_SUFFIX_PATTERN.test(suffix) ? suffix : null;
+}
+
+/** The derived full-size URL, or null when this page does not carry the suffix. */
+export function stripFullSizeSuffix(url: string, suffix: string): string | null {
+    const rule = normalizeFullSizeSuffix(suffix);
+    if (!rule) return null;
+    const parsed = publicHttpsUrl(url);
+    if (!parsed) return null;
+    const path = parsed.pathname;
+    // The suffix sits on the file name, before its extension: `abc-mini.jpg`.
+    const lastDot = path.lastIndexOf(".");
+    const hasExtension = lastDot > path.lastIndexOf("/") && path.length - lastDot <= 6;
+    const base = hasExtension ? path.slice(0, lastDot) : path;
+    const extension = hasExtension ? path.slice(lastDot) : "";
+    if (!base.endsWith(rule)) return null;
+    const trimmed = base.slice(0, base.length - rule.length);
+    if (trimmed === "" || trimmed.endsWith("/")) return null;
+    const derived = new URL(parsed.href);
+    derived.pathname = trimmed + extension;
+    return publicHttpsUrl(derived.href) ? derived.href : null;
+}
+
+/**
+ * Apply the rule to a whole chapter. All or nothing: a page without the suffix
+ * means the rule does not describe this reader, and a mixed chapter (some
+ * thumbnails, some full-size) is refused rather than half-converted.
+ */
+export function applyFullSizeSuffix(
+    pages: UniversalPageReference[], suffix: string
+): { pages: UniversalPageReference[]; changed: number } {
+    const rule = normalizeFullSizeSuffix(suffix);
+    if (rule === null) throw new UniversalChapterError("suffix", "The thumbnail suffix must look like \"-mini\".");
+    if (rule === "") return { pages: pages.slice(), changed: 0 };
+    if (!pages.length) return { pages: [], changed: 0 };
+    const converted: UniversalPageReference[] = [];
+    const seen = new Set<string>();
+    for (const page of pages) {
+        const url = stripFullSizeSuffix(page.url, rule);
+        if (!url) {
+            throw new UniversalChapterError("suffix",
+                "Some page URLs do not carry the \"" + rule + "\" suffix. Clear the rule, or check the selector.");
+        }
+        if (seen.has(url)) throw new UniversalChapterError("suffix", "The rule produced duplicate page URLs.");
+        seen.add(url);
+        const host = publicHttpsUrl(url);
+        converted.push({ url: url, host: host ? host.hostname.toLowerCase() : page.host });
+    }
+    return { pages: converted, changed: converted.length };
+}
+
 const PAGE_COUNT_ATTRIBUTES = ["data-total-pages", "data-page-count", "data-pages", "data-totalpage", "data-num-pages"];
 const COUNTER_SELECTOR = '[class*="page" i], [id*="page" i], [class*="counter" i], [id*="counter" i]';
 
