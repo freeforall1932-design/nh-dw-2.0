@@ -75,6 +75,33 @@ The review line states which strategy ran, flags reordering that differs from th
 reader order, and previews the first four resolved pages so a wrong guess is
 visible before saving. Nothing is ever fuzzy-matched or silently re-sorted.
 
+## Readers whose page list is inside a script (MangaThemesia family)
+
+Some WordPress manga themes (the MangaThemesia base, which sasangeyou inherits)
+serve a chapter page with an empty reader container and keep the page list in a
+base64 script:
+
+```html
+<script src="data:text/javascript;base64,dHNfcmVhZGVyLnJ1bih7…"></script>
+```
+
+`dHNfcmVhZGVyLnJ1bih7` decodes to `ts_reader.run({`, and the payload contains
+`"images":["https://…", …]`. When the supplied selector matches **no** images, the
+probe decodes that payload as text — it is never executed — keeps the site's own
+order, drops anything that is not a public HTTPS URL, and the review says:
+
+> Chapter 1 — 8 image reference(s) · read from the reader's own embedded page list
+
+If the selector *does* match images, the script is ignored: a normal reader is
+never second-guessed. This is what makes a whole title inspectable in one pass on
+that site family; the reference behaviour comes from the open-source extension’s
+parser (see [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md)).
+
+A site that encrypts its reader API (DoujinDesu does, with an hour-derived key) is
+**not** handled this way on purpose — that would be reproducing a scraping
+countermeasure. Use *Use open chapter* there: the site's own JavaScript has already
+rendered the images in your tab.
+
 ## Top-down / scroll readers (random file names are fine)
 
 A vertical reader lists every page as an image, so **page 1 is simply the first

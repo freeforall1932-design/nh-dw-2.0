@@ -5,6 +5,7 @@ import {
     UniversalChapterError, ImageAttribute, UniversalPageReference,
     publicHttpsUrl, discoverChapters, collectChapterPages, collectStaticChapterPages, PageOrderStrategy,
     detectAdvertisedPageCount, detectStaticPageCount, sweepScroll, pickScrollTarget,
+    collectReaderScriptPages, hasReaderScript,
     assertUsablePage, ScrollCandidate, MIN_PAGE_DIMENSION,
     readBoundedResponse, checkResponse, identifyImage
 } from "../utils/universalChapter";
@@ -95,6 +96,21 @@ if (!scope.__nhdwChapterProbe) {
         return match && match.element ? { element: match.element, name: best.name } : "window";
     }
 
+    /**
+     * The page's own base64 reader scripts, re-serialised so the shared parser
+     * (which works on HTML text) can be reused unchanged. Only the src/value
+     * attributes are needed; no script is executed.
+     */
+    function readerScriptSource(): string {
+        const parts: string[] = [];
+        const nodes = document.querySelectorAll("script");
+        for (let i = 0; i < nodes.length && i < 200; i++) {
+            const value = nodes[i].getAttribute("src") || "";
+            if (value.indexOf("data:text/javascript;base64,") === 0) parts.push('<script src="' + value + '"></script>');
+        }
+        return parts.join("");
+    }
+
     async function handle(message: any): Promise<any> {
         if (message.op === "cancel") {
             cancelled = true;
@@ -127,20 +143,43 @@ if (!scope.__nhdwChapterProbe) {
             const order = String(message.order || "reader") as PageOrderStrategy;
             let collection;
             let advertised: number | null = null;
+            // Where the page list came from, so the review can say so instead of
+            // presenting a translated list as if it were the reader's own.
+            let source: "dom" | "static" | "reader-script" = "dom";
             if (message.current === true) {
                 if (chapter.href !== current.href) throw new UniversalChapterError("tab-changed", "Return to the selected chapter and scan again.");
-                collection = collectChapterPages(document, document.baseURI, selector, attribute, order);
+                try {
+                    collection = collectChapterPages(document, document.baseURI, selector, attribute, order);
+                } catch (error) {
+                    // MangaThemesia-style readers may hold the page list in a
+                    // base64 script rather than in <img> elements.
+                    const scripted = collectReaderScriptPages(readerScriptSource(), current.href);
+                    if (!scripted.length) throw error;
+                    collection = { pages: scripted, order: "reader", readerOrderDiffers: false,
+                        preview: scripted.slice(0, 3).map(page => page.host) };
+                    source = "reader-script";
+                }
             } else {
                 const data = await boundedFetch(chapter.href, "html");
                 const html = new TextDecoder("utf-8").decode(data);
-                collection = collectStaticChapterPages(html, chapter.href, selector, attribute, order);
                 advertised = detectStaticPageCount(html);
+                try {
+                    collection = collectStaticChapterPages(html, chapter.href, selector, attribute, order);
+                    source = "static";
+                } catch (error) {
+                    const scripted = collectReaderScriptPages(html, chapter.href);
+                    if (!scripted.length) throw error;
+                    collection = { pages: scripted, order: "reader", readerOrderDiffers: false,
+                        preview: scripted.slice(0, 3).map(page => page.host) };
+                    source = "reader-script";
+                }
             }
             const pages = collection.pages;
             inspected.set(id, { url: chapter.href, pages: pages });
             // pageHosts lets the panel (and the benchmark) pick a page on a host
             // the user has already approved, instead of trial and error.
-            return { ok: true, count: pages.length, hosts: Array.from(new Set(pages.map(page => page.host))),
+            return { ok: true, count: pages.length, source: source,
+                hosts: Array.from(new Set(pages.map(page => page.host))),
                 pageHosts: pages.slice(0, 400).map(page => page.host),
                 order: collection.order, readerOrderDiffers: collection.readerOrderDiffers, preview: collection.preview,
                 advertised: message.current === true ? detectAdvertisedPageCount(document) : advertised };

@@ -1,6 +1,8 @@
 const assert = require('assert');
 const {
-    readImageSize, assertUsablePage, MIN_PAGE_DIMENSION, identifyImage, pickScrollTarget
+    readImageSize, assertUsablePage, MIN_PAGE_DIMENSION, identifyImage, pickScrollTarget,
+    readerScriptPayloads, readerScriptImageUrls, collectReaderScriptPages, hasReaderScript,
+    collectStaticChapterPages
 } = require('../build/test/utils/universalChapter.js');
 const { approvedHostsFor, rememberHosts, forgetOrigin, MAX_HOSTS_PER_ORIGIN } = require('../build/test/utils/hostApprovals.js');
 const {
@@ -241,5 +243,70 @@ describe('UI self-test plan (synthetic control exercise)', () => {
         assert.match(lines[0], /^retry \(checkbox\): click twice — ok$/);
         assert.match(lines[1], /^format \(select\): select — FAILED \(did not return\)$/);
         assert.deepStrictEqual(summarizeSelfTest([]), { checked: 0, failed: 0, skipped: 0 });
+    });
+});
+
+// --- MangaThemesia reader script (real base64 payloads, no network) -----------
+function readerPayload(imagesJson) {
+    return 'ts_reader.run(' + JSON.stringify({ images: imagesJson, pagin: false }) + ')';
+}
+function scriptTag(payload) {
+    return '<script src="data:text/javascript;base64,' + Buffer.from(payload, 'utf8').toString('base64') + '"></script>';
+}
+
+describe('reader scripts that carry the page list (MangaThemesia family)', () => {
+    const chapterUrl = 'https://reader.example/series/book/chapter-1/';
+
+    it('decodes the payload and keeps the site list order', () => {
+        const html = '<div id="readerarea"></div>' + scriptTag(readerPayload([
+            'https://images.example/001.jpg', 'https://images.example/002.jpg', 'https://images.example/003.jpg'
+        ]));
+        assert.strictEqual(hasReaderScript(html), true);
+        assert.strictEqual(readerScriptPayloads(html).length, 1);
+        const pages = collectReaderScriptPages(html, chapterUrl);
+        assert.deepStrictEqual(pages.map(page => page.url), [
+            'https://images.example/001.jpg', 'https://images.example/002.jpg', 'https://images.example/003.jpg'
+        ]);
+        assert.deepStrictEqual(pages.map(page => page.host), ['images.example', 'images.example', 'images.example']);
+    });
+
+    it('resolves relative URLs against the chapter and drops anything not public HTTPS', () => {
+        const html = scriptTag(readerPayload([
+            '/wp-content/uploads/one.jpg',
+            'https://cdn.other.example/two.jpg',
+            'http://insecure.example/three.jpg',
+            'data:image/gif;base64,R0lGODlhAQABAAA=',
+            'https://user:pass@bad.example/four.jpg',
+            'https://localhost/five.jpg',
+            'not a url'
+        ]));
+        const pages = collectReaderScriptPages(html, chapterUrl);
+        assert.deepStrictEqual(pages.map(page => page.url), [
+            'https://reader.example/wp-content/uploads/one.jpg', 'https://cdn.other.example/two.jpg'
+        ]);
+    });
+
+    it('refuses a payload that is not an image list, and HTML with no payload at all', () => {
+        assert.deepStrictEqual(readerScriptImageUrls('ts_reader.run({"pagin":true})'), []);
+        assert.deepStrictEqual(readerScriptImageUrls('nothing here'), []);
+        assert.deepStrictEqual(readerScriptImageUrls('ts_reader.run({"images":not json})'), []);
+        assert.deepStrictEqual(collectReaderScriptPages('<div id="readerarea"></div>', chapterUrl), []);
+        assert.deepStrictEqual(readerScriptPayloads(''), []);
+        assert.deepStrictEqual(readerScriptPayloads('<script src="data:text/javascript;base64,!!!!"></script>'), []);
+        assert.throws(() => collectReaderScriptPages('<script></script>', 'http://plain.example/c/1/'), /not allowed/);
+    });
+
+    it('is only a fallback: a normal reader is read from its images, not the script', () => {
+        const html = '<div id="readerarea"><img data-src="https://images.example/dom-1.jpg">' +
+            '<img data-src="https://images.example/dom-2.jpg"></div>' + scriptTag(readerPayload([
+                'https://images.example/script-1.jpg', 'https://images.example/script-2.jpg',
+                'https://images.example/script-3.jpg'
+            ]));
+        const fromDom = collectStaticChapterPages(html, chapterUrl, '#readerarea img', 'auto', 'reader');
+        assert.deepStrictEqual(fromDom.pages.map(page => page.url), [
+            'https://images.example/dom-1.jpg', 'https://images.example/dom-2.jpg'
+        ]);
+        // The script is still there for the probe to use only when the selector found nothing.
+        assert.strictEqual(hasReaderScript(html), true);
     });
 });

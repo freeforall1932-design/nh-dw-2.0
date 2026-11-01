@@ -49,6 +49,14 @@ What landed in this pass, on top of retry + `ComicInfo.xml`:
   [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The
   API-key archive path stays the supported route and stays off by default until
   delivery is verified.
+- **Extension-source research (2026-10-31)**: [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md)
+  answers the owner's "should we pivot to bypassing the ad-link?" question — no;
+  the Mihon/Keiyoushi extensions read the reader/API and never touch a download
+  button or shortener, so their parsers are the evidence source. From it: sasangeyou
+  is MangaThemesia (`div#readerarea img`, else a base64 `ts_reader.run({…})` script
+  → implemented as a fallback), doujindesu uses an encrypted reader API (hour-key
+  `Decryptor`, deliberately **not** reimplemented; DOM reading only), tailspace has
+  no extension (still needs a capture).
 - **The capture guide is the owner's manual task**:
   [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) — setup, chapter-list
   capture, reader capture, the six questions per reader, per-site walkthrough

@@ -333,6 +333,102 @@ export function collectStaticChapterImages(html: string, chapterUrl: string, sel
     return collectStaticChapterPages(html, chapterUrl, selector, attribute).pages;
 }
 
+/*
+ * Reader scripts that carry the page list inside the HTML.
+ *
+ * MangaThemesia-family sites (the base library behind ~120 extensions in the
+ * Keiyoushi extension set, including sasangeyou) do not always put <img>
+ * elements in the served HTML. Instead the chapter page ships
+ *
+ *     <script src="data:text/javascript;base64,dHNfcmVhZGVyLnJ1bih7…"></script>
+ *
+ * whose decoded payload is `ts_reader.run({"images":["https://…", …]})`. The
+ * reference implementation reads `div#readerarea img` first and only falls back
+ * to this payload when no usable images were found, which is the same order used
+ * here: an ordinary reader is never second-guessed.
+ *
+ * Nothing is executed. The payload is base64-decoded as text, the JSON array is
+ * parsed, and every URL still has to pass publicHttpsUrl (https only, public
+ * host, no credentials/port). Anything else is dropped rather than guessed.
+ */
+const READER_SCRIPT_PATTERN = /(?:src|value)\s*=\s*["']data:text\/javascript;base64,([A-Za-z0-9+/=\s]+)["']/gi;
+const IMAGE_LIST_PATTERN = /["']?(?:images|imageUrls)["']?\s*[:=]\s*(\[[^\]]*\])/;
+
+function decodeBase64Text(value: string): string | null {
+    const compact = value.replace(/\s+/g, "");
+    if (!compact || compact.length % 4 === 1) return null;
+    try {
+        const scope: any = globalThis as any;
+        if (typeof scope.atob === "function") {
+            const binary = scope.atob(compact);
+            if (typeof scope.TextDecoder === "function") {
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                return new scope.TextDecoder("utf-8").decode(bytes);
+            }
+            return binary;
+        }
+        if (scope.Buffer && typeof scope.Buffer.from === "function") {
+            return scope.Buffer.from(compact, "base64").toString("utf-8");
+        }
+    } catch (_) { return null; }
+    return null;
+}
+
+/** Every candidate payload in this HTML, decoded as text. Invalid ones are skipped. */
+export function readerScriptPayloads(html: string): string[] {
+    const found: string[] = [];
+    const text = String(html || "");
+    if (text.length === 0) return found;
+    READER_SCRIPT_PATTERN.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = READER_SCRIPT_PATTERN.exec(text)) !== null && found.length < 8) {
+        const decoded = decodeBase64Text(match[1]);
+        if (decoded && decoded.length <= UNIVERSAL_MAX_HTML_BYTES) found.push(decoded);
+    }
+    return found;
+}
+
+/** Raw image URLs from a decoded `ts_reader.run({…})` payload, in the site's own order. */
+export function readerScriptImageUrls(payload: string): string[] {
+    const match = IMAGE_LIST_PATTERN.exec(String(payload || ""));
+    if (!match) return [];
+    let parsed: any;
+    try { parsed = JSON.parse(match[1]); } catch (_) { return []; }
+    if (!Array.isArray(parsed)) return [];
+    const urls: string[] = [];
+    for (const entry of parsed) {
+        // A URL never contains literal whitespace; such an entry is prose, not a page.
+        if (typeof entry === "string" && entry.trim() !== "" && !/\s/.test(entry.trim()) &&
+            urls.length < UNIVERSAL_MAX_PAGES) urls.push(entry.trim());
+    }
+    return urls;
+}
+
+/**
+ * Page references from a reader script. Order is the site's own list order
+ * (page 1 first), so no numbering strategy is applied or guessed.
+ */
+export function collectReaderScriptPages(html: string, chapterUrl: string): UniversalPageReference[] {
+    if (!publicHttpsUrl(chapterUrl)) throw new UniversalChapterError("url", "Chapter page URL is not allowed.");
+    const pages: UniversalPageReference[] = [];
+    for (const payload of readerScriptPayloads(html)) {
+        for (const raw of readerScriptImageUrls(payload)) {
+            const url = publicHttpsUrl(raw, chapterUrl);
+            if (!url || url.hash) continue;
+            pages.push({ url: url.href, host: url.hostname.toLowerCase() });
+            if (pages.length >= UNIVERSAL_MAX_PAGES) return pages;
+        }
+        if (pages.length) return pages;
+    }
+    return pages;
+}
+
+/** True when this HTML carries a reader script at all (used only for messaging). */
+export function hasReaderScript(html: string): boolean {
+    return readerScriptPayloads(html).length > 0;
+}
+
 const PAGE_COUNT_ATTRIBUTES = ["data-total-pages", "data-page-count", "data-pages", "data-totalpage", "data-num-pages"];
 const COUNTER_SELECTOR = '[class*="page" i], [id*="page" i], [class*="counter" i], [id*="counter" i]';
 

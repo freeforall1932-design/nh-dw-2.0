@@ -36,6 +36,12 @@ comparison. The native button's click flow remains unobserved.
   2026-10-30). Other sites use on-site page extraction — a pseudo-batch from the
   title list, one chapter archive at a time, with no mirror or shortener
   clicking. See [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md).
+- **Mihon/Keiyoushi extension source is the evidence source, not a pivot to
+  shortcut bypassing** (2026-10-31). The extensions read the site's reader/API and
+  never touch a download button, `mirrored.to` or a shortener; bypassing an
+  ad-link/shortener stays out of scope. Findings and the site-by-site answers:
+  [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md). Implemented from it:
+  the MangaThemesia `ts_reader.run` base64 fallback (sasangeyou family).
 - **Benchmark = logging + the extension testing itself, not a guide.** The owner
   asked for no benchmark guide: the button presses the page's own controls, runs
   the site checks and writes the log file to hand over. The owner's manual task is
@@ -58,6 +64,15 @@ was checked against the code, not assumed. All remain unverified against a live
 site unless stated.
 
 *Chapter tool — correctness and robustness*
+
+- [x] **Page lists hidden in a reader script — done 2026-10-31**
+  (`readerScriptPayloads`, `readerScriptImageUrls`, `collectReaderScriptPages`):
+  MangaThemesia-family chapters that ship no `<img>` elements keep the page list
+  in a base64 `ts_reader.run({…})` script. The probe decodes it as text (never
+  executes it), requires public HTTPS URLs, keeps the site's own order and labels
+  the review accordingly. DOM images still win when present. Evidence:
+  `lib-multisrc/mangathemesia` in `keiyoushi/extensions-source`; ~124 extensions
+  inherit that base. Not yet confirmed on a live sasangeyou page.
 
 - [x] **CBZ metadata — done 2026-10-30** (`buildComicInfoXml`,
   `chapterNumberFromLabel`): escaped XML, CBZ only, salvaged archives carry their

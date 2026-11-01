@@ -264,11 +264,19 @@ async function inspectSelected(): Promise<void> {
             if (!Number.isInteger(result.count) || !Array.isArray(result.hosts)) throw new Error("The reader inspection was incomplete.");
             const orderLabels: Record<string, string> = { "reader": "reader order", "link-index": "sorted by page links", "name-natural": "sorted by image numbers" };
             let orderNote = orderLabels[String(result.order)] || "reader order";
+            // A page list recovered from the reader's embedded script is the
+            // site's own list; say so, because no <img> element was involved.
+            if (result.source === "reader-script") orderNote = "read from the reader's own embedded page list";
             if (result.order !== "reader" && result.readerOrderDiffers) orderNote += " (differs from reader order — verify)";
             if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
             const advertised = Number.isInteger(result.advertised) ? Number(result.advertised) : null;
             results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts,
                 orderNote: orderNote, advertised: advertised, url: chapter.url });
+            if (result.source === "reader-script") {
+                log("info", "inspect", "Page list recovered from the site's embedded reader script", {
+                    label: chapter.label, pages: result.count, hosts: result.hosts
+                });
+            }
             log("info", "inspect", "Chapter inspected", {
                 label: chapter.label, chapter: chapter.url, pages: result.count, hosts: result.hosts,
                 order: result.order, differs: !!result.readerOrderDiffers, advertised: advertised

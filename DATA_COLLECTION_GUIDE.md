@@ -136,7 +136,17 @@ iframe). Say so — that is a finding, and it changes what can be supported.
 Do them in this order. Each one is the same four moves as Part 2/3; only the
 location differs.
 
-### 1. `sasangeyou.net` — first
+### 1. `sasangeyou.net` — confirm only (structure already known)
+
+Its open-source extension inherits the MangaThemesia base, so the reader shape is
+known: `div#readerarea img`, and when that is empty a base64 `ts_reader.run({…})`
+script holding the page list — the tool now handles both. A capture is only needed
+to confirm the *variant* on this domain, so it is worth 2 minutes, not a session:
+open one ordinary chapter, run the benchmark, and say whether the review shows
+images or "read from the reader's own embedded page list". Details:
+[EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md).
+
+### 1b. `sasangeyou.net` — full capture (only if the benchmark is unclear)
 
 - Go to the home page, choose an **ordinary series** (any chapter marked Premium
   stays out of this entirely), open its **title page**. Capture the chapter list.
@@ -158,7 +168,14 @@ location differs.
 - The answers that matter: *Thumbnail attribute*, *Page numbers* (expect "none";
   file names are hashed), and *Needs scrolling*.
 
-### 3. `doujin.desu.xxx`
+### 3. `doujin.desu.xxx` — reader only (no static list)
+
+Its extension uses an API whose JSON is encrypted with an hour-derived key, so a
+static whole-title read is **not** supported here by design (see
+[EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md#doujindesuxxx--reader-api-encrypted-on-purpose)).
+Capture the rendered reader only: open one chapter, scroll to the bottom, and
+capture the container the site's own JavaScript filled in. The panel path for this
+site is *Use open chapter*, one chapter at a time.
 
 - Go to `https://doujin.desu.xxx/manga/irodori-kazoku`, capture the chapter list.
   If `https://doujin.desu.xxx/manga/stop-smoking` looks different, capture that

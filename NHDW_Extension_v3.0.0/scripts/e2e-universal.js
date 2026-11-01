@@ -33,6 +33,8 @@ const fixtures = {
     // the DOM order deliberately jumbled (page 2 before page 1).
     'https://reader.example/series/book/chapter-1/': ['text/html', '<div class="page-counter">Page 1 / 3</div><div id="readerarea"><a href="?page=2"><img data-src="https://images.example/two.png" alt="Fixture, page 2"></a><a href="?page=1"><img data-src="https://images.example/one.jpg" alt="Fixture, page 1"></a></div><div class="ads"><img src="https://unapproved.example/ad.jpg"></div>'],
     'https://reader.example/series/book/chapter-2/': ['text/html', '<div id="readerarea"><a href="?page=1"><img data-src="https://images.example/three.jpg" alt="Fixture, page 1"></a></div>'],
+    // MangaThemesia-style: no <img> at all, the page list lives in a base64 script.
+    'https://reader.example/series/book/chapter-3/': ['text/html', '<div id="readerarea"></div><script src="data:text/javascript;base64,dHNfcmVhZGVyLnJ1bih7ImltYWdlcyI6IFsiaHR0cHM6Ly9pbWFnZXMuZXhhbXBsZS9vbmUuanBnIiwgImh0dHBzOi8vaW1hZ2VzLmV4YW1wbGUvdHdvLnBuZyJdLCAicGFnaW4iOiBmYWxzZX0p"></script>'],
     'https://images.example/one.jpg': ['image/jpeg', page1],
     'https://images.example/two.png': ['image/png', page2],
     'https://images.example/three.jpg': ['image/jpeg', page3]
@@ -254,6 +256,21 @@ async function main() {
     assert.match(aw.document.getElementById('approvalHint').textContent, /No hosts remembered for https:\/\/reader\.example yet\./);
     click('forgetTitle');
     assert.match(aw.document.getElementById('status').textContent, /Cleared 2 saved-chapter record\(s\)/);
+    // A reader that keeps its page list in a base64 script (MangaThemesia family):
+    // no <img> matched the selector, so the probe falls back to the site's own list.
+    const moreUrls = aw.document.getElementById('chapterUrls');
+    moreUrls.value = 'https://reader.example/series/book/chapter-3/'; click('addUrls');
+    await until(() => aw.document.querySelectorAll('#chapterList input').length === 3, 'third chapter added');
+    click('selectNone');
+    const third = aw.document.querySelectorAll('#chapterList input')[2];
+    third.checked = true; third.dispatchEvent(new aw.Event('change'));
+    aw.document.getElementById('pageOrder').value = 'reader';
+    const beforeScript = requests.length;
+    click('inspect');
+    await until(() => /embedded page list/.test(aw.document.getElementById('review').textContent), 'reader-script fallback');
+    assert.match(aw.document.querySelector('#review li').textContent, /read from the reader's own embedded page list/);
+    assert.strictEqual(requests.length, beforeScript + 1, 'only the chapter HTML is fetched, no image yet');
+    assert.match(requests[requests.length - 1].url, /chapter-3\/$/);
     console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, benchmark log (synthetic VM)');
 }
 main().then(() => { app.window.close(); source.window.close(); }).catch(error => {
