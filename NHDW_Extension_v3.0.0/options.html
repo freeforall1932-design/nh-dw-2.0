@@ -156,11 +156,13 @@
         <br/>
         Download whole galleries as one ready-made file from the server (requires API key):
         <input id="useServerArchive" type="checkbox"/>
-        <br/><small>When on, the extension asks the nhentai server for the complete
-        gallery as one ZIP/CBZ file instead of fetching every page itself — usually
-        faster. If the server does not offer this for your account, the extension
-        quietly falls back to downloading page by page, so nothing breaks.
-        Applies to ZIP/CBZ downloads of single galleries (not PDF, not raw).</small>
+        <br/><small><strong>Experimental — leave this off:</strong> the nhentai API
+        archive path is not live-verified. It rejects unrecognized delivery hosts,
+        redirects and some large or unsupported archives, and has not proved page
+        completeness or browser save completion. For an eligible individual
+        ZIP/CBZ, failures are reported rather than silently falling back to pages.
+        PDF, raw and combined batch archives do not use this path. The website's
+        own Download button is separate.</small>
         <br/><hr/>
         <h3>Name template</h3>
         Choose what the downloaded file name contains:

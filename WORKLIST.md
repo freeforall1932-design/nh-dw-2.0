@@ -1,5 +1,371 @@
 # Worklist — nh-dw-2.0
 
+**Owner browser priority (2026-10-27):** Chromium is the primary target for new
+work, with the desktop **Load unpacked** workflow kept beginner-friendly.
+Firefox development, parity, device testing and signing are deferred unless a
+particular change is straightforward; they must not block a Chromium release.
+Keep the existing Firefox tree rather than deleting it. If it is changed or
+released later, test that build independently and describe any missing features
+or known defects honestly. This direction supersedes older *future-work* claims
+that both browser trees must be updated together; historical results below are
+unchanged. See [NEW_DOMAIN_PLANNING.md](NEW_DOMAIN_PLANNING.md#browser-priority).
+
+**Current scope:** The owner authorized continuing Sasangeyou chapter work and
+Chromium nhentai archive hardening. Sasangeyou and DoujinDesu remain the
+new-domain priorities; external video/game hosts remain on hold. The owner can
+identify a desired batch option when choices vary. A same-title available batch
+still has priority; separate chapter archives are the fallback only after the
+relevant batch options are explicitly confirmed expired. No related series or
+blocked host should be guessed. See [NEW_DOMAIN_PLANNING.md](NEW_DOMAIN_PLANNING.md).
+The owner reports the nhentai website download and reader have the same original
+file size; this is not an independently checked hash, quality or provenance
+comparison. The native button's click flow remains unobserved.
+
+**Owner decisions (2026-10-30, recorded):**
+
+- **Retry: allowed.** Implemented — up to two extra attempts (400 ms, 1200 ms)
+  for transient transport/timeout/5xx failures only; 429, 401/403, Cancel, a
+  changed tab, an unapproved host and a stale inspection are never retried.
+- **ComicInfo.xml: yes.** Implemented in CBZ output with the fields this tool
+  actually knows: `Title` (chapter label), `Series` (title folder), `Number`
+  (first number in the label), `PageCount`, and `Notes` only for a salvaged
+  archive. No invented writer/artist/genre/summary; readers ignore it harmlessly.
+- **Entry point: a separate tab** (already the case) — keeps the tool out of the
+  popup/side panel.
+- **The "site's own Download control" drop is nhentai-only** (second pass,
+  2026-10-30). Other sites use on-site page extraction — a pseudo-batch from the
+  title list, one chapter archive at a time, with no mirror or shortener
+  clicking. See [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md).
+- **Focus order (2026-10-31, owner):** Tailspace is the active target; DoujinDesu
+  and Sasangeyou are **on hold** pending a real run. Estimates and the reasoning
+  behind each: [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md#6-how-likely-is-each-site-now).
+  Tailspace checklist: [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md). Nothing was deleted
+  for the hold — the MangaThemesia reader-script fallback ships because it is
+  already tested and is what sasangeyou will need on resumption.
+- **Mihon/Keiyoushi extension source is the evidence source, not a pivot to
+  shortcut bypassing** (2026-10-31). The extensions read the site's reader/API and
+  never touch a download button, `mirrored.to` or a shortener; bypassing an
+  ad-link/shortener stays out of scope. Findings and the site-by-site answers:
+  [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md). Implemented from it:
+  the MangaThemesia `ts_reader.run` base64 fallback (sasangeyou family).
+- **Benchmark = logging + the extension testing itself, not a guide.** The owner
+  asked for no benchmark guide: the button presses the page's own controls, runs
+  the site checks and writes the log file to hand over. The owner's manual task is
+  the website capture walkthrough in
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md).
+- **Firefox: Chromium-only for now**, revisit only if installing an unsigned
+  build stops requiring a signed/licensed add-on. The Firefox tree stays.
+- **Tailspace (answered):** scroll mode serves full-size files; only gallery mode
+  serves `-mini` thumbnails.
+- **nhentai's own Download (owner's live observation, not independently
+  verified):** the control is an embedded link; the resulting file is a ZIP whose
+  name carries the id, title and artist (similar to what this extension builds),
+  and the unpacked images are byte-for-byte the same as reader mode. The
+  extension already targets `/api/v2/galleries/{id}/download?format=`; this
+  report supports the *quality* assumption but does not exercise the delivery
+  path or the native click flow. Recorded as evidence, not as verification.
+
+**Audit 2026-10-30 — gaps found now, not previously recorded.** Each item below
+was checked against the code, not assumed. All remain unverified against a live
+site unless stated.
+
+*Chapter tool — correctness and robustness*
+
+- [x] **Explicit thumbnail suffix rule — done 2026-10-31**
+  (`normalizeFullSizeSuffix`, `stripFullSizeSuffix`, `applyFullSizeSuffix`): a
+  typed suffix such as `-mini` is removed from the file name before its
+  extension, for **every** page or the chapter is refused; duplicates and
+  non-HTTPS results are refused; off unless typed; the review reports how many
+  URLs changed. Built for Tailspace gallery mode; nothing is inferred from a
+  file name.
+- [x] **Remembered reader settings per site — done 2026-10-31**
+  (`siteProfiles.ts`): selector, attribute, order and suffix stored per exact
+  HTTPS origin (max 50), re-validated on read, pre-filled on the next scan,
+  forgettable. A profile grants no host access and never auto-approves an image
+  host.
+
+- [x] **Page lists hidden in a reader script — done 2026-10-31**
+  (`readerScriptPayloads`, `readerScriptImageUrls`, `collectReaderScriptPages`):
+  MangaThemesia-family chapters that ship no `<img>` elements keep the page list
+  in a base64 `ts_reader.run({…})` script. The probe decodes it as text (never
+  executes it), requires public HTTPS URLs, keeps the site's own order and labels
+  the review accordingly. DOM images still win when present. Evidence:
+  `lib-multisrc/mangathemesia` in `keiyoushi/extensions-source`; ~124 extensions
+  inherit that base. Not yet confirmed on a live sasangeyou page.
+
+- [x] **CBZ metadata — done 2026-10-30** (`buildComicInfoXml`,
+  `chapterNumberFromLabel`): escaped XML, CBZ only, salvaged archives carry their
+  real page count and an "Incomplete archive" note. Optional later: Writer/Artist
+  once a site page actually supplies them.
+- [ ] **Memory on long chapters.** Every page crosses the extension message
+  channel as base64 (a 12 MiB page becomes a ~16 MiB string) and JSZip holds the
+  whole chapter (limit 128 MiB) before saving. `streamingZip.ts`/OPFS already
+  exist for the gallery path; reuse or chunk the chapter path and measure a
+  100+ page chapter. Today a very long Tailspace/Breaking-Tail title can spike
+  memory or hit the per-message cost.
+- [x] **Bounded retry — done 2026-10-30** (`retryDelay`, `fetchPageWithRetry`,
+  on by default in the panel): two extra attempts with 400/1200 ms waits for
+  `transfer`/`timeout`/`http`/`network` only.
+- [x] **Inner scroll containers — done 2026-10-30** (`pickScrollTarget`,
+  `findScrollElement`): the element that actually scrolls is detected from
+  measured overflow (>200 px hidden, ≥200 px visible height and width, largest
+  wins — never from class names), the sweep drives it, the position is restored,
+  and the probe now reports `scrolledElement` (`window` or `tag#id`) and the
+  iframe count. Not yet confirmed against a live site.
+- [ ] **Iframes.** Injection targets the main frame, so a reader embedded in an
+  iframe is invisible. Decide whether to support `allFrames` (and how the review
+  names the frame that matched).
+- [x] **Tiny/placeholder images — done 2026-10-30** (`readImageSize`,
+  `assertUsablePage`, `MIN_PAGE_DIMENSION = 128`): real header parsing for PNG,
+  GIF, WebP (VP8X/VP8/VP8L) and JPEG (SOF walk); a page under 128 px in either
+  direction, or with an unparsable header, is refused with `too-small`/`format`
+  instead of being zipped. AVIF is accepted with unknown dimensions (no parser).
+  The gate runs at probe fetch time **and** again before the archive is built, so
+  a spacer can no longer pad a chapter.
+- [ ] **Multi-server readers.** There is no "Server 1/2/3" picker; a selection
+  mixing servers is refused rather than surfaced. Sites like Sasangeyou need the
+  choice made explicit in the chapter tool.
+- [ ] **Cooldown for the chapter tool.** Fixed 250 ms spacing between pages, no
+  jitter, no backoff, no persisted cooldown across runs (the nhentai API path has
+  its own, also not restart-persistent).
+- [x] **Resume — done 2026-10-30** (`chapterProgress.ts`): a bounded local record
+  (500 chapters per title, 100 titles, oldest evicted first) keyed by exact
+  chapter URL, written only for archives the browser confirmed **complete**.
+  "Skip chapters already saved" is on by default; skipped chapters stay visible in
+  the review with their page counts, and *Forget saved chapters for this title*
+  clears the record. Partial/salvaged archives are deliberately **not** recorded,
+  so they are retried.
+
+*Chapter tool — usability*
+
+- [ ] **Click-to-select picker.** Requiring a hand-written CSS selector is the
+  main thing keeping this from being usable as "universal". Add "pick the first
+  page image" (and "pick the chapter links") using an injected overlay.
+- [x] **Remember approved image hosts per origin — done 2026-10-30**
+  (`hostApprovals.ts`): approvals are stored per **exact HTTPS origin** (max 30
+  hosts per origin), pre-ticked on the next inspection for that same site, still
+  listed individually so any one can be unticked for a run, on by default with a
+  checkbox, and cleared by *Forget remembered hosts*. Trade-off accepted: after
+  the first run, a site's hosts no longer need re-approval each time — which is
+  exactly why the per-run list stays visible.
+- [ ] **Re-bind the source tab** when it was closed/reloaded instead of a dead-end
+  error (the page knows the old tab id only).
+- [ ] **Entry point.** The tool opens a new tab even in side-panel mode; decide
+  whether the panel should host the same page.
+
+*Release hygiene*
+
+- [ ] **Version bump and release notes.** `manifest.json` is still 3.14.0 and
+  `package.json` 2.2.0, although a new page and two new bundles ship. Decide the
+  version and note the feature as experimental.
+- [x] **Licence/attribution review — done 2026-10-30.** All new runtime
+  dependencies are permissive: `htmlparser2` MIT; `css-select`, `css-what`,
+  `domhandler`, `domutils`, `domelementtype`, `entities`, `nth-check` BSD-2-Clause;
+  `dom-serializer` MIT; `boolbase` ISC; `pako` MIT/Zlib; existing `jszip`
+  MIT-or-GPL-3.0. `jsdom` (dev-only) is MIT. **Finding:** the probe bundle
+  contained BSD-2/ISC code with *no* notice file, because terser only emits
+  `*.LICENSE.txt` for `/*!`-marked sources. Fixed by adding and packaging
+  [`THIRD_PARTY_NOTICES.txt`](NHDW_Extension_v3.0.0/THIRD_PARTY_NOTICES.txt) with
+  a test that every bundled library is named and the file ships. Still open: the
+  bundle growth (≈200 KB `chapters.js`, ≈160 KB `universalChapterProbe.js`) and
+  whether shipping `jsdom` in devDependencies is acceptable for CI size.
+- [ ] **Firefox:** that tree has no Chapters button and no chapter bundles. Add a
+  one-line note to its README so it does not read as broken, and decide on porting
+  (`activeTab`/`scripting` exist in Firefox; the `chrome.*` shim differs).
+
+*Next session: evidence still needed (owner asked to defer items 1, 2, 3 and 5)*
+
+- [ ] One loaded-reader snapshot per site (Sasangeyou ordinary chapter, Yurilab
+  chapter, Tailspace **scroll** mode, DoujinDesu after scrolling).
+- [ ] Per site: iframe or inner scroll container? “Server 1/2/3”? A stated page
+  total (`3 / 57`)?
+- [ ] DoujinDesu: `<img>` count after scrolling vs pages actually visible, and
+  whether the batch link only appears past a chapter count.
+- [ ] Real-browser run of the unpacked build (Chrome version, checklist output).
+
+*Dropped / replaced: use the site's own Download control*
+
+- [x] **Dropped for nhentai only — 2026-10-30, owner decision.** nhentai keeps the
+  API-key archive path; the native control is not pursued and no code was written
+  for it. Reasons and the unobserved evidence:
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md).
+- [x] **Replaced for every other site by on-site page extraction** (the owner's
+  instruction): a title page scan is a pseudo-batch that reads the reader pages
+  for each selected chapter and builds one archive locally, with **no** mirror or
+  ad-link-shortener clicking. That is the existing chapter tool, so no new mode is
+  needed; the decision and the numbering caveat (clear numbering required, hashed
+  names only via top-down DOM order, otherwise a refusal) are recorded in
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md#part-b--other-sites-the-on-site-extraction-route).
+- [ ] **Per-site extraction settings** still need the captures in
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md): without them every site
+  runs on the generic selector defaults.
+
+*Diagnostics (added 2026-10-30 at the owner's request)*
+
+- [x] **Extension log with its own file — done** (`extensionLog.ts`): every
+  entry is redacted on the way in (URL query/fragment dropped, cookie/token/body
+  keys dropped, base64 and `data:` payloads replaced, 300-character strings), the
+  buffer is capped at 500 entries and persisted under `nhdwExtensionLog`, so it
+  survives closing the tab. *Save log* writes `nhdw-log-<timestamp>.txt` through
+  `chrome.downloads`.
+- [x] **Benchmark button — done** (panel step 04): five read-only checks from
+  whatever page the source tab is on — tab reach, chapter-link count, reader page
+  images, one page image (only from an already-approved host on that site) plus
+  scroll-container detection, and a storage round-trip — then saves the log and
+  reports a problem count. It builds no archive, starts no download and approves
+  no host. There is deliberately no guide: the log is the artifact.
+- [x] **The benchmark tests the extension itself — done 2026-10-30**
+  (`src/utils/uiSelfTest.ts`): it presses the page's checkboxes, selects and text
+  fields as a user would, verifies each accepted the change, and restores every
+  value. Buttons with side effects are only inspected for their resting disabled
+  state; controls whose change would discard a review are skipped and named; a
+  new read-only `ping` action proves the worker answers the page. Failures appear
+  as named `FAILED` lines in the log.
+- [ ] **Benchmark against real sites.** The button has only run in the bundled
+  VM e2e, never in a real Chromium profile. First real run pending the owner's
+  browser session.
+- [ ] **Website captures.** The owner's manual extraction task is written out in
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) (setup, chapter-list
+  capture, reader capture, six questions per reader, per-site walkthrough,
+  sanitizing snippets); no capture has been made yet.
+
+*Evidence and decisions needed from the owner* (sanitized only — see
+`SITE_CAPTURE_GUIDE.md`; never media, signed URLs, cookies or raw HARs)
+
+- [ ] One reader snapshot per site, taken from the **loaded** page (DevTools →
+  copy the reader container's `outerHTML`, or the capture helper's output):
+  Sasangeyou ordinary chapter, Yurilab chapter, Tailspace **scroll mode**,
+  DoujinDesu chapter after scrolling.
+- [ ] For each: iframe or inner scroll container? Does it show "Server 1/2/3"?
+  Does the page state a page total (`3 / 57`, `57 pages`)?
+- [ ] Desu: `<img>` count after scrolling versus pages you actually see, and
+  whether the batch link only appears beyond a chapter count.
+- [ ] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
+- [ ] Real-browser run: your Chrome version, and confirmation you can load the
+  unpacked build — I can supply a checklist whose output you paste back.
+- [ ] nhentai's own Download button: still unobserved. A screenshot plus the
+  resulting file's name/size is enough; no cookies or signed URLs.
+- [x] Decisions — answered 2026-10-30: remember hosts per site **yes**
+  (implemented), automatic retry **yes** by default (implemented), `ComicInfo.xml`
+  **yes** with the fields this tool knows (implemented), own tab (as built),
+  Chromium-only for now. Still open: the real-browser run below.
+
+**My next-step recommendation:** the offline queue the owner approved is done —
+`ComicInfo.xml`, bounded retry, tiny-image rejection, inner-scroll containers,
+remembered hosts, resume and the diagnostic log/benchmark. What is left needs a
+**real browser** rather than more code: load the unpacked build, press
+**Run benchmark and save log** on one ordinary chapter, then work the remaining
+evidence items (iframe/scroll answers, stated page totals) with
+[DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md). The click-to-select picker is the
+last usability item and is much better after one captured reader.
+
+**Latest Chromium progress (offline, not new-site support):**
+
+**Deferred owner options (recorded 2026-10-30, not started):** the owner asked
+to keep these three choices on file for later.
+
+- [ ] **(A) DoujinDesu selection helper** — open the site's *own* download page for
+  exactly the chosen chapters: the site batch when the selection is large (the
+  owner's rough rule: more than 5–10 chapters, i.e. one combined file), otherwise
+  per-chapter download pages. Both observed buttons land on a `mirrored.to` link
+  directory, not a file, so the helper must stop at "here is the site's download
+  page" and let the owner pick a host. No host automation, no premium/captcha
+  handling, no bypass.
+- [ ] **(B) Real-browser verification run** — load the unpacked Chromium build and
+  exercise the chapter tool (`Chapters ↗`), one ordinary chapter page, the save
+  path and one strict-completion archive. Replaces synthetic-only evidence; a
+  prior `@sparticuz/chromium` attempt failed to register the extension, so this
+  needs a real desktop Chromium session.
+- [ ] **(C) Per-site reader tuning** — once a single live sample can be inspected,
+  record the real selector, URL attribute and page-order strategy per site
+  (Sasangeyou, Yurilab, Tailspace, DoujinDesu) instead of relying on generic
+  defaults. Capture with `SITE_CAPTURE_GUIDE.md`; no media or signed URLs.
+
+**New-domain download reinforcement (recorded 2026-10-30, all unverified):**
+
+The generic collector now covers top-down readers: page 1 is simply the first
+image element in DOM order, the reader's own advertised page total is compared
+with what was found, and `Load all pages (top-down)` scrolls the source tab to
+force lazy images into the DOM before inspection. Nothing below is live-tested.
+
+- [ ] **Sasangeyou (`sasangeyou.net`)** — WordPress/MangaThemesia; the offline
+  `ts_reader.run` candidate parser exists but is unwired. Premium chapters are
+  excluded; ordinary chapters only. Open question: does its reader expose plain
+  image URLs in static HTML (batch-inspectable) or only after script execution
+  (one chapter at a time via *Use open chapter*)?
+- [ ] **Yurilab (`yurilab.top`)** — WordPress series pages; the observed listing is
+  paginated (`?t=2`), so a title scan needs every list page added. Chapter reader
+  markup and page ordering are unknown.
+- [ ] **Tailspace (`tailspace.com`)** — gallery mode shows `?page=N` links whose
+  images are `-mini` thumbnails; scroll mode lists the full-size pages in DOM
+  order. Plan: prefer scroll mode + reader order, or link order in gallery mode,
+  and never mix thumbnail and full-size files.
+- [ ] **DoujinDesu (`doujin.desu.xxx`)** — top-down reader; page images come from
+  an obfuscated API, so *static* HTML inspection will probably find nothing.
+  Plan: *Use open chapter* + reader order per chapter (the browser has already
+  decoded the URLs), and keep title-level batch downloads on the site's own
+  `mirrored.to` pages. Open question: whether the reader lists every page in the
+  DOM after a scroll sweep.
+- [ ] **Sequential open-and-capture** (needed for JS-only readers such as Desu) —
+  open each selected chapter in the source tab, wait for its reader, capture page
+  order, save, then continue. Not implemented; today each chapter needs manual
+  *Use open chapter*.
+
+
+- [Universal chapter collector](UNIVERSAL_CHAPTER_TOOL.md) — Chromium-only,
+  user-initiated `Chapters ↗` page: explicit chapter selection, selector-based
+  discovery, data-only reader HTML parsing, per-host approval, bounded
+  signature-checked pages, explicit page-order strategies (reader, page links,
+  file numbers), optional clearly-marked partial chapters, one strict-completion
+  archive per chapter, no wildcard hosts or auto-injection. Synthetic tests plus a bundled end-to-end VM
+  run pass; **no live site, real browser or real media has been validated**, and
+  it does not detect or use site-provided batches.
+
+- [Chapter planning](NHDW_Extension_v3.0.0/src/utils/chapterPlan.ts) now accepts
+  multiple batch candidates and requires an explicit choice; one expired option
+  is not evidence that other choices expired. A non-executing, synthetic-only
+  [candidate reader parser](NHDW_Extension_v3.0.0/src/parsing/sasangeyouReaderCandidate.ts)
+  preserves selected-server references and count mismatches. Neither is wired to
+  the UI/downloader, and Sasangeyou's actual DOM/`ts_reader.run` pattern,
+  authorization and media transfer are unverified. DoujinDesu remains unimplemented.
+- The existing opt-in **API** archive route now fails eligible Chromium jobs
+  explicitly instead of silently switching to pages. Synthetic tests cover
+  source isolation, missing/expired URLs, HTTPS/host/redirect restrictions,
+  bounded ZIP parsing, CRCs, image signatures, unsafe/duplicate names and
+  expected image counts. These checks do not prove that images decode, pages
+  are the right pages, or bytes are original. Real delivery hosts are unknown;
+  the temporary nhentai.net-only allowlist may reject a legitimate host.
+- Chromium now respects long `Retry-After` values by returning the 429 rather
+  than retrying early. The current batch defers unattempted titles and stops
+  paginated work; the popup reports keyed 429s instead of fetching a fallback.
+  A cross-context/restart-persistent cooldown and separately queued jobs are
+  not yet guaranteed. Browser-save completion is required for this API route in
+  worker/offscreen mocks; real Chrome filename, permission and completion
+  behavior remain unverified.
+- **Leave server archive OFF.** The safety limits reject archives over 128 MiB
+  compressed, 256 MiB expanded, 64 MiB per entry or 5,000 entries; expiry is
+  required and capped conservatively at seven days. Real host, redirect, CORS,
+  expiry, format, save and quality behavior still need an authorized, sanitized
+  real-browser test. Old installed/queued builds may retain previous behavior.
+  Firefox was not ported in this pass and retains the earlier silent fallback,
+  HTML acceptance and 15-second retry cap; its option must also remain off.
+- Normal page downloading still has the reproduced image-integrity defect:
+  sufficiently large HTML falsely labelled `image/jpeg` can be saved as a JPEG;
+  raw browser URL handoff cannot inspect bytes. Metadata conflicts and
+  cross-site mirror equivalence still need broader review.
+- Latest offline validation: Chromium **722 passing, 4 pending**, build, smoke,
+  all VM e2e scripts and capture-helper tests passed. The added regressions cover
+  merged/skip/cancellation handling and metadata/archive 429 propagation through
+  both worker and offscreen VMs. A Chromium 153 headless-shell attempt could
+  not register the extension, so it did **not** run real-browser tests. Firefox's
+  previous run was **703 passing, 4 pending**; it was not retested for these
+  Chromium-only changes. No live archive, reader-media transfer, native-button
+  click, real key, or quality comparison was performed.
+
+The [minimal sanitized capture guide](SITE_CAPTURE_GUIDE.md) remains available;
+never request credentials, cookies, signed URLs, media or raw HARs. `nhentai.to`
+was removed per the owner's ad report; no nhentai video feature is requested.
+
 **Chrome folder consolidation (current session):**
 `NHDW_Extension_v3.0.0/` is now the one checked-in loadable Chrome tree.
 **Migration warning:** an old unpacked install at the former folder path may
@@ -175,7 +541,8 @@ This is the single place to look for *what to do next*.
 | **`MULTISITE_V4_PLAN.md`** | Multi-site decision record, cooldown strategies (C pending owner), bucket list. |
 | **`ADAPTER_WIRING_PLAN.md`** | Per-site contract matrix + adapter interface — the reference for site #7+. |
 | **`CAPTURE_GUIDE.md`** | How to capture samples for a NEW site. |
-| **`CANDIDATE_SITES.md`** | Candidate analysis for site #7+ (tiers, onboarding checklist, the 2026-09-24 swap decision). The canonical URL roster lives in `new domain candidate` on main. |
+| **`CANDIDATE_SITES.md`** | Candidate analysis for site #7+ (tiers, onboarding checklist, the 2026-09-24 swap decision). The canonical URL roster is `new domain candidate`. |
+| **`NEW_DOMAIN_PLANNING.md`** | Sasangeyou scoped observations, offline chapter work, deferred external mirrors and DoujinDesu, and Chromium nhentai archive progress and remaining safety gates. |
 
 Item numbers are shared with `IMPROVEMENT_BACKLOG.md` and are never reused.
 

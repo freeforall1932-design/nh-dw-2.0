@@ -240,6 +240,9 @@ function fetchStub(url) {
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
     }
+    if (u.includes('gold-usergeneratedcontent.net')) {
+        return Promise.resolve(new Response(pageBytes[0], { status: 200 }));
+    }
     const imgMatch = /nhentai\.net\/galleries\/([0-9]+)\/([0-9]+)\.(jpg|png)/.exec(u);
     if (imgMatch) {
         if (failImages || failMediaIds.has(imgMatch[1])) {
@@ -1349,6 +1352,42 @@ function askOffscreen(message) {
     }
     galleryJson2.title = savedTitle2;
     console.log("PASS: separate ignore-dup counts the dropped title in skipped");
+
+    // Single-title success and failure must retain the selected source in
+    // history and retry messages, not collide with the default site's id.
+    const hitomiHash = "0e".repeat(32);
+    const hitomiSingle = {
+        id: 765432, site: "hitomi", media_id: hitomiHash,
+        title: { english: "Single", japanese: "", pretty: "Single" },
+        images: { pages: [{ t: "w", hash: hitomiHash, name: "01.webp" }] }, tags: []
+    };
+    sentMessages.length = 0;
+    anchorDownloads.length = 0;
+    const hitomiStart = await askOffscreen({
+        action: "downloadDoujinshi", json: hitomiSingle, path: "Single", name: "Single",
+        options: Object.assign({}, relayedOptions, { site: "hitomi", useZip: "zip" })
+    });
+    if (!hitomiStart || hitomiStart.result !== "started") fail("single-site job did not start");
+    await waitFor(() => sentMessages.some((m) => m.action === "jobFinished"), "single-site job must finish");
+    const hitomiRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (!hitomiRecords || hitomiRecords.length !== 1 || hitomiRecords[0].id !== "hitomi:765432") {
+        fail("single-site history must keep the original site: " + JSON.stringify(hitomiRecords));
+    }
+    sentMessages.length = 0;
+    const invalidHitomi = Object.assign({}, hitomiSingle, { images: { pages: [{ t: "0" }] } });
+    const failedStart = await askOffscreen({
+        action: "downloadDoujinshi", json: invalidHitomi, path: "Invalid", name: "Invalid",
+        options: Object.assign({}, relayedOptions, { site: "hitomi", useZip: "zip" })
+    });
+    if (!failedStart || failedStart.result !== "started") fail("invalid single-site job did not start");
+    await waitFor(() => sentMessages.some((m) => m.action === "jobFinished"), "invalid single-site job must finish");
+    const failedSingle = sentMessages.find((m) => m.action === "downloadError");
+    if (!failedSingle || failedSingle.site !== "hitomi" || !failedSingle.retryJob || failedSingle.retryJob.site !== "hitomi") {
+        fail("single-site failure and retry must keep the source: " + JSON.stringify(failedSingle));
+    }
+    const failedRecords = sentMessages.filter((m) => m.action === "jobFinished").map((m) => m.records).pop();
+    if (failedRecords && failedRecords.length) fail("invalid metadata must not be recorded as a success");
+    console.log("PASS: single-title history and retry keep the original site");
 
     // ---- The document must have stayed inside its API surface --------------
     if (forbidden.storage !== 0 || forbidden.downloads !== 0) {

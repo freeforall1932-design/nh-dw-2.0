@@ -436,6 +436,42 @@ describe('Downloader mirror fallback (item 72)', () => {
         assert.ok(fetchStub.attempted.some((u) => u.indexOf('m11.hentaienvy.com/033/envytok123/') !== -1));
     });
 
+    for (const mode of ['zip', 'raw']) {
+        it('title match: a switched page uses the sibling format in ' + mode + ' mode', async () => {
+            fetchStub.add(/hentaiera\.site\//, () => Promise.resolve(new Response('throttled', { status: 429 })));
+            fetchStub.add(/hentaienvy\.com\/search\//, () => Promise.resolve(new Response(ENVY_SEARCH_HTML, { status: 200 })));
+            fetchStub.add(/hentaienvy\.com\/gallery\//, () => Promise.resolve(new Response(ENVY_GALLERY_HTML, { status: 200 })));
+            fetchStub.add(/hentaienvy\.com\/033\//, (u) => {
+                const m = /\/([0-9]+)\.webp/.exec(u);
+                return m ? Promise.resolve(new Response(pageBytes[parseInt(m[1], 10) - 1], { status: 200 }))
+                    : Promise.resolve(new Response('wrong extension', { status: 404 }));
+            });
+            const original = Object.assign({}, ERA_GALLERY, { images: { pages: [{ t: 'j' }, { t: 'j' }] } });
+            let zipUrl;
+            chrome.downloads.download = (opts, cb) => { zipUrl = opts.url; if (cb) cb(1); };
+            const downloader = new Downloader(original, 'Test', () => {}, () => {}, 'Test', new JSZip(), 'Test', null,
+                undefined, { useZip: mode, archiveLayout: 'flat', maxConcurrentDownloads: 1 });
+            downloader.retryBackoffMs = 0;
+            const saved = [];
+            const attemptedRaw = [];
+            if (mode === 'raw') downloader.saveUrl = async (url, filename) => {
+                attemptedRaw.push(url);
+                if (url.includes('hentaiera.site')) throw new Error('primary unavailable');
+                if (!url.endsWith('.webp')) throw new Error('wrong mirror extension');
+                saved.push({ url, filename });
+            };
+            await downloader.startAsync();
+            const filenames = mode === 'zip'
+                ? Object.keys((await decodeZip(zipUrl)).files).sort()
+                : saved.map((entry) => entry.filename.split('/').pop()).sort();
+            assert.deepStrictEqual(filenames, ['001.webp', '002.webp']);
+            if (mode === 'raw') {
+                assert.ok(attemptedRaw.filter((url) => url.includes('hentaienvy.com')).every((url) => url.endsWith('.webp')),
+                    'the switched mirror must never be sent the old extension');
+            }
+        });
+    }
+
     it('title match: the switch is sticky — later pages never touch the failed store', async () => {
         fetchStub.add(/hentaiera\.site\//, () => Promise.resolve(new Response('throttled', { status: 429 })));
         fetchStub.add(/hentaienvy\.com\/search\//, () => Promise.resolve(new Response(ENVY_SEARCH_HTML, { status: 200, headers: { 'Content-Type': 'text/html' } })));

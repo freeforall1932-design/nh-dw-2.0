@@ -39,6 +39,7 @@ const diskFiles = new Map();
 // Every request the worker makes to an /api/ route, with the Authorization
 // header it carried (null when none). Phases 8/9 assert the mode boundary.
 const apiRequestLog = [];
+const archiveRequestLog = [];
 
 const sessionStore = {};   // chrome.storage.session (survives worker restarts in the test)
 
@@ -220,6 +221,15 @@ function fetchStub(url, init) {
             ));
         }
     }
+    if (u === "https://nhentai.net/api/v2/galleries/" + GALLERY_ID + "/download?format=zip") {
+        archiveRequestLog.push({ url: u, headers: (init && init.headers) || {} });
+        return Promise.resolve(new Response(JSON.stringify({
+            url: "https://archives.example.test/fixture.zip", expires_at: Date.now() + 60000
+        }), { status: 200 }));
+    }
+    if (u === "https://archives.example.test/fixture.zip") {
+        return Promise.resolve(new Response(new Uint8Array([80, 75, 3, 4]), { status: 200 }));
+    }
     const apiMatch = /\/api\/(?:v2\/galleries|gallery)\/([0-9]+)/.exec(u);
     if (apiMatch) {
         const headers = (init && init.headers) || {};
@@ -260,7 +270,10 @@ const sandbox = {
     Response,
     Blob, // jszip needs a Blob constructor for generateAsync({type:"blob"})
     btoa,
-    AbortController
+    AbortController,
+    // Real workers have the URL parser, but not URL.createObjectURL. Keep
+    // that distinction so source verification and Blob fallback both run.
+    URL: function WorkerURL(input, base) { return new URL(input, base); }
     // NOTE: do not inject host built-ins like Uint8Array/ArrayBuffer/Promise:
     // they would shadow the VM's own intrinsics and break instanceof checks
     // inside the bundle (a real service worker uses a single realm).
@@ -1225,6 +1238,69 @@ const historyKeyFor = (id) => "nhentai:" + String(id);
         fail("a hitomi gallery must never be recorded under the nhentai key");
     }
     console.log("PASS phase 8b: a per-site job resolves, names, fetches and records through its own site (item 48)");
+
+    // A single-title popup download must use the same source-qualified
+    // history identity as the batch path, even when ids overlap.
+    localSettings = {};
+    syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
+    downloads.length = 0;
+    const singleHitomi = {
+        id: HITOMI_ID, site: "hitomi", media_id: HITOMI_HASH,
+        title: { english: "Single", japanese: "", pretty: "Single" },
+        images: { pages: [{ t: "w", hash: HITOMI_HASH, name: "01.webp" }] }, tags: []
+    };
+    onMessageHandler({
+        action: "downloadDoujinshi", json: singleHitomi, path: "Single", name: "Single",
+        site: "hitomi", galleryUrl: "https://hitomi.la/galleries/" + HITOMI_ID + ".html"
+    }, {}, () => {});
+    await waitFor(() => localSettings.downloadHistory && Object.keys(localSettings.downloadHistory).length > 0,
+        "single-site history must be written", 5000);
+    if (!localSettings.downloadHistory["hitomi:" + HITOMI_ID]
+        || localSettings.downloadHistory["nhentai:" + HITOMI_ID]) {
+        fail("single hitomi download must record the original site, got " + JSON.stringify(localSettings.downloadHistory));
+    }
+    console.log("PASS: single-title worker history keeps its original site");
+
+    sentMessages.length = 0;
+    localSettings = {};
+    expectedWorkerRejection = true;
+    const invalidSingle = Object.assign({}, singleHitomi, { images: { pages: [{ t: "0" }] } });
+    onMessageHandler({
+        action: "downloadDoujinshi", json: invalidSingle, path: "Invalid", name: "Invalid",
+        site: "hitomi", galleryUrl: "https://hitomi.la/galleries/" + HITOMI_ID + ".html"
+    }, {}, () => {});
+    await waitFor(() => sentMessages.some((m) => m.action === "downloadError" && m.galleryId === String(HITOMI_ID)),
+        "single-site failure must be reported", 5000);
+    await waitFor(() => (sessionStore.nhdwFailedGalleries || []).some((f) => f.id === String(HITOMI_ID) && f.site === "hitomi"),
+        "single-site failure must be remembered with its site", 5000);
+    const failure = sentMessages.find((m) => m.action === "downloadError" && m.galleryId === String(HITOMI_ID));
+    if (failure.site !== "hitomi" || !failure.retryJob || failure.retryJob.site !== "hitomi" || localSettings.downloadHistory) {
+        fail("worker failure/retry must keep the original source and not record success: " + JSON.stringify(failure));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expectedWorkerRejection = false;
+    console.log("PASS: single-title worker failure and retry keep the original site");
+
+    // A canonical nhentai source still reaches the opt-in archive endpoint
+    // through the complete worker path, not only through helper unit tests.
+    localSettings = { apiKey: "test-key-123", useServerArchive: true };
+    syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
+    downloads.length = 0;
+    archiveRequestLog.length = 0;
+    onMessageHandler({
+        action: "downloadDoujinshi", json: Object.assign({}, galleryJson, { site: "nhentai" }),
+        path: "Canonical", name: "Canonical", site: "nhentai",
+        galleryUrl: "https://nhentai.net/g/" + GALLERY_ID + "/"
+    }, {}, () => {});
+    await waitFor(() => downloads.length === 1 && localSettings.downloadHistory,
+        "canonical single-title archive should complete", 5000);
+    if (archiveRequestLog.length !== 1 || archiveRequestLog[0].headers.Authorization !== "Key test-key-123") {
+        fail("canonical source should request its server archive exactly once: " + JSON.stringify(archiveRequestLog));
+    }
+    if (!localSettings.downloadHistory["nhentai:" + GALLERY_ID]) {
+        fail("canonical source should record nhentai history");
+    }
+    console.log("PASS: verified single-title nhentai provenance reaches its archive endpoint");
 
     // ---- Phase 9: API key mode resolves batch metadata via the keyed API ---
     // With a stored key (chrome.storage.local), the batch must hit the

@@ -68,6 +68,24 @@ describe('batchPipeline helpers', () => {
         assert.strictEqual(tryParseGalleryText(html).media_id, '987654');
     });
 
+    it('rejects pre-resolved metadata that names a different gallery or site', async () => {
+        const host = makeHost();
+        for (const candidate of [gallery(22, 'Wrong id'), Object.assign(gallery(11, 'Wrong site'), { site: 'hitomi' })]) {
+            await assert.rejects(resolveGalleryMetadata('nhentai:11', {
+                galleryMetadata: { 'nhentai:11': candidate }, apiKey: '', host: host, site: 'nhentai'
+            }), /metadata.*(?:id|site).*mismatch/i);
+        }
+        const outcome = await runBatchDownload({
+            zip: { files: {} }, allDoujinshis: { '11': 'Requested' }, finalName: 'Batch', downloadAtEnd: true,
+            galleryMetadata: { '11': gallery(22, 'Wrong') }, options: { site: 'nhentai', downloadSeparately: true }, host: host
+        });
+        const summary = host.messages.find((m) => m.action === 'batchSummary');
+        assert.strictEqual(summary.failed, 1);
+        assert.strictEqual(summary.succeeded, 0);
+        assert.strictEqual(host.downloads.length, 0);
+        assert.strictEqual(outcome.records.length, 0);
+    });
+
     it('buildRetryJob copies format, tab, template and master folder', () => {
         const job = buildRetryJob(7, { useZip: 'cbz', downloadName: '{id}', archiveMasterFolder: 'NHDW' });
         assert.deepStrictEqual(job, {
@@ -957,5 +975,52 @@ describe('item 48 — a per-site job', () => {
                 'the retry job downloads the previously cancelled gallery');
             assert.strictEqual(second.failedGalleries.length, 0);
         });
+    });
+});
+
+describe('batch regressions: naming and archive provenance', () => {
+    it('terminates when the generated duplicate name and first suffix already exist', async () => {
+        for (const separate of [true, false]) {
+            const host = makeHost();
+            const outcome = await runBatchDownload({
+                zip: {},
+                allDoujinshis: { '11': 'One', '22': 'Two', '33': 'Three', '44': 'Four' },
+                finalName: 'Batch', downloadAtEnd: true,
+                galleryMetadata: {
+                    '11': gallery(11, 'Test'),
+                    '22': gallery(22, 'Test (44)'),
+                    '33': gallery(33, 'Test (44) (2)'),
+                    '44': gallery(44, 'Test')
+                },
+                options: { useZip: 'zip', downloadSeparately: separate, duplicateBehaviour: 'rename' },
+                host
+            });
+            assert.strictEqual(host.downloads.length, 4);
+            assert.deepStrictEqual(host.downloads.map((job) => job.path), [
+                'Test', 'Test_(44)', 'Test_(44)_(2)', 'Test_(44)_(3)'
+            ]);
+            assert.strictEqual(outcome.failedGalleries.length, 0);
+        }
+    });
+
+    it('passes independent per-gallery identity only for explicit, non-conflicting jobs', async () => {
+        const cases = [
+            { key: '42', site: 'nhentai', expected: { site: 'nhentai', id: '42' } },
+            { key: 'nhentai:42', site: undefined, expected: { site: 'nhentai', id: '42' } },
+            { key: '42', site: undefined, expected: null },
+            { key: '42', site: 'hitomi', expected: null },
+            { key: 'nhentai:42', site: 'hitomi', expected: null }
+        ];
+        for (const c of cases) {
+            const host = makeHost();
+            await runBatchDownload({
+                zip: {}, allDoujinshis: { [c.key]: 'Fixture' }, finalName: 'Batch', downloadAtEnd: true,
+                galleryMetadata: { '42': gallery(42, 'Fixture') },
+                options: { useZip: 'zip', downloadSeparately: true, site: c.site, useServerArchive: true },
+                host
+            });
+            assert.strictEqual(host.downloads.length, 1);
+            assert.deepStrictEqual(host.downloads[0].gallerySettings.archiveIdentity, c.expected, c.key + '/' + c.site);
+        }
     });
 });

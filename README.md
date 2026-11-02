@@ -52,14 +52,23 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 - 🪟 **Dockable side panel** — the toolbar button opens a resizable side panel (popup still available in Settings).
 - 🛡️ **Cloudflare-aware** — metadata and pages are fetched through your open gallery tab's session first. Not a bypass: a challenge page has no images, so complete it and retry.
 - 🔁 **Retry that knows what failed** — every failure names the gallery and reason; **Retry failed** re-downloads exactly those titles with the same settings.
-- 🦊 **Firefox desktop + Android build** — separate 1.3.0 build with an in-page drawer and full parity ([Firefox README](NHDW_Firefox_v1.0.0/README.md)).
+- 🦊 **Firefox tree** — a separate existing build with an in-page drawer ([Firefox README](NHDW_Firefox_v1.0.0/README.md)). New development is Chromium-first; Firefox work is deferred unless straightforward, and future feature parity is not guaranteed.
 
 ## 📦 Installation
 
-1. Open `chrome://extensions/` (Chrome / Brave / Edge — any Chromium 109+).
-2. Enable **Developer mode** (top right).
-3. Click **Load unpacked** and select **`NHDW_Extension_v3.0.0`** (the folder containing `manifest.json`).
-4. Pin 📚 **NHentai Downloader** from the puzzle-piece menu.
+On desktop Chrome, Brave or Edge:
+
+1. Open `chrome://extensions/` (Brave: `brave://extensions/`; Edge: `edge://extensions/`).
+2. Enable **Developer mode**.
+3. Click **Load unpacked** and select the **`NHDW_Extension_v3.0.0` folder** containing `manifest.json`, not the ZIP or its parent folder.
+4. Pin 📚 **NHentai Downloader** from the puzzle-piece menu. Keep the selected folder in place.
+
+Chromium is the primary development target. Firefox can load an unpacked add-on
+**temporarily** through `about:debugging`, but it is removed on restart; a
+persistent installation in standard Firefox requires a Mozilla-signed package.
+The Firefox build is retained but deferred for new work unless straightforward.
+[Mozilla's temporary-install guide](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/)
+explains the distinction.
 
 > **Existing unpacked installs:** Switching from the old
 > `NHDW_Release_v3.0.0/` path to `NHDW_Extension_v3.0.0/` may give Chrome a
@@ -122,8 +131,11 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 
 ## ⚠️ Known limitations
 
+- **Experimental universal chapter collector** — the Chromium panel's **Chapters ↗** tab opens a user-driven tool that saves one open chapter or a selected set of title chapters as ordered CBZ/ZIP archives. It works only where you supply a working CSS selector, only on normal public HTTPS pages, and only after you approve each image host. It adds no wildcard host access and is not live-validated; see [UNIVERSAL_CHAPTER_TOOL.md](UNIVERSAL_CHAPTER_TOOL.md).
+- **Keep opt-in server archive mode off for now** — Chromium has synthetic archive validation, 429 and browser-completion safeguards, but real hosts, browser behavior, contents and quality are unverified. Firefox retains the earlier unsafe fallback and validation behavior. Old installed or queued jobs may still use earlier code; cancel or review them and reload the updated build. The website's own Download button is separate and its flow has not been observed. See [the safety plan](NEW_DOMAIN_PLANNING.md#important-existing-issuesfix-before-relying-on-the-option).
+- **Page integrity is not guaranteed** — ordinary page downloads can accept sufficiently large HTML falsely labelled as an image; raw browser handoff cannot inspect its bytes. Do not treat a saved filename alone as proof of a valid image.
 - **Download history is local** — it lives in this browser profile, starts empty, and never syncs via browser cloud accounts. Use **Export / Import backup** in the Bookmark tab to migrate history between machines.
-- **Firefox device verification/signing is pending** — `NHDW_Firefox_v1.0.0` is now the separate 1.4.3 build with the **Bookmark** tab, the bookmark icon, list controls, per-site card controls and multi-site download support; offline checks do not replace the desktop/Android release gate (58).
+- **Firefox is deferred** — `NHDW_Firefox_v1.0.0` is retained as a separate build, but new Chromium work may not be ported. Desktop/Android verification and signing remain pending for any future Firefox release (item 58); offline checks do not establish live parity.
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
@@ -138,7 +150,7 @@ One extension, several sites, one shared history. The full plan lives in [`MULTI
 - [x] **Card controls on all six sites (Item 63)** — landed in 3.10.0 / FF 1.4.0: per-site listing-card selectors, site-aware history skip and composite bookmark identity on every listing page.
 - [x] **Smart Download control beside Bookmark (Item 62)** — landed in 3.10.0 / FF 1.4.0: **Save offline** in the panel preview and on every supported gallery page (Alt opens the existing form).
 - [x] **Select all + title-page select (Item 64)** — landed in 3.10.0 / FF 1.4.0: the floating bar selects a whole page, and a gallery page's **Select** writes into the same shared selection the cards use.
-- [ ] **Combined device verification & Firefox signing (Items 42/58)** — real-browser and Android checks.
+- [ ] **Chromium real-browser verification (Item 42)**. Firefox device verification and signing (Item 58) are deferred unless that build is pursued; they are not a Chromium release gate.
 
 The old `NHDW_Release_v3.0.0/` checked-in copy was identical to the Chrome
 runtime files (except its README) and has been removed. **There is no second
@@ -194,7 +206,7 @@ unset or invalid value inherits the single-title choice without writing
 defaults back. A 36-case matrix covers the real reader, the built
 popup/panel Settings and the in-page card + bar controls in both trees.
 
-Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (last session's rules) · [`IMPROVEMENT_BACKLOG.md`](IMPROVEMENT_BACKLOG.md) (full specs & history).
+Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HANDOFF.md`](SESSION_HANDOFF.md) (last session's rules) · [`IMPROVEMENT_BACKLOG.md`](IMPROVEMENT_BACKLOG.md) (full specs & history) · [`DATA_COLLECTION_GUIDE.md`](DATA_COLLECTION_GUIDE.md) (the manual website-capture task, step by step) · [`EXTENSION_PARSER_RESEARCH.md`](EXTENSION_PARSER_RESEARCH.md) (what open-source Mihon/Keiyoushi parsers show per site) · [`TAILSPACE_PLAN.md`](TAILSPACE_PLAN.md) (the current focus, step by step) · [`SITE_DOWNLOAD_CONTROL_EFFORT.md`](SITE_DOWNLOAD_CONTROL_EFFORT.md) (nhentai-only drop, archived).
 
 ## 📝 Version history
 

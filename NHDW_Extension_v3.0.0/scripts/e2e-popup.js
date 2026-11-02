@@ -194,6 +194,7 @@ const documentStub = {
 // behaviour. injectedScripts records what the panel injected.
 let listingPayload = null;
 let tabGalleryJson = null;
+let tabGalleryReadCount = 0;
 const injectedScripts = [];
 // What window.confirm answers; the item-40 phase flips it for the
 // already-downloaded re-save prompt.
@@ -332,6 +333,7 @@ const chromeStub = {
                 return;
             }
             const source = details && typeof details.func === "function" ? String(details.func) : "";
+            if (source.indexOf("_gallery") !== -1) tabGalleryReadCount++;
             const result = tabGalleryJson !== null && source.indexOf("_gallery") !== -1
                 ? { gallery: tabGalleryJson, scripts: [], html: "" }
                 : null;
@@ -411,6 +413,20 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("a retryable error must offer Retry and Go Back, got " + action.innerHTML);
     }
     console.log("PASS phase 1: object-shaped downloadError renders its message with Retry + Go Back");
+
+    // The visible Retry action must not turn a failure from another source
+    // into a default-site job, even if the job details omit the site.
+    deliver({ action: "downloadError", error: "Fixture failure", galleryId: "42",
+        galleryName: "Other source", site: "hitomi", retryJob: { formatOverride: "zip" } });
+    await wait(20);
+    sentMessages.length = 0;
+    byId("buttonRetryFailed").dispatchLast("click");
+    await wait(30);
+    const sourceRetry = sentMessages.find((m) => m.action === "downloadAllDoujinshis");
+    if (!sourceRetry || sourceRetry.site !== "hitomi" || !sourceRetry.allDoujinshis["42"]) {
+        fail("a single-title retry must preserve its source: " + JSON.stringify(sourceRetry));
+    }
+    console.log("PASS: single-title Retry retains the failed gallery's source");
 
     // ---- Phase 2: batch-level error still leaves an action (item 29) -------
     deliver({ action: "downloadError", error: "Unable to start the offscreen download document." });
@@ -904,6 +920,27 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         fail("a live darkMode change must flip the root back to #htmlLight, got " + JSON.stringify(root.id));
     }
     console.log("PASS phase 12: dark mode follows the stored preference across re-bootstraps and live changes");
+
+    // A keyed 429 must be shown, not immediately bypassed via a tab or another
+    // API request. The fixture never contacts a real server.
+    await settleStaleTabRead(tabGalleryJson);
+    const tabReadsBefore = tabGalleryReadCount;
+    const rateCalls = [];
+    localExtra.apiKey = "synthetic-key";
+    sandbox.fetch = (url, init) => {
+        rateCalls.push({ url: String(url), init });
+        return Promise.resolve({ ok: false, status: 429, statusText: "Too Many Requests", headers: { get: () => "120" } });
+    };
+    setPreviewTabUrl("https://nhentai.net/g/888001/");
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(200);
+    if (rateCalls.length !== 1 || rateCalls[0].init.redirect !== "error" || tabGalleryReadCount !== tabReadsBefore) {
+        fail("keyed 429 must not trigger another request or tab fallback");
+    }
+    if (!/rate limited/i.test(byId("action").innerHTML) || !/120 seconds/.test(byId("action").innerHTML)) {
+        fail("keyed 429 must show the server delay to the user");
+    }
+    console.log("PASS phase 13: keyed 429 is shown without a tab or API fallback");
 
     console.log("PASS: popup message layer behaves correctly in a window-less context.");
     process.exit(0);

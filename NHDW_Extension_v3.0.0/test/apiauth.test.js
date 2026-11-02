@@ -131,9 +131,11 @@ describe('API access layer (apiAuth)', () => {
             assert.strictEqual(apiAuth.parseRetryAfterMs('3', 0), 3000);
         });
 
-        it('clamps the backoff to [250ms, 15s]', () => {
+        it('keeps a small minimum without shortening long server backoffs', () => {
             assert.strictEqual(apiAuth.parseRetryAfterMs('0', 0), 250);
-            assert.strictEqual(apiAuth.parseRetryAfterMs('999', 0), 15000);
+            assert.strictEqual(apiAuth.parseRetryAfterMs('120', 0), 120000);
+            assert.strictEqual(apiAuth.parseRetryAfterMs('999', 0), 999000);
+            assert.strictEqual(apiAuth.parseRetryAfterMs('9'.repeat(500), 0), Infinity);
         });
 
         it('parses HTTP dates relative to now', () => {
@@ -159,6 +161,7 @@ describe('API access layer (apiAuth)', () => {
             assert.strictEqual(resp.status, 200);
             assert.strictEqual(calls.length, 1);
             assert.strictEqual(calls[0].init.headers['Authorization'], 'Key abc');
+            assert.strictEqual(calls[0].init.redirect, 'error', 'credentials must not follow redirects');
         });
 
         it('sends no Authorization when keyless (open-tab mode unchanged)', async () => {
@@ -188,6 +191,30 @@ describe('API access layer (apiAuth)', () => {
             assert.strictEqual(resp.status, 200);
             assert.strictEqual(calls.length, 2);
             assert.deepStrictEqual(sleeps, [3000]);
+        });
+
+        it('returns a long-delay 429 without retrying early or sleeping indefinitely', async () => {
+            let calls = 0;
+            let sleeps = 0;
+            const resp = await apiAuth.fetchNhentaiApi('https://nhentai.net/api/v2/galleries/674496', {}, 'abc', {
+                fetchImpl: () => { calls++; return Promise.resolve(jsonResponse(429, {}, { 'retry-after': '120' })); },
+                sleepImpl: () => { sleeps++; return Promise.resolve(); }
+            });
+            assert.strictEqual(resp.status, 429);
+            assert.strictEqual(calls, 1);
+            assert.strictEqual(sleeps, 0);
+        });
+
+        it('cancels an in-progress backoff promptly on abort', async () => {
+            const controller = new AbortController();
+            let calls = 0;
+            const pending = apiAuth.fetchNhentaiApi('https://nhentai.net/api/v2/galleries/674496', { signal: controller.signal }, 'abc', {
+                fetchImpl: () => { calls++; return Promise.resolve(jsonResponse(429, {}, { 'retry-after': '5' })); }
+            });
+            await new Promise(resolve => setTimeout(resolve, 0));
+            controller.abort();
+            await assert.rejects(pending, /Aborted/);
+            assert.strictEqual(calls, 1);
         });
 
         it('gives up after maxRetries and returns the lingering 429', async () => {

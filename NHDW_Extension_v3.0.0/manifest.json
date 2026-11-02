@@ -22,6 +22,7 @@
     "storage",
     "alarms",
     "scripting",
+    "activeTab",
     "offscreen",
     "sidePanel"
   ],

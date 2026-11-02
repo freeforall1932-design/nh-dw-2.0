@@ -147,6 +147,34 @@ describe('MV3 manifest', () => {
         }
     });
 
+    it('ships the opt-in chapter tool without adding broad host access or automatic injection', () => {
+        for (const manifest of [sourceManifest]) {
+            // The chapter page injects the probe only after a toolbar user
+            // gesture (chrome.scripting + activeTab). Declaring a content
+            // script or a wildcard host would make it run on or ask for every
+            // website instead of the one the user chose.
+            assert.ok(manifest.permissions.includes('activeTab'),
+                'activeTab is required for the user-initiated chapter injection');
+            assert.ok(!manifest.permissions.includes('host_permissions'),
+                'the chapter tool must not add a broad host permission');
+            for (const entry of manifest.content_scripts || []) {
+                assert.ok(!(entry.js || []).includes('js/universalChapterProbe.js'),
+                    'the chapter probe must never be auto-injected on every matching site');
+            }
+            for (const pattern of (manifest.host_permissions || []).concat(manifest.optional_host_permissions || [])) {
+                assert.ok(!pattern.includes('<all_urls>') && pattern !== '*://*/*',
+                    'no wildcard host access for the chapter tool: ' + pattern);
+            }
+        }
+        const root = path.join(__dirname, '..');
+        const html = fs.readFileSync(path.join(root, 'chapters.html'), 'utf8');
+        assert.ok(html.includes('js/chapters.js'), 'the page loads its bundled script');
+        assert.ok(!/<script(?![^>]*\bsrc=)[^>]*>/i.test(html),
+            'the chapter page must not use inline scripts under the extension CSP');
+        assert.ok(!/https?:\/\//i.test(html.replace(/<!--[\s\S]*?-->/g, '')),
+            'the chapter page must not embed a hardcoded site or media URL');
+    });
+
     it('background bundle uses root-relative toolbar icon paths', () => {
         const bundle = fs.readFileSync(path.join(__dirname, '..', 'js', 'background.js'), 'utf8');
         assert.ok(bundle.includes('/Icon.png'), 'built worker must fetch /Icon.png from the extension root');

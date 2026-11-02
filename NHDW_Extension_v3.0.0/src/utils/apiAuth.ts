@@ -212,24 +212,66 @@ export function getApiHeadersForUrl(url: string, apiKey: string | null): Record<
 
 // 429 handling ---------------------------------------------------------------
 // The API documents 429 with Retry-After ("Treat 429 as a backoff signal").
+export class NhentaiRateLimitError extends Error {
+    readonly waitMs: number;
+    constructor(context: string, waitMs: number) {
+        const wait = Number.isFinite(waitMs)
+            ? " Wait at least " + Math.ceil(waitMs / 1000) + " seconds before retrying."
+            : " Follow the server's retry delay before retrying.";
+        super(context + " was rate limited." + wait);
+        this.name = "NhentaiRateLimitError";
+        this.waitMs = waitMs;
+    }
+}
+
 export function parseRetryAfterMs(value: string | null, now?: number): number {
     const current = now !== undefined ? now : Date.now();
     if (!value) {
         return 2000;
     }
-    const seconds = Number(value);
-    if (Number.isFinite(seconds) && seconds >= 0) {
-        return clampBackoffMs(seconds * 1000);
+    const trimmed = value.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+        const seconds = Number(trimmed);
+        // Never overflow into a short retry for an enormous server delay.
+        if (!Number.isFinite(seconds) || seconds > Number.MAX_SAFE_INTEGER / 1000) return Infinity;
+        return Math.max(250, Math.ceil(seconds * 1000));
     }
-    const dateMs = Date.parse(value);
+    const dateMs = Date.parse(trimmed);
     if (!isNaN(dateMs)) {
-        return clampBackoffMs(dateMs - current);
+        return Math.max(250, dateMs - current);
     }
     return 2000;
 }
 
-function clampBackoffMs(ms: number): number {
-    return Math.min(15000, Math.max(250, ms));
+// Keep one request from tying up the worker indefinitely. A longer server
+// delay is returned to the caller as 429, never shortened into an early retry.
+const MAX_INLINE_RETRY_MS = 15000;
+
+async function waitBeforeRetry(ms: number, signal: AbortSignal | undefined, sleepImpl?: (ms: number) => Promise<void>): Promise<void> {
+    if (signal && signal.aborted) throw new Error("Aborted");
+    if (!signal) {
+        await (sleepImpl ? sleepImpl(ms) : new Promise<void>(resolve => setTimeout(resolve, ms)));
+        return;
+    }
+    await new Promise<void>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let finished = false;
+        const finish = (error?: Error) => {
+            if (finished) return;
+            finished = true;
+            signal.removeEventListener("abort", abort);
+            if (timer !== null) clearTimeout(timer);
+            if (error) reject(error); else resolve();
+        };
+        const abort = () => finish(new Error("Aborted"));
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) { abort(); return; }
+        if (sleepImpl) {
+            Promise.resolve().then(() => sleepImpl(ms)).then(() => finish(), () => finish(new Error("Retry wait failed")));
+        } else {
+            timer = setTimeout(() => finish(), ms);
+        }
+    });
 }
 
 export interface ApiFetchDeps {
@@ -241,7 +283,7 @@ export interface ApiFetchDeps {
 }
 
 // fetch() for nhentai API routes with (optional) key auth and 429 backoff.
-// Keyless callers pass apiKey=null and get exactly one plain request.
+// Keyless callers pass apiKey=null and send no Authorization header.
 export async function fetchNhentaiApi(
     url: string,
     init: any,
@@ -249,25 +291,31 @@ export async function fetchNhentaiApi(
     deps: ApiFetchDeps = {}
 ): Promise<Response> {
     const fetchImpl = deps.fetchImpl || fetch;
-    const sleepImpl = deps.sleepImpl || ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
     const maxRetries = deps.maxRetries !== undefined ? deps.maxRetries : 2;
 
     const extraHeaders = getApiHeadersForUrl(url, apiKey);
     const merged: any = Object.assign({}, init || {});
     merged.headers = Object.assign({}, extraHeaders, (init && init.headers) || {});
+    // Never follow a redirect while carrying the API key. A different host
+    // must not receive credentials, even if an endpoint starts redirecting.
+    if (extraHeaders.Authorization) merged.redirect = "error";
 
     for (let attempt = 0; ; attempt++) {
+        if (merged.signal && merged.signal.aborted) throw new Error("Aborted");
         const resp = await fetchImpl(url, merged);
         if (resp.status !== 429 || attempt >= maxRetries) {
             return resp;
         }
-        // Back off without consuming the body, then retry.
         const retryAfter = resp.headers && typeof resp.headers.get === "function"
             ? resp.headers.get("Retry-After")
             : null;
-        await sleepImpl(parseRetryAfterMs(retryAfter));
-        if (merged.signal && merged.signal.aborted) {
-            throw new Error("Aborted");
+        const delay = parseRetryAfterMs(retryAfter);
+        if (delay > MAX_INLINE_RETRY_MS) return resp;
+        // Cancel the previous body before retrying; it contains no information
+        // used by this helper. Mock responses may not expose a stream.
+        if (resp.body && typeof resp.body.cancel === "function") {
+            try { await resp.body.cancel(); } catch (_) { /* best effort */ }
         }
+        await waitBeforeRetry(delay, merged.signal, deps.sleepImpl);
     }
 }

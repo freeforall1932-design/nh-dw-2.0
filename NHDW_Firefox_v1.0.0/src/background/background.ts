@@ -9,6 +9,7 @@ import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFet
 import { setImageServers } from "../sources/cdnConfig";
 import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
+import { ArchiveIdentity, archiveIdentityFromGalleryUrl } from "../utils/archiveIdentity";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
 import { installDownloadCompletionTracker, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
@@ -542,11 +543,14 @@ module background
         return currentDownloader == null || currentDownloader.isDone();
     }
 
-    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string }) {
+    export function downloadDoujinshi(jsonTmp: any, path: string, errorCallback: Function, progressCallback: Function, name: string, sourceTabId?: number | null, options?: { useZip?: string; downloadSeparately?: boolean; downloadName?: string; rawMasterFolder?: string; archiveMasterFolder?: string; archiveIdentity?: ArchiveIdentity | null; site?: string }) {
         const signal = beginJob();
         // Single-gallery jobs always own their archive: pages go to the root
         // and the file is named after the gallery (no Title/Title double name).
-        const settings: any = { archiveLayout: "flat" };
+        const settings: any = { archiveLayout: "flat", archiveIdentity: options ? options.archiveIdentity : null };
+        // Preserve the selected source for history and retries. Legacy callers
+        // may omit it, in which case explicit gallery metadata is a fallback.
+        const jobSite = options && options.site ? options.site : (jsonTmp && jsonTmp.site ? String(jsonTmp.site) : undefined);
         // The effective output format is resolved ONCE for this job (per-job
         // override -> stored default -> zip) inside the storage read below,
         // and every consumer reads that single value: the Downloader settings,
@@ -578,6 +582,7 @@ module background
                     const format = resolveJobFormat((currentDownloader && currentDownloader.useZip) || settings.useZip);
                     retryJob.formatOverride = format;
                     if (typeof sourceTabId === "number") retryJob.tabId = sourceTabId;
+                    if (jobSite && jobSite !== "nhentai") retryJob.site = jobSite;
                     const retryFolder = format === "raw" ? settings.rawMasterFolder : settings.archiveMasterFolder;
                     if (typeof retryFolder === "string") retryJob.masterFolder = retryFolder;
                     return retryJob;
@@ -586,6 +591,7 @@ module background
                     errorCallback(errorMessage(error), {
                         galleryId: jsonTmp && jsonTmp.id !== undefined ? String(jsonTmp.id) : "",
                         galleryName: name,
+                        site: jobSite,
                         retryJob: buildRetryJob()
                     });
                 };
@@ -608,7 +614,7 @@ module background
                             ? String(settings.rawMasterFolder || "NHDW")
                             : String(settings.archiveMasterFolder || "");
                         const records = [{
-                            id: String(jsonTmp.id),
+                            id: toGalleryKey(String(jsonTmp.id), jobSite),
                             filename: artifactRecordFilename({
                                 format: format,
                                 name: String(downloader.downloadName || path),
@@ -828,8 +834,13 @@ function jobOverridesFromRequest(request: any): {
     archiveMasterFolder?: string;
     redownloadIds?: string[];
     site?: string;
+    archiveIdentity?: ArchiveIdentity | null;
 } {
     const overrides: any = { useZip: normalizeFormatOverride(request.formatOverride) };
+    if (request.action === "downloadDoujinshi") {
+        overrides.archiveIdentity = request.site === "nhentai"
+            ? archiveIdentityFromGalleryUrl(request.galleryUrl) : null;
+    }
     if (request.separate !== undefined) {
         overrides.downloadSeparately = !!request.separate;
     }
@@ -1121,17 +1132,18 @@ function relayDownloadError(error: string) {
 
 // Error reporter for the in-worker fallback pipeline. The optional context
 // names the failed gallery and carries the job the popup can re-send.
-function fallbackErrorCallback(error: any, context?: { galleryId?: string; galleryName?: string; retryJob?: any }) {
+function fallbackErrorCallback(error: any, context?: { galleryId?: string; galleryName?: string; site?: string; retryJob?: any }) {
     const payload: any = { action: "downloadError", error: errorMessage(error) };
     if (context) {
         if (context.galleryId !== undefined) payload.galleryId = String(context.galleryId);
         if (context.galleryName !== undefined) payload.galleryName = String(context.galleryName);
+        if (context.site !== undefined) payload.site = context.site;
         if (context.retryJob !== undefined) payload.retryJob = context.retryJob;
         if (context.galleryId) {
-            rememberFailedGalleries(
-                [{ id: String(context.galleryId), name: String(context.galleryName || context.galleryId), error: payload.error }],
-                context.retryJob || null
-            );
+            const failure = { id: String(context.galleryId), site: context.site,
+                name: String(context.galleryName || context.galleryId), error: payload.error };
+            rememberFailedGalleries([failure], context.retryJob || null);
+            markBookmarksFailed([failure]);
         }
     }
     chrome.runtime.sendMessage(payload);
@@ -1371,10 +1383,10 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
                 markBookmarksFailed(request.failedGalleries);
             } else if (request.action === "downloadError" && request.galleryId) {
                 rememberFailedGalleries(
-                    [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: String(request.error) }],
+                    [{ id: String(request.galleryId), site: request.site, name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }],
                     request.retryJob || null
                 );
-                markBookmarksFailed([{ id: String(request.galleryId), error: errorMessage(request.error) }]);
+                markBookmarksFailed([{ id: String(request.galleryId), site: request.site, error: errorMessage(request.error) }]);
             }
         } catch (_) { /* bookkeeping only */ }
         return false;
@@ -1549,6 +1561,10 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 if (Array.isArray(relayedMessage.redownloadIds)) {
                     options.redownloadIds = relayedMessage.redownloadIds.map(String);
                 }
+                if (relayedMessage.action === "downloadDoujinshi") {
+                    options.archiveIdentity = relayedMessage.site === "nhentai"
+                        ? archiveIdentityFromGalleryUrl(relayedMessage.galleryUrl) : null;
+                }
                 if (typeof relayedMessage.site === "string" && relayedMessage.site !== "") {
                     // Item 48: the Queue tab splits a mixed selection into one
                     // job per site, and this is the site every gallery of THIS
@@ -1628,7 +1644,7 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
             return true;
         };
         if (request.action === "downloadDoujinshi") {
-            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
+            return startRelayedJob({ action: "downloadDoujinshi", json: request.json, path: request.path, name: request.name, site: request.site, galleryUrl: request.galleryUrl, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, masterFolder: request.masterFolder });
         } else if (request.action === "downloadAllDoujinshis") {
             return startRelayedJob({ action: "downloadAllDoujinshis", allDoujinshis: request.allDoujinshis, galleryMetadata: request.galleryMetadata, finalName: request.finalName, site: request.site, tabId: resolveTabId(request, _sender), formatOverride: request.formatOverride, separate: request.separate, nameTemplate: request.nameTemplate, masterFolder: request.masterFolder, redownloadIds: request.redownloadIds, existingConfirmed: !!request.existingConfirmed });
         } else if (request.action === "downloadAllPages") {

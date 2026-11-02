@@ -382,7 +382,7 @@ function renderDownloadQualitySection(container: HTMLElement): void {
     section.appendChild(heading);
 
     const hint = el("small");
-    hint.textContent = "Every download fetches the reading-mode source images — original resolution, the site's original format. The sites' own download button (a lite, lower-resolution copy) is deliberately not used.";
+    hint.textContent = "Page-by-page downloads use the images supplied to the reader. Server-provided downloads may differ in contents or quality; the site's own Download button is a separate control.";
     section.appendChild(hint);
 
     container.appendChild(section);

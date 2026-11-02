@@ -1,5 +1,100 @@
 # Current Session Handoff — nh-dw-2.0
 
+**Latest state (2026-10-30, branch `arena/e012b75a-nh-dw-2-0`):** the owner's
+approved queue is implemented and green offline. Chromium's last full run:
+**778 passing / 4 pending** (`npm test`, now including
+`test/chapter-support.test.js`), `npm run build`, `npm run test:smoke` and the
+whole e2e suite (**196 PASS**, 0 FAIL) including both chapter harnesses
+(`e2e-universal.js`, `e2e-chapter-relay.js`). No live
+site and no real browser were used; that is the next step, not more code.
+
+What landed in this pass, on top of retry + `ComicInfo.xml`:
+
+- **Tiny/placeholder rejection.** `readImageSize` parses real headers (PNG, GIF,
+  WebP VP8X/VP8/VP8L, JPEG SOF walk) and `assertUsablePage` refuses a page under
+  `MIN_PAGE_DIMENSION = 128` px or with an unparsable header (`too-small` /
+  `format`). Checked at fetch time **and** again before zipping, so an archive can
+  no longer be padded with spacers. AVIF has no parser and is accepted with
+  unknown dimensions.
+- **Inner scroll containers.** `pickScrollTarget` chooses the element with
+  >200 px hidden overflow and ≥200 px visible height/width (largest wins, never
+  from class names); the probe drives it, restores the position, and reports
+  `scrolledElement` plus the iframe count.
+- **Remembered hosts** (`src/utils/hostApprovals.ts`) per exact HTTPS origin, max
+  30 hosts, pre-ticked but still individually listed, on by default, cleared by
+  *Forget remembered hosts*.
+- **Resume** (`src/utils/chapterProgress.ts`): bounded saved-chapter records
+  (500/title, 100 titles), written only for browser-confirmed **complete**
+  archives; *Skip chapters already saved* is on by default and skipped chapters
+  stay visible with their counts. Salvaged archives are intentionally not
+  recorded, so they are retried.
+- **Logger** (`src/utils/extensionLog.ts`): redaction on the way in (URL query and
+  fragment dropped, cookie/token/body keys dropped, base64 and `data:` payloads
+  replaced), 500-entry cap in `chrome.storage.local` under `nhdwExtensionLog`,
+  exportable as `nhdw-log-<timestamp>.txt`.
+- **Benchmark** (panel step 04): five read-only checks from whatever page the
+  source tab is on — tab reach, chapter-link count, reader page images, one page
+  image *only from an already-approved host* plus scroll-container detection, and
+  a storage round-trip — then saves the log. It builds no archive, starts no
+  download and approves no host.
+- **The benchmark also tests the extension itself** (`src/utils/uiSelfTest.ts`):
+  it presses the page's own checkboxes, selects and text fields the way a user
+  would, confirms each accepted the change, and puts every value back. Buttons
+  with a side effect are only inspected, controls that would discard a review on
+  screen are skipped and named in the log, and the worker round-trip is proven
+  with a new read-only `ping` action. A broken control is now a named `FAILED`
+  line instead of something to discover by hand.
+- **"Use the site's own Download control" is dropped** by owner decision; the
+  effort is archived in
+  [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md). The
+  API-key archive path stays the supported route and stays off by default until
+  delivery is verified.
+- **Focus switched (owner, 2026-10-31): Tailspace first.** DoujinDesu and
+  Sasangeyou are on hold — see the likelihood table in
+  [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md#6-how-likely-is-each-site-now)
+  (~60–70 % tailspace, ~75 % sasangeyou ordinary chapters, ~35–45 % desu whole
+  title) and the Tailspace checklist in [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md).
+  Added for it: an **explicit thumbnail suffix rule** (`-mini` → full size, all
+  pages or refuse) and **remembered reader settings per site** (`siteProfiles.ts`,
+  max 50 origins, re-validated on read, no host access granted). Nothing was
+  removed for the hold.
+- **Extension-source research (2026-10-31)**: [EXTENSION_PARSER_RESEARCH.md](EXTENSION_PARSER_RESEARCH.md)
+  answers the owner's "should we pivot to bypassing the ad-link?" question — no;
+  the Mihon/Keiyoushi extensions read the reader/API and never touch a download
+  button or shortener, so their parsers are the evidence source. From it: sasangeyou
+  is MangaThemesia (`div#readerarea img`, else a base64 `ts_reader.run({…})` script
+  → implemented as a fallback), doujindesu uses an encrypted reader API (hour-key
+  `Decryptor`, deliberately **not** reimplemented; DOM reading only), tailspace has
+  no extension (still needs a capture).
+- **The capture guide is the owner's manual task**:
+  [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) — setup, chapter-list
+  capture, reader capture, the six questions per reader, per-site walkthrough
+  (sasangeyou.net first, then tailspace.com `/c/Scale%20Train`, doujin.desu.xxx
+  `/manga/irodori-kazoku` and `/manga/stop-smoking`, mirrored.to directories), and
+  exactly what to send back. No capture exists yet; Yurilab has no tailored steps.
+  The benchmark log is delivered by pressing one button; there is no guide to
+  read first.
+- **No separate benchmark guide** (owner: "instead of guide just focus on
+  logging it"). The page's own step-04 text explains what it does; everything it
+  learns goes into the log file.
+
+**Docs shape:** `BENCHMARK_GUIDE.md` and `OUTER_HTML_GUIDE.md` were removed (the
+owner asked for no benchmark guide and for one real capture walkthrough).
+[DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md) is now the single manual
+task; `SITE_DOWNLOAD_CONTROL_EFFORT.md` records the nhentai-only drop and the
+on-site extraction route for every other site.
+
+**Still unverified / limits:** nothing in this pass was exercised against a live
+site or a real Chromium profile. The `Chapters ↗` page, its self-test and the
+benchmark have only run in the bundled VM e2e. Cross-origin images still need CORS;
+JS-only readers still need *Use open chapter* one chapter at a time; there is
+still no server picker and no iframe support; the archive server mode is off; the
+native nhentai Download button remains unobserved. Firefox has none of this and
+must not be claimed to.
+
+**Historical handoff below:** Earlier session status, test counts and priorities
+are archival; the latest state above and the actual current Git branch take precedence.
+
 **Updated:** 2026-10-17 (session `arena/96e2ebce-nh-dw-2-0`, item 72
 cross-mirror fallback). Chrome **3.13.0**, Firefox **1.5.0** — both
 trees fully green (Chrome 647 unit / 182 e2e / 7 smoke; Firefox 673

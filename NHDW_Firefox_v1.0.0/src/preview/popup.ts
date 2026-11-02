@@ -189,6 +189,7 @@ function pendingFromMessage(failed: FailedGallery[], retryJob: any): PendingFail
         id: String(entry.id),
         name: String(entry.name || entry.id),
         error: String(entry.error || ""),
+        site: entry.site,
         retryJob: retryJob && typeof retryJob === "object" ? retryJob : null,
         at: Date.now()
     }));
@@ -314,7 +315,7 @@ chrome.runtime.onMessage.addListener(function(request) {
         // cancellation), NAME the gallery when the pipeline told us which one
         // failed, and offer a retry when it can be re-added.
         const failed: FailedGallery[] = request.galleryId !== undefined && request.galleryId !== null && request.galleryId !== ""
-            ? [{ id: String(request.galleryId), name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }]
+            ? [{ id: String(request.galleryId), site: request.site, name: String(request.galleryName || request.galleryId), error: errorMessage(request.error) }]
             : [];
         const retryable = failed.length > 0;
         // errorMessage(), never String(): this is the LAST hop before the user
@@ -485,7 +486,7 @@ export default class Popup
         const source = getSourceForUrl(self.url);
         const galleryId = source ? source.getGalleryId(self.url) : null;
         if (galleryId !== null && source !== null) {
-            await self.#doujinshiPreviewAsync(galleryId, source);
+            await self.#doujinshiPreviewAsync(galleryId, source, newUrl);
         } else if (source !== null) {
             executeActiveTabScript("js/getGalleries.js");
         } else {
@@ -507,7 +508,7 @@ export default class Popup
     }
 
     // Display popup for a doujinshi
-    async #doujinshiPreviewAsync(id: string, source: SiteAdapter = clearnetSource) {
+    async #doujinshiPreviewAsync(id: string, source: SiteAdapter = clearnetSource, galleryUrl: string = "") {
         let json: any | null = null;
         let status = 0;
         let statusText = "";
@@ -749,6 +750,10 @@ export default class Popup
                                 path: (document.getElementById('path') as HTMLInputElement).value,
                                 name: title,
                                 tabId: tabId,
+                                // Source and URL come from the previewed page,
+                                // independently of the returned gallery JSON.
+                                site: source.site,
+                                galleryUrl: galleryUrl,
                                 formatOverride: selectedFormat()
                             }, (response) => {
                                 if (response && response.result === "queued") {
