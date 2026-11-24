@@ -68,8 +68,10 @@ reported plus what the code now does.
   background image, this tool cannot read it — that would need a different
   approach and an honest "not supported".
 - Whether full-size images sit on a CDN that sends no CORS headers. The probe
-  fetches with `credentials: "same-origin"`, no referrer and no forged headers;
-  a CDN without CORS fails by design.
+  fetches with `credentials: "same-origin"` and no forged headers; by default
+  no referrer is sent, and a per-site opt-in (added for mangak.io, 2026-11-24)
+  sends the browser's own origin-only referrer. A CDN without CORS still fails
+  by design.
 - Whether the title list is paginated beyond what was observed, and whether
   chapters also exist outside `/c/…` paths.
 - Whether `?page=N` on the title page means "page N of the title list" or

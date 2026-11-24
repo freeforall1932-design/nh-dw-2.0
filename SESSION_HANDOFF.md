@@ -1,6 +1,50 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Latest state (2026-10-30, branch `arena/e012b75a-nh-dw-2-0`):** the owner's
+**Latest state (2026-11-24, branch `arena/2943994c-nh-dw-2-0`, not yet a PR):**
+three commits on top of `main` (`41b1e68`), all green offline: `npm test`
+**824 passing / 4 pending**, `npm run build`, `npm run test:smoke`, and the
+e2e suite **197 PASS**, 0 FAIL. Still no live site or real browser was used.
+
+- **mangak.io (`09b0136`)** — handled by the generic `Chapters ↗` tool, no
+  site adapter: page lists are read from Next.js `__NEXT_DATA__`
+  (`initialChapter.images`), stale data in a client-navigated tab is refused,
+  and a per-site opt-in sends the browser's `strict-origin` referrer for page
+  images (default stays `no-referrer`). Spec: `UNIVERSAL_CHAPTER_TOOL.md`
+  "Next.js sites" + "Opt-in referrer". Open: does mangak's image CDN send CORS
+  and need the referrer (WORKLIST Owner/live list).
+- **doujin.io — dropped by the owner** ("delete that website candidate and
+  anything related to it"). It is DRM-protected (WASM decryption + canvas);
+  capturing it would be circumvention. Do not re-propose it.
+- **Hitomi downloads were broken and are fixed (`8052921`, `ac1b16e`).** The
+  09-22 resolver never fetched `gg.js`, built a retired URL layout, and the
+  rendered gallery page has no page list (it returned a fake id/0-page record).
+  Now:
+  - metadata from `ltn.gold-usergeneratedcontent.net/galleries/{id}.js`,
+    id-checked, in the batch pipeline and the popup;
+  - `gg.js` parsed as text and never executed (`parseHitomiGg` refuses a
+    changed shape), cached 10 min, last good copy kept on a failed refresh;
+    page URL `https://{a|w}{1+m(g)}.gold-usergeneratedcontent.net/{b}{g}/{hash}.{avif|webp}`,
+    `g = parseInt(h[-1] + h[-3:-1], 16)`; reproduces 4/4 captured requests;
+    sibling server as fallback;
+  - a declarativeNetRequest **session rule** (`background/siteHeaderRules.ts`,
+    permission `declarativeNetRequestWithHostAccess`, no install warning) adds
+    `Referer: https://hitomi.la/` + `Origin: https://hitomi.la` to the
+    extension's OWN requests to that domain only (initiator = extension id),
+    so hitomi works from any tab or none, like the other five sites;
+  - the in-tab image fetch runs only in a hitomi.la tab, without credentials
+    (the servers send `ACAO: *`); the worker relay re-checks every URL;
+  - raw mode fetches + validates, then saves the bytes; `blocked: 1`
+    galleries stop with "This gallery is blocked on Hitomi".
+  Live checklist: WORKLIST "Hitomi live check". Firefox still has the OLD,
+  broken hitomi resolver (no backport was made — see Next).
+- **Next:** (1) the owner's real-browser runs — Hitomi checklist, mangak.io
+  check, and the older 42/58 list below; (2) decide whether to open a PR for
+  this branch; (3) a deliberate Firefox release would need the Hitomi fix
+  ported (`NHDW_Firefox_v1.0.0/src/sources/hitomi*.ts` still use
+  `fullPathFromHash`/`subdomainFromHash`); (4) Tailspace / DoujinDesu /
+  Sasangeyou still wait on captures (`DATA_COLLECTION_GUIDE.md`).
+
+**Previous state (2026-10-30, branch `arena/e012b75a-nh-dw-2-0`):** the owner's
 approved queue is implemented and green offline. Chromium's last full run:
 **778 passing / 4 pending** (`npm test`, now including
 `test/chapter-support.test.js`), `npm run build`, `npm run test:smoke` and the
@@ -933,8 +977,16 @@ on the five added hosts).
 - One job carries ONE site; per-site adapters (`src/sources/*`) own metadata
   extraction, image URL generation, host/path allowlists (`cdnConfig` is
   per-adapter) and paste-box shapes; the core pipeline has no site-specific
-  logic. hitomi: dynamic `gg.js` subdomain math (`hitomiResolver.ts`) — never
-  hardcode its CDN subdomains; default format `raw` (1 GB-class galleries).
+  logic. hitomi: `gg.js` read at runtime as text (never executed), cached
+  10 min, refused if its shape changes (`hitomiResolver.ts`) — never hardcode
+  its servers or path prefix; metadata only from `galleries/{id}.js`. The
+  adapter's `defaultFormat` field is not read anywhere (the user's format
+  setting decides); it says `zip` like the other sites since 2026-11-24 — the
+  old `raw` value never had an effect. Large archives rely on the streaming
+  ZIP writer (item 51).
+- Site header rules (`siteHeaderRules.ts`): an adapter's
+  `getImageRequestContext()` becomes a session rule scoped to this extension's
+  own requests (`initiatorDomains: [runtime.id]`) and that adapter's domains.
 - Image fetches for Cloudflare-fronted sites go through the open tab
   (`tabImageFetch` pattern) so the browser sends its own Referer/cookies.
 - Unpadded numbers in CDN fetch URLs, 3-digit zero-padded names on disk.
@@ -1157,6 +1209,9 @@ byte-identical — keep them in sync on any future change).
 - Do not drop `site` from `retryJobKey` (`undefined`/empty normalizes to `null`).
 - Do not put site-specific logic in the core pipeline — it belongs in the adapter.
 - Do not hardcode hitomi CDN subdomains (they rotate; fetch `gg.js` at runtime and cache with a TTL).
+- Do not execute `gg.js` (regex-parse it; refuse an unknown shape) and do not read hitomi metadata from the rendered gallery page (it has no page list).
+- Do not widen a site header rule beyond `initiatorDomains: [chrome.runtime.id]` + the adapter's own domains, and do not switch to the plain `declarativeNetRequest` permission (install warning).
+- Do not re-propose doujin.io (owner dropped it; DRM).
 - Do not try to bypass server-side cooldowns (Strategy A avoids them; Strategy B waits politely; never hammer).
 - Do not delete the nhentai adapter before a second site downloads end-to-end (it is the regression control); do not run the lab clone as a second installed extension long-term.
 

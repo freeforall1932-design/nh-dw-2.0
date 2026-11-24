@@ -3474,3 +3474,42 @@ only. Chrome **3.13.0**; Firefox **1.5.0**.
 | 75 | Embedded-UI "Download lite" / "Download source" buttons (like nh's in-page UI) | **decided against 2026-10-17 (owner pick)** — Strategy A stays the only pipeline: lite is inferior per the owner's same-title sampling and zip endpoints are deliberately not hammered |
 
 Do not allocate these numbers to anything else.
+
+## Session log — 2026-11-24: mangak.io via `Chapters ↗`, doujin.io dropped, Hitomi downloads repaired
+
+Branch `arena/2943994c-nh-dw-2-0`, commits `09b0136`, `8052921`, `ac1b16e`.
+Offline only; no live site or real browser.
+
+- **Owner question:** can doujin.io and mangak.io be supported, including auto
+  batch download while reading? doujin.io: no — DRM (WASM-decrypted pages
+  painted to canvas); logging in or "it is already decrypted on screen" does
+  not change that capturing it is circumvention. Owner then dropped it
+  entirely. mangak.io: yes, through the generic chapter tool.
+- **mangak.io (`09b0136`):** `universalChapter.ts` reads Next.js
+  `__NEXT_DATA__` page lists, refuses stale data after client-side
+  navigation, and the probe gained an opt-in `strict-origin` referrer per site
+  (`sendReferrer` in the reader profile). New `test/next-data-reader.test.js`,
+  a Next.js scenario in `scripts/e2e-universal.js`.
+- **Hitomi (`8052921`):** the 09-22 adapter could not download anything —
+  `gg.js` was never fetched, URLs used a retired layout, the allow-list
+  rejected the real URLs, and the rendered page carries no page list. Rewrote
+  `hitomiResolver.ts` (regex-only `gg.js` parser, 10-min cache, keep-last-good,
+  refusal on shape change) and `hitomiSource.ts`; metadata from
+  `galleries/{id}.js` (id-checked) in `batchPipeline` and the popup; the
+  Downloader calls `prepareDownload`; raw mode fetches + validates then saves
+  bytes. Found on the way: the in-tab fetch used `credentials: "include"`,
+  which a server answering `ACAO: *` can never satisfy — hitomi tab reads now
+  omit credentials. Real `gg.js` fixture (`test/fixtures/hitomi/`).
+- **Research → follow-up (`ac1b16e`):** Cyberdrop-DL (updated 2026-11-21),
+  HiPaGo and comic-looms agree the `gg.js` rules are unchanged and that image
+  requests need `Referer`/`Origin: https://hitomi.la`. Chromium source checked
+  (ruleset_manager.cc, web_request_permissions.cc,
+  chrome_permission_message_rules.cc): DNR rules apply to the extension's own
+  requests, the extension origin counts as permitted, and
+  `declarativeNetRequestWithHostAccess` carries no warning. Added
+  `siteHeaderRules.ts` (session rule, own-initiator + content domain only),
+  in-tab fetch only on hitomi.la tabs, `blocked: 1` → clear error. The worker
+  relay `fetchInTab` now re-checks URLs (it previously injected any URL).
+- **Counts:** `npm test` 824 passing / 4 pending; e2e 197 PASS; build + smoke
+  green. **Not done:** Firefox keeps the old hitomi resolver; live checks are on
+  the WORKLIST Owner/live list (Hitomi, mangak.io).
