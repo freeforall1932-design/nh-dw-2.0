@@ -3513,3 +3513,28 @@ Offline only; no live site or real browser.
 - **Counts:** `npm test` 824 passing / 4 pending; e2e 197 PASS; build + smoke
   green. **Not done:** Firefox keeps the old hitomi resolver; live checks are on
   the WORKLIST Owner/live list (Hitomi, mangak.io).
+
+### Follow-up — items 68/70/71 review changes (owner-approved)
+
+- **Bug, item 70:** `harvestTick` stopped "bottom" the first time
+  `atPageBottom()` was true — on a real infinite-scroll site that is exactly
+  when the next batch starts loading, so runs could end early. New pure helpers in `listHarvest.ts`:
+  `noteHarvestProgress(state, atBottom)` (idle count resets on new cards or
+  when not at the bottom) and `harvestReachedEnd` (`idleRounds >=
+  HARVEST_END_IDLE_ROUNDS`, 3). `HARVEST_MAX_ROUNDS` 40 → 120. State gained
+  `idleRounds`/`lastCount` (optional on read). Red evidence: the new e2e
+  fixture option `scrollCardDelayMs` delivers each batch 1 s after the scroll;
+  the old rule ended at "4 collected", the new one collects all 5.
+- **Merge order:** `mergeHarvestIntoSelection` now keeps the existing
+  selection first (the download order), then the harvest.
+- **Item 68 search:** digits-only terms match the exact id or a whole number in
+  title/tags (`containsWholeNumber`); other terms keep substring AND.
+- **Item 68 "done" filter:** history-based when `historyKeys` is passed
+  (the panel always passes it); label "Downloaded ✓". Without the argument
+  the old status reading stays (back-compat for any other caller).
+- **Item 71:** the pointer tail names the range block on numbered listings
+  and Harvest on endless ones.
+- Applied to Chrome and Firefox (shared files identical; `popup.ts`,
+  `e2e-popup.js`, `e2e-list-controls.js` edited per copy). Chrome 827/4,
+  e2e 198 PASS; Firefox 706/4, e2e green; builds + smoke green.
+

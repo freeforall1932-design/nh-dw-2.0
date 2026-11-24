@@ -62,7 +62,9 @@ import {
     harvestSummary,
     isHarvestRun,
     mergeHarvestIntoSelection,
+    harvestReachedEnd,
     nextHarvestRound,
+    noteHarvestProgress,
     normalizeHarvestState,
     selectionKeyMatchesSite,
     startHarvest,
@@ -851,10 +853,10 @@ function renderHarvestBar(): void {
 /**
  * The bare ids this harvest adds to the page's selection, in merge order.
  *
- * The ORDER is the shared core's (`mergeHarvestIntoSelection`): harvest order
- * first, then whatever was already ticked, never a duplicate. That is not
- * cosmetic - `allIds` IS the download order, so the titles the user watched
- * collect stay in front. The page's selection is stamped with one site and
+ * The ORDER is the shared core's (`mergeHarvestIntoSelection`): whatever was
+ * already ticked first, then the harvest in collection order, never a
+ * duplicate. That is not cosmetic - `allIds` IS the download order, so what the
+ * user chose first downloads first. The page's selection is stamped with one site and
  * holds bare ids, so composite keys are filtered by site (the same number on
  * another site is a different title) and stripped back to ids.
  */
@@ -958,6 +960,10 @@ function harvestTick(): void {
     }
     collectHarvest();
     harvest = nextHarvestRound(harvest, Date.now());
+    // The bottom alone is not the end: an infinite-scroll site starts loading
+    // its next batch there. Only HARVEST_END_IDLE_ROUNDS rounds at the bottom
+    // with no new cards end the run (listHarvest.ts).
+    harvest = noteHarvestProgress(harvest, atPageBottom());
     harvestToken = harvest.run;
     persistHarvest();
     if (!harvestShouldContinue(harvest)) {
@@ -965,7 +971,7 @@ function harvestTick(): void {
         stopHarvestRun(harvest.cards.length >= HARVEST_MAX_ITEMS ? "limit" : "rounds");
         return;
     }
-    if (atPageBottom()) {
+    if (harvestReachedEnd(harvest)) {
         stopHarvestRun("bottom");
         return;
     }

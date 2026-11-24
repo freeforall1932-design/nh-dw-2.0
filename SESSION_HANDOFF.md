@@ -1,9 +1,29 @@
 # Current Session Handoff — nh-dw-2.0
 
 **Latest state (2026-11-24, branch `arena/2943994c-nh-dw-2-0`, not yet a PR):**
-three commits on top of `main` (`41b1e68`), all green offline: `npm test`
-**824 passing / 4 pending**, `npm run build`, `npm run test:smoke`, and the
-e2e suite **197 PASS**, 0 FAIL. Still no live site or real browser was used.
+five commits on top of `main` (`41b1e68`), all green offline: Chrome `npm test`
+**827 passing / 4 pending**, `npm run build`, `npm run test:smoke`, e2e
+**198 PASS**; Firefox `npm test` 706 / 4, build, smoke, e2e green. Still no
+live site or real browser was used.
+
+- **Items 68/70/71 review changes (owner-approved, Chrome AND Firefox — the
+  shared files are byte-identical in both):**
+  - *Harvest end-of-page bug (item 70):* auto-scroll used to stop on the FIRST
+    bottom hit, while an infinite-scroll site was still loading its next
+    batch. Now `noteHarvestProgress` counts rounds at the bottom with no new
+    cards and the run ends only after `HARVEST_END_IDLE_ROUNDS = 3` (~2 s);
+    the status line says "waiting for the page to load more…" meanwhile.
+    `HARVEST_MAX_ROUNDS` 40 → 120. Old stored states read `idleRounds` 0.
+  - *Harvest merge order:* already-ticked keys stay first, harvest follows.
+  - *Bookmark search (item 68):* a digits-only term matches the exact id or a
+    whole number in title/tags (`250` ≠ id 12503); word terms unchanged.
+  - *"done" filter → "Downloaded ✓":* follows download history (the green
+    check), via the new optional `historyKeys` arg of `queryBookmarks`. The
+    counts line ("N done") still counts row status — deliberately unchanged.
+  - *Item 71 pointer:* numbered listings name the range block; endless
+    listings name Harvest on the page.
+  - Roll-back: `git revert` that commit; no storage migration is needed
+    either way (new fields are optional, old readers ignore them).
 
 - **mangak.io (`09b0136`)** — handled by the generic `Chapters ↗` tool, no
   site adapter: page lists are read from Next.js `__NEXT_DATA__`

@@ -88,6 +88,29 @@ describe("bookmark search and filters (item 68)", () => {
         assert.strictEqual(bookmarkMatchesQuery(item({ title: "Plain" }), { text: "plain" }, NOW), true);
     });
 
+    it("treats a number-only term as a number: exact id or a whole number in the title (2026-11-24)", () => {
+        const vol = item({ id: "12503", title: "Big Series Vol. 250", tags: ["parody:2501 nights"] });
+        const exact = item({ id: "250", title: "Something Else" });
+        const near = item({ id: "2501", title: "Another 12503rd thing" });
+        const matches = (row, text) => bookmarkMatchesQuery(row, { text: text }, NOW);
+        // "250" is the whole number in vol's title and exact's id - not a slice of 12503 / 2501.
+        assert.strictEqual(matches(vol, "250"), true);
+        assert.strictEqual(matches(exact, "250"), true);
+        assert.strictEqual(matches(near, "250"), false);
+        // An id matches only exactly; a whole number in the title still counts.
+        assert.strictEqual(matches(vol, "12503"), true);
+        assert.strictEqual(matches(near, "12503"), true);
+        assert.strictEqual(matches(vol, "1250"), false);
+        // Tags are words too: "2501" is a whole number there.
+        assert.strictEqual(matches(vol, "2501"), true);
+        // Mixed terms: the number rule and the substring rule are ANDed.
+        assert.strictEqual(matches(vol, "series 250"), true);
+        assert.strictEqual(matches(vol, "series 25"), false);
+        // A term with letters keeps substring matching, ids included.
+        assert.strictEqual(matches(vol, "ser"), true);
+        assert.strictEqual(matches(item({ id: "ab12cd" }), "b12c"), true);
+    });
+
     it("filters by status, including the selected-only and saved-only views", () => {
         const rows = [
             item({ id: "1", status: "saved", selected: true }),
@@ -101,6 +124,26 @@ describe("bookmark search and filters (item 68)", () => {
         assert.deepStrictEqual(ids({ status: "saved" }), ["1"]);
         assert.deepStrictEqual(ids({ status: "selected" }), ["1", "3"]);
         assert.deepStrictEqual(ids({ status: "all" }), ["1", "2", "3", "4"]);
+    });
+
+    it("reads the Downloaded filter from HISTORY when the panel passes it (2026-11-24)", () => {
+        const rows = [
+            item({ id: "1", status: "saved" }),
+            item({ id: "2", status: "done" }),
+            item({ id: "3", status: "failed", site: "hitomi" }),
+            item({ id: "3", status: "saved", site: "hentaifox" })
+        ];
+        const historyKeys = [toGalleryKey("1", "nhentai"), toGalleryKey("3", "hitomi")];
+        const ids = (keys) => queryBookmarks(state(rows), { status: "done" }, NOW, keys).map((row) => row.site + ":" + row.id);
+        // A saved row that is on disk shows; a row that only SAYS done does not;
+        // the composite key keeps the same number on another site out.
+        assert.deepStrictEqual(ids(historyKeys), ["nhentai:1", "hitomi:3"]);
+        // An empty history means nothing is downloaded.
+        assert.deepStrictEqual(ids([]), []);
+        // Callers that pass no history keep the old status reading.
+        assert.deepStrictEqual(ids(undefined), ["nhentai:2"]);
+        // Other statuses ignore the history.
+        assert.deepStrictEqual(queryBookmarks(state(rows), { status: "failed" }, NOW, historyKeys).map((row) => row.id), ["3"]);
     });
 
     it("filters by date bucket off the stored addedAt, and reads a clock it is given", () => {

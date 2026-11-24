@@ -714,7 +714,7 @@ function renderList(): void {
     // the filter line states how much of it the query matches, and the list
     // below renders a bounded window of those matches.
     const queryActive = !isDefaultBookmarkQuery(bookmarkQuery);
-    const matched = queryBookmarks(state, bookmarkQuery);
+    const matched = queryBookmarks(state, bookmarkQuery, Date.now(), historyKeys);
     const visible = chunkBookmarkRows(matched, shownRows);
     const querySummary = bookmarkQuerySummary(matched, historyKeys);
     syncSiteFilterSelect();
@@ -1041,7 +1041,8 @@ function buildChrome(container: HTMLElement): void {
         { value: "all", label: "Any state" },
         { value: "saved", label: "Not downloaded" },
         { value: "selected", label: "Ticked" },
-        { value: "done", label: "Done" },
+        // "done" = in the download history (the green check), not row status.
+        { value: "done", label: "Downloaded \u2713" },
         { value: "failed", label: "Failed" },
         { value: "downloading", label: "Downloading" }
     ];
@@ -1095,7 +1096,7 @@ function buildChrome(container: HTMLElement): void {
     selectAll.addEventListener("click", () => {
         const message: any = isDefaultBookmarkQuery(bookmarkQuery)
             ? { action: "bookmarkSelect", all: true, selected: true }
-            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(queryBookmarks(state, bookmarkQuery)), selected: true };
+            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(queryBookmarks(state, bookmarkQuery, Date.now(), historyKeys)), selected: true };
         send(message).then((response) => {
             if (response && response.state) {
                 state = normalizeBookmarkState(response.state);
@@ -1112,7 +1113,7 @@ function buildChrome(container: HTMLElement): void {
     selectNone.addEventListener("click", () => {
         const message: any = isDefaultBookmarkQuery(bookmarkQuery)
             ? { action: "bookmarkSelect", all: true, selected: false }
-            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(queryBookmarks(state, bookmarkQuery)), selected: false };
+            : { action: "bookmarkSelect", ids: bookmarkSelectionKeys(queryBookmarks(state, bookmarkQuery, Date.now(), historyKeys)), selected: false };
         send(message).then((response) => {
             if (response && response.state) {
                 state = normalizeBookmarkState(response.state);

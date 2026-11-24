@@ -839,6 +839,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     if (rangeHtml.indexOf('id="selectionPointer"') === -1) {
         fail("the list must point at the shared on-page selection (item 71), got " + rangeHtml.slice(0, 400));
     }
+    if (rangeHtml.indexOf("use the range block below (numbered pages)") === -1) {
+        fail("a numbered listing's pointer must name the range block (item 71, 2026-11-24), got " + rangeHtml.slice(0, 400));
+    }
     // Default input value + live count + both handlers wired on the vivified nodes.
     await wait(40);
     if (byId("downloadInput").value !== "2-7") {

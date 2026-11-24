@@ -873,7 +873,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     statusSelect.value = "done";
     statusSelect.dispatch("change");
     await wait(30);
-    assertEqual(findRows(byId("nhdwBmList")).length, 2, "the status filter shows only the done rows");
+    // 2026-11-24: "done" is the "Downloaded \u2713" view and follows HISTORY,
+    // like the green check: row 4 only SAYS done, so only row 2 shows.
+    const downloadedRows = findRows(byId("nhdwBmList"));
+    assertEqual(downloadedRows.length, 1, "the Downloaded filter shows only the rows history records");
+    assertEqual(findDeep(downloadedRows[0], "nhdwBmTitle").textContent, "Dark Room",
+        "the Downloaded filter keeps the title that is really on disk");
     statusSelect.value = "selected";
     statusSelect.dispatch("change");
     await wait(30);

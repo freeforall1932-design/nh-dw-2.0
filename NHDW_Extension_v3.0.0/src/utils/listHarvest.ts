@@ -31,8 +31,19 @@ import { normalizeSite, splitGalleryKey, toGalleryKey } from "./siteKeys";
 export const HARVEST_MAX_ITEMS = 2000;
 /** Delay between auto-scroll steps: polite to the site and to the user's eyes. */
 export const HARVEST_INTERVAL_MS = 700;
-/** Auto-scroll rounds before the run stops itself and says so. */
-export const HARVEST_MAX_ROUNDS = 40;
+/**
+ * Auto-scroll rounds before the run stops itself and says so (~84 s at 700 ms).
+ * Raised from 40 on 2026-11-24: 40 screens could end a big listing before the
+ * item cap; the real end-of-page signal is HARVEST_END_IDLE_ROUNDS below.
+ */
+export const HARVEST_MAX_ROUNDS = 120;
+/**
+ * Rounds the page must sit at the bottom WITHOUT new cards before the run calls
+ * it the end (~2 s). An infinite-scroll site starts loading the next batch when
+ * the bottom is reached; ending on the first bottom hit cut runs off while that
+ * batch was still on its way.
+ */
+export const HARVEST_END_IDLE_ROUNDS = 3;
 /** Where a run's cards are persisted so a reload does not lose them. */
 export const HARVEST_STORAGE_KEY = "listHarvest";
 
@@ -57,10 +68,14 @@ export interface HarvestState {
     lastRound: number;
     stopReason: HarvestStopReason;
     cards: HarvestCard[];
+    /** Consecutive rounds at the page bottom with no new cards. */
+    idleRounds: number;
+    /** Card count at the previous round (what "no new cards" compares with). */
+    lastCount: number;
 }
 
 export function emptyHarvestState(): HarvestState {
-    return { v: 1, run: 0, active: false, autoScroll: false, round: 0, lastRound: 0, stopReason: "", cards: [] };
+    return { v: 1, run: 0, active: false, autoScroll: false, round: 0, lastRound: 0, stopReason: "", cards: [], idleRounds: 0, lastCount: 0 };
 }
 
 const STOP_REASONS: HarvestStopReason[] = ["", "stopped", "rounds", "limit", "bottom"];
@@ -122,7 +137,10 @@ function coerceHarvestState(raw: any, fromStorage: boolean): HarvestState {
         round: Number.isFinite(Number(raw.round)) ? Math.max(0, Math.floor(Number(raw.round))) : 0,
         lastRound: Number.isFinite(Number(raw.lastRound)) ? Math.max(0, Math.floor(Number(raw.lastRound))) : 0,
         stopReason: STOP_REASONS.indexOf(raw.stopReason) !== -1 ? raw.stopReason : "",
-        cards: cards
+        cards: cards,
+        // Older stored states have neither field; both read as 0.
+        idleRounds: Number.isFinite(Number(raw.idleRounds)) ? Math.max(0, Math.floor(Number(raw.idleRounds))) : 0,
+        lastCount: Number.isFinite(Number(raw.lastCount)) ? Math.max(0, Math.floor(Number(raw.lastCount))) : 0
     };
 }
 
@@ -144,7 +162,9 @@ export function startHarvest(previous: HarvestState, autoScroll: boolean, now: n
         autoScroll: !!autoScroll,
         round: 0,
         lastRound: Number.isFinite(now) ? now : Date.now(),
-        stopReason: "" as HarvestStopReason
+        stopReason: "" as HarvestStopReason,
+        idleRounds: 0,
+        lastCount: base.cards.length
     });
 }
 
@@ -207,13 +227,35 @@ export function nextHarvestRound(state: HarvestState, now: number = Date.now()):
     });
 }
 
+/**
+ * Record one round's end-of-page evidence. New cards since the previous round,
+ * or not being at the bottom, reset the idle count; sitting at the bottom with
+ * nothing new adds one. Pure: the adapter supplies `atBottom`.
+ */
+export function noteHarvestProgress(state: HarvestState, atBottom: boolean): HarvestState {
+    const base = coerceHarvestState(state, false);
+    const count = base.cards.length;
+    const grew = count > base.lastCount;
+    return Object.assign({}, base, {
+        idleRounds: atBottom && !grew ? base.idleRounds + 1 : 0,
+        lastCount: count
+    });
+}
+
+/** The page has stopped growing at its bottom for long enough: the real end. */
+export function harvestReachedEnd(state: HarvestState): boolean {
+    return !!state && (state.idleRounds || 0) >= HARVEST_END_IDLE_ROUNDS;
+}
+
 /** The status line: what was collected, and what is still happening. */
 export function harvestSummary(state: HarvestState): string {
     const base = coerceHarvestState(state, false);
     const count = base.cards.length;
     const collected = count === 1 ? "1 collected" : count + " collected";
     if (base.active) {
-        return collected + " \u00b7 still collecting\u2026";
+        return base.idleRounds > 0
+            ? collected + " \u00b7 waiting for the page to load more\u2026"
+            : collected + " \u00b7 still collecting\u2026";
     }
     switch (base.stopReason) {
         case "stopped": return collected + " \u00b7 stopped";
@@ -225,22 +267,17 @@ export function harvestSummary(state: HarvestState): string {
 }
 
 /**
- * Merge a harvest into a selection of composite keys. The harvest's own order
- * comes first (that is the order the user watched it collect, and it becomes
- * the download order); ids already in the selection follow, minus duplicates.
- * Passing the same state twice is a no-op, so a resume cannot double a row.
+ * Merge a harvest into a selection of composite keys. What the user had
+ * ALREADY ticked keeps its place at the front (it was chosen first, and the
+ * selection order is the download order); harvested cards follow in the order
+ * they were collected, minus duplicates. (Before 2026-11-24 the harvest went
+ * first; the owner's review flipped it.) Passing the same state twice is a
+ * no-op, so a resume cannot double a row or reorder it.
  */
 export function mergeHarvestIntoSelection(state: HarvestState, selectedKeys: string[]): string[] {
     const base = coerceHarvestState(state, false);
     const merged: string[] = [];
     const seen = new Set<string>();
-    for (const card of base.cards) {
-        const key = toGalleryKey(card.id, card.site);
-        if (!seen.has(key)) {
-            seen.add(key);
-            merged.push(key);
-        }
-    }
     for (const key of Array.isArray(selectedKeys) ? selectedKeys : []) {
         const normalized = String(key === undefined || key === null ? "" : key).trim();
         if (normalized === "" || seen.has(normalized)) {
@@ -248,6 +285,13 @@ export function mergeHarvestIntoSelection(state: HarvestState, selectedKeys: str
         }
         seen.add(normalized);
         merged.push(normalized);
+    }
+    for (const card of base.cards) {
+        const key = toGalleryKey(card.id, card.site);
+        if (!seen.has(key)) {
+            seen.add(key);
+            merged.push(key);
+        }
     }
     return merged;
 }

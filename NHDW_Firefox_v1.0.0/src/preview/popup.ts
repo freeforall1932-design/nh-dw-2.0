@@ -984,7 +984,12 @@ export default class Popup
         // block. Rendered only when the page really has cards.
         const sharedSelectionPointer = allIds.length > 0
             ? '<div id="selectionPointer" class="selectionPointer">Ticking rows here and ticking cards on the page are the same selection'
-                + (maxPage > 0 && currPage > 0 ? "; for the listing's other pages use the range block below" : '')
+                // Item 71 (2026-11-24): name the right tool for each kind of
+                // listing - the range block for numbered pages, Harvest (the
+                // page's floating bar) for endless scrolling.
+                + (maxPage > 0 && currPage > 0
+                    ? "; for more pages use the range block below (numbered pages)"
+                    : "; for more from an endless-scrolling page use Harvest on the page")
                 + '.</div>'
             : '';
         let html = '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>'
