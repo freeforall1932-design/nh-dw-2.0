@@ -5,7 +5,7 @@ import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl, SiteAdapter, clearnetSource } from "../sources"
 import { getActiveTabId, getActiveNhentaiTabId, readGalleryFromTab, executeInTab } from "./activeTabGallery"
-import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
+import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi, parseRetryAfterMs, NhentaiRateLimitError } from "../utils/apiAuth"
 import {
     DownloadFormat,
     effectiveOutputMode,
@@ -518,6 +518,7 @@ export default class Popup
         // any keyed failure keep the original order below.
         const modeState = await getApiModeState();
         let keyedRejected = false;
+        let rateLimitMessage = "";
         if (source.site === "nhentai" && modeState.mode === "keyed") {
             try {
                 const keyedParsing = new ApiParsing();
@@ -528,6 +529,9 @@ export default class Popup
                     json = await keyedParsing.GetJsonAsync(keyedResp);
                 } else if (keyedResp.status === 401) {
                     keyedRejected = true;
+                } else if (keyedResp.status === 429) {
+                    const retryAfter = keyedResp.headers && keyedResp.headers.get ? keyedResp.headers.get("Retry-After") : null;
+                    rateLimitMessage = new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter)).message;
                 }
             } catch (error) {
                 statusText = errorMessage(error);
@@ -537,7 +541,28 @@ export default class Popup
         // Read the open gallery tab. Extension-origin fetches to the gallery
         // API are what Cloudflare 403s; the rendered page already carries its
         // metadata once any challenge is done.
-        if (json === null) {
+        // Sites whose metadata is a separate document (hitomi: galleries/{id}.js)
+        // read it directly; the result must be this gallery and have pages.
+        let blockedMessage: string | null = null;
+        if (json === null && !rateLimitMessage && source.site !== "nhentai" && typeof source.getMetadataUrl === "function" && source.extractGallery) {
+            try {
+                const metaResp = await fetch(source.getMetadataUrl(id), { credentials: "omit", cache: "no-store", redirect: "error" });
+                status = metaResp ? metaResp.status : 0;
+                statusText = metaResp ? String(metaResp.statusText || "") : "";
+                if (metaResp && metaResp.ok) {
+                    const meta = source.extractGallery(await metaResp.text());
+                    if (meta && meta.blocked === true && String(meta.id) === String(id)) {
+                        blockedMessage = "This gallery is blocked on Hitomi: the site does not serve its pages.";
+                    } else if (meta && String(meta.id) === String(id) && meta.images && Array.isArray(meta.images.pages) && meta.images.pages.length > 0) {
+                        json = meta;
+                    }
+                }
+            } catch (error) {
+                statusText = errorMessage(error);
+            }
+        }
+
+        if (json === null && !rateLimitMessage) {
             if (source.site === "nhentai") {
                 json = await getGalleryFromActiveTab(id);
             } else {
@@ -551,16 +576,20 @@ export default class Popup
             }
         }
 
-        if (json === null && source.site === "nhentai") {
+        if (json === null && source.site === "nhentai" && !rateLimitMessage) {
             try {
                 const resp = await fetch(this.parsing!.GetUrl(id), {
                     credentials: "include",
                     cache: "no-store",
+                    redirect: "error",
                     headers: await getOptionalApiHeaders()
                 });
                 status = resp.status;
                 statusText = resp.statusText;
-                if (resp.ok) {
+                if (resp.status === 429) {
+                    const retryAfter = resp.headers && resp.headers.get ? resp.headers.get("Retry-After") : null;
+                    rateLimitMessage = new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter)).message;
+                } else if (resp.ok) {
                     json = await this.parsing!.GetJsonAsync(resp);
                 }
             } catch (error) {
@@ -589,9 +618,11 @@ export default class Popup
         }
 
         if (json === null) {
-            let html = status === 404
-                ? message.errorOther(status, statusText)
-                : message.cloudflareMetadata();
+            let html = blockedMessage
+                ? message.errorOther(403, blockedMessage)
+                : rateLimitMessage
+                ? message.errorOther(429, rateLimitMessage)
+                : (status === 404 ? message.errorOther(status, statusText) : message.cloudflareMetadata());
             if (keyedRejected) {
                 html += '<br/><small>Your API key was rejected (HTTP 401). Check it in the extension options, or clear it there to use open-tab mode only.</small>';
             }

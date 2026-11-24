@@ -1,12 +1,30 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.6.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.7.0)
 
-**Updated:** 2026-10-17 (v1.6.0 search-wording ladder + pipeline notes; the 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
+**Updated:** 2026-11-24 (v1.7.0 catch-up to Chrome; the 2026-10-17 and 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
 Chrome-3.9.0 backport — bookmark icon, gallery-page Bookmark button, Queue-tab
 markup (43), drag-reorder (44), backup import/export (52), canonical-separator
 gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
+
+v1.7.0 = the owner-requested catch-up (2026-11-24): everything Chrome
+gained after the 2026-10-20 sync, ported by three-way merge with the audited
+delta kept (`FIREFOX_PARITY_PLAN.md` §2/§13):
+
+- **Hitomi** resolver fix (gg.js text parse, `galleries/{id}.js` metadata,
+  blocked galleries reported, `Referer`/`Origin` via a DNR session rule whose
+  initiator is this add-on's `moz-extension://` host).
+- **Chapters ↗** universal chapter tool (`chapters.html`; mangak, MangaThemesia
+  fallback, Tailspace profiles, benchmark log). Opens in a tab bound to the
+  gallery tab you were on, since Firefox has no side panel. New permission:
+  `activeTab` (plus `declarativeNetRequestWithHostAccess`); no new host access.
+- Archive/retry hardening, items 68/70/71, and the token theme (`theme.css`;
+  options follows Dark mode; the website drawer gets a token mirror).
+
+Verified offline only: 861 unit / 4 pending, smoke, `test:e2e`, options and
+embedded-toolbar suites, web-ext lint 0 errors. Not run in a real Firefox or
+on Android, not signed, theme not visually checked.
 
 v1.6.0 = items 73–74, ported from Chrome 3.14.0: the
 mirror-fallback title search now climbs a wording ladder

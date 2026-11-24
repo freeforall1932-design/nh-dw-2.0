@@ -3,16 +3,17 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import Downloader from "./Downloader";
 import { errorMessage } from "../utils/utils";
-import { getSourceForUrl } from "../sources";
+import { getSourceForUrl, getConfiguredSources } from "../sources";
+import { installSiteHeaderRules } from "./siteHeaderRules";
 import { executeInTab, panelSourceTabId } from "../preview/activeTabGallery";
-import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
+import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab, tabFetchModeForUrl } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
 import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
 import { ArchiveIdentity, archiveIdentityFromGalleryUrl } from "../utils/archiveIdentity";
 import * as cdnConfigService from "./cdnConfigService";
 import { installDownloadFilenameGuard, recordDownloadRequest } from "./downloadNaming";
-import { installDownloadCompletionTracker, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
+import { installDownloadCompletionTracker, completionTrackingAvailable, startBrowserDownload, awaitDownloadCompletion, cancelTrackedDownload } from "./downloadControl";
 import { normalizeFormat, normalizeFormatOverride, resolveJobFormat, formatExtension, DownloadFormat } from "../utils/downloadFormats";
 // The worker OWNS the persistent download history (chrome.storage.local): it
 // reads it for the pipeline guard, writes it when jobs report success and
@@ -76,6 +77,12 @@ installDownloadFilenameGuard();
 // registered at load so terminal events are never missed after a worker
 // restart mid-gallery. Harmless where onChanged does not exist.
 installDownloadCompletionTracker();
+
+// Site header rules (hitomi: Referer/Origin hitomi.la on this extension's own
+// requests to its image servers only). Session rules do not survive a browser
+// restart, so they are (re)installed on every worker start; idempotent, and a
+// no-op where the API is missing. See siteHeaderRules.ts for the scope.
+void installSiteHeaderRules(chrome, getConfiguredSources());
 
 // One awaitDownload relay answer is held open for at most this long; the
 // offscreen document simply asks again while the download is still running.
@@ -1273,6 +1280,10 @@ function readDownloadOptions(callback: (options: any) => void) {
 // also reach the popup directly, so the worker must NOT relay them back.
 function handleOffscreenMessage(request: any, sendResponse: (response: any) => void): boolean {
     if (request.action === "saveDownload") {
+        if (request.requireCompletion === true && !completionTrackingAvailable()) {
+            sendResponse({ result: false, error: "Browser download completion tracking is unavailable." });
+            return false;
+        }
         // The offscreen document assembles blobs and exposes them through
         // object URLs, but it cannot call chrome.downloads itself (only
         // chrome.runtime is available there). The worker performs the actual
@@ -1342,7 +1353,15 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
     if (request.action === "fetchInTab") {
         // The offscreen document cannot call chrome.scripting; the worker
         // injects the image fetch into the gallery tab (see tabImageFetch.ts).
-        executeInTab(request.tabId, fetchImageInPage, [request.url], request.world === "MAIN" ? "MAIN" : "ISOLATED")
+        // Re-check here: this injects into the user's tab, so only page
+        // images of nhentai or of an adapter that opted in are fetched, with
+        // that adapter's credentials mode (never the caller's say-so).
+        const mode = tabFetchModeForUrl(String(request.url || ""), getConfiguredSources());
+        if (mode === null || typeof request.tabId !== "number") {
+            sendResponse(null);
+            return false;
+        }
+        executeInTab(request.tabId, fetchImageInPage, [request.url, mode.credentials, mode.requiredHost], request.world === "MAIN" ? "MAIN" : "ISOLATED")
             .then((result: any) => sendResponse(result));
         return true;
     }
@@ -1465,6 +1484,32 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
         return true;
     }
     if (request.from === "offscreen") {
+        return handleOffscreenMessage(request, sendResponse);
+    }
+    if (request.from === "chapters" && _sender && _sender.id === chrome.runtime.id &&
+        typeof _sender.url === "string" && _sender.url.split("?")[0] === chrome.runtime.getURL("chapters.html") &&
+        ["saveDownload", "awaitDownload", "cancelDownload", "ping"].indexOf(request.action) !== -1) {
+        // The extension page uses the worker's single naming/completion guard,
+        // rather than maintaining a second, conflicting storage/session map.
+        // Accept only extension-owned blob artifacts, never arbitrary URLs.
+        if (request.action === "ping") {
+            // Used by the chapter page's self-test: proves the worker answers a
+            // message from that exact page and reports which browser APIs the
+            // save path depends on. Changes nothing.
+            let completion = false;
+            try { completion = completionTrackingAvailable(); } catch (_) { /* older browser */ }
+            sendResponse({
+                result: true, version: chrome.runtime.getManifest().version,
+                downloads: typeof chrome.downloads !== "undefined" && !!chrome.downloads.download,
+                offscreen: typeof (chrome as any).offscreen !== "undefined", completion: completion
+            });
+            return false;
+        }
+        if (request.action === "saveDownload" && (request.requireCompletion !== true ||
+            typeof request.url !== "string" || !request.url.startsWith("blob:" + chrome.runtime.getURL("")))) {
+            sendResponse({ result: false, error: "Invalid chapter artifact." });
+            return false;
+        }
         return handleOffscreenMessage(request, sendResponse);
     }
     if (request.action === "historyPresent") {

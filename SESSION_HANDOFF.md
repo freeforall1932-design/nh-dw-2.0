@@ -1,10 +1,33 @@
 # Current Session Handoff — nh-dw-2.0
 
 **Latest state (2026-11-24, branch `arena/2943994c-nh-dw-2-0`, not yet a PR):**
-five commits on top of `main` (`41b1e68`), all green offline: Chrome `npm test`
-**827 passing / 4 pending**, `npm run build`, `npm run test:smoke`, e2e
-**198 PASS**; Firefox `npm test` 706 / 4, build, smoke, e2e green. Still no
-live site or real browser was used.
+six commits on top of `main` (`41b1e68`), all green offline: Chrome `npm test`
+**828 passing / 4 pending**, `npm run build`, smoke 7, e2e **198 PASS**;
+Firefox **1.7.0** `npm test` **861 / 4**, build, smoke 7, `test:e2e` exit 0
+(241 PASS), options 35/0, embedded toolbar 11/0, web-ext lint 0 errors.
+Still no live site or real browser was used.
+
+- **Firefox catch-up (owner: "Do a catch up on Firefox all update that's been
+  postponed on Firefox part").** Everything Chrome gained after the 2026-10-20
+  sync (`5834582`) is now in `NHDW_Firefox_v1.0.0` via three-way merge: Hitomi
+  fix, Chapters ↗ / mangak / MangaThemesia / Tailspace profiles, benchmark log,
+  archive/retry hardening, theme tokens, items 68/70/71. Firefox-only choices
+  (details in `FIREFOX_PARITY_PLAN.md` §2 + §13):
+  - DNR initiator: Firefox matches extension requests by the
+    `moz-extension://<uuid>` host, so shared `siteHeaderRules.ts` now uses
+    `extensionInitiatorHost()` in BOTH trees (Chrome gets its id, unchanged
+    behaviour; new Chrome unit test). Manifest + `activeTab`,
+    `declarativeNetRequestWithHostAccess`; host list equals Chrome's.
+  - Chapters ↗ opens `chapters.html?tab=<source tab>` (no side panel).
+  - Theme: `panelRenderers.css` opens with a `#nhdwSiteUi` token mirror
+    (theme.css is never injected into websites); `content.css` = Chrome bytes +
+    a `FIREFOX-ONLY DELTA` drawer block; options applies Dark mode itself;
+    `test/theme-budget.test.js` ported with those two exemptions.
+  - Not ported: Chrome's logo-lab toolbar-icon tryout.
+  - Firefox e2e harness kept its own stubs (UUID `getURL`, single
+    `localStore`, `tabs.create` capture); never copy Chrome's scripts over.
+  - Open: real Firefox desktop + Android pass, signing (58), a visual look at
+    the token theme in the drawer/options.
 
 - **Items 68/70/71 review changes (owner-approved, Chrome AND Firefox — the
   shared files are byte-identical in both):**

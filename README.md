@@ -7,7 +7,7 @@
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
 ![Version](https://img.shields.io/badge/version-3.14.0-blue)
-![Firefox](https://img.shields.io/badge/Firefox-1.6.0-orange)
+![Firefox](https://img.shields.io/badge/Firefox-1.7.0-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -52,7 +52,7 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 - 🪟 **Dockable side panel** — the toolbar button opens a resizable side panel (popup still available in Settings).
 - 🛡️ **Cloudflare-aware** — metadata and pages are fetched through your open gallery tab's session first. Not a bypass: a challenge page has no images, so complete it and retry.
 - 🔁 **Retry that knows what failed** — every failure names the gallery and reason; **Retry failed** re-downloads exactly those titles with the same settings.
-- 🦊 **Firefox tree** — a separate existing build with an in-page drawer ([Firefox README](NHDW_Firefox_v1.0.0/README.md)). New development is Chromium-first; Firefox work is deferred unless straightforward, and future feature parity is not guaranteed.
+- 🦊 **Firefox tree** — a separate existing build with an in-page drawer ([Firefox README](NHDW_Firefox_v1.0.0/README.md)). New development is Chromium-first. On 2026-11-24 the owner asked for a catch-up, so Firefox **1.7.0** carries everything Chromium had then (Hitomi fix, **Chapters ↗** tool, theme, archive hardening). Future parity is still not guaranteed.
 
 ## 📦 Installation
 
@@ -66,7 +66,7 @@ On desktop Chrome, Brave or Edge:
 Chromium is the primary development target. Firefox can load an unpacked add-on
 **temporarily** through `about:debugging`, but it is removed on restart; a
 persistent installation in standard Firefox requires a Mozilla-signed package.
-The Firefox build is retained but deferred for new work unless straightforward.
+The Firefox build is Chromium-first; it was last caught up to Chromium on 2026-11-24 (1.7.0).
 [Mozilla's temporary-install guide](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/)
 explains the distinction.
 
@@ -132,10 +132,10 @@ Archives: `Downloads/NHDW/[Title].zip` (master folder configurable). Raw: `Downl
 ## ⚠️ Known limitations
 
 - **Experimental universal chapter collector** — the Chromium panel's **Chapters ↗** tab opens a user-driven tool that saves one open chapter or a selected set of title chapters as ordered CBZ/ZIP archives. It works only where you supply a working CSS selector, only on normal public HTTPS pages, and only after you approve each image host. It adds no wildcard host access and is not live-validated; see [UNIVERSAL_CHAPTER_TOOL.md](UNIVERSAL_CHAPTER_TOOL.md).
-- **Keep opt-in server archive mode off for now** — Chromium has synthetic archive validation, 429 and browser-completion safeguards, but real hosts, browser behavior, contents and quality are unverified. Firefox retains the earlier unsafe fallback and validation behavior. Old installed or queued jobs may still use earlier code; cancel or review them and reload the updated build. The website's own Download button is separate and its flow has not been observed. See [the safety plan](NEW_DOMAIN_PLANNING.md#important-existing-issuesfix-before-relying-on-the-option).
+- **Keep opt-in server archive mode off for now** — Chromium and Firefox 1.7.0 share the synthetic archive validation, 429 and browser-completion safeguards, but real hosts, browser behavior, contents and quality are unverified. Old installed or queued jobs may still use earlier code; cancel or review them and reload the updated build. The website's own Download button is separate and its flow has not been observed. See [the safety plan](NEW_DOMAIN_PLANNING.md#important-existing-issuesfix-before-relying-on-the-option).
 - **Page integrity is not guaranteed** — ordinary page downloads can accept sufficiently large HTML falsely labelled as an image; raw browser handoff cannot inspect its bytes. Do not treat a saved filename alone as proof of a valid image.
 - **Download history is local** — it lives in this browser profile, starts empty, and never syncs via browser cloud accounts. Use **Export / Import backup** in the Bookmark tab to migrate history between machines.
-- **Firefox is deferred** — `NHDW_Firefox_v1.0.0` is retained as a separate build, but new Chromium work may not be ported. Desktop/Android verification and signing remain pending for any future Firefox release (item 58); offline checks do not establish live parity.
+- **Firefox follows Chromium in catch-ups** — `NHDW_Firefox_v1.0.0` 1.7.0 matches Chromium as of 2026-11-24 apart from its audited delta ([parity plan §2](NHDW_Firefox_v1.0.0/FIREFOX_PARITY_PLAN.md)); later Chromium work may not be ported. Desktop/Android verification and signing remain pending for any future Firefox release (item 58); offline checks do not establish live parity.
 - **A second extension can win filename fights** — Chrome gives the last-installed extension the final say on names.
 
 ## 🗺️ Roadmap — multi-site v4
@@ -187,7 +187,7 @@ For Firefox:
 cd NHDW_Firefox_v1.0.0
 npm ci
 npm run build     # webpack -> js/
-npm test          # 649 passing unit tests (Firefox)
+npm test          # 861 passing unit tests (Firefox)
 npm run test:smoke
 npm run test:e2e
 ```
@@ -212,6 +212,7 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| Firefox **1.7.0** (Chrome tree unchanged at 3.14.0) | Firefox catch-up (owner request, 2026-11-24): everything Chromium gained after the 2026-10-20 sync — Hitomi resolver fix, universal **Chapters ↗** tool (mangak `__NEXT_DATA__`, MangaThemesia fallback, Tailspace profiles), benchmark log, archive/retry hardening, the theme tokens, items 68/70/71. Firefox-specific: DNR rules match the `moz-extension://` host (shared `extensionInitiatorHost`), Chapters ↗ opens a tab bound to the source tab, the website drawer gets a token mirror. Offline suites only; no real Firefox/Android check or signing. |
 | **3.14.0** (Firefox **1.6.0**) | Items 73–74: the mirror-fallback title search now climbs a wording ladder — raw title → normalized title → strongest tag term (the adapters extract typed gallery tags for this; the owner's live note: imhentai/hentaiera search often answer nothing unless the wording is the full title or a tag), each rung tried only when the previous search comes back empty. Settings and the panel now carry a "Download quality" reminder: downloads fetch the reading-mode source images (original resolution, original format); the sites' own download button (lite/lower-resolution) is deliberately not used. Item 75 (in-page lite/source buttons) was decided against. |
 | **3.13.0** (Firefox **1.5.0**) | Item 72 — cross-mirror fallback: a mirror-site gallery whose own image mirrors all fail validation continues from a sibling site. hentaienvy serves imhentai's images by token host-swap (the twins share the `/033/<token>/` store, so only the hosts change); hentaiera copies are found by title (search, ≥ 0.9 title containment, page-count check, then a sticky switch). Chains follow the site graph: imhentai→(envy, era), envy→(era, imh), era→(envy, imh). Reactive only — no sibling requests while the gallery's own mirrors work — and off by opt-out in Settings and the panel (`Mirror fallback`). Fetch-side only: queue, jobs, bookmarks and history behave exactly as before, and history still records only full success. 23 new unit tests per tree; live-chain verification on a real throttled gallery is a device-pass item. |
 | **3.12.0** | The theme layer (`ASSET_PLAN.md` families 2–6 under the style budget): one `css/theme.css` with 15 tokens and element primitives, `style.css`/`content.css` value swaps only, the seated browser tab strip, one pink primary per surface, status chips, a soft modal, the options page in the same look in light **and** dark. Found and fixed on the way: the side panel threw on its second dark-mode bootstrap (one-way `#htmlLight → #htmlDark` rename) and stopped following the tab — fixed in Chrome and ported to Firefox **1.4.7**; the injected "Include already downloaded" row never hid on hosts without a `[hidden]` rule; the floating bar overflowed narrow windows. `test/theme-budget.test.js` locks the budget and measures AA contrast. |

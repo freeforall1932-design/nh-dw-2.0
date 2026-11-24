@@ -60,8 +60,20 @@ const OPTIONS_DEFAULTS = {
     inPageControls: true,
     mirrorFallback: true
 };
+// The options page wears the same theme as the panel: theme.css re-values its
+// tokens on #htmlDark, so the root id is the whole switch - applied from the
+// stored preference on load and live when the Dark mode box is toggled.
+function applyDarkMode(on: boolean): void {
+    document.documentElement.id = on ? "htmlDark" : "htmlLight";
+}
+
 chrome.storage.sync.get(Object.keys(OPTIONS_DEFAULTS).concat("listFormat"), function(stored) {
     const elems = Object.assign({}, OPTIONS_DEFAULTS, stored);
+    applyDarkMode(!!(elems as any).darkMode);
+    const darkBox = document.getElementById("darkMode") as HTMLInputElement | null;
+    if (darkBox) {
+        darkBox.addEventListener("change", () => applyDarkMode(darkBox.checked));
+    }
     const storedListFormat = elems.listFormat;
     let inheritListFormat = normalizeFormatOverride(storedListFormat) === undefined;
     // Normalize only the displayed values; opening Options must not rewrite

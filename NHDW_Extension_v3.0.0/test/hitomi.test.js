@@ -251,6 +251,22 @@ describe("Hitomi Adapter & Resolver", () => {
             assert.strictEqual(calls[0].addRules.length, 1);
         });
 
+        it("scopes to the extension's ORIGIN host: the id on Chrome, the moz-extension UUID on Firefox", async () => {
+            const { extensionInitiatorHost } = require("../build/test/background/siteHeaderRules");
+            const FF_UUID = "3f2b8c1e-9a4d-4e7b-8c55-0123456789ab";
+            const chromeRuntime = { id: EXT_ID, getURL: (p) => "chrome-extension://" + EXT_ID + "/" + p };
+            // Firefox: runtime.id is the gecko id, which is never a request initiator.
+            const firefoxRuntime = { id: "nhdw@example.org", getURL: (p) => "moz-extension://" + FF_UUID + "/" + p };
+            assert.strictEqual(extensionInitiatorHost(chromeRuntime), EXT_ID);
+            assert.strictEqual(extensionInitiatorHost(firefoxRuntime), FF_UUID);
+            assert.strictEqual(extensionInitiatorHost({ id: EXT_ID }), EXT_ID);
+            assert.strictEqual(extensionInitiatorHost(undefined), null);
+            const calls = [];
+            const ff = { runtime: firefoxRuntime, declarativeNetRequest: { updateSessionRules: async (arg) => { calls.push(arg); } } };
+            assert.strictEqual(await installSiteHeaderRules(ff, getConfiguredSources()), true);
+            assert.deepStrictEqual(calls[0].addRules[0].condition.initiatorDomains, [FF_UUID]);
+        });
+
         it("never throws: no API, no permission, or a rejected update just reports false", async () => {
             assert.strictEqual(await installSiteHeaderRules({ runtime: { id: EXT_ID } }, getConfiguredSources()), false);
             assert.strictEqual(await installSiteHeaderRules(undefined, getConfiguredSources()), false);

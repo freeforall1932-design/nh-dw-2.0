@@ -3538,3 +3538,29 @@ Offline only; no live site or real browser.
   `e2e-popup.js`, `e2e-list-controls.js` edited per copy). Chrome 827/4,
   e2e 198 PASS; Firefox 706/4, e2e green; builds + smoke green.
 
+### Follow-up — Firefox catch-up to Chrome (owner request)
+
+- **Scope:** every Chrome change since the last Firefox sync (`5834582`,
+  Chrome 3.14.0 / Firefox 1.6.0) — Hitomi resolver, universal chapter tool +
+  Chapters page (mangak, MangaThemesia, Tailspace profiles), benchmark/log,
+  archive/retry hardening, theme tokens, items 68/70/71. Firefox → **1.7.0**.
+- **Method:** `git merge-file` per changed file (base = Chrome at `5834582`),
+  new files copied, conflicts resolved to Chrome logic + the audited delta.
+  Source now differs from Chrome only in the §2 allowlist (nine files + two
+  Firefox-only); `listControls.ts` is byte-identical again.
+- **Real defect found by the port:** the Hitomi DNR rule used
+  `initiatorDomains: [runtime.id]`; Firefox matches an extension's own request
+  by its `moz-extension://<uuid>` host (Firefox `ExtensionDNR.sys.mjs`), so the
+  header rule would never have applied. Shared fix `extensionInitiatorHost()`
+  in both trees + unit test; Firefox e2e-worker asserts the UUID host.
+- **Firefox deltas added:** Chapters ↗ binds the source tab
+  (`chapters.html?tab=<id>`); `#nhdwSiteUi` token mirror in
+  `panelRenderers.css` (the 27 old `#htmlDark`/hover/disabled pairs dropped,
+  tokens replace them); `content.css` = Chrome + marked drawer block; options
+  `applyDarkMode()` (+ e2e-options test); theme-budget test ported with the
+  two exemptions plus a drawer-mirror check.
+- **Counts:** Firefox 861 / 4 (was 706), smoke 7, `test:e2e` 241 PASS, options
+  35/0, toolbar 11/0, lint 0 errors / 33 warnings (+1 = webpack's global shim in
+  the new `js/chapters.js`). Chrome 828 / 4, e2e 198, smoke 7.
+- **Not done:** no real Firefox/Android run, no signing, no visual check.
+

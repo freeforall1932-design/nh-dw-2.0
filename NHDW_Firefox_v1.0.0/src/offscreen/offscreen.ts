@@ -180,7 +180,7 @@ function askWorker(message: any): Promise<any> {
 // and keep the historical "started = saved" behaviour.
 const AWAIT_DOWNLOAD_MAX_MS = 4 * 60 * 1000;
 
-async function awaitDownloadViaServiceWorker(downloadId: number, signal: AbortSignal | null): Promise<void> {
+async function awaitDownloadViaServiceWorker(downloadId: number, signal: AbortSignal | null, requireCompletion: boolean = false): Promise<void> {
     const startedAt = Date.now();
     while (true) {
         if (signal && signal.aborted) {
@@ -190,16 +190,25 @@ async function awaitDownloadViaServiceWorker(downloadId: number, signal: AbortSi
         }
         const answer = await askWorker({ action: "awaitDownload", downloadId: downloadId });
         if (!answer || answer.result !== true) {
-            // Older worker or unreachable: nothing more can be learned.
+            if (requireCompletion) {
+                void askWorker({ action: "cancelDownload", downloadId: downloadId });
+                throw new Error("Browser download completion could not be confirmed.");
+            }
+            // Older worker or unreachable: legacy raw mode cannot learn more.
             return;
         }
         if (answer.ok) {
+            if (requireCompletion && answer.state !== "complete") {
+                void askWorker({ action: "cancelDownload", downloadId: downloadId });
+                throw new Error("Browser download completion could not be confirmed.");
+            }
             return;
         }
         if (answer.state === "pending") {
-            if (Date.now() - startedAt >= AWAIT_DOWNLOAD_MAX_MS) {
+            const maxWait = requireCompletion ? 30 * 60 * 1000 : AWAIT_DOWNLOAD_MAX_MS;
+            if (Date.now() - startedAt >= maxWait) {
                 void askWorker({ action: "cancelDownload", downloadId: downloadId });
-                throw new Error("Download did not finish within " + Math.round(AWAIT_DOWNLOAD_MAX_MS / 60000) + " min and was stopped");
+                throw new Error("Download did not finish within " + Math.round(maxWait / 60000) + " min and was stopped");
             }
             continue;
         }
@@ -216,8 +225,8 @@ async function awaitDownloadViaServiceWorker(downloadId: number, signal: AbortSi
 // here (zip/pdf mode) or the original CDN URL (raw mode). Blob URLs are
 // extension-origin, so the worker can download them even though it cannot
 // create object URLs itself.
-async function saveViaServiceWorker(url: string, filename: string): Promise<void> {
-    const response = await askWorker({ action: "saveDownload", url: url, filename: filename });
+async function saveViaServiceWorker(url: string, filename: string, requireCompletion: boolean = false): Promise<void> {
+    const response = await askWorker({ action: "saveDownload", url: url, filename: filename, requireCompletion });
     if (!response) {
         throw new Error("Unable to save the file (worker unreachable)");
     }
@@ -227,7 +236,9 @@ async function saveViaServiceWorker(url: string, filename: string): Promise<void
         throw new Error(errorMessage(response.error) || "Unable to save the file");
     }
     if (typeof response.result === "number") {
-        await awaitDownloadViaServiceWorker(response.result, jobAbortController ? jobAbortController.signal : null);
+        await awaitDownloadViaServiceWorker(response.result, jobAbortController ? jobAbortController.signal : null, requireCompletion);
+    } else if (requireCompletion) {
+        throw new Error("Browser download completion could not be confirmed.");
     }
 }
 
@@ -265,7 +276,10 @@ function saveBlobViaAnchor(blobUrl: string, filename: string): void {
 // (zip/cbz/pdf) go through the anchor mechanism above; everything else
 // (raw-mode CDN URLs) is relayed to the service worker's
 // chrome.downloads.download, which names plain http(s) URLs correctly.
-function saveArtifactSmart(url: string, filename: string): Promise<void> {
+function saveArtifactSmart(url: string, filename: string, requireCompletion: boolean = false): Promise<void> {
+    // The experimental server archive cannot treat an untracked anchor click
+    // as success. Route only that case through the worker's tracked download.
+    if (requireCompletion) return saveViaServiceWorker(url, filename, true);
     if (typeof url === "string" && url.indexOf("blob:") === 0) {
         try {
             saveBlobViaAnchor(url, filename);

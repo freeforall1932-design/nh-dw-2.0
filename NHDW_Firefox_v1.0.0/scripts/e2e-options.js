@@ -238,6 +238,17 @@ test("checkbox changes persist true and false without clobbering sibling setting
     assert.equal(ctx.sync.untouched, "keep");
 });
 
+test("the options page wears the stored theme and flips live with the Dark mode box (catch-up port)", async () => {
+    const light = await page({});
+    assert.equal(light.document.documentElement.id, "htmlLight", "darkMode unset: the light theme");
+    const dark = await page({ sync: { darkMode: true } });
+    assert.equal(dark.document.documentElement.id, "htmlDark", "a stored darkMode must put #htmlDark on the root");
+    dark.writes.length = 0;
+    await dark.change("darkMode", false);
+    assert.equal(dark.document.documentElement.id, "htmlLight", "unticking Dark mode flips the page live");
+    onlySet(dark, "sync", "darkMode", false);
+});
+
 test("an inherited list format follows single-title edits until explicitly overridden", async () => {
     const ctx = await page({ sync: { useZip: "zip" } });
     await ctx.change("useZip", "cbz");

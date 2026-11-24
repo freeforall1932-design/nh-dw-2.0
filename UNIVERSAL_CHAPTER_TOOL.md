@@ -340,8 +340,9 @@ Still open, in order of what unblocks most:
   gallery path but is not reused here.
 - **Click-to-select picker** — the last usability item; still requires a
   hand-written CSS selector.
-- **Release hygiene** — version bump; the Firefox tree has none of this and must
-  not be described as having it.
+- **Release hygiene** — version bump. The Firefox tree has carried the tool
+  since the 2026-11-24 catch-up (1.7.0); there, Chapters ↗ opens
+  `chapters.html?tab=<source tab>` because Firefox has no side panel.
 
 The dropped "use the site's own Download control" idea is archived in
 [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md); do not
@@ -376,7 +377,9 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
 - **No live-browser validation yet.** The benchmark and log have only run in the
   bundled VM harness; the first real run is the next step and its log is the
   artifact to send back.
-- **Firefox is not ported.** `NHDW_Firefox_v1.0.0` has none of this.
+- **Firefox: ported offline only (2026-11-24, 1.7.0).** Same code plus the
+  source-tab binding above; its e2e (`e2e-universal`, `e2e-chapter-relay`,
+  popup phase 18) is green, but it has never run in a real Firefox.
 - **Content responsibility stays with the user.** The tool has no age or
   entitlement check and cannot grant access. Only save material you can
   normally access and may lawfully download. It does not bypass logins, paywalls,

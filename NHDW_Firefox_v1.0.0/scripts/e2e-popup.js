@@ -195,6 +195,7 @@ const documentStub = {
 // behaviour. injectedScripts records what the panel injected.
 let listingPayload = null;
 let tabGalleryJson = null;
+let tabGalleryReadCount = 0;
 const injectedScripts = [];
 // What window.confirm answers; the item-40 phase flips it for the
 // already-downloaded re-save prompt.
@@ -241,6 +242,7 @@ const syncWrites = [];
 const localWrites = [];
 const localStore = { apiKeyGate: "skipped" };
 const sourceTab = { id: 7, url: "https://nhentai.net/g/123456/", active: !fullPanel };
+const createdTabs = [];
 // Item 40: point the panel at a tab URL the way a real navigation does (the
 // harness then fires the captured onActivated listener), and hand the panel a
 // recorded-history entry through the local store. isDownloadFinished must
@@ -319,6 +321,7 @@ const chromeStub = {
     tabs: {
         query(_q, cb) { cb(fullPanel ? [{ id: 99, url: panelUrl, active: true }] : [sourceTab]); },
         get(id, cb) { cb(id === sourceTab.id ? sourceTab : undefined); },
+        create(opts) { createdTabs.push(opts); },
         onUpdated: { addListener(fn) { updatedListeners.push(fn); } },
         onActivated: { addListener(fn) { activatedListeners.push(fn); } }
     },
@@ -347,6 +350,7 @@ const chromeStub = {
                 return;
             }
             const source = details && typeof details.func === "function" ? String(details.func) : "";
+            if (source.indexOf("_gallery") !== -1) tabGalleryReadCount++;
             const result = tabGalleryJson !== null && source.indexOf("_gallery") !== -1
                 ? { gallery: tabGalleryJson, scripts: [], html: "" }
                 : null;
@@ -1063,6 +1067,40 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         process.off("uncaughtException", onUncaught);
         console.log("PASS phase 16: dark mode follows the stored preference across re-bootstraps and live changes");
     }
+
+    // A keyed 429 must be shown, not immediately bypassed via a tab or another
+    // API request. The fixture never contacts a real server.
+    await settleStaleTabRead(tabGalleryJson);
+    const tabReadsBefore = tabGalleryReadCount;
+    const rateCalls = [];
+    localStore.apiKey = "synthetic-key"; // Firefox harness: one local store (Chrome: localExtra)
+    sandbox.fetch = (url, init) => {
+        rateCalls.push({ url: String(url), init });
+        return Promise.resolve({ ok: false, status: 429, statusText: "Too Many Requests", headers: { get: () => "120" } });
+    };
+    setPreviewTabUrl("https://nhentai.net/g/888001/");
+    for (const listener of activatedListeners) listener({ tabId: 7 });
+    await wait(200);
+    if (rateCalls.length !== 1 || rateCalls[0].init.redirect !== "error" || tabGalleryReadCount !== tabReadsBefore) {
+        fail("keyed 429 must not trigger another request or tab fallback");
+    }
+    if (!/rate limited/i.test(byId("action").innerHTML) || !/120 seconds/.test(byId("action").innerHTML)) {
+        fail("keyed 429 must show the server delay to the user");
+    }
+    console.log("PASS phase 17: keyed 429 is shown without a tab or API fallback");
+    delete localStore.apiKey;
+
+    // Chapters tool (catch-up port): the page binds to the SOURCE tab. In the
+    // Full panel the active tab is the panel itself (id 99), which must never
+    // become the chapter source.
+    sourceTab.url = "https://nhentai.net/g/123456/";
+    createdTabs.length = 0;
+    byId("buttonChapters").dispatchLast("click");
+    await wait(30);
+    if (createdTabs.length !== 1 || !/chapters\.html\?tab=7$/.test(String(createdTabs[0].url))) {
+        fail("Chapters must open chapters.html bound to source tab 7 (" + (fullPanel ? "full panel" : "popup") + "), got " + JSON.stringify(createdTabs));
+    }
+    console.log("PASS phase 18: Chapters opens bound to the source tab, never the panel tab (" + (fullPanel ? "full panel" : "popup") + ")");
 
     process.exit(0);
 })();

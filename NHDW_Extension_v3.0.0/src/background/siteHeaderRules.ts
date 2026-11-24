@@ -4,8 +4,11 @@
 // forbids them — so a declarativeNetRequest session rule adds them.
 //
 // Scope, deliberately narrow:
-//   * initiatorDomains = this extension's id: only requests the extension
-//     itself makes. Chrome never applies one extension's rules to another
+//   * initiatorDomains = this extension's own origin host: only requests the
+//     extension itself makes. On Chrome that host IS the extension id; on
+//     Firefox it is the per-install moz-extension UUID (runtime.id there is
+//     the gecko id, which never appears as an initiator) - Firefox's
+//     ExtensionDNR evaluates an extension's own requests by that UUID. Chrome never applies one extension's rules to another
 //     extension's requests, and the user's own browsing (initiator hitomi.la or
 //     any other site) does not match, so the site behaves exactly as before.
 //   * requestDomains = the adapter's content domain only.
@@ -68,17 +71,34 @@ export function buildSiteHeaderRules(adapters: any[], extensionId: string): any[
 }
 
 /**
+ * The host of this extension's own origin, as it appears as a request
+ * initiator: chrome-extension://<id>/ on Chrome, moz-extension://<uuid>/ on
+ * Firefox. Falls back to runtime.id when getURL is unavailable (old stubs).
+ */
+export function extensionInitiatorHost(runtime: any): string | null {
+    try {
+        if (runtime && typeof runtime.getURL === "function") {
+            const match = /^(?:chrome|moz)-extension:\/\/([a-z0-9_-]+)\//i.exec(String(runtime.getURL("")));
+            if (match) {
+                return match[1].toLowerCase();
+            }
+        }
+    } catch (_) { /* fall through */ }
+    return runtime && typeof runtime.id === "string" ? runtime.id : null;
+}
+
+/**
  * Install (or refresh) the rules. Never throws: a browser without the API or
  * the permission just keeps today's behaviour (the open-tab fetch still works).
  */
 export async function installSiteHeaderRules(chromeApi: any, adapters: any[]): Promise<boolean> {
     try {
         const dnr = chromeApi && chromeApi.declarativeNetRequest;
-        const runtimeId = chromeApi && chromeApi.runtime && chromeApi.runtime.id;
-        if (!dnr || typeof dnr.updateSessionRules !== "function" || typeof runtimeId !== "string") {
+        const initiator = extensionInitiatorHost(chromeApi && chromeApi.runtime);
+        if (!dnr || typeof dnr.updateSessionRules !== "function" || typeof initiator !== "string") {
             return false;
         }
-        const rules = buildSiteHeaderRules(adapters, runtimeId);
+        const rules = buildSiteHeaderRules(adapters, initiator);
         const removeRuleIds: number[] = [];
         for (let id = SITE_HEADER_RULE_ID_BASE; id <= SITE_HEADER_RULE_ID_MAX; id++) removeRuleIds.push(id);
         await dnr.updateSessionRules({ removeRuleIds, addRules: rules });

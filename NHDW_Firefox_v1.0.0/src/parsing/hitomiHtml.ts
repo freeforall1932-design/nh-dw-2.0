@@ -3,8 +3,8 @@
 // Chrome-free and fetch-free: runs in the service worker, the offscreen
 // document, and the plain-Node VM test sandboxes.
 //
-// Source of truth for Hitomi gallery data is either the rendered page DOM,
-// the embedded gallery JS (var galleryinfo = {...}), or the gallery HTML.
+// Source of truth for Hitomi gallery data is the gallery JS
+// (ltn.gold-usergeneratedcontent.net/galleries/{id}.js: var galleryinfo = {...}).
 
 export function extractHitomiReaderImage(html: string): string | null {
     if (!html || typeof html !== "string") return null;
@@ -18,8 +18,15 @@ export function extractHitomiGallery(htmlOrJs: string): any | null {
 
     let rawInfo: any = null;
 
+    // galleries/{id}.js is exactly `var galleryinfo = {JSON}` — parse it whole,
+    // so braces inside titles cannot confuse the brace scan below.
+    const assignment = /^\s*var\s+galleryinfo\s*=\s*([\s\S]*?);?\s*$/.exec(htmlOrJs);
+    if (assignment) {
+        try { rawInfo = JSON.parse(assignment[1]); } catch (_) { rawInfo = null; }
+    }
+
     // Find the first { and parse balanced braces
-    const firstBrace = htmlOrJs.indexOf("{");
+    const firstBrace = rawInfo ? -1 : htmlOrJs.indexOf("{");
     if (firstBrace !== -1) {
         let depth = 0;
         let endBrace = -1;
@@ -70,35 +77,17 @@ export function extractHitomiGallery(htmlOrJs: string): any | null {
             },
             scanlator: "",
             tags: Array.isArray(rawInfo.tags) ? rawInfo.tags : [],
-            num_pages: pages.length
+            num_pages: pages.length,
+            // Hitomi marks some galleries `blocked: 1`; it does not serve their
+            // pages. Carried only when set so other records are unchanged.
+            ...(Number(rawInfo.blocked) ? { blocked: true } : {})
         };
     }
 
-    // Fallback: extract basic metadata from HTML if JS is unavailable
-    const idMatch = /\/(?:galleries|doujinshi|manga|gamecg|cg|anime|reader)\/(?:.*-)?([0-9]+)(?:\.html)?(?:[#/?]|$)/i.exec(htmlOrJs);
-    const id = idMatch ? idMatch[1] : null;
-    if (!id) return null;
-
-    const titleMatch = /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(htmlOrJs) ||
-                       /<title>([\s\S]*?)(?:\||\-)?\s*Hitomi\.la<\/title>/i.exec(htmlOrJs);
-    const title = titleMatch ? titleMatch[1].trim() : "Gallery " + id;
-
-    return {
-        id: id,
-        media_id: id,
-        site: "hitomi",
-        title: {
-            pretty: title,
-            english: title,
-            japanese: title
-        },
-        images: {
-            pages: [],
-            cover: { t: "j", w: 0, h: 0 },
-            thumbnail: { t: "j", w: 0, h: 0 }
-        },
-        scanlator: "",
-        tags: [],
-        num_pages: 0
-    };
+    // No page list: the rendered gallery page does not carry one (it loads
+    // galleries/{id}.js as an external script). An earlier fallback built a
+    // record from the page HTML anyway, which picked up an unrelated number as
+    // the id and reported 0 pages; returning null lets the caller read the
+    // real metadata (hitomiSource.getMetadataUrl) instead.
+    return null;
 }

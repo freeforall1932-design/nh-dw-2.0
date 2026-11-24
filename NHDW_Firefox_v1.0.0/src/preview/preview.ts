@@ -49,6 +49,18 @@ function initPopupTabs() {
         }
     };
     tabDownload.addEventListener("click", () => show("download"));
+    const chaptersButton = document.getElementById("buttonChapters");
+    if (chaptersButton) chaptersButton.addEventListener("click", () => {
+        // Firefox delta: the Full panel (index.html?sourceTabId=N in its own
+        // tab) is itself the active tab, so bind through getPreviewTab, which
+        // resolves the validated source tab there and the active tab in the
+        // ordinary popup. An extension page is never a chapter source.
+        void getPreviewTab().then((tab) => {
+            if (!tab || typeof tab.id !== "number") return;
+            if (typeof tab.url === "string" && /^(?:moz|chrome)-extension:/i.test(tab.url)) return;
+            chrome.tabs.create({ url: chrome.runtime.getURL("chapters.html") + "?tab=" + tab.id });
+        });
+    });
     tabQueue.addEventListener("click", () => show("queue"));
     tabSettings.addEventListener("click", () => show("settings"));
     // Live row updates (a card bookmarked on the page, a download settling)

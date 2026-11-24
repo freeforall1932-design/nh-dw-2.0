@@ -13,7 +13,7 @@ import AParsing from "../parsing/AParsing";
 import ApiParsing from "../parsing/ApiParsing";
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing";
 import { coerceGallery, extractGalleryFromHtml, looksLikeGallery, requireGallery } from "../parsing/GalleryEmbed";
-import { fetchNhentaiApi } from "./apiAuth";
+import { fetchNhentaiApi, parseRetryAfterMs, NhentaiRateLimitError } from "./apiAuth";
 import { artifactRecordFilename, BatchOutcome, FailedGallery } from "./downloadHistory";
 import { DEFAULT_SITE, GALLERY_KEY_SEPARATOR, normalizeSite, toGalleryKey, splitGalleryKey } from "./siteKeys";
 import { resolveJobFormat } from "./downloadFormats";
@@ -85,6 +85,11 @@ export interface BatchHost {
     fetchImpl(url: string, init?: any): Promise<any>;
     newZip(): any;
     downloadGallery(job: GalleryDownloadJob): Promise<void>;
+}
+
+function batchWasAborted(host: BatchHost): boolean {
+    const signal = host.getAbortSignal();
+    return host.wasAborted() || !!(signal && signal.aborted);
 }
 
 const cancelledGalleries = new Set<string>();
@@ -241,6 +246,9 @@ async function parseResponseGallery(resp: any, parsing: AParsing): Promise<any> 
     return requireGallery(json);
 }
 
+// Shown when a site marks a gallery as blocked (hitomi `blocked: 1`).
+export const BLOCKED_GALLERY_MESSAGE = "This gallery is blocked on Hitomi: the site does not serve its pages.";
+
 export async function resolveGalleryMetadata(
     key: string,
     args: {
@@ -292,6 +300,35 @@ export async function resolveGalleryMetadata(
         let status = 0;
         let statusText = "";
 
+        // Separate metadata document (hitomi: galleries/{id}.js). Accepted only
+        // when it is this gallery and lists pages; otherwise fall through.
+        if (typeof adapter.getMetadataUrl === "function" && adapter.extractGallery) {
+            try {
+                const metaResp = await host.fetchImpl(adapter.getMetadataUrl(id), {
+                    credentials: "omit",
+                    cache: "no-store",
+                    redirect: "error",
+                    signal: signal || undefined
+                });
+                status = metaResp ? metaResp.status : 0;
+                statusText = metaResp ? String(metaResp.statusText || "") : "";
+                if (metaResp && metaResp.ok) {
+                    const meta = adapter.extractGallery(typeof metaResp.text === "function" ? await metaResp.text() : "");
+                    if (meta && meta.blocked === true && String(meta.id) === String(id)) {
+                        // Final: no other route serves a blocked gallery's pages.
+                        return { ok: false, status: 403, statusText: BLOCKED_GALLERY_MESSAGE, contentType: "application/javascript" };
+                    }
+                    if (meta && looksLikeGallery(meta) && String(meta.id) === String(id) && meta.images.pages.length > 0) {
+                        if (!meta.site) meta.site = adapter.site;
+                        return { ok: true, json: requireGallery(meta) };
+                    }
+                }
+            } catch (e: any) {
+                if (signal && signal.aborted) throw e;
+                statusText = String(e && e.message ? e.message : e);
+            }
+        }
+
         if (typeof sourceTabId === "number") {
             const viaTab = await host.fetchUrlFromTab(sourceTabId, targetUrl);
             if (viaTab && viaTab.ok && viaTab.text !== null) {
@@ -318,7 +355,10 @@ export async function resolveGalleryMetadata(
         }
         if (htmlText && adapter.extractGallery) {
             const extracted = adapter.extractGallery(htmlText);
-            if (extracted && looksLikeGallery(extracted)) {
+            // Same rule as supplied metadata: a page that names a different
+            // gallery must never be saved under this one's identity.
+            const idConflict = extracted && extracted.id !== undefined && extracted.id !== null && String(extracted.id) !== id;
+            if (extracted && !idConflict && looksLikeGallery(extracted)) {
                 if (!extracted.site) extracted.site = adapter.site;
                 return { ok: true, json: requireGallery(extracted) };
             }
@@ -341,6 +381,10 @@ export async function resolveGalleryMetadata(
                 apiKey,
                 { fetchImpl: host.fetchImpl }
             );
+            if (keyedResp.status === 429) {
+                const retryAfter = keyedResp.headers && keyedResp.headers.get ? keyedResp.headers.get("Retry-After") : null;
+                throw new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter));
+            }
             if (keyedResp.ok) {
                 const jsonKeyed = await keyedParsing.GetJsonAsync(keyedResp);
                 if (jsonKeyed) {
@@ -349,10 +393,11 @@ export async function resolveGalleryMetadata(
                 }
             }
         } catch (error) {
-            if (error && /not gallery metadata/.test(String((error as any).message || error))) {
+            if (error instanceof NhentaiRateLimitError || (signal && signal.aborted) ||
+                (error && /not gallery metadata/.test(String((error as any).message || error)))) {
                 throw error;
             }
-            // Fall through to the tab-based routes.
+            // Other failures may fall through to the tab-based routes.
         }
     }
 
@@ -386,6 +431,7 @@ export async function resolveGalleryMetadata(
                 credentials: "include",
                 cache: "no-store",
                 headers: headers,
+                redirect: apiKey ? "error" : "follow",
                 signal: signal || undefined
             });
         } catch (e) {
@@ -394,6 +440,10 @@ export async function resolveGalleryMetadata(
     }
 
     if (!resp || !resp.ok) {
+        if (resp && resp.status === 429) {
+            const retryAfter = resp.headers && resp.headers.get ? resp.headers.get("Retry-After") : null;
+            throw new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter));
+        }
         return {
             ok: false,
             status: resp ? resp.status : 0,
@@ -490,6 +540,7 @@ export async function runBatchDownload(args: {
     const records: Array<{ id: string; filename: string }> = [];
     const batchKeys: string[] = [];
     let finalSaveOk = false;
+    let rateLimited = false;
     const failedGalleries: FailedGallery[] = [];
     const batchRetryJob = buildRetryJob(sourceTabId, options);
 
@@ -513,8 +564,26 @@ export async function runBatchDownload(args: {
         host.sendMessage(Object.assign({}, host.messageExtras(), payload));
     }
 
+    function deferRemaining(afterIndex: number, error: NhentaiRateLimitError) {
+        rateLimited = true;
+        for (let j = afterIndex + 1; j < length; j++) {
+            const key = allKeys[j];
+            if (isGalleryCancelled(key, jobSite) || (host.isGalleryCancelled && host.isGalleryCancelled(storeKey(key)))) {
+                // This mark belongs to the stopped job too, not a future retry.
+                consumeGalleryCancellation(key, jobSite);
+                countFailure(key, "Download was aborted");
+            } else if (effectiveSeparate && alreadySet.has(storeKey(key)) && !redownloadSet.has(storeKey(key))) {
+                skipped++;
+            } else {
+                // Include unattempted titles in the retry list rather than
+                // quietly losing them or issuing another request too early.
+                countFailure(key, "Deferred after rate limit. " + error.message);
+            }
+        }
+    }
+
     for (let i = 0; i < length; i++) {
-        if (host.wasAborted()) {
+        if (batchWasAborted(host)) {
             break;
         }
         const key = allKeys[i];
@@ -553,11 +622,17 @@ export async function runBatchDownload(args: {
                 site: jobSite
             });
         } catch (error) {
+            if (batchWasAborted(host)) break;
             countFailure(key, error);
             host.errorCallback("Can't download " + key + " (" + errorMessage(error) + ").");
+            if (error instanceof NhentaiRateLimitError) {
+                deferRemaining(i, error);
+                break;
+            }
             continue;
         }
 
+        if (batchWasAborted(host)) break;
         if (resolved.ok) {
             const json = resolved.json;
             const galleryId = bareId(key);
@@ -607,6 +682,7 @@ export async function runBatchDownload(args: {
                     }),
                     sourceTabId: sourceTabId
                 });
+                if (batchWasAborted(host)) break;
                 succeeded++;
                 if (isFinalSave) {
                     finalSaveOk = true;
@@ -627,7 +703,12 @@ export async function runBatchDownload(args: {
                     batchKeys.push(storeKey(key));
                 }
             } catch (error) {
+                if (batchWasAborted(host)) break;
                 countFailure(key, error);
+                if (error instanceof NhentaiRateLimitError) {
+                    deferRemaining(i, error);
+                    break;
+                }
             }
         } else {
             const isCf = resolved.status === 503 || resolved.status === 403;
@@ -642,7 +723,7 @@ export async function runBatchDownload(args: {
         }
     }
 
-    if (!host.wasAborted()) {
+    if (!batchWasAborted(host)) {
         broadcast({
             action: "batchSummary",
             succeeded: succeeded,
@@ -655,37 +736,57 @@ export async function runBatchDownload(args: {
         });
     }
 
-    const clean = effectiveSeparate
-        ? true
-        : (failed === 0 && batchKeys.length > 0 && (!downloadAtEnd || finalSaveOk));
-    return {
+    const clean = !batchWasAborted(host) && (effectiveSeparate
+        ? !rateLimited
+        : (failed === 0 && batchKeys.length > 0 && (!downloadAtEnd || finalSaveOk)));
+    const outcome: BatchOutcome = {
         records: records,
         clean: clean,
         batchKeys: batchKeys,
         skipped: skipped,
         failedGalleries: failedGalleries
-    } as BatchOutcome;
+    };
+    if (rateLimited) outcome.rateLimited = true;
+    return outcome;
 }
 
 async function fetchListingPage(url: string, sourceTabId: number | null | undefined, host: BatchHost): Promise<string | null> {
+    const isNhentai = /^https:\/\/nhentai\.net\//i.test(url);
+    if (batchWasAborted(host)) return null;
     if (typeof sourceTabId === "number") {
         try {
             const viaTab = await host.fetchUrlFromTab(sourceTabId, url);
+            if (batchWasAborted(host)) return null;
+            if (isNhentai && viaTab && viaTab.status === 429) throw new NhentaiRateLimitError("Listing request", parseRetryAfterMs(null));
             if (viaTab && viaTab.ok && viaTab.text) {
                 return viaTab.text;
             }
-        } catch (_) { /* fall through */ }
+        } catch (error) {
+            if (batchWasAborted(host)) return null;
+            if (error instanceof NhentaiRateLimitError) throw error;
+            /* other errors fall through */
+        }
     }
+    if (batchWasAborted(host)) return null;
     try {
         const resp = await host.fetchImpl(url, {
             credentials: "include",
             cache: "no-store",
             signal: host.getAbortSignal() || undefined
         });
+        if (batchWasAborted(host)) return null;
+        if (isNhentai && resp && resp.status === 429) {
+            const retryAfter = resp.headers && resp.headers.get ? resp.headers.get("Retry-After") : null;
+            throw new NhentaiRateLimitError("Listing request", parseRetryAfterMs(retryAfter));
+        }
         if (resp && resp.ok) {
             return await resp.text();
         }
-    } catch (_) { /* listing page unavailable */ }
+    } catch (error) {
+        if (batchWasAborted(host)) return null;
+        if (error instanceof NhentaiRateLimitError) throw error;
+        /* other errors mean the listing is unavailable */
+    }
     return null;
 }
 
@@ -710,11 +811,16 @@ export async function runPagedBatchDownload(args: {
     const allBatchKeys: string[] = [];
     const allFailed: FailedGallery[] = [];
     let allClean = true;
+    let rateLimited = false;
     let skippedTotal = 0;
     let pagesFetched = 0;
     const zip = host.newZip();
 
     for (let i = 0; i < pagesArr.length; i++) {
+        if (batchWasAborted(host)) {
+            allClean = false;
+            break;
+        }
         const curr = pagesArr[i];
         const m = /page=([0-9]+)/.exec(url);
         if (m !== null) {
@@ -724,7 +830,20 @@ export async function runPagedBatchDownload(args: {
         } else {
             url += "?page=" + curr;
         }
-        const pageText = await fetchListingPage(url, args.sourceTabId, host);
+        let pageText: string | null;
+        try {
+            pageText = await fetchListingPage(url, args.sourceTabId, host);
+        } catch (error) {
+            if (!(error instanceof NhentaiRateLimitError)) throw error;
+            rateLimited = true;
+            allClean = false;
+            host.errorCallback(error.message + " Remaining list pages were not processed.");
+            break;
+        }
+        if (batchWasAborted(host)) {
+            allClean = false;
+            break;
+        }
         if (pageText !== null) {
             const cards = parseGalleryCardsFromHtml(pageText);
             const allDoujinshis: Record<string, string> = {};
@@ -755,14 +874,20 @@ export async function runPagedBatchDownload(args: {
                 allClean = false;
             }
             pagesFetched++;
+            if (outcome.rateLimited) {
+                rateLimited = true;
+                allClean = false;
+                if (i < pagesArr.length - 1) host.errorCallback("Remaining list pages were not processed after the rate limit.");
+                break;
+            }
         } else {
             allClean = false;
         }
     }
 
-    const clean = effectiveSeparate
-        ? true
-        : (allClean && pagesFetched === pagesArr.length && pagesArr.length > 0);
+    const clean = !batchWasAborted(host) && (effectiveSeparate
+        ? !rateLimited
+        : (allClean && pagesFetched === pagesArr.length && pagesArr.length > 0));
     if (!effectiveSeparate && clean) {
         const finalName = args.path + " (" + String(pagesArr[pagesArr.length - 1]) + ")";
         const filename = artifactRecordFilename({
@@ -778,11 +903,13 @@ export async function runPagedBatchDownload(args: {
             failedGalleries: allFailed
         } as BatchOutcome;
     }
-    return {
+    const pagedOutcome: BatchOutcome = {
         records: effectiveSeparate ? allRecords : [],
         clean: clean,
         batchKeys: [],
         skipped: skippedTotal,
         failedGalleries: allFailed
-    } as BatchOutcome;
+    };
+    if (rateLimited) pagedOutcome.rateLimited = true;
+    return pagedOutcome;
 }

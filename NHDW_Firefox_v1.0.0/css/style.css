@@ -11,52 +11,36 @@ html {
     text-align: center;
 }
 
-#htmlLight {
-    color: #202a34;
-}
-
-#htmlDark {
-    color: white;
-    background-color: #202a34;
-}
-
 #downloadInput, #buttonHelp  {
     display: block;
     margin-left: auto;
     margin-right: auto;
 }
 
-#button, #buttonBack, #buttonAll{
+#button, #buttonBack, #buttonAll {
     display: block;
     margin-left: auto;
     margin-right: auto;
-    background-color: #e31b53;
-    color: white;
-    border: none;
-    padding: 15px 32px;
+    padding: 8px 20px;
 }
 
-#buttonAll {
-    background-color: #888;
+#button {
+    background-color: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
 }
 
 #progressBar {
     width: 100%;
 }
 
-input[type="button"] {
-    border-radius: 5px;
-}
-
-input[type="button"]:hover {
-    color: #e31b53;
-    background-color: white;
-}
 #cdnNotice {
     margin-top: 8px;
-    padding: 6px;
-    border: 1px solid #e31b53;
-    border-radius: 5px;
+    padding: 8px 10px;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
     font-size: 12px;
     text-align: center;
 }
@@ -70,15 +54,12 @@ input[type="button"]:hover {
    listed by name with Retry / Dismiss) and the failed list inside summaries. */
 #failedNotice {
     margin: 8px 0;
-    padding: 6px;
-    border: 1px solid #b3541e;
-    border-radius: 5px;
+    padding: 8px 10px;
+    border: 1px solid var(--warn);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
     font-size: 12px;
     text-align: left;
-}
-
-#htmlDark #failedNotice {
-    border-color: #f2a154;
 }
 
 .nhdwFailedList {
@@ -94,11 +75,7 @@ input[type="button"]:hover {
 }
 
 .nhdwFailedReason {
-    color: #b3541e;
-}
-
-#htmlDark .nhdwFailedReason {
-    color: #f2a154;
+    color: var(--warn);
 }
 
 /* Two-column popup: current gallery on the left, similar galleries on the right */
@@ -121,8 +98,9 @@ input[type="button"]:hover {
 .similarList {
     max-height: 190px;
     overflow-y: auto;
-    border: 1px solid #999;
-    border-radius: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface);
     padding: 4px 6px;
     margin: 6px 0;
 }
@@ -134,43 +112,71 @@ input[type="button"]:hover {
     text-overflow: ellipsis;
 }
 
-#htmlDark .similarList {
-    border-color: #555;
-}
-
-/* ---- Popup tabs (Download | Settings) ---- */
+/* ---- Popup tabs (Download | Bookmark | Settings): the seated browser tab.
+   The strip is the chrome colour and bleeds to the panel edge; the active
+   tab takes the pane colour, overlaps the strip's hairline by 1px and so
+   fuses with the content below it. Its 2px top line is the accent (the
+   Firefox --tab-line-color convention). Dividers sit between inactive tabs
+   and vanish next to the active one. ---- */
 .popupTabs {
     display: flex;
-    gap: 6px;
-    margin: 0 0 8px 0;
-    border-bottom: 2px solid #e31b53;
-    padding-bottom: 0;
+    align-items: flex-end;
+    gap: 0;
+    margin: 0 -10px 10px;
+    padding: 8px 10px 0;
+    background-color: var(--surface-2);
+    border-bottom: 1px solid var(--line);
 }
 
 .popupTab {
+    position: relative;
     flex: 1;
-    padding: 8px 0;
-    border: none;
-    background: transparent;
-    color: inherit;
-    font-size: 14px;
-    font-weight: bold;
+    padding: 8px 0 9px;
+    margin-bottom: -1px;
+    border: 1px solid transparent;
+    border-bottom: 0;
+    background-color: transparent;
+    color: var(--ink-2);
+    font-size: 13px;
+    font-weight: 600;
     cursor: pointer;
-    border-radius: 5px 5px 0 0;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0;
 }
 
 .popupTab:hover {
-    color: #e31b53;
+    color: var(--ink);
+}
+
+/* The ring sits 2px outside the tab; tabs are adjacent and positioned, so
+   without this the next tab's fill (the active one) paints over one side. */
+.popupTab:focus-visible {
+    z-index: 1;
 }
 
 .popupTab.active {
-    background-color: #e31b53;
-    color: white;
+    background-color: var(--surface);
+    border-color: var(--line);
+    color: var(--ink);
+    box-shadow: inset 0 2px 0 var(--accent);
 }
 
-#htmlDark .popupTab.active {
-    background-color: #e31b53;
-    color: white;
+.popupTab.active:hover {
+    background-image: none;
+}
+
+.popupTab + .popupTab::before {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: 8px;
+    bottom: 8px;
+    width: 1px;
+    background-color: var(--line);
+}
+
+.popupTab.active::before,
+.popupTab.active + .popupTab::before {
+    display: none;
 }
 
 /* ---- Settings pane ---- */
@@ -191,27 +197,21 @@ html.nhdwPanel body {
 .listGalleries {
     max-height: 220px;
     overflow-y: auto;
-    border: 1px solid #999;
-    border-radius: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface);
     padding: 4px 6px;
     margin: 6px 0;
     text-align: left;
 }
 
-#htmlDark .listGalleries {
-    border-color: #555;
-}
-
 .listOptions {
-    border: 1px solid #999;
-    border-radius: 5px;
-    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
+    padding: 8px 10px;
     margin: 8px 0;
     text-align: left;
-}
-
-#htmlDark .listOptions {
-    border-color: #555;
 }
 
 .listOptionRow {
@@ -240,11 +240,7 @@ html.nhdwPanel body {
 .listNote {
     display: block;
     margin: 4px 0;
-    color: #b35900;
-}
-
-#htmlDark .listNote {
-    color: #e0a34e;
+    color: var(--warn);
 }
 
 .listPreview {
@@ -255,15 +251,12 @@ html.nhdwPanel body {
 
 /* ---- Listing page-range block (item 61) ---- */
 .rangeBlock {
-    border: 1px solid #999;
-    border-radius: 5px;
-    padding: 6px 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background-color: var(--surface);
+    padding: 8px 10px;
     margin: 8px 0;
     text-align: left;
-}
-
-#htmlDark .rangeBlock {
-    border-color: #555;
 }
 
 .rangeBlockHeader {
@@ -285,12 +278,8 @@ html.nhdwPanel body {
 
 .rangeCount {
     font-size: 12px;
-    color: #555;
+    color: var(--ink-2);
     white-space: nowrap;
-}
-
-#htmlDark .rangeCount {
-    color: #bbb;
 }
 
 .rangeBlockActions {
@@ -310,21 +299,17 @@ html.nhdwPanel body {
 /* ---- Shared-selection pointer (item 71) ---- */
 .selectionPointer {
     font-size: 12px;
-    color: #555;
+    color: var(--ink-2);
     margin: 4px 0 8px;
     text-align: left;
     word-break: break-word;
-}
-
-#htmlDark .selectionPointer {
-    color: #bbb;
 }
 
 /* ---- Modal confirmations (batch-PDF merge warning) ---- */
 .nhdwModalOverlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: rgba(0, 0, 0, 0.4);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -333,18 +318,14 @@ html.nhdwPanel body {
 }
 
 .nhdwModal {
-    background: #fff;
-    color: #202a34;
-    border: 2px solid #e31b53;
-    border-radius: 8px;
-    padding: 12px 14px;
+    background-color: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    padding: 14px 16px;
     max-width: 420px;
     text-align: left;
-}
-
-#htmlDark .nhdwModal {
-    background: #202a34;
-    color: #fff;
 }
 
 .nhdwModal h3 {
@@ -375,39 +356,25 @@ html.nhdwPanel body {
 .nhdwModalButtons button {
     flex: 1 1 auto;
     padding: 8px 10px;
-    border: 1px solid #999;
-    border-radius: 5px;
-    background: #eee;
-    color: #202a34;
-    cursor: pointer;
 }
 
 .nhdwModalButtons button.nhdwModalPrimary {
-    background-color: #e31b53;
+    background-color: var(--accent);
     color: #fff;
-    border-color: #e31b53;
-    font-weight: bold;
-}
-
-.nhdwModalButtons button:focus {
-    outline: 2px solid #202a34;
+    border-color: var(--accent);
+    font-weight: 600;
 }
 
 /* ---- Persistent download history (listing panel) -------------------------
    Rows already downloaded get a small badge and a per-row "Download anyway"
    override; the summary line shows real counts before the job is committed. */
 .nhdwAlready {
-    color: #4c8b4c;
+    color: var(--ok);
     font-size: 11px;
 }
 
-#htmlDark .nhdwAlready {
-    color: #9ee29e;
-}
-
-.nhdwAlready a.nhdwRedl,
-#htmlDark .nhdwAlready a.nhdwRedl {
-    color: #e31b53;
+.nhdwAlready a.nhdwRedl {
+    color: var(--accent-ink);
     font-weight: bold;
     text-decoration: underline;
     cursor: pointer;
@@ -421,12 +388,8 @@ html.nhdwPanel body {
 }
 
 .nhdwSummary.nhdwSummaryWarn {
-    color: #b3541e;
+    color: var(--warn);
     font-weight: bold;
-}
-
-#htmlDark .nhdwSummary.nhdwSummaryWarn {
-    color: #f2a154;
 }
 
 /* ---- Queue pane (persistent bookmark list) -------------------------------
@@ -472,7 +435,7 @@ html.nhdwPanel body {
         padding: 9px 10px;
         min-height: 42px;
         margin: 4px 0;
-        border-radius: 5px;
+        border-radius: var(--radius-sm);
     }
 
     input[type="button"] {
@@ -522,8 +485,8 @@ html.nhdwPanel body {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        background-color: white;
-        border-top: 2px solid #e31b53;
+        background-color: var(--surface);
+        border-top: 2px solid var(--accent);
         padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px));
     }
 
@@ -531,9 +494,5 @@ html.nhdwPanel body {
         flex: 1 1 45%;
         width: auto;
         margin: 0;
-    }
-
-    #htmlDark #nhdwMobileBar {
-        background-color: #202a34;
     }
 }

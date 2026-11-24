@@ -198,6 +198,27 @@ describe('download completion tracking', () => {
         assert.deepStrictEqual(outcome, { ok: true, state: 'unknown' });
     });
 
+    it('strict completion refuses to start without browser tracking', async () => {
+        globalThis.chrome = makeChromeStub({ withOnChanged: false });
+        await assert.rejects(startTrackedDownload('blob:fixture', 'Archive.zip', { requireCompletion: true }), /tracking is unavailable/);
+        assert.strictEqual(globalThis.chrome.downloads.calls.length, 0);
+    });
+
+    it('strict completion waits for complete and rejects interruptions', async () => {
+        const pending = startTrackedDownload('blob:fixture', 'Archive.zip', { requireCompletion: true, pollMs: 60000 });
+        await tick();
+        let settled = false;
+        pending.then(() => { settled = true; }, () => { settled = true; });
+        await tick();
+        assert.strictEqual(settled, false, 'browser handoff alone is not completion');
+        chrome.fire({ id: 1, state: { current: 'complete' } });
+        assert.deepStrictEqual(await pending, { downloadId: 1 });
+        const interrupted = startTrackedDownload('blob:fixture2', 'Archive2.zip', { requireCompletion: true, pollMs: 60000 });
+        await tick();
+        chrome.fire({ id: 2, state: { current: 'interrupted' }, error: { current: 'FILE_NO_SPACE' } });
+        await assert.rejects(interrupted, /FILE_NO_SPACE/);
+    });
+
     it('startTrackedDownload starts, binds and waits; interruption rejects with the reason', async () => {
         const pending = startTrackedDownload('https://i.nhentai.net/galleries/1/1.jpg', 'NHDW/T/001.jpg', { pollMs: 60000 });
         await tick();

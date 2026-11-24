@@ -53,8 +53,10 @@ comparison. The native button's click flow remains unobserved.
   the site checks and writes the log file to hand over. The owner's manual task is
   the website capture walkthrough in
   [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md).
-- **Firefox: Chromium-only for now**, revisit only if installing an unsigned
-  build stops requiring a signed/licensed add-on. The Firefox tree stays.
+- **Firefox: Chromium-first.** On 2026-11-24 the owner asked for a one-off
+  catch-up of everything postponed; done offline (Firefox 1.7.0, see
+  `NHDW_Firefox_v1.0.0/FIREFOX_PARITY_PLAN.md` §13). New work stays
+  Chromium-first unless the owner asks again. The Firefox tree stays.
 - **Tailspace (answered):** scroll mode serves full-size files; only gallery mode
   serves `-mini` thumbnails.
 - **nhentai's own Download (owner's live observation, not independently
@@ -169,9 +171,9 @@ site unless stated.
   a test that every bundled library is named and the file ships. Still open: the
   bundle growth (≈200 KB `chapters.js`, ≈160 KB `universalChapterProbe.js`) and
   whether shipping `jsdom` in devDependencies is acceptable for CI size.
-- [ ] **Firefox:** that tree has no Chapters button and no chapter bundles. Add a
-  one-line note to its README so it does not read as broken, and decide on porting
-  (`activeTab`/`scripting` exist in Firefox; the `chrome.*` shim differs).
+- [x] **Firefox:** ported in the 2026-11-24 catch-up (1.7.0): Chapters button,
+  `chapters.html`, both bundles, `activeTab`. Chapters ↗ passes the source tab id
+  (no side panel). Offline e2e only; real Firefox run still open (item 58).
 
 *Next session: evidence still needed (owner asked to defer items 1, 2, 3 and 5)*
 
@@ -368,8 +370,8 @@ force lazy images into the DOM before inspection. Nothing below is live-tested.
   required and capped conservatively at seven days. Real host, redirect, CORS,
   expiry, format, save and quality behavior still need an authorized, sanitized
   real-browser test. Old installed/queued builds may retain previous behavior.
-  Firefox was not ported in this pass and retains the earlier silent fallback,
-  HTML acceptance and 15-second retry cap; its option must also remain off.
+  Firefox got the same hardening in the 2026-11-24 catch-up (1.7.0); its
+  option must also remain off.
 - Normal page downloading still has the reproduced image-integrity defect:
   sufficiently large HTML falsely labelled `image/jpeg` can be saved as a JPEG;
   raw browser URL handoff cannot inspect bytes. Metadata conflicts and
