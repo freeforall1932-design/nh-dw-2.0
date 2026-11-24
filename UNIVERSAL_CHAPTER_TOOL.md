@@ -129,6 +129,62 @@ A site that encrypts its reader API (DoujinDesu does, with an hour-derived key) 
 countermeasure. Use *Use open chapter* there: the site's own JavaScript has already
 rendered the images in your tab.
 
+## Next.js sites: page list in `__NEXT_DATA__` (mangak.io)
+
+Sites built on the Next.js "pages" router render each chapter with its full,
+ordered page list inside a JSON block, then build the visible reader from it in
+the browser:
+
+```html
+<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"initialChapter":{"images":["https://…/1.webp", …]}}}, "page":"/[slug]/[chapter]", …}</script>
+```
+
+mangak.io (title `https://mangak.io/{slug}`, chapters `https://mangak.io/{slug}/chapter-N`)
+is the motivating site; the layout was confirmed from the open-source
+Keiyoushi (Apache-2.0) and Aidoku (MIT) parsers, used as factual reference only,
+no code copied. Behaviour:
+
+- **Fallback only, same rule as the reader script.** Consulted only when the
+  selector matched no images *and* there is no MangaThemesia script. Known
+  places are checked first (`initialChapter.images`, `chapter.images`,
+  `…imageUrls`). Otherwise exactly one distinct `images`/`imageUrls`/`pageImages`
+  list must exist, or nothing is used. Lists of cards (related titles) are
+  never searched.
+- **Parsed, never executed; all or nothing.** The block is `JSON.parse`d as text.
+  Every entry must be a public HTTPS URL (relative entries resolve against the
+  chapter). One bad entry rejects the whole list instead of leaving a gap.
+- **Batch-friendly.** Fetched chapter HTML for the exact chapter URL carries
+  the data, so a whole selection can be inspected without opening each chapter.
+  The review says `read from the page's embedded Next.js data (__NEXT_DATA__)`.
+- **Stale data in an open tab is refused.** Next.js switches pages without
+  reloading and does **not** refresh `__NEXT_DATA__`. A tab opened on chapter 1,
+  then clicked through to chapter 2, still carries chapter 1's list. *Use open
+  chapter* therefore checks the data's route pattern and query against the tab
+  URL segment by segment. On a mismatch it stops with *"Reload the chapter tab,
+  then try again"* instead of saving the wrong pages.
+
+mangak.io workflow: open the title page and wait for its chapter list to show.
+Run **Scan / add title page** (the default filter accepts `/{slug}/chapter-N` links,
+which sit inside the title path), pick chapters and **Inspect**. If the image
+server refuses the page fetches, tick the referrer option below and run the
+benchmark again.
+
+## Opt-in referrer for page images
+
+Some image servers only answer requests that carry the site as referrer. By
+default the probe still fetches with `referrerPolicy: "no-referrer"`. The
+checkbox **Send this site's address (origin only) as the referrer…** switches
+**page-image** fetches (never the chapter HTML) to the browser's own
+`"strict-origin"` policy. Chrome then sends the source tab's origin, e.g.
+`https://mangak.io/`, which is the truthful value for a request made from that
+tab. No header is written by this code, there is no `declarativeNetRequest`
+rule, and HTTPS→HTTP downgrades send nothing. It is off by default, stored per
+site in the reader profile (`sendReferrer`), and recorded in the batch and
+benchmark log.
+
+It does **not** relax CORS. A CDN that sends no CORS headers still fails, and
+that is still by design.
+
 ## Top-down / scroll readers (random file names are fine)
 
 A vertical reader lists every page as an image, so **page 1 is simply the first
@@ -301,8 +357,10 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
   JavaScript after load cannot be read from static HTML; "Use open chapter"
   inspects the rendered page instead, one chapter at a time.
 - **Cross-origin images need CORS.** The probe fetches images with
-  `credentials: "same-origin"` and no referrer. A CDN that does not send CORS
-  headers will fail — by design there is no cookie or header forgery.
+  `credentials: "same-origin"`. By default no referrer is sent. With the
+  per-site opt-in, the browser's own `strict-origin` referrer is sent (see
+  above). A CDN that does not send CORS headers will fail, by design: there is
+  no cookie or header forgery.
 - **No site-provided batch.** This route deliberately ignores batch links,
   mirror/file hosts and shorteners. The existing offline
   [`chapterPlan.ts`](NHDW_Extension_v3.0.0/src/utils/chapterPlan.ts) still says a
@@ -337,6 +395,14 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
   only selected chapter HTML; the save gate blocks unapproved hosts; ZIPs contain
   the exact ordered bytes; an interrupted browser download is reported as
   `Stopped after 0 completed archive(s)`.
+- `test/next-data-reader.test.js` — `__NEXT_DATA__` extraction: known and
+  unknown layouts, ambiguity refusal, all-or-nothing URL policy, no execution,
+  stale-data detection (route pattern, dynamic and catch-all segments), and the
+  `sendReferrer` profile field (default off, legacy profiles read as off).
+- `scripts/e2e-universal.js` also covers a mangak-style chapter with no `<img>`
+  in its HTML: the page list comes from `__NEXT_DATA__`, the archive holds the
+  exact ordered bytes, image fetches use `strict-origin` only when opted in
+  while HTML stays `no-referrer`, and the log records both.
 - `scripts/e2e-chapter-relay.js` — the worker relay trust boundary.
 - `test/chapter-support.test.js` — the supporting pieces on their own, including
   the self-test plan (never drives a button, skips review-wiping controls when a

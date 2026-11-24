@@ -136,6 +136,13 @@ other archive-integrity and delivery-safety issues are open.
   come back: they are slug-addressed (no numeric ids), so the `siteKeys`
   contract (ids must not contain `:`) needs a slug-based composite-key and
   paste-box-shape decision before any adapter work.
+  **Update (2026-11-24, owner request):** mangak.io is now supported through the
+  generic Chromium `Chapters ↗` tool, not as a built-in adapter. The tool reads
+  its chapter page list from Next.js `__NEXT_DATA__` and offers an opt-in
+  origin-only referrer for page images. See
+  [`UNIVERSAL_CHAPTER_TOOL.md`](UNIVERSAL_CHAPTER_TOOL.md). It has not been tested
+  against the live site yet; whether its image CDN allows CORS is the open
+  question.
 - **Video-only / general streaming platforms stay out of scope** — they belong
   in dedicated tools such as `yt-dlp` or `multi-site-video-downloader`. This
   extension remains focused on comic, doujinshi, and image gallery archives

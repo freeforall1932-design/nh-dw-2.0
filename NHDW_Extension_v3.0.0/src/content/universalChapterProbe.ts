@@ -6,6 +6,7 @@ import {
     publicHttpsUrl, discoverChapters, collectChapterPages, collectStaticChapterPages, PageOrderStrategy,
     detectAdvertisedPageCount, detectStaticPageCount, sweepScroll, pickScrollTarget,
     collectReaderScriptPages, hasReaderScript, applyFullSizeSuffix,
+    collectNextDataPages, collectNextDataPagesFromText,
     assertUsablePage, ScrollCandidate, MIN_PAGE_DIMENSION,
     readBoundedResponse, checkResponse, identifyImage
 } from "../utils/universalChapter";
@@ -31,7 +32,13 @@ if (!scope.__nhdwChapterProbe) {
         }
         return current;
     }
-    async function boundedFetch(url: string, kind: "html" | "image"): Promise<Uint8Array> {
+    /**
+     * `sendReferrer` is the user's explicit, per-site opt-in. It switches the
+     * browser's own referrer policy to "strict-origin", so Chrome itself sends
+     * the source site's origin (e.g. https://site.example/) — the truthful value
+     * for a request made from that tab. No header is set or forged by this code.
+     */
+    async function boundedFetch(url: string, kind: "html" | "image", sendReferrer: boolean = false): Promise<Uint8Array> {
         const controller = new AbortController();
         currentController = controller;
         cancelled = false;
@@ -39,7 +46,7 @@ if (!scope.__nhdwChapterProbe) {
         try {
             const resp = await fetch(url, {
                 method: "GET", mode: "cors", credentials: "same-origin", redirect: "error",
-                referrerPolicy: "no-referrer", cache: "no-store", signal: controller.signal
+                referrerPolicy: sendReferrer ? "strict-origin" : "no-referrer", cache: "no-store", signal: controller.signal
             });
             checkResponse(resp);
             const mime = (resp.headers.get("Content-Type") || "").split(";")[0].trim().toLowerCase();
@@ -145,7 +152,7 @@ if (!scope.__nhdwChapterProbe) {
             let advertised: number | null = null;
             // Where the page list came from, so the review can say so instead of
             // presenting a translated list as if it were the reader's own.
-            let source: "dom" | "static" | "reader-script" = "dom";
+            let source: "dom" | "static" | "reader-script" | "next-data" = "dom";
             if (message.current === true) {
                 if (chapter.href !== current.href) throw new UniversalChapterError("tab-changed", "Return to the selected chapter and scan again.");
                 try {
@@ -154,10 +161,24 @@ if (!scope.__nhdwChapterProbe) {
                     // MangaThemesia-style readers may hold the page list in a
                     // base64 script rather than in <img> elements.
                     const scripted = collectReaderScriptPages(readerScriptSource(), current.href);
-                    if (!scripted.length) throw error;
-                    collection = { pages: scripted, order: "reader", readerOrderDiffers: false,
-                        preview: scripted.slice(0, 3).map(page => page.host) };
-                    source = "reader-script";
+                    if (scripted.length) {
+                        collection = { pages: scripted, order: "reader", readerOrderDiffers: false,
+                            preview: scripted.slice(0, 3).map(page => page.host) };
+                        source = "reader-script";
+                    } else {
+                        // Next.js sites ship the ordered list as page data.
+                        const node = document.getElementById("__NEXT_DATA__");
+                        const text = node && node.tagName.toLowerCase() === "script" ? String(node.textContent || "") : null;
+                        const next = collectNextDataPagesFromText(text, current.href, current.href);
+                        if (next.stale) {
+                            throw new UniversalChapterError("stale-page-data",
+                                "This tab's embedded page data belongs to a page opened earlier (the site switched pages without reloading). Reload the chapter tab, then try again.");
+                        }
+                        if (!next.pages.length) throw error;
+                        collection = { pages: next.pages, order: "reader", readerOrderDiffers: false,
+                            preview: next.pages.slice(0, 3).map(page => page.host) };
+                        source = "next-data";
+                    }
                 }
             } else {
                 const data = await boundedFetch(chapter.href, "html");
@@ -168,10 +189,12 @@ if (!scope.__nhdwChapterProbe) {
                     source = "static";
                 } catch (error) {
                     const scripted = collectReaderScriptPages(html, chapter.href);
-                    if (!scripted.length) throw error;
-                    collection = { pages: scripted, order: "reader", readerOrderDiffers: false,
-                        preview: scripted.slice(0, 3).map(page => page.host) };
-                    source = "reader-script";
+                    const next = scripted.length ? [] : collectNextDataPages(html, chapter.href);
+                    const fallback = scripted.length ? scripted : next;
+                    if (!fallback.length) throw error;
+                    collection = { pages: fallback, order: "reader", readerOrderDiffers: false,
+                        preview: fallback.slice(0, 3).map(page => page.host) };
+                    source = scripted.length ? "reader-script" : "next-data";
                 }
             }
             // An explicit thumbnail rule may rewrite every page URL; it is all or
@@ -237,7 +260,7 @@ if (!scope.__nhdwChapterProbe) {
             if (!Array.isArray(message.approvedHosts) || message.approvedHosts.indexOf(page.host) === -1) {
                 throw new UniversalChapterError("approval", "The image host was not approved.");
             }
-            const bytes = await boundedFetch(page.url, "image");
+            const bytes = await boundedFetch(page.url, "image", message.sendReferrer === true);
             const ext = identifyImage(bytes);
             if (!ext) throw new UniversalChapterError("format", "The page bytes do not have a supported image signature.");
             // Spacers, lazy-load placeholders and 1x1 trackers are not pages.

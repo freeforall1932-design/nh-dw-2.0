@@ -41,13 +41,16 @@ const fixtures = {
     'https://images.example/t2.jpg': ['image/jpeg', page3],
     // Gallery-mode style: thumbnails only, so the full-size name must be derived by rule.
     'https://reader.example/series/book/chapter-4/': ['text/html', '<div id="readerarea"><img data-src="https://images.example/t1-mini.jpg"><img data-src="https://images.example/t2-mini.jpg"></div>'],
+    // Next.js (mangak.io-style): the reader is hydrated client-side, so the
+    // served HTML has no page <img>; the ordered list is in __NEXT_DATA__.
+    'https://reader.example/series/book/chapter-5/': ['text/html', "<div class=\"reader\"></div><script id=\"__NEXT_DATA__\" type=\"application/json\">{\"props\":{\"pageProps\":{\"initialChapter\":{\"name\":\"Chapter 5\",\"images\":[\"https://images.example/one.jpg\",\"https://images.example/two.png\"]},\"initialManga\":{\"id\":\"fixture\",\"name\":\"Fixture\"}}},\"page\":\"/[slug]/[chapter]\",\"query\":{\"slug\":\"book\",\"chapter\":\"chapter-5\"},\"buildId\":\"fixture\"}</script>"],
     'https://images.example/one.jpg': ['image/jpeg', page1],
     'https://images.example/two.png': ['image/png', page2],
     'https://images.example/three.jpg': ['image/jpeg', page3]
 };
 const requests = [], downloads = [], blobs = new Map();
 const failUrls = new Set();
-let listener = null, blobIndex = 0, nextId = 1, interrupted = false;
+let listener = null, blobIndex = 0, nextId = 1, interrupted = false, expectReferrer = false;
 const source = new JSDOM('<title>Fixture Title</title><a href="chapter-2/">Chapter 2</a><a href="chapter-1/">Chapter 1</a>', {
     url: 'https://reader.example/series/book/', runScripts: 'outside-only'
 });
@@ -62,7 +65,10 @@ sw.fetch = async (url, options) => {
     requests.push({ url: String(url), options });
     assert.strictEqual(options.credentials, 'same-origin');
     assert.strictEqual(options.redirect, 'error');
-    assert.strictEqual(options.referrerPolicy, 'no-referrer');
+    // Referrer: never sent unless the user opted in, and then only the browser's
+    // own origin-only policy for page images (HTML stays no-referrer).
+    const isImage = !/\/$/.test(String(url));
+    assert.strictEqual(options.referrerPolicy, expectReferrer && isImage ? 'strict-origin' : 'no-referrer');
     if (failUrls.has(String(url))) throw new Error('Synthetic network failure');
     const item = fixtures[String(url)];
     if (!item) throw new Error('Unexpected fixture request');
@@ -301,7 +307,33 @@ async function main() {
     assert.ok(requests.some(item => /\/t1\.jpg$/.test(item.url)), 'the derived full-size URL is what was fetched');
     assert.ok(!requests.some(item => /t1-mini\.jpg$/.test(item.url)), 'the thumbnail URL must not be fetched');
     aw.document.getElementById('fullSizeSuffix').value = '';
-    // Remembered reader settings for one site only.
+    // Next.js reader: no <img> in the served HTML, page list in __NEXT_DATA__.
+    // Also exercises the opt-in referrer for the page-image fetches.
+    moreUrls.value = 'https://reader.example/series/book/chapter-5/'; click('addUrls');
+    await until(() => aw.document.querySelectorAll('#chapterList input').length === 5, 'fifth chapter added');
+    click('selectNone');
+    const fifth = aw.document.querySelectorAll('#chapterList input')[4];
+    fifth.checked = true; fifth.dispatchEvent(new aw.Event('change'));
+    click('inspect');
+    await until(() => /Next\.js data/.test(aw.document.getElementById('review').textContent), 'next-data fallback');
+    assert.match(aw.document.querySelector('#review li').textContent, /2 image reference/);
+    aw.document.getElementById('sendReferrer').checked = true;
+    expectReferrer = true;
+    aw.document.getElementById('confirm').checked = true;
+    aw.document.querySelector('#review input[data-host]').checked = true;
+    const beforeNext = downloads.length;
+    click('download');
+    await until(() => downloads.length === beforeNext + 1, 'next-data archive saved');
+    const nextZip = await JSZip.loadAsync(await downloads[downloads.length - 1].blob.arrayBuffer());
+    assert.deepStrictEqual(await nextZip.file('001.jpg').async('nodebuffer'), page1);
+    assert.deepStrictEqual(await nextZip.file('002.png').async('nodebuffer'), page2);
+    await until(() => JSON.stringify(storage.nhdwExtensionLog || []).includes('embedded Next.js data'), 'log names the page-list source');
+    assert.ok(JSON.stringify(storage.nhdwExtensionLog).includes('"sendReferrer":true'), 'the batch log records the referrer opt-in');
+    // Remembered reader settings for one site only (including the referrer opt-in).
+    click('saveProfile');
+    assert.strictEqual(storage.nhdwSiteProfiles['https://reader.example'].sendReferrer, true);
+    aw.document.getElementById('sendReferrer').checked = false;
+    expectReferrer = false;
     aw.document.getElementById('imageSelector').value = '#readerarea img';
     aw.document.getElementById('pageOrder').value = 'reader';
     click('saveProfile');
@@ -311,7 +343,7 @@ async function main() {
     click('forgetProfile');
     assert.match(aw.document.getElementById('status').textContent, /Cleared the saved reader settings/);
     assert.deepStrictEqual(Object.keys(storage.nhdwSiteProfiles), []);
-    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, suffix rule, site profiles, benchmark log (synthetic VM)');
+    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, suffix rule, Next.js page data, opt-in referrer, site profiles, benchmark log (synthetic VM)');
 }
 main().then(() => { app.window.close(); source.window.close(); }).catch(error => {
     console.error('FAIL: bundled chapter integration:', error); app.window.close(); source.window.close(); process.exitCode = 1;

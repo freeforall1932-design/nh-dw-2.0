@@ -7,7 +7,7 @@
  * HTTPS origin and revocable.
  *
  * What a profile is deliberately NOT:
- *   * not a scraper/recipe language — five known fields only, each one already a
+ *   * not a scraper/recipe language — six known fields only, each one already a
  *     control in the panel, so nothing can be executed from storage;
  *   * not a network permission — a profile never widens host access, never
  *     auto-approves an image host and never injects anything by itself;
@@ -27,6 +27,12 @@ export interface ReaderProfile {
      * deriving a URL is a guess unless the user states the rule.
      */
     fullSizeSuffix: string;
+    /**
+     * Let the browser send this site's origin as the referrer when page images
+     * are fetched (some image servers refuse requests without it). Off unless
+     * the user turns it on; older profiles without the field read as off.
+     */
+    sendReferrer: boolean;
     savedAt: number;
 }
 
@@ -62,6 +68,9 @@ export function checkProfile(profile: Partial<ReaderProfile> | null | undefined)
     if (suffix !== "" && (!SUFFIX_PATTERN.test(suffix) || suffix.length > MAX_SUFFIX_LENGTH)) {
         return { ok: false, reason: "The thumbnail suffix must look like \"-mini\" (a dash or underscore, then letters or digits)." };
     }
+    if (profile.sendReferrer !== undefined && typeof profile.sendReferrer !== "boolean") {
+        return { ok: false, reason: "The referrer setting must be on or off." };
+    }
     return { ok: true };
 }
 
@@ -78,6 +87,7 @@ export function profileFor(map: ReaderProfileMap | null | undefined, origin: str
         attribute: String(stored.attribute),
         order: String(stored.order),
         fullSizeSuffix: String(stored.fullSizeSuffix || "").trim(),
+        sendReferrer: stored.sendReferrer === true,
         savedAt: Number.isFinite(stored.savedAt) ? Number(stored.savedAt) : 0
     };
 }
@@ -100,6 +110,7 @@ export function saveProfile(
         attribute: String(profile.attribute),
         order: String(profile.order),
         fullSizeSuffix: String(profile.fullSizeSuffix || "").trim(),
+        sendReferrer: profile.sendReferrer === true,
         savedAt: now
     };
     const keys = Object.keys(next);

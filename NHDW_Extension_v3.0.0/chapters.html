@@ -37,6 +37,7 @@
     <label>Page-image CSS selector <input id="imageSelector" value="#readerarea img, .reading-content img, .chapter-content img, .page-break img" spellcheck="false"></label>
     <label>Image URL attribute <select id="imageAttribute"><option value="auto">Automatic, only if unambiguous</option><option value="src">src</option><option value="data-src">data-src</option><option value="data-lazy-src">data-lazy-src</option><option value="data-original">data-original</option></select></label>
     <label>Thumbnail suffix to remove from page URLs (optional) <input id="fullSizeSuffix" maxlength="16" spellcheck="false" placeholder="-mini"></label>
+    <label class="check"><input id="sendReferrer" type="checkbox"> Send this site's address (origin only) as the referrer when fetching page images — some image servers require it; off by default</label>
     <p class="hint">Only when the reader lists thumbnails and you know the full-size name is the same URL without this tail. It is applied to every page or to none — a page without the tail refuses the whole chapter rather than mixing sizes. Leave it empty to use whatever URL the page gives.</p>
     <label>Page order <select id="pageOrder">
       <option value="reader">Reader order — the order the site lists them (safest)</option>

@@ -182,6 +182,14 @@ site unless stated.
 - [ ] DoujinDesu: `<img>` count after scrolling vs pages actually visible, and
   whether the batch link only appears past a chapter count.
 - [ ] Real-browser run of the unpacked build (Chrome version, checklist output).
+- [ ] **mangak.io live check (2026-11-24).** `Chapters ↗` now reads Next.js
+  `__NEXT_DATA__` page lists and has an opt-in origin-only referrer for page
+  images (`UNIVERSAL_CHAPTER_TOOL.md`). Still needs a run on the real site:
+  1. Scan `/{slug}` after its chapter list renders.
+  2. Inspect 2 or more chapters (the review should say "Next.js data").
+  3. Run the benchmark with and without the referrer box.
+  4. Record whether the image CDN allows CORS. If it does not, the route does
+     not work without new policy.
 
 *Dropped / replaced: use the site's own Download control*
 

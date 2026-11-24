@@ -430,6 +430,168 @@ export function hasReaderScript(html: string): boolean {
 }
 
 /*
+ * Next.js page data (`<script id="__NEXT_DATA__" type="application/json">`).
+ *
+ * Sites built on the Next.js "pages" router (mangak.io is the motivating one)
+ * server-render each chapter with its full, ordered page list inside this JSON
+ * block, e.g. `props.pageProps.initialChapter.images: string[]`. The visible
+ * reader is hydrated from it, often lazily, so the <img> elements may be
+ * incomplete or absent in fetched HTML while the data is complete.
+ *
+ * Same rules as the reader-script fallback: the block is parsed as JSON text,
+ * never executed; it is consulted only after the user's selector found nothing;
+ * every URL must pass publicHttpsUrl; an ambiguous document returns nothing
+ * rather than a guess.
+ *
+ * Live tabs need one extra check. Next.js navigates between pages without a
+ * reload and does NOT refresh `__NEXT_DATA__`, so an open tab can carry the data
+ * of the page it was first loaded on. `nextDataMatchesUrl` compares the data's
+ * route pattern and query against the tab's URL and refuses stale data.
+ */
+const NEXT_DATA_PATTERN = /<script\b[^>]*\bid\s*=\s*["']?__NEXT_DATA__["']?[^>]*>([\s\S]*?)<\/script\s*>/i;
+/** Well-known places first, most specific first. */
+const NEXT_IMAGE_PATHS: string[][] = [
+    ["initialChapter", "images"], ["initialChapter", "imageUrls"],
+    ["chapter", "images"], ["chapter", "imageUrls"],
+    ["initialChapter", "chapter", "images"], ["chapter", "chapter", "images"]
+];
+const NEXT_IMAGE_KEYS = ["images", "imageUrls", "pageImages"];
+const NEXT_GENERIC_DEPTH = 4;
+
+/** The raw JSON text of the `__NEXT_DATA__` block in fetched HTML, if any. */
+export function nextDataText(html: string): string | null {
+    const match = NEXT_DATA_PATTERN.exec(String(html || ""));
+    if (!match) return null;
+    const text = match[1].trim();
+    return text && text.length <= UNIVERSAL_MAX_HTML_BYTES ? text : null;
+}
+
+/** Parsed page data, or null when absent, oversized or not a JSON object. */
+export function parseNextData(text: string | null): any | null {
+    if (!text || text.length > UNIVERSAL_MAX_HTML_BYTES) return null;
+    try {
+        const parsed = JSON.parse(text);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch (_) { return null; }
+}
+
+/** A plain URL string list (or {url}/{src} objects), else null. Never partial. */
+function nextUrlList(value: any): string[] | null {
+    if (!Array.isArray(value) || value.length === 0 || value.length > UNIVERSAL_MAX_PAGES) return null;
+    const urls: string[] = [];
+    for (const entry of value) {
+        let raw: any = entry;
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+            raw = typeof entry.url === "string" ? entry.url : typeof entry.src === "string" ? entry.src : null;
+        }
+        if (typeof raw !== "string") return null;
+        const text = raw.trim();
+        if (text === "" || /\s/.test(text)) return null;
+        urls.push(text);
+    }
+    return urls;
+}
+
+/** Raw page URLs in the site's own order, or [] when absent or ambiguous. */
+export function nextDataImageUrls(data: any): string[] {
+    const props = data && data.props && data.props.pageProps;
+    if (!props || typeof props !== "object") return [];
+    for (const path of NEXT_IMAGE_PATHS) {
+        let node: any = props;
+        for (const key of path) node = node && typeof node === "object" ? node[key] : undefined;
+        const list = nextUrlList(node);
+        if (list) return list;
+    }
+    // Unknown layout: accept a list only when exactly one distinct candidate exists.
+    const found = new Map<string, string[]>();
+    const walk = (node: any, depth: number): void => {
+        if (!node || typeof node !== "object" || depth > NEXT_GENERIC_DEPTH || found.size > 1) return;
+        if (Array.isArray(node)) return; // lists of cards (related titles) are not walked into
+        for (const key of Object.keys(node)) {
+            const value = node[key];
+            if (NEXT_IMAGE_KEYS.indexOf(key) !== -1) {
+                const list = nextUrlList(value);
+                if (list) { found.set(list.join("\n"), list); continue; }
+            }
+            walk(value, depth + 1);
+        }
+    };
+    walk(props, 0);
+    return found.size === 1 ? Array.from(found.values())[0] : [];
+}
+
+function safeDecode(segment: string): string {
+    try { return decodeURIComponent(segment); } catch (_) { return segment; }
+}
+
+/**
+ * Does this page data describe `url`? Requires the route pattern (`page`, e.g.
+ * "/[slug]/[chapter]") to match the URL path segment for segment, with dynamic
+ * segments equal to `query`. Anything it cannot verify is treated as stale.
+ */
+export function nextDataMatchesUrl(data: any, url: string): boolean {
+    if (!data || typeof data.page !== "string" || data.page.charAt(0) !== "/" || data.page === "/_error") return false;
+    const parsed = publicHttpsUrl(url);
+    if (!parsed) return false;
+    const query = data.query && typeof data.query === "object" ? data.query : {};
+    const pattern = data.page.split("/").filter((part: string) => part !== "");
+    const actual = parsed.pathname.split("/").filter(part => part !== "").map(safeDecode);
+    for (let i = 0; i < pattern.length; i++) {
+        const part: string = pattern[i];
+        const catchAll = /^\[\[?\.\.\.([^\]]+)\]?\]$/.exec(part);
+        if (catchAll) {
+            if (i !== pattern.length - 1) return false;
+            const expected = query[catchAll[1]];
+            const rest = actual.slice(i);
+            const list = Array.isArray(expected) ? expected.map(String) : expected === undefined ? [] : [String(expected)];
+            return list.length === rest.length && list.every((value, index) => value === rest[index]) &&
+                (rest.length > 0 || part.indexOf("[[") === 0);
+        }
+        if (i >= actual.length) return false;
+        const dynamic = /^\[([^\]]+)\]$/.exec(part);
+        if (dynamic) {
+            if (typeof query[dynamic[1]] !== "string" || query[dynamic[1]] !== actual[i]) return false;
+        } else if (part !== actual[i]) {
+            return false;
+        }
+    }
+    return pattern.length === actual.length;
+}
+
+export interface NextDataPages {
+    pages: UniversalPageReference[];
+    /** True when page data exists but belongs to another URL (live tab only). */
+    stale: boolean;
+    /** True when a `__NEXT_DATA__` block was present at all (for messaging). */
+    present: boolean;
+}
+
+/**
+ * Page references from Next.js page data. `liveUrl` is the open tab's URL when
+ * reading a live document (enables the staleness check); fetched HTML for an
+ * exact chapter URL needs no check and passes null.
+ */
+export function collectNextDataPagesFromText(text: string | null, chapterUrl: string, liveUrl: string | null): NextDataPages {
+    if (!publicHttpsUrl(chapterUrl)) throw new UniversalChapterError("url", "Chapter page URL is not allowed.");
+    const data = parseNextData(text);
+    if (!data) return { pages: [], stale: false, present: !!text };
+    if (liveUrl !== null && !nextDataMatchesUrl(data, liveUrl)) return { pages: [], stale: true, present: true };
+    const pages: UniversalPageReference[] = [];
+    for (const raw of nextDataImageUrls(data)) {
+        const url = publicHttpsUrl(raw, chapterUrl);
+        // All or nothing: one unusable entry means this is not a clean page list.
+        if (!url || url.hash) return { pages: [], stale: false, present: true };
+        pages.push({ url: url.href, host: url.hostname.toLowerCase() });
+    }
+    return { pages: pages, stale: false, present: true };
+}
+
+/** Same, from fetched chapter HTML. */
+export function collectNextDataPages(html: string, chapterUrl: string): UniversalPageReference[] {
+    return collectNextDataPagesFromText(nextDataText(html), chapterUrl, null).pages;
+}
+
+/*
  * Thumbnail -> full-size URL by an EXPLICIT suffix.
  *
  * Some readers list `…abc-mini.jpg` (a thumbnail) even though the site also
