@@ -152,16 +152,39 @@ describe("Hitomi Adapter & Resolver", () => {
             assert.strictEqual(hitomiSource.fetchImagesThroughTab(), true);
         });
 
-        it("the worker relay reads hitomi pages without credentials and refuses anything else", () => {
+        it("the worker relay reads hitomi pages without credentials, from hitomi tabs only, and refuses anything else", () => {
             const { getConfiguredSources } = require("../build/test/sources/index");
-            const { tabFetchCredentialsForUrl } = require("../build/test/background/tabImageFetch");
+            const { tabFetchModeForUrl } = require("../build/test/background/tabImageFetch");
             const sources = getConfiguredSources();
             // The servers answer Access-Control-Allow-Origin: * (captured), which
             // browsers reject for a credentialed read from the hitomi.la tab.
-            assert.strictEqual(tabFetchCredentialsForUrl(CAPTURED_PAGE_URLS[0], sources), "omit");
-            assert.strictEqual(tabFetchCredentialsForUrl("https://i.nhentai.net/galleries/987654/1.jpg", sources), "include");
-            assert.strictEqual(tabFetchCredentialsForUrl("https://ltn.gold-usergeneratedcontent.net/gg.js", sources), null);
-            assert.strictEqual(tabFetchCredentialsForUrl("https://evil.example/x.avif", sources), null);
+            assert.deepStrictEqual(tabFetchModeForUrl(CAPTURED_PAGE_URLS[0], sources), { credentials: "omit", requiredHost: "hitomi.la" });
+            assert.deepStrictEqual(tabFetchModeForUrl("https://i.nhentai.net/galleries/987654/1.jpg", sources), { credentials: "include", requiredHost: "" });
+            assert.strictEqual(tabFetchModeForUrl("https://ltn.gold-usergeneratedcontent.net/gg.js", sources), null);
+            assert.strictEqual(tabFetchModeForUrl("https://evil.example/x.avif", sources), null);
+        });
+
+        it("the injected page fetch refuses to run outside the required site", async () => {
+            const { fetchImageInPage } = require("../build/test/background/tabImageFetch");
+            const saved = { fetch: globalThis.fetch, location: globalThis.location };
+            let fetched = 0;
+            globalThis.fetch = async () => { fetched++; return new Response(new Uint8Array([1]), { status: 200 }); };
+            try {
+                for (const host of ["nhentai.net", "nothitomi.la", "hitomi.la.evil.example", ""]) {
+                    globalThis.location = { hostname: host };
+                    const r = await fetchImageInPage(CAPTURED_PAGE_URLS[0], "omit", "hitomi.la");
+                    assert.strictEqual(r.ok, false, host);
+                    assert.strictEqual(r.status, 0, host);
+                }
+                assert.strictEqual(fetched, 0);
+                for (const host of ["hitomi.la", "www.hitomi.la"]) {
+                    globalThis.location = { hostname: host };
+                    assert.strictEqual((await fetchImageInPage(CAPTURED_PAGE_URLS[0], "omit", "hitomi.la")).ok, true, host);
+                }
+            } finally {
+                globalThis.fetch = saved.fetch;
+                globalThis.location = saved.location;
+            }
         });
 
         it("the injected page fetch honours the credentials mode", async () => {
@@ -176,6 +199,70 @@ describe("Hitomi Adapter & Resolver", () => {
                 globalThis.fetch = saved;
             }
             assert.deepStrictEqual(seen, ["omit", "include"]);
+        });
+    });
+
+    describe("site header rule (hitomi.la context for the extension's own requests)", () => {
+        const { buildSiteHeaderRules, installSiteHeaderRules, SITE_HEADER_RULE_ID_BASE, SITE_HEADER_RULE_ID_MAX } = require("../build/test/background/siteHeaderRules");
+        const { getConfiguredSources } = require("../build/test/sources/index");
+        const EXT_ID = "abcdefghijklmnopabcdefghijklmnop";
+
+        it("builds exactly one rule, for hitomi, scoped to this extension and the content domain", () => {
+            const rules = buildSiteHeaderRules(getConfiguredSources(), EXT_ID);
+            assert.strictEqual(rules.length, 1);
+            assert.deepStrictEqual(rules[0], {
+                id: SITE_HEADER_RULE_ID_BASE,
+                priority: 1,
+                action: {
+                    type: "modifyHeaders",
+                    requestHeaders: [
+                        { header: "referer", operation: "set", value: "https://hitomi.la/" },
+                        { header: "origin", operation: "set", value: "https://hitomi.la" }
+                    ]
+                },
+                condition: {
+                    requestDomains: ["gold-usergeneratedcontent.net"],
+                    initiatorDomains: [EXT_ID],
+                    resourceTypes: ["xmlhttprequest", "other"]
+                }
+            });
+        });
+
+        it("ignores malformed adapter contexts and a missing extension id", () => {
+            const bad = [
+                { getImageRequestContext: () => ({ domains: ["*"], referer: "https://x.example/", origin: "https://x.example" }) },
+                { getImageRequestContext: () => ({ domains: ["x.example"], referer: "javascript:alert(1)", origin: "https://x.example" }) },
+                { getImageRequestContext: () => ({ domains: ["x.example"], referer: "https://x.example/", origin: "https://x.example/path" }) },
+                { getImageRequestContext: () => { throw new Error("boom"); } },
+                {}
+            ];
+            assert.deepStrictEqual(buildSiteHeaderRules(bad, EXT_ID), []);
+            assert.deepStrictEqual(buildSiteHeaderRules(getConfiguredSources(), ""), []);
+        });
+
+        it("installs by replacing its whole id range (idempotent across worker restarts)", async () => {
+            const calls = [];
+            const chromeApi = { runtime: { id: EXT_ID }, declarativeNetRequest: { updateSessionRules: async (arg) => { calls.push(arg); } } };
+            assert.strictEqual(await installSiteHeaderRules(chromeApi, getConfiguredSources()), true);
+            assert.strictEqual(await installSiteHeaderRules(chromeApi, getConfiguredSources()), true);
+            assert.strictEqual(calls.length, 2);
+            assert.strictEqual(calls[0].removeRuleIds.length, SITE_HEADER_RULE_ID_MAX - SITE_HEADER_RULE_ID_BASE + 1);
+            assert.ok(calls[0].removeRuleIds.includes(SITE_HEADER_RULE_ID_BASE));
+            assert.strictEqual(calls[0].addRules.length, 1);
+        });
+
+        it("never throws: no API, no permission, or a rejected update just reports false", async () => {
+            assert.strictEqual(await installSiteHeaderRules({ runtime: { id: EXT_ID } }, getConfiguredSources()), false);
+            assert.strictEqual(await installSiteHeaderRules(undefined, getConfiguredSources()), false);
+            const rejecting = { runtime: { id: EXT_ID }, declarativeNetRequest: { updateSessionRules: async () => { throw new Error("no permission"); } } };
+            assert.strictEqual(await installSiteHeaderRules(rejecting, getConfiguredSources()), false);
+        });
+
+        it("the manifest grants the warning-free header-rule permission and no broader one", () => {
+            const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest.json"), "utf8"));
+            assert.ok(manifest.permissions.includes("declarativeNetRequestWithHostAccess"));
+            assert.ok(!manifest.permissions.includes("declarativeNetRequest"), "the plain permission shows a 'block content' warning");
+            assert.ok(manifest.host_permissions.includes("https://*.gold-usergeneratedcontent.net/*"), "the rule only acts where host access exists");
         });
     });
 
@@ -240,6 +327,14 @@ describe("Hitomi Adapter & Resolver", () => {
             assert.strictEqual(gallery.images.pages[0].t, "w");
             assert.strictEqual(gallery.images.pages[1].t, "a");
             assert.strictEqual(gallery.images.pages[1].hash, hashOf(CAPTURED_PAGE_URLS[1]));
+        });
+
+        it("carries Hitomi's blocked flag only when it is set", () => {
+            const file = { hash: hashOf(CAPTURED_PAGE_URLS[0]), hasavif: 1, name: "1.png" };
+            const blocked = extractHitomiGallery("var galleryinfo = " + JSON.stringify({ id: "5", title: "B", blocked: 1, files: [file] }));
+            assert.strictEqual(blocked.blocked, true);
+            const open = extractHitomiGallery("var galleryinfo = " + JSON.stringify({ id: "5", title: "B", blocked: 0, files: [file] }));
+            assert.strictEqual(Object.prototype.hasOwnProperty.call(open, "blocked"), false);
         });
 
         it("returns null for a rendered gallery page instead of a fake 0-page record", () => {

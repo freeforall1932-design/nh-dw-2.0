@@ -544,6 +544,7 @@ export default class Popup
         // metadata once any challenge is done.
         // Sites whose metadata is a separate document (hitomi: galleries/{id}.js)
         // read it directly; the result must be this gallery and have pages.
+        let blockedMessage: string | null = null;
         if (json === null && !rateLimitMessage && source.site !== "nhentai" && typeof source.getMetadataUrl === "function" && source.extractGallery) {
             try {
                 const metaResp = await fetch(source.getMetadataUrl(id), { credentials: "omit", cache: "no-store", redirect: "error" });
@@ -551,7 +552,9 @@ export default class Popup
                 statusText = metaResp ? String(metaResp.statusText || "") : "";
                 if (metaResp && metaResp.ok) {
                     const meta = source.extractGallery(await metaResp.text());
-                    if (meta && String(meta.id) === String(id) && meta.images && Array.isArray(meta.images.pages) && meta.images.pages.length > 0) {
+                    if (meta && meta.blocked === true && String(meta.id) === String(id)) {
+                        blockedMessage = "This gallery is blocked on Hitomi: the site does not serve its pages.";
+                    } else if (meta && String(meta.id) === String(id) && meta.images && Array.isArray(meta.images.pages) && meta.images.pages.length > 0) {
                         json = meta;
                     }
                 }
@@ -616,7 +619,9 @@ export default class Popup
         }
 
         if (json === null) {
-            let html = rateLimitMessage
+            let html = blockedMessage
+                ? message.errorOther(403, blockedMessage)
+                : rateLimitMessage
                 ? message.errorOther(429, rateLimitMessage)
                 : (status === 404 ? message.errorOther(status, statusText) : message.cloudflareMetadata());
             if (keyedRejected) {

@@ -246,6 +246,9 @@ async function parseResponseGallery(resp: any, parsing: AParsing): Promise<any> 
     return requireGallery(json);
 }
 
+// Shown when a site marks a gallery as blocked (hitomi `blocked: 1`).
+export const BLOCKED_GALLERY_MESSAGE = "This gallery is blocked on Hitomi: the site does not serve its pages.";
+
 export async function resolveGalleryMetadata(
     key: string,
     args: {
@@ -311,6 +314,10 @@ export async function resolveGalleryMetadata(
                 statusText = metaResp ? String(metaResp.statusText || "") : "";
                 if (metaResp && metaResp.ok) {
                     const meta = adapter.extractGallery(typeof metaResp.text === "function" ? await metaResp.text() : "");
+                    if (meta && meta.blocked === true && String(meta.id) === String(id)) {
+                        // Final: no other route serves a blocked gallery's pages.
+                        return { ok: false, status: 403, statusText: BLOCKED_GALLERY_MESSAGE, contentType: "application/javascript" };
+                    }
                     if (meta && looksLikeGallery(meta) && String(meta.id) === String(id) && meta.images.pages.length > 0) {
                         if (!meta.site) meta.site = adapter.site;
                         return { ok: true, json: requireGallery(meta) };

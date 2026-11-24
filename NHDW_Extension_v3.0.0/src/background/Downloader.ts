@@ -303,6 +303,11 @@ export default class Downloader
             // Validate the complete page list before fetching anything. A `0`
             // descriptor is an unmapped/invalid page, not permission to skip
             // that page and report a partial archive (or raw folder) as done.
+            if (this.#json && this.#json.blocked === true) {
+                // The site marks this gallery blocked (hitomi): it serves no
+                // pages, so say so instead of failing page after page.
+                throw new Error("This gallery is blocked on Hitomi: the site does not serve its pages.");
+            }
             const pages = this.#json && this.#json.images && this.#json.images.pages;
             if (!Array.isArray(pages) || pages.length === 0) {
                 throw new Error("Unexpected response type (no pages in gallery metadata).");

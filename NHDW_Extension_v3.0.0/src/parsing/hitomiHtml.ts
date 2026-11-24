@@ -77,7 +77,10 @@ export function extractHitomiGallery(htmlOrJs: string): any | null {
             },
             scanlator: "",
             tags: Array.isArray(rawInfo.tags) ? rawInfo.tags : [],
-            num_pages: pages.length
+            num_pages: pages.length,
+            // Hitomi marks some galleries `blocked: 1`; it does not serve their
+            // pages. Carried only when set so other records are unchanged.
+            ...(Number(rawInfo.blocked) ? { blocked: true } : {})
         };
     }
 

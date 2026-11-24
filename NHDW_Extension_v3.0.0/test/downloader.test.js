@@ -972,6 +972,98 @@ describe('Downloader (tab image fetch)', () => {
         return attempted;
     }
 
+    function hitomiFixture() {
+        const fs = require('fs');
+        const path = require('path');
+        const resolver = require('../build/test/sources/hitomiResolver.js');
+        resolver.setHitomiGg(resolver.parseHitomiGg(fs.readFileSync(path.join(__dirname, 'fixtures/hitomi/gg-2026-09-22.js'), 'utf8')));
+        const hash = 'a8c650cf5c18d63f50bc15c4b6c26f7f8ca9a62fed49a19896c096e7c81febc4';
+        return {
+            resolver,
+            url: 'https://a2.gold-usergeneratedcontent.net/1790046002/1212/' + hash + '.avif',
+            gallery: {
+                id: 4203493, media_id: '4203493', site: 'hitomi',
+                title: { english: 'H', japanese: '', pretty: 'H' },
+                images: { pages: [{ t: 'a', hash: hash, name: '001.png' }] }, tags: []
+            }
+        };
+    }
+
+    // Runs the injected function for real, with the tab's location faked.
+    function tabRunningInjectedFunction(hostname, calls) {
+        chrome.scripting = {
+            executeScript(details, cb) {
+                calls.push({ world: details.world || 'ISOLATED', args: details.args });
+                const savedLocation = globalThis.location;
+                globalThis.location = { hostname };
+                let pending;
+                try { pending = Promise.resolve(details.func(...details.args)); } finally { globalThis.location = savedLocation; }
+                pending.then((result) => cb([{ result }]));
+            }
+        };
+    }
+
+    it('hitomi: an open hitomi.la tab fetches the page itself, without credentials', async () => {
+        const fx = hitomiFixture();
+        const calls = [];
+        tabRunningInjectedFunction('hitomi.la', calls);
+        const fetches = [];
+        globalThis.fetch = (url, init) => {
+            fetches.push({ url: String(url), credentials: init && init.credentials, inTab: calls.length > 0 && globalThis.location && globalThis.location.hostname === 'hitomi.la' });
+            return Promise.resolve(new Response(makePageBytes(0, 0, 0, 0x1c), { status: 200, headers: { 'content-type': 'image/avif' } }));
+        };
+        try {
+            const downloader = new Downloader(fx.gallery, 'H', () => {}, () => {}, 'H', new JSZip(), 'H');
+            downloader.sourceTabId = 99;
+            downloader.revokeObjectUrlDelayMs = 10;
+            downloader.retryBackoffMs = 0;
+            await downloader.startAsync();
+        } finally {
+            fx.resolver.setHitomiGg(null);
+        }
+        assert.deepStrictEqual(calls.map((c) => c.args), [[fx.url, 'omit', 'hitomi.la']]);
+        assert.strictEqual(fetches.length, 1, 'one fetch, made inside the tab');
+        assert.strictEqual(fetches[0].credentials, 'omit');
+    });
+
+    it('hitomi: in another site\'s tab nothing runs there; the extension fetch takes over', async () => {
+        const fx = hitomiFixture();
+        const calls = [];
+        tabRunningInjectedFunction('nhentai.net', calls);
+        const fetches = [];
+        globalThis.fetch = (url) => {
+            fetches.push(String(url));
+            return Promise.resolve(new Response(makePageBytes(0, 0, 0, 0x1c), { status: 200, headers: { 'content-type': 'image/avif' } }));
+        };
+        try {
+            const downloader = new Downloader(fx.gallery, 'H', () => {}, () => {}, 'H', new JSZip(), 'H');
+            downloader.sourceTabId = 99;
+            downloader.revokeObjectUrlDelayMs = 10;
+            downloader.retryBackoffMs = 0;
+            await downloader.startAsync();
+        } finally {
+            fx.resolver.setHitomiGg(null);
+        }
+        assert.deepStrictEqual(calls.map((c) => c.world), ['ISOLATED'], 'refused once; no MAIN-world retry in the wrong site');
+        assert.deepStrictEqual(fetches, [fx.url], 'the page came from the extension fetch (header rule adds hitomi.la context)');
+        assert.strictEqual(chrome.downloads.calls.length, 1);
+    });
+
+    it('hitomi: a blocked gallery stops with a clear message and fetches nothing', async () => {
+        const fx = hitomiFixture();
+        const fetches = [];
+        globalThis.fetch = (url) => { fetches.push(String(url)); return Promise.reject(new Error('no fetch expected')); };
+        let reported = null;
+        try {
+            const downloader = new Downloader(Object.assign({}, fx.gallery, { blocked: true }), 'H', (e) => { reported = e; }, () => {}, 'H', new JSZip(), 'H');
+            await assert.rejects(downloader.startAsync(), /blocked on Hitomi/);
+        } finally {
+            fx.resolver.setHitomiGg(null);
+        }
+        assert.deepStrictEqual(fetches, []);
+        assert.ok(/blocked on Hitomi/.test(String(reported && (reported.message || reported))));
+    });
+
     it('fetches through the open tab and does not use extension-origin fetch', async () => {
         const attempted = tabScriptReturningPages();
         const worlds = [];

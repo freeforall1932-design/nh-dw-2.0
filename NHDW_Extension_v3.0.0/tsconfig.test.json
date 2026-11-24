@@ -13,6 +13,7 @@
         "src/background/downloadControl.ts",
         "src/background/ArchiveDownload.ts",
         "src/background/tabImageFetch.ts",
+        "src/background/siteHeaderRules.ts",
         "src/preview/selectedGalleryResolver.ts",
         "src/preview/activeTabGallery.ts",
         "src/preview/message.ts",

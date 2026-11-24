@@ -79,10 +79,23 @@ export const hitomiSource: SiteAdapter = {
         return /^\/[0-9]{1,16}\/[0-9]{1,4}\/[0-9a-f]{64}\.(?:avif|webp)$/;
     },
 
-    // Fetch pages through the open Hitomi tab first, like nhentai: the
-    // browser then sends the real hitomi.la referrer by itself.
+    // Fetch pages through an open hitomi.la tab first, like nhentai: the
+    // browser then sends the real hitomi.la referrer by itself. In any other
+    // tab this is skipped (getTabSiteHost) and the extension's own fetch runs
+    // with the header rule below.
     fetchImagesThroughTab(): boolean {
         return true;
+    },
+
+    getTabSiteHost(): string {
+        return "hitomi.la";
+    },
+
+    // The image servers expect hitomi.la context (Referer + Origin), as the
+    // site's own reader sends; documented by several independent Hitomi
+    // clients. Applied only to this extension's requests to the content domain.
+    getImageRequestContext(): { domains: string[]; referer: string; origin: string } {
+        return { domains: [HITOMI_CONTENT_DOMAIN], referer: HITOMI_PAGE_HOST + "/", origin: HITOMI_PAGE_HOST };
     },
 
     needsTabFetch(): boolean {

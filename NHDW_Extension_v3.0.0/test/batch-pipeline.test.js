@@ -264,6 +264,19 @@ describe('resolveGalleryMetadata', () => {
         assert.strictEqual(tabCalls, 0, 'no tab round-trip needed');
     });
 
+    it('hitomi: a blocked gallery fails at once with a clear reason, no fallback fetches', async () => {
+        const info = 'var galleryinfo = ' + JSON.stringify({ id: '4203493', title: 'Blocked', blocked: 1, files: [{ hash: 'a'.repeat(64), hasavif: 1, name: '1.png' }] });
+        const urls = [];
+        const host = makeHost({
+            fetchImpl: async (url) => { urls.push(url); return { ok: true, status: 200, statusText: 'OK', headers: { get: () => null }, text: async () => info }; }
+        });
+        const result = await resolveGalleryMetadata('hitomi:4203493', { galleryMetadata: {}, apiKey: '', host });
+        assert.strictEqual(result.ok, false);
+        assert.strictEqual(result.status, 403);
+        assert.ok(/blocked on Hitomi/.test(result.statusText));
+        assert.strictEqual(urls.length, 1, 'the gallery page is not fetched as a fallback');
+    });
+
     it('hitomi refuses metadata for a different gallery and falls through', async () => {
         const info = 'var galleryinfo = ' + JSON.stringify({ id: '999', title: 'Other', files: [{ hash: 'a'.repeat(64), hasavif: 1, name: '1.png' }] });
         const host = makeHost({

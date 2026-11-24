@@ -61,7 +61,11 @@ const CDN_CONFIG_FIXTURE = JSON.stringify({
 });
 let cdnConfigFetches = 0;
 
+const sessionRuleUpdates = [];
 const chromeStub = {
+    declarativeNetRequest: {
+        updateSessionRules(arg) { sessionRuleUpdates.push(arg); return Promise.resolve(); }
+    },
     tabs: {
         onUpdated: { addListener() {} },
         onActivated: { addListener() {} },
@@ -97,6 +101,7 @@ const chromeStub = {
             }
             sentMessages.push(msg);
         },
+        id: "abcdefghijklmnopabcdefghijklmnop",
         lastError: null
     },
     downloads: {
@@ -380,6 +385,23 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("bundle threw while loading: " + err.name + ": " + err.message);
     }
     if (!onMessageHandler) fail("onMessage listener was never registered");
+
+    // ---- Phase 0: hitomi header rule installed at worker start ------------
+    // The built worker must add the hitomi.la Referer/Origin rule for its OWN
+    // requests to the image servers (siteHeaderRules.ts), on every start.
+    await waitFor(() => sessionRuleUpdates.length >= 1, "the worker must install its site header rules at startup");
+    const headerRules = sessionRuleUpdates[0].addRules || [];
+    const hitomiRule = headerRules.find((r) => r.condition && (r.condition.requestDomains || []).includes("gold-usergeneratedcontent.net"));
+    if (!hitomiRule
+        || JSON.stringify(hitomiRule.condition.initiatorDomains) !== JSON.stringify(["abcdefghijklmnopabcdefghijklmnop"])
+        || !hitomiRule.action.requestHeaders.some((h) => h.header === "referer" && h.value === "https://hitomi.la/")
+        || !hitomiRule.action.requestHeaders.some((h) => h.header === "origin" && h.value === "https://hitomi.la")) {
+        fail("the hitomi header rule must be scoped to this extension and set hitomi.la context, got " + JSON.stringify(headerRules));
+    }
+    if (headerRules.length !== 1) {
+        fail("only the hitomi header rule is expected, got " + headerRules.length);
+    }
+    console.log("PASS phase 0: hitomi header rule installed at worker start, scoped to the extension's own requests");
 
     // ---- Phase 1: ZIP mode ------------------------------------------------
     syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };

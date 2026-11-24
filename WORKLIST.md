@@ -190,15 +190,19 @@ site unless stated.
   3. Run the benchmark with and without the referrer box.
   4. Record whether the image CDN allows CORS. If it does not, the route does
      not work without new policy.
-- [ ] **Hitomi live check (2026-11-24, resolver rewrite).** Unit + e2e green;
-  needs one real-browser run with a hitomi gallery tab open:
+- [ ] **Hitomi live check (2026-11-24, resolver rewrite + header rule).** Unit
+  + e2e green; needs one real-browser run (reload the unpacked extension first
+  — it adds `declarativeNetRequestWithHostAccess`, which has no warning):
   1. Popup on `hitomi.la/galleries/{id}.html`: title and page count must match
      the site (metadata now comes from `ltn…/galleries/{id}.js`).
-  2. Download as ZIP: every page saved as `.avif`/`.webp`, none tiny/HTML.
+  2. Download as ZIP: every page saved as `.avif`, none tiny/HTML.
   3. Repeat in raw mode (pages are fetched and checked, then saved).
   4. Queue/batch 2–3 hitomi galleries; all finish.
-  5. If pages fail with 403, note it — that means the image servers want a
-     hitomi.la Referer even from the tab, and the next step is a header rule.
+  5. Start a hitomi download from a NON-hitomi tab (bookmark panel on nhentai,
+     or close the hitomi tab mid-queue): it must still finish. This is the
+     header-rule path. If it 403s while step 2 works, the rule is not applying
+     (check `chrome://extensions` errors; DevTools on the offscreen document →
+     Network → a page request's Referer should read `https://hitomi.la/`).
 
 *Dropped / replaced: use the site's own Download control*
 
@@ -1177,8 +1181,16 @@ piece of work".
   (reproduces 4/4 captured requests) with the sibling server as fallback;
   pages fetched from the open hitomi tab without credentials (the servers send
   `ACAO: *`), worker relay re-checks the URL; raw mode fetches + validates then
-  saves the bytes; ZIP is the default like the other sites. Live check pending
-  (Owner/live list).
+  saves the bytes; ZIP is the default like the other sites. Follow-up the same
+  day: a declarativeNetRequest session rule (`background/siteHeaderRules.ts`,
+  permission `declarativeNetRequestWithHostAccess`, no install warning) adds
+  `Referer: https://hitomi.la/` + `Origin: https://hitomi.la` to the
+  extension's OWN requests to `gold-usergeneratedcontent.net` only (initiator =
+  extension id; user browsing untouched; Chromium applies a rule to its own
+  extension's requests and treats the extension origin as permitted), so
+  hitomi works from any tab or none; the in-tab fetch now only runs in a
+  hitomi.la tab; galleries with `blocked: 1` stop with "This gallery is blocked
+  on Hitomi". Live check pending (Owner/live list).
 - **49/50/53 (2026-09-22/23, 3.9.0/FF 1.3.0):** hitomi adapter (`gg.js`
   dynamic resolver, default raw) + mirror-network adapters (hentaiera,
   imhentai, hentaienvy) + hentaifox — all six sites shipping.
