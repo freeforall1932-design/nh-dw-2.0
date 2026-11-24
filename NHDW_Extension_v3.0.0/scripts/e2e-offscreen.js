@@ -251,6 +251,10 @@ function fetchStub(url) {
         const gallery = galleryById[apiMatch[1]];
         if (gallery) return Promise.resolve(new Response(JSON.stringify(gallery), { status: 200 }));
     }
+    // Hitomi: the server map comes from gg.js (real captured copy).
+    if (u === "https://ltn.gold-usergeneratedcontent.net/gg.js") {
+        return Promise.resolve(new Response(fs.readFileSync(path.join(__dirname, "../test/fixtures/hitomi/gg-2026-09-22.js"), "utf8"), { status: 200 }));
+    }
     if (u.includes('gold-usergeneratedcontent.net')) {
         return Promise.resolve(new Response(pageBytes[0], { status: 200 }));
     }

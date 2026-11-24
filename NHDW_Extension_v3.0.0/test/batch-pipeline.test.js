@@ -241,6 +241,37 @@ describe('resolveGalleryMetadata', () => {
         assert.strictEqual(result.ok, true);
         assert.strictEqual(result.json.title.pretty, 'FromHtml');
     });
+
+    it('hitomi reads galleries/{id}.js directly (the rendered page has no page list)', async () => {
+        const hash = 'a8c650cf5c18d63f50bc15c4b6c26f7f8ca9a62fed49a19896c096e7c81febc4';
+        const info = 'var galleryinfo = ' + JSON.stringify({ id: '4203493', title: 'Fixture', files: [{ hash: hash, hasavif: 1, name: '001.png' }] });
+        const urls = [];
+        let tabCalls = 0;
+        const host = makeHost({
+            fetchUrlFromTab: async () => { tabCalls++; return null; },
+            fetchImpl: async (url, init) => {
+                urls.push({ url, init });
+                return { ok: true, status: 200, statusText: 'OK', headers: { get: () => 'application/javascript' }, text: async () => info };
+            }
+        });
+        const result = await resolveGalleryMetadata('hitomi:4203493', { galleryMetadata: {}, apiKey: '', sourceTabId: 7, host });
+        assert.strictEqual(result.ok, true);
+        assert.strictEqual(result.json.id, '4203493');
+        assert.strictEqual(result.json.site, 'hitomi');
+        assert.strictEqual(result.json.images.pages.length, 1);
+        assert.deepStrictEqual(urls.map(u => u.url), ['https://ltn.gold-usergeneratedcontent.net/galleries/4203493.js']);
+        assert.strictEqual(urls[0].init.credentials, 'omit');
+        assert.strictEqual(tabCalls, 0, 'no tab round-trip needed');
+    });
+
+    it('hitomi refuses metadata for a different gallery and falls through', async () => {
+        const info = 'var galleryinfo = ' + JSON.stringify({ id: '999', title: 'Other', files: [{ hash: 'a'.repeat(64), hasavif: 1, name: '1.png' }] });
+        const host = makeHost({
+            fetchImpl: async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: () => null }, text: async () => info })
+        });
+        const result = await resolveGalleryMetadata('hitomi:4203493', { galleryMetadata: {}, apiKey: '', host });
+        assert.strictEqual(result.ok, false, 'a mismatched id is never saved under this gallery');
+    });
 });
 
 describe('runBatchDownload', () => {
@@ -918,8 +949,9 @@ describe('job format contract (item 33)', () => {
 // ---------------------------------------------------------------------------
 
 function hitomiPage(id, title) {
-    // The real page carries a JSON blob the adapter's extractor reads
-    // (src/parsing/hitomiHtml.ts): files[] with hash + name per page.
+    // The `var galleryinfo = {...}` document the adapter's extractor reads
+    // (src/parsing/hitomiHtml.ts): files[] with hash + name per page. Live it
+    // is served as galleries/{id}.js; the extractor also finds it inside HTML.
     const info = {
         id: Number(id),
         title: title,
@@ -1093,14 +1125,14 @@ describe('item 48 — a per-site job', () => {
         });
         const bare = await resolveGalleryMetadata('70007', { galleryMetadata: {}, apiKey: '', host: host, site: 'hitomi' });
         assert.strictEqual(bare.ok, true);
-        assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
+        assert.strictEqual(calls[0], 'https://ltn.gold-usergeneratedcontent.net/galleries/70007.js',
             'a bare key with a job site must use that site\'s adapter URL');
         assert.strictEqual(bare.json.site, 'hitomi');
 
         calls.length = 0;
         const composite = await resolveGalleryMetadata('hitomi:70007', { galleryMetadata: {}, apiKey: '', host: host, site: 'nhentai' });
         assert.strictEqual(composite.ok, true);
-        assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
+        assert.strictEqual(calls[0], 'https://ltn.gold-usergeneratedcontent.net/galleries/70007.js',
             'a composite key wins over a contradicting job site');
     });
 

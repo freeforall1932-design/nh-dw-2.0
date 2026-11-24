@@ -22,6 +22,16 @@ export interface SiteAdapter {
     // never a URL list.
     getFallbackImageUrls?(mediaId: string, filename: string): string[];
     needsTabFetch?(): boolean;
+    // Optional, used by hitomi only (the other sites leave these undefined and
+    // behave exactly as before):
+    // * getMetadataUrl — a direct metadata document parsed by extractGallery,
+    //   tried before the open tab's HTML (hitomi's rendered page has no page list).
+    getMetadataUrl?(id: string): string;
+    // * prepareDownload — async setup before page URLs are built (hitomi: gg.js).
+    prepareDownload?(fetchImpl: (url: string, init?: any) => Promise<any>, signal?: AbortSignal | null): Promise<void>;
+    // * fetchImagesThroughTab — try the open tab for page images, validated
+    //   against this adapter's getImageHosts()/getAllowedPathRegex().
+    fetchImagesThroughTab?(): boolean;
 }
 
 export type GallerySource = SiteAdapter;

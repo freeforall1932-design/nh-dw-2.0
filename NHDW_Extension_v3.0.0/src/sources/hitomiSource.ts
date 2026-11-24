@@ -1,13 +1,16 @@
 import { SiteAdapter } from "./GallerySource";
 import { extractHitomiGallery, extractHitomiReaderImage } from "../parsing/hitomiHtml";
-import { buildHitomiImageUrls, fullPathFromHash, HitomiImageFile } from "./hitomiResolver";
+import { buildHitomiImageUrls, ensureHitomiGg, getHitomiGg, GgFetch, HitomiImageFile, HITOMI_CONTENT_DOMAIN } from "./hitomiResolver";
 
 export const HITOMI_PAGE_HOST = "https://hitomi.la";
-export const HITOMI_LTN_HOST = "https://ltn.gold-usergeneratedcontent.net";
+export const HITOMI_LTN_HOST = "https://ltn." + HITOMI_CONTENT_DOMAIN;
+
+/** Full-size page servers: a1/a2 (avif) and w1/w2 (webp), plus one spare each. */
+const HITOMI_PAGE_HOSTS = ["a1", "a2", "a3", "w1", "w2", "w3"].map((sub) => sub + "." + HITOMI_CONTENT_DOMAIN);
 
 export const hitomiSource: SiteAdapter = {
     site: "hitomi",
-    defaultFormat: "raw",
+    defaultFormat: "zip",
 
     matchesUrl(url: string): boolean {
         return /^https:\/\/(?:[a-z0-9-]+\.)?hitomi\.la(?:[/?#]|$)/i.test(url);
@@ -34,6 +37,13 @@ export const hitomiSource: SiteAdapter = {
         return HITOMI_LTN_HOST + "/galleries/" + encodeURIComponent(id) + ".js";
     },
 
+    // The rendered gallery page does not contain the page list (it is loaded
+    // from galleries/{id}.js as an external script), so metadata is read from
+    // that file directly. Served with CORS "*", covered by host permissions.
+    getMetadataUrl(id: string): string {
+        return HITOMI_LTN_HOST + "/galleries/" + encodeURIComponent(id) + ".js";
+    },
+
     extractGallery(html: string): any | null {
         return extractHitomiGallery(html);
     },
@@ -42,35 +52,37 @@ export const hitomiSource: SiteAdapter = {
         return extractHitomiReaderImage(html);
     },
 
+    // Load (or refresh) gg.js before page URLs are built; cached ~10 minutes.
+    async prepareDownload(fetchImpl: GgFetch, signal?: AbortSignal | null): Promise<void> {
+        await ensureHitomiGg(fetchImpl, Date.now(), signal);
+    },
+
     getImageUrls(mediaId: string, filename: string): string[] {
-        // Strip extension if filename has one: e.g. "abc...e12.webp" -> "abc...e12"
-        const cleanName = filename.replace(/\.(?:webp|avif|jpg|jpeg|png|gif)$/i, "");
-        const hash = cleanName.length >= 32 ? cleanName : (mediaId.length >= 32 ? mediaId : cleanName);
+        // filename is "<64-hex hash>.<avif|webp>" (see Downloader filenameParsing).
+        const match = /^([0-9a-f]{64})\.(avif|webp)$/i.exec(String(filename || ""));
+        if (!match) return [];
         const file: HitomiImageFile = {
-            hash: hash,
+            hash: match[1],
+            hasavif: match[2].toLowerCase() === "avif" ? 1 : 0,
             haswebp: 1,
-            hasavif: filename.endsWith(".avif") ? 1 : 0,
             name: filename
         };
-        return buildHitomiImageUrls(file, filename.endsWith(".avif"));
+        return buildHitomiImageUrls(file, getHitomiGg(), true);
     },
 
     getImageHosts(): string[] {
-        return [
-            "gold-usergeneratedcontent.net",
-            "a.gold-usergeneratedcontent.net",
-            "b.gold-usergeneratedcontent.net",
-            "aa.gold-usergeneratedcontent.net",
-            "ba.gold-usergeneratedcontent.net",
-            "bb.gold-usergeneratedcontent.net",
-            "ltn.gold-usergeneratedcontent.net",
-            "hitomi.la",
-            "ltn.hitomi.la"
-        ];
+        return HITOMI_PAGE_HOSTS.slice();
     },
 
     getAllowedPathRegex(): RegExp {
-        return /^\/(?:webp|avif|images|galleries)\/[0-9a-z\/_.-]+\.(jpg|jpeg|png|gif|webp|avif|js)$/i;
+        // /{rotating prefix}/{gg.s(hash)}/{hash}.{avif|webp}
+        return /^\/[0-9]{1,16}\/[0-9]{1,4}\/[0-9a-f]{64}\.(?:avif|webp)$/;
+    },
+
+    // Fetch pages through the open Hitomi tab first, like nhentai: the
+    // browser then sends the real hitomi.la referrer by itself.
+    fetchImagesThroughTab(): boolean {
+        return true;
     },
 
     needsTabFetch(): boolean {

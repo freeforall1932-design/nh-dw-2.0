@@ -170,41 +170,72 @@ describe('Downloader (zip mode)', () => {
     it('item 48: a hitomi gallery is fetched through hitomi URLs, never the nhentai CDN', async () => {
         // The last link of the per-site chain: the pipeline resolved the
         // metadata through the hitomi adapter and stamped json.site, and the
-        // Downloader must now pick that adapter up and build hitomi image URLs
-        // (hash-based, on the user-generated-content hosts).
-        const hash = '0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e';
+        // Downloader must now pick that adapter up, read gg.js once, and build
+        // the hash-based page URLs on the user-generated-content hosts.
+        const fs = require('fs');
+        const path = require('path');
+        const { setHitomiGg, HITOMI_GG_URL } = require('../build/test/sources/hitomiResolver.js');
+        setHitomiGg(null);
+        const ggText = fs.readFileSync(path.join(__dirname, 'fixtures/hitomi/gg-2026-09-22.js'), 'utf8');
+        const hash = 'a8c650cf5c18d63f50bc15c4b6c26f7f8ca9a62fed49a19896c096e7c81febc4';
         const hitomiGallery = {
             id: 765432,
-            media_id: hash,
+            media_id: '765432',
             site: 'hitomi',
             title: { english: 'Hitomi Title', japanese: '', pretty: 'Hitomi Title' },
-            images: { pages: [{ t: 'w', hash: hash, name: '01.webp' }, { t: 'w', hash: hash, name: '02.webp' }] },
+            images: { pages: [{ t: 'w', hash: hash, name: '01.webp' }, { t: 'a', hash: hash, name: '02.png' }] },
             tags: []
         };
         const attempted = [];
+        let ggReads = 0;
         globalThis.fetch = (url) => {
+            if (String(url) === HITOMI_GG_URL) {
+                ggReads++;
+                return Promise.resolve(new Response(ggText, { status: 200 }));
+            }
             attempted.push(String(url));
             return Promise.resolve(new Response(makePageBytes(0x52, 0x49, 0x46, 0x46), { status: 200 }));
         };
 
-        const downloader = new Downloader(hitomiGallery, 'Downloads/Hitomi', () => {}, () => {}, 'Hitomi Title', new JSZip(), 'Downloads/Hitomi');
-        downloader.revokeObjectUrlDelayMs = 10;
-        downloader.retryBackoffMs = 0;
-        await downloader.startAsync();
-
-        assert.strictEqual(attempted.length >= 2, true, 'both hitomi pages must be fetched');
-        for (const url of attempted) {
-            assert.ok(url.indexOf('gold-usergeneratedcontent.net') !== -1,
-                'a hitomi gallery must be fetched from the hitomi hosts, got ' + url);
-            assert.ok(url.indexOf('/webp/') !== -1, 'hitomi webp pages keep their format, got ' + url);
-            assert.ok(url.indexOf('nhentai.net') === -1, 'the nhentai CDN must never be used for a hitomi gallery');
+        try {
+            const downloader = new Downloader(hitomiGallery, 'Downloads/Hitomi', () => {}, () => {}, 'Hitomi Title', new JSZip(), 'Downloads/Hitomi');
+            downloader.revokeObjectUrlDelayMs = 10;
+            downloader.retryBackoffMs = 0;
+            await downloader.startAsync();
+        } finally {
+            setHitomiGg(null);
         }
+
+        assert.strictEqual(ggReads, 1, 'gg.js is read once per download, not per page');
+        assert.deepStrictEqual(attempted.sort(), [
+            'https://a2.gold-usergeneratedcontent.net/1790046002/1212/' + hash + '.avif',
+            'https://w2.gold-usergeneratedcontent.net/1790046002/1212/' + hash + '.webp'
+        ], 'each page is fetched once, from its gg.js server, in its own format');
 
         assert.strictEqual(chrome.downloads.calls.length, 1);
         const zip = await decodeZip(chrome.downloads.calls[0].url);
         const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir).sort();
-        assert.deepStrictEqual(names, ['Downloads/Hitomi/001.webp', 'Downloads/Hitomi/002.webp'],
+        assert.deepStrictEqual(names, ['Downloads/Hitomi/001.webp', 'Downloads/Hitomi/002.avif'],
             'hitomi pages keep their own numbering and extension');
+    });
+
+    it('item 48: a hitomi download stops with a clear error when gg.js cannot be read', async () => {
+        const { setHitomiGg } = require('../build/test/sources/hitomiResolver.js');
+        setHitomiGg(null);
+        const attempted = [];
+        globalThis.fetch = (url) => { attempted.push(String(url)); return Promise.resolve(new Response('', { status: 503 })); };
+        const hitomiGallery = {
+            id: 765433, media_id: '765433', site: 'hitomi',
+            title: { english: 'H', japanese: '', pretty: 'H' },
+            images: { pages: [{ t: 'a', hash: 'b'.repeat(64), name: '01.png' }] }, tags: []
+        };
+        let reported = null;
+        const downloader = new Downloader(hitomiGallery, 'Downloads/H', (e) => { reported = e; }, () => {}, 'H', new JSZip(), 'Downloads/H');
+        downloader.retryBackoffMs = 0;
+        await assert.rejects(downloader.startAsync(), /gg\.js/);
+        assert.ok(attempted.length >= 1 && attempted.length <= 6, 'gg.js is retried with the page retries, then given up');
+        assert.ok(attempted.every((u) => u === 'https://ltn.gold-usergeneratedcontent.net/gg.js'), 'no image request is guessed without gg.js');
+        assert.ok(reported === null || /gg\.js/.test(String(reported)));
     });
 
     it('reports a failure when every image host fails', async () => {
@@ -321,6 +352,45 @@ describe('Downloader (raw mode)', () => {
         ]);
         // Raw mode must not fetch anything itself (Chrome does the download).
         assert.strictEqual(fetchStub.attempted.length, 0);
+    });
+
+    it('hitomi raw pages are fetched and checked like ZIP pages, then saved from those bytes', async () => {
+        // The download manager cannot send hitomi.la context and would skip the
+        // image check and the alternate server, so hitomi never hands it a CDN URL.
+        const fs = require('fs');
+        const path = require('path');
+        const { setHitomiGg, HITOMI_GG_URL } = require('../build/test/sources/hitomiResolver.js');
+        setHitomiGg(null);
+        const ggText = fs.readFileSync(path.join(__dirname, 'fixtures/hitomi/gg-2026-09-22.js'), 'utf8');
+        const hash = 'a8c650cf5c18d63f50bc15c4b6c26f7f8ca9a62fed49a19896c096e7c81febc4';
+        const attempted = [];
+        globalThis.fetch = (url) => {
+            if (String(url) === HITOMI_GG_URL) return Promise.resolve(new Response(ggText, { status: 200 }));
+            attempted.push(String(url));
+            // First server answers an HTML error page: the alternate must be used.
+            if (attempted.length === 1) return Promise.resolve(new Response('<html>blocked</html>', { status: 200, headers: { 'content-type': 'text/html' } }));
+            return Promise.resolve(new Response(makePageBytes(0x00, 0x00, 0x00, 0x1c), { status: 200, headers: { 'content-type': 'image/avif' } }));
+        };
+        const hitomiGallery = {
+            id: 4203493, media_id: '4203493', site: 'hitomi',
+            title: { english: 'Raw Hitomi', japanese: '', pretty: 'Raw Hitomi' },
+            images: { pages: [{ t: 'a', hash: hash, name: '001.png' }] }, tags: []
+        };
+        try {
+            const downloader = new Downloader(hitomiGallery, 'RawHitomi', () => {}, () => {}, 'Raw Hitomi', new JSZip(), null);
+            downloader.revokeObjectUrlDelayMs = 10;
+            downloader.retryBackoffMs = 0;
+            await downloader.startAsync();
+        } finally {
+            setHitomiGg(null);
+        }
+        assert.deepStrictEqual(attempted, [
+            'https://a2.gold-usergeneratedcontent.net/1790046002/1212/' + hash + '.avif',
+            'https://a1.gold-usergeneratedcontent.net/1790046002/1212/' + hash + '.avif'
+        ]);
+        assert.strictEqual(chrome.downloads.calls.length, 1);
+        assert.ok(!/gold-usergeneratedcontent/.test(chrome.downloads.calls[0].url), 'saved from fetched bytes, not a CDN URL');
+        assert.strictEqual(chrome.downloads.calls[0].filename, 'NHDW/RawHitomi/001.avif');
     });
 
     it('groups raw pages under the master folder by default and honors a custom one', async () => {

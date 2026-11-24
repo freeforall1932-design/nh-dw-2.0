@@ -41,8 +41,12 @@ export function decodeTabImageBytes(b64: string): Uint8Array {
 // Self-contained Promise chain: Chrome serializes this function into the tab.
 // Do not use async/await (tsconfig target es6 rewrites that to helpers that
 // do not exist in the page) and do not close over module state.
-export function fetchImageInPage(imageUrl: string): Promise<TabImageResult> {
-    return fetch(imageUrl, { credentials: "include", cache: "no-store" }).then(function(resp): Promise<TabImageResult> | TabImageResult {
+// `credentials` is "omit" for hosts that answer `Access-Control-Allow-Origin: *`
+// (hitomi's image servers): the browser rejects a wildcard for a credentialed
+// cross-origin read, so "include" would always fail there. Self-contained
+// (it is injected), hence the inline check rather than a shared helper.
+export function fetchImageInPage(imageUrl: string, credentials?: string): Promise<TabImageResult> {
+    return fetch(imageUrl, { credentials: credentials === "omit" ? "omit" : "include", cache: "no-store" }).then(function(resp): Promise<TabImageResult> | TabImageResult {
         const contentType = resp.headers.get("content-type");
         if (!resp.ok) {
             return {
@@ -179,19 +183,49 @@ function relayToServiceWorker<T>(message: any): Promise<T | null> {
     });
 }
 
-export async function fetchImageFromTab(tabId: number, url: string): Promise<TabImageResult | null> {
-    if (!isAllowedImageUrl(url)) {
+// `rules` (an adapter's getImageHosts/getAllowedPathRegex) widens the check
+// to that one site's exact page-image shape; without it only nhentai URLs pass.
+type TabFetchRules = { getImageHosts?(): string[]; getAllowedPathRegex?(): RegExp };
+
+// Credentials mode for an in-tab image read: adapters that opt into the tab
+// fetch (hitomi) are read without credentials (see fetchImageInPage).
+function tabCredentialsFor(rules?: TabFetchRules): "omit" | "include" {
+    return rules ? "omit" : "include";
+}
+
+/**
+ * Worker-side gate for the offscreen relay: the URL must be an nhentai page
+ * image, or the exact page-image shape of an adapter that opted into the tab
+ * fetch. Returns that adapter's credentials mode, or null to refuse.
+ */
+export function tabFetchCredentialsForUrl(url: string, adapters: any[]): "omit" | "include" | null {
+    if (isAllowedImageUrl(url)) return "include";
+    for (const adapter of adapters || []) {
+        if (adapter && typeof adapter.fetchImagesThroughTab === "function" && adapter.fetchImagesThroughTab() === true
+            && isAllowedCdnImageUrl(url, adapter)) {
+            return tabCredentialsFor(adapter);
+        }
+    }
+    return null;
+}
+
+export async function fetchImageFromTab(
+    tabId: number, url: string,
+    rules?: TabFetchRules
+): Promise<TabImageResult | null> {
+    if (!(rules ? isAllowedCdnImageUrl(url, rules) : isAllowedImageUrl(url))) {
         return null;
     }
+    const credentials = tabCredentialsFor(rules);
     if (scriptingAvailable()) {
         // Service worker / popup context: inject directly. Isolated world
         // first: MV3 host_permissions let content-script fetches skip page
         // CORS. MAIN world is the fallback when isolation cannot run.
-        const isolated = await executeInTab(tabId, fetchImageInPage, [url], "ISOLATED");
+        const isolated = await executeInTab(tabId, fetchImageInPage, [url, credentials], "ISOLATED");
         if (usableTabResult(isolated)) {
             return isolated;
         }
-        const main = await executeInTab(tabId, fetchImageInPage, [url], "MAIN");
+        const main = await executeInTab(tabId, fetchImageInPage, [url, credentials], "MAIN");
         if (usableTabResult(main)) {
             return main;
         }
@@ -203,6 +237,7 @@ export async function fetchImageFromTab(tabId: number, url: string): Promise<Tab
         action: "fetchInTab",
         tabId: tabId,
         url: url,
+        credentials: credentials,
         world: "ISOLATED"
     });
     if (usableTabResult(isolated)) {
@@ -213,6 +248,7 @@ export async function fetchImageFromTab(tabId: number, url: string): Promise<Tab
         action: "fetchInTab",
         tabId: tabId,
         url: url,
+        credentials: credentials,
         world: "MAIN"
     });
     if (usableTabResult(main)) {

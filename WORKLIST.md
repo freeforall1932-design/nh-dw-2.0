@@ -190,6 +190,15 @@ site unless stated.
   3. Run the benchmark with and without the referrer box.
   4. Record whether the image CDN allows CORS. If it does not, the route does
      not work without new policy.
+- [ ] **Hitomi live check (2026-11-24, resolver rewrite).** Unit + e2e green;
+  needs one real-browser run with a hitomi gallery tab open:
+  1. Popup on `hitomi.la/galleries/{id}.html`: title and page count must match
+     the site (metadata now comes from `ltn…/galleries/{id}.js`).
+  2. Download as ZIP: every page saved as `.avif`/`.webp`, none tiny/HTML.
+  3. Repeat in raw mode (pages are fetched and checked, then saved).
+  4. Queue/batch 2–3 hitomi galleries; all finish.
+  5. If pages fail with 403, note it — that means the image servers want a
+     hitomi.la Referer even from the tab, and the next step is a header rule.
 
 *Dropped / replaced: use the site's own Download control*
 
@@ -630,7 +639,7 @@ full title, or searched by tags instead. **All three landed 2026-10-17
   per the owner's own sampling, and zip endpoints are deliberately
   not hammered. (nhentai itself has no such buttons either — the
   "like nh" reference was the embedded-UI drawer pattern.)
-- **Hitomi — needs nothing more (closed by inspection).** The
+- **Hitomi — downloads were broken; fixed 2026-11-24 (see below).** The
   owner's own call treats hitomi like hentaifox (unique, sometimes-
   exists, no guaranteed mirror copy), so item 72 gives it an empty
   chain — correct. Strategy A already serves hitomi's reading-mode
@@ -1159,6 +1168,17 @@ piece of work".
   (union, local wins, never deletes) · `isCanonicalTemplate()` odd-separator gate.
 - **Bookmark icon + gallery-page Bookmark button (2026-09-23, 3.9.0/FF 1.3.0):**
   SVG bookmark on cards; blue Bookmark button on all six sites' gallery pages.
+- **Hitomi resolver rewrite (2026-11-24):** the 09-22 resolver never fetched
+  `gg.js` and built an old URL layout, and the rendered gallery page carries no
+  page list, so hitomi downloads could not work. Now: metadata from
+  `ltn…/galleries/{id}.js` (id-checked); `gg.js` read as text (never executed),
+  cached 10 min, last good copy kept on a failed refresh, refused if its shape
+  changes; page URL `{a|w}{1+m(g)}.gold-usergeneratedcontent.net/{b}{g}/{hash}.{avif|webp}`
+  (reproduces 4/4 captured requests) with the sibling server as fallback;
+  pages fetched from the open hitomi tab without credentials (the servers send
+  `ACAO: *`), worker relay re-checks the URL; raw mode fetches + validates then
+  saves the bytes; ZIP is the default like the other sites. Live check pending
+  (Owner/live list).
 - **49/50/53 (2026-09-22/23, 3.9.0/FF 1.3.0):** hitomi adapter (`gg.js`
   dynamic resolver, default raw) + mirror-network adapters (hentaiera,
   imhentai, hentaienvy) + hentaifox — all six sites shipping.

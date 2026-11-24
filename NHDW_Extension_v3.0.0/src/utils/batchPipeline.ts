@@ -297,6 +297,31 @@ export async function resolveGalleryMetadata(
         let status = 0;
         let statusText = "";
 
+        // Separate metadata document (hitomi: galleries/{id}.js). Accepted only
+        // when it is this gallery and lists pages; otherwise fall through.
+        if (typeof adapter.getMetadataUrl === "function" && adapter.extractGallery) {
+            try {
+                const metaResp = await host.fetchImpl(adapter.getMetadataUrl(id), {
+                    credentials: "omit",
+                    cache: "no-store",
+                    redirect: "error",
+                    signal: signal || undefined
+                });
+                status = metaResp ? metaResp.status : 0;
+                statusText = metaResp ? String(metaResp.statusText || "") : "";
+                if (metaResp && metaResp.ok) {
+                    const meta = adapter.extractGallery(typeof metaResp.text === "function" ? await metaResp.text() : "");
+                    if (meta && looksLikeGallery(meta) && String(meta.id) === String(id) && meta.images.pages.length > 0) {
+                        if (!meta.site) meta.site = adapter.site;
+                        return { ok: true, json: requireGallery(meta) };
+                    }
+                }
+            } catch (e: any) {
+                if (signal && signal.aborted) throw e;
+                statusText = String(e && e.message ? e.message : e);
+            }
+        }
+
         if (typeof sourceTabId === "number") {
             const viaTab = await host.fetchUrlFromTab(sourceTabId, targetUrl);
             if (viaTab && viaTab.ok && viaTab.text !== null) {
@@ -323,7 +348,10 @@ export async function resolveGalleryMetadata(
         }
         if (htmlText && adapter.extractGallery) {
             const extracted = adapter.extractGallery(htmlText);
-            if (extracted && looksLikeGallery(extracted)) {
+            // Same rule as supplied metadata: a page that names a different
+            // gallery must never be saved under this one's identity.
+            const idConflict = extracted && extracted.id !== undefined && extracted.id !== null && String(extracted.id) !== id;
+            if (extracted && !idConflict && looksLikeGallery(extracted)) {
                 if (!extracted.site) extracted.site = adapter.site;
                 return { ok: true, json: requireGallery(extracted) };
             }

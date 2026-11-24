@@ -608,6 +608,7 @@ export default class Downloader
             // invalid replacement page even if the original list was valid.
             throw new Error("Unknown page format (invalid page " + (currPage + 1) + ").");
         }
+        await this.#prepareSource();
         let filenameParsing = (page && page.hash) ? (page.hash + format) : ((currPage + 1) + format); // Name for parsing
         this.updateProgress(progress, this.#doujinshiName + "/" + ((currPage + 1) + format), false);
 
@@ -634,6 +635,23 @@ export default class Downloader
             // value nest deeper. sanitizeArtifactFilename cleans every
             // segment independently at save time.
             const rawSavePath = masterPrefix + this.path.replace(/[\\:*?"<>|]/g, '') + "/" + filename;
+            if (this.#sourceFetchesThroughTab()) {
+                // Hitomi: the download manager cannot send the hitomi.la
+                // context its image servers expect, and a bare URL would skip
+                // the image check and the alternate server. Fetch exactly as
+                // ZIP mode does (open tab first, validated, every server),
+                // then save those bytes as the loose page.
+                const validated = await this.#loadValidatedImage(imageUrls);
+                const { url, revoke } = await this.#urlForBlob(validated.blob);
+                try {
+                    await this.#saveArtifact(url, rawSavePath);
+                } catch (error) {
+                    if (revoke !== null) revoke();
+                    throw error;
+                }
+                if (revoke !== null) setTimeout(revoke, this.revokeObjectUrlDelayMs);
+                return;
+            }
             try {
                 await this.#saveArtifact(imageUrls[0], rawSavePath);
                 return;
@@ -764,6 +782,28 @@ export default class Downloader
             lastStatus = loaded.lastStatus;
         }
         throw this.#imageFetchFailureMessage(lastStatus);
+    }
+
+    // Adapters whose images must be fetched in the site's own context
+    // (hitomi) rather than handed to the download manager as a bare URL.
+    #sourceFetchesThroughTab(): boolean {
+        const source = this.#source as any;
+        return typeof source.fetchImagesThroughTab === "function" && source.fetchImagesThroughTab() === true;
+    }
+
+    // Adapter setup that must finish before page URLs are built (hitomi reads
+    // gg.js, cached for minutes, so calling this per page is cheap and also
+    // picks up Hitomi's rotation during a long gallery). No-op for every
+    // adapter without prepareDownload.
+    async #prepareSource(): Promise<void> {
+        const source = this.#source as any;
+        if (typeof source.prepareDownload !== "function") {
+            return;
+        }
+        if (this.#isAborted()) {
+            throw "Download was aborted";
+        }
+        await source.prepareDownload((url: string, init?: any) => fetch(url, init), this.#abortSignal);
     }
 
     // Entry name inside the archive. Flat layouts (the archive belongs to this
@@ -1000,7 +1040,9 @@ export default class Downloader
             throw "Download was aborted";
         }
         if (this.sourceTabId !== null) {
-            const fromTab = await fetchImageFromTab(this.sourceTabId, imageUrl);
+            const source = this.#source as any;
+            const tabRules = typeof source.fetchImagesThroughTab === "function" && source.fetchImagesThroughTab() ? source : undefined;
+            const fromTab = await fetchImageFromTab(this.sourceTabId, imageUrl, tabRules);
             if (fromTab && fromTab.ok && fromTab.b64) {
                 const bytes = decodeTabImageBytes(fromTab.b64);
                 return {

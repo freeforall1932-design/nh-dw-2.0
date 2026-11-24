@@ -3,9 +3,9 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import Downloader from "./Downloader";
 import { errorMessage } from "../utils/utils";
-import { getSourceForUrl } from "../sources";
+import { getSourceForUrl, getConfiguredSources } from "../sources";
 import { executeInTab } from "../preview/activeTabGallery";
-import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
+import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab, tabFetchCredentialsForUrl } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
 import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
@@ -1204,7 +1204,15 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
     if (request.action === "fetchInTab") {
         // The offscreen document cannot call chrome.scripting; the worker
         // injects the image fetch into the gallery tab (see tabImageFetch.ts).
-        executeInTab(request.tabId, fetchImageInPage, [request.url], request.world === "MAIN" ? "MAIN" : "ISOLATED")
+        // Re-check here: this injects into the user's tab, so only page
+        // images of nhentai or of an adapter that opted in are fetched, with
+        // that adapter's credentials mode (never the caller's say-so).
+        const credentials = tabFetchCredentialsForUrl(String(request.url || ""), getConfiguredSources());
+        if (credentials === null || typeof request.tabId !== "number") {
+            sendResponse(null);
+            return false;
+        }
+        executeInTab(request.tabId, fetchImageInPage, [request.url, credentials], request.world === "MAIN" ? "MAIN" : "ISOLATED")
             .then((result: any) => sendResponse(result));
         return true;
     }

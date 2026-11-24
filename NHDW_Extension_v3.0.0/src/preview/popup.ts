@@ -542,6 +542,24 @@ export default class Popup
         // Read the open gallery tab. Extension-origin fetches to the gallery
         // API are what Cloudflare 403s; the rendered page already carries its
         // metadata once any challenge is done.
+        // Sites whose metadata is a separate document (hitomi: galleries/{id}.js)
+        // read it directly; the result must be this gallery and have pages.
+        if (json === null && !rateLimitMessage && source.site !== "nhentai" && typeof source.getMetadataUrl === "function" && source.extractGallery) {
+            try {
+                const metaResp = await fetch(source.getMetadataUrl(id), { credentials: "omit", cache: "no-store", redirect: "error" });
+                status = metaResp ? metaResp.status : 0;
+                statusText = metaResp ? String(metaResp.statusText || "") : "";
+                if (metaResp && metaResp.ok) {
+                    const meta = source.extractGallery(await metaResp.text());
+                    if (meta && String(meta.id) === String(id) && meta.images && Array.isArray(meta.images.pages) && meta.images.pages.length > 0) {
+                        json = meta;
+                    }
+                }
+            } catch (error) {
+                statusText = errorMessage(error);
+            }
+        }
+
         if (json === null && !rateLimitMessage) {
             if (source.site === "nhentai") {
                 json = await getGalleryFromActiveTab(id);
