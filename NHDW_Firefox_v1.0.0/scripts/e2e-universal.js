@@ -44,6 +44,12 @@ const fixtures = {
     // Next.js (mangak.io-style): the reader is hydrated client-side, so the
     // served HTML has no page <img>; the ordered list is in __NEXT_DATA__.
     'https://reader.example/series/book/chapter-5/': ['text/html', "<div class=\"reader\"></div><script id=\"__NEXT_DATA__\" type=\"application/json\">{\"props\":{\"pageProps\":{\"initialChapter\":{\"name\":\"Chapter 5\",\"images\":[\"https://images.example/one.jpg\",\"https://images.example/two.png\"]},\"initialManga\":{\"id\":\"fixture\",\"name\":\"Fixture\"}}},\"page\":\"/[slug]/[chapter]\",\"query\":{\"slug\":\"book\",\"chapter\":\"chapter-5\"},\"buildId\":\"fixture\"}</script>"],
+    // React Router (framework mode), unknown site: no <img> in the served HTML,
+    // the page list is in the route's single-fetch ".data" (turbo-stream).
+    'https://reader.example/series/book/chapter-6/': ['text/html', '<div id="root"></div><script>window.__reactRouterContext = {"basename":"/"};</script>'],
+    'https://reader.example/series/book/chapter-6.data': ['text/x-script', fs.readFileSync(path.join(root, 'test/fixtures/tailspace/generic-reader.data'), 'utf8')],
+    'https://cdn.reader.example/9/1.jpg': ['image/jpeg', page1],
+    'https://cdn.reader.example/9/2.png': ['image/png', page2],
     'https://images.example/one.jpg': ['image/jpeg', page1],
     'https://images.example/two.png': ['image/png', page2],
     'https://images.example/three.jpg': ['image/jpeg', page3]
@@ -343,7 +349,21 @@ async function main() {
     click('forgetProfile');
     assert.match(aw.document.getElementById('status').textContent, /Cleared the saved reader settings/);
     assert.deepStrictEqual(Object.keys(storage.nhdwSiteProfiles), []);
-    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, suffix rule, Next.js page data, opt-in referrer, site profiles, benchmark log (synthetic VM)');
+    // React Router reader on an unknown site: generic single-fetch fallback.
+    moreUrls.value = 'https://reader.example/series/book/chapter-6/'; click('addUrls');
+    await until(() => aw.document.querySelectorAll('#chapterList input').length === 6, 'sixth chapter added');
+    click('selectNone');
+    const sixth = aw.document.querySelectorAll('#chapterList input')[5];
+    sixth.checked = true; sixth.dispatchEvent(new aw.Event('change'));
+    const beforeRoute = requests.length;
+    click('inspect');
+    await until(() => /React Router \.data/.test(aw.document.getElementById('review').textContent), 'route-data fallback');
+    assert.match(aw.document.querySelector('#review li').textContent, /2 image reference/);
+    assert.deepStrictEqual(requests.slice(beforeRoute).map(item => item.url), [
+        'https://reader.example/series/book/chapter-6/', 'https://reader.example/series/book/chapter-6.data'
+    ], 'the chapter HTML, then its single-fetch data - nothing else');
+    assert.deepStrictEqual(Array.from(aw.document.querySelectorAll('#review input[data-host]'), box => box.dataset.host), ['cdn.reader.example']);
+    console.log('PASS: bundled chapter UI/probe, explicit host gate, ordered ZIPs, strict completion, resume, suffix rule, Next.js page data, React Router page data, opt-in referrer, site profiles, benchmark log (synthetic VM)');
 }
 main().then(() => { app.window.close(); source.window.close(); }).catch(error => {
     console.error('FAIL: bundled chapter integration:', error); app.window.close(); source.window.close(); process.exitCode = 1;

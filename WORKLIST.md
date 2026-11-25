@@ -59,6 +59,19 @@ comparison. The native button's click flow remains unobserved.
   Chromium-first unless the owner asks again. The Firefox tree stays.
 - **Tailspace (answered):** scroll mode serves full-size files; only gallery mode
   serves `-mini` thumbnails.
+- **Tailspace page-data reader (2026-11-25, owner "Yes").** Built from the facts
+  in Keiyoushi's Tailspace plugin (Apache-2.0, credited) and cofob/memesave-bot
+  (facts only). Each comic's page list is read from React Router `.data`, and a
+  series is walked through previous/next links. The decoder is general, so any
+  React Router/Remix reader with exactly one URL list also works. It went into
+  both trees because it is shared code. It is offline-verified only. The owner's
+  live check is in [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#one-live-check-owner-5-minutes).
+- **Research order for an undocumented site (2026-11-25):** existing open-source
+  scrapers (`node tools/find-site-references.js <domain>`), then a site-family or
+  framework fingerprint (MangaThemesia, Next.js `__NEXT_DATA__`, React Router
+  `.data`), then the network log, then a manual capture as the last resort.
+  Licences decide reuse. Apache/MIT/Unlicense may be re-implemented with credit.
+  GPL or no licence means facts only, never code.
 - **nhentai's own Download (owner's live observation, not independently
   verified):** the control is an embedded link; the resulting file is a ZIP whose
   name carries the id, title and artist (similar to what this extension builds),
@@ -263,7 +276,10 @@ site unless stated.
   Does the page state a page total (`3 / 57`, `57 pages`)?
 - [ ] Desu: `<img>` count after scrolling versus pages you actually see, and
   whether the batch link only appears beyond a chapter count.
-- [ ] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
+- [x] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
+  (Yes per the owner. It is moot now that pages come from page data.)
+- [ ] Tailspace live check: scan, inspect and save one multi-part comic.
+  Report whether `pics.tailspace.com` needed the referrer option or refused CORS.
 - [ ] Real-browser run: your Chrome version, and confirmation you can load the
   unpacked build — I can supply a checklist whose output you paste back.
 - [ ] nhentai's own Download button: still unobserved. A screenshot plus the
@@ -319,10 +335,11 @@ force lazy images into the DOM before inspection. Nothing below is live-tested.
 - [ ] **Yurilab (`yurilab.top`)** — WordPress series pages; the observed listing is
   paginated (`?t=2`), so a title scan needs every list page added. Chapter reader
   markup and page ordering are unknown.
-- [ ] **Tailspace (`tailspace.com`)** — gallery mode shows `?page=N` links whose
+- [x] **Tailspace (`tailspace.com`)** — gallery mode shows `?page=N` links whose
   images are `-mini` thumbnails; scroll mode lists the full-size pages in DOM
-  order. Plan: prefer scroll mode + reader order, or link order in gallery mode,
-  and never mix thumbnail and full-size files.
+  order. *Superseded 2026-11-25:* pages come from the site's React Router data
+  (full size by construction). `?page=N` is only the reader position. The DOM
+  path is the fallback. Live check still open (above).
 - [ ] **DoujinDesu (`doujin.desu.xxx`)** — top-down reader; page images come from
   an obfuscated API, so *static* HTML inspection will probably find nothing.
   Plan: *Use open chapter* + reader order per chapter (the browser has already

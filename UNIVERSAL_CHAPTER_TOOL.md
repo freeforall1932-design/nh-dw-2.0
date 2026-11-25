@@ -169,6 +169,67 @@ which sit inside the title path), pick chapters and **Inspect**. If the image
 server refuses the page fetches, tick the referrer option below and run the
 benchmark again.
 
+## React Router sites: page data at `<path>.data` (Tailspace)
+
+Sites built on React Router 7 "framework mode" (and Remix) serve every page's
+loader data at the same path plus `.data` (`/` uses `/_root.data`), as
+turbo-stream v2 text (`Content-Type: text/x-script`). The visible reader is
+rendered from that data, so it is the site's own complete, ordered page list.
+Code: `src/utils/routeData.ts` (shared, byte-identical in both trees).
+
+- **Decoder.** `decodeTurboStream` follows the format react-router 7 bundles
+  (turbo-stream v2, MIT; checked against the npm source, re-implemented):
+  flat value array, `_<key>` objects, negative special values, D/U/B/R/Y/S/M/N/P/Z/E
+  tags, later `P<id>:`/`E<id>:` lines, and react-router's plugin types. It is
+  bounded (5 MiB, 250,000 values, depth 256), cycle-safe, and builds objects
+  with no prototype, so page data cannot pollute `Object.prototype`. Text is
+  parsed, never executed.
+- **Generic fallback (any React Router site).** When the selector, the reader
+  script and `__NEXT_DATA__` all find nothing *and* the page shows
+  `window.__reactRouterContext`/`__remixContext`, the probe fetches the
+  chapter's `.data` (same origin, query kept) and accepts exactly one distinct
+  URL list under `images`/`imageUrls`/`pageImages`/`pages`. Card lists are not
+  searched; anything ambiguous gives nothing.
+- **Known-site recipes.** Some sites store page *tokens*, not URLs. A recipe is
+  a few lines of reviewed code, not storage: which route holds a chapter, how to
+  build the page URL, and how parts of a series link. It never grants or
+  approves a host and never injects anything. The only recipe is Tailspace:
+  - loader `routes/pages/comic/ComicPage` at `/c/<slug>.data?_routes=…` (the
+    reader position `?page=N` is dropped);
+  - `comic.pages[]` `{token, pageNumber, fileType}` → full size
+    `https://pics.tailspace.com/comics/<id>/<token>.<fileType or jpg>`, sorted by
+    `pageNumber`; one unexpected entry rejects the whole list;
+  - `comic.numberOfPages` is the site's stated total, cross-checked in the
+    review ("site's own page data disagrees with its stated total");
+  - a series is a chain of comics (`previousComic`/`nextComic`).
+  Sources: keiyoushi/extensions-source `src/en/tailspace` (Apache-2.0, added
+  2026-11-01) and, independently, cofob/memesave-bot `scraper/src_tailspace.go`
+  (no licence stated, facts only). No code copied.
+- **Recipe first, reader second.** On a recipe site the page data is tried
+  before the selector. If it fails (site changed, HTML instead of data), the
+  normal reader paths run as before.
+- **Whole series from any part.** *Scan / add title page* on any Tailspace
+  comic walks the series links in both directions, one `.data` request per part
+  with the usual pause (cap 200, loop-safe), and lists the parts oldest first.
+  The order select is preset to *Oldest to newest*. Inspection reuses the
+  decoded data, so it makes no second request per chapter.
+- **Referrer.** Both reference projects send `Referer: https://tailspace.com/`
+  for images. The tool still sends none unless you tick the opt-in below; after a
+  Tailspace scan the status points at that box (it never ticks it).
+
+Tailspace workflow: open any comic in a series (`https://tailspace.com/c/<name>`),
+open the tool, **Scan / add title page**, select parts, **Inspect**, approve
+`pics.tailspace.com`, save. If the pages fail, tick the referrer option and try
+again. If they still fail, the image server probably sends no CORS headers for
+extension-initiated reads, and the run log will say so.
+
+**Find what others already know first.** `node tools/find-site-references.js
+<domain>` searches GitHub for the domain and searches the known scraper
+catalogs for the site name (two searches through the signed-in `gh` CLI).
+Each hit is labelled reusable-with-attribution (Apache/MIT/Unlicense) or
+facts-only (GPL). Tailspace had a Keiyoushi source the day after it was
+recorded as "none".
+
 ## Opt-in referrer for page images
 
 Some image servers only answer requests that carry the site as referrer. By
@@ -241,7 +302,8 @@ page failure does:
   complete.
 - **No silent page loss.** Every matched element must be an `<img>` with exactly
   one usable URL; a missing or ambiguous one fails the whole chapter.
-- **Data parsing, not page execution.** Fetched chapter HTML is parsed by
+- **Data parsing, not page execution.** React Router `.data` text is decoded by
+  a bounded, prototype-free parser, never evaluated. Fetched chapter HTML is parsed by
   `htmlparser2`/`css-select` (no `DOMParser`, no detached `<img>`, no script
   execution), so no subresource is requested before the host approval step.
 - **Bounded and fail-closed.** Redirects (`redirect: "error"`), 429 and
@@ -406,6 +468,22 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
   in its HTML: the page list comes from `__NEXT_DATA__`, the archive holds the
   exact ordered bytes, image fetches use `strict-origin` only when opted in
   while HTML stays `no-referrer`, and the log records both.
+- `test/route-data.test.js` — the turbo-stream decoder against official encoder
+  output (`test/fixtures/tailspace/`, synthetic data, reproducible with
+  `generate.js`): shared references, deferred lines, maps, dates, holes,
+  cycles, plugin types, no prototype pollution, refusal of non-stream input and
+  the value cap. Also `.data` URL building, the generic finder's ambiguity
+  rules, and the Tailspace recipe (exact origin, slugs with spaces, page order,
+  default jpg, whole-list refusal, stated total, series walk with loop,
+  break and cap).
+- `scripts/e2e-route-data.js` — built page + probe against a synthetic
+  `tailspace.com` tab. Scanning part 2 lists all 3 parts oldest first from 3
+  `.data` requests, without the reader's `?page=1`. Inspection makes no further
+  request. The 2-of-3 mismatch is flagged without scrolling advice, and only
+  `pics.tailspace.com` is offered for approval. It saves 3 ordered CBZ files
+  (jpg/png/webp) and never fetches the gallery `-mini` thumbnails. When the site
+  answers HTML instead of data, it falls back to the ordinary link scan.
+  `e2e-universal.js` adds the generic fallback on an unknown React Router reader.
 - `scripts/e2e-chapter-relay.js` — the worker relay trust boundary.
 - `test/chapter-support.test.js` — the supporting pieces on their own, including
   the self-test plan (never drives a button, skips review-wiping controls when a

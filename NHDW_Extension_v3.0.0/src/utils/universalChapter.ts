@@ -476,7 +476,7 @@ export function parseNextData(text: string | null): any | null {
 }
 
 /** A plain URL string list (or {url}/{src} objects), else null. Never partial. */
-function nextUrlList(value: any): string[] | null {
+export function nextUrlList(value: any): string[] | null {
     if (!Array.isArray(value) || value.length === 0 || value.length > UNIVERSAL_MAX_PAGES) return null;
     const urls: string[] = [];
     for (const entry of value) {

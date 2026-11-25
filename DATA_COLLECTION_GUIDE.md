@@ -160,6 +160,11 @@ images or "read from the reader's own embedded page list". Details:
 
 ### 2. `tailspace.com`
 
+> **Probably not needed any more (2026-11-25).** The tool now reads Tailspace's
+> own page data (see [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md)). Do the five-minute
+> live check there first. Capture the reader as below only if that check shows the
+> page-data path failing.
+
 - Go to `https://tailspace.com/c/Scale%20Train` (the title page) and capture the
   chapter list.
 - Open one chapter. Choose **scroll mode**, not gallery mode — the owner's

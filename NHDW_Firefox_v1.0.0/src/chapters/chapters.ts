@@ -30,7 +30,7 @@ let origin = "";
 let sourcePath = "";
 let mode: "title" | "current" | "" = "";
 let candidates: Candidate[] = [];
-type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null; url: string; skipped?: boolean };
+type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null; url: string; skipped?: boolean; source?: string };
 let inspected: ReviewedChapter[] = [];
 let approvedHosts: string[] = [];
 let isBusy = false;
@@ -184,8 +184,21 @@ async function scan(which: "title" | "current"): Promise<void> {
         }
         invalidateReview(); renderList();
         sourceStatus.textContent = "Source: " + origin + ". Keep its tab open.";
-        setStatus((result.truncated || candidates.length >= 200 ? "List limit reached; results may be incomplete. " : "") +
-            "Collected " + candidates.length + " candidate(s). Select chapters and confirm their order.");
+        let found = "Collected " + candidates.length + " candidate(s). Select chapters and confirm their order.";
+        if (result.source === "route-data") {
+            // The site's own series chain, read part by part, oldest first: the
+            // order is known, so it is preset (still visible and changeable).
+            if (result.ordered === "oldest" && order.value === "") order.value = "oldest";
+            found = "Read " + (result.chapters || []).length + " linked part(s) of this series from the site's own page data (oldest first)." +
+                (result.seriesBroken ? " One linked part could not be read, so the series may be incomplete." : "") +
+                " Select the chapters to save." +
+                (result.referrerHint && !el<HTMLInputElement>("sendReferrer").checked
+                    ? " Other downloaders for this site send its address as the referrer for images; if pages fail, tick that option in step 02." : "");
+            log("info", "scan", "Series read from the site's page data", {
+                parts: (result.chapters || []).length, truncated: !!result.truncated, broken: !!result.seriesBroken
+            });
+        }
+        setStatus((result.truncated || candidates.length >= 200 ? "List limit reached; results may be incomplete. " : "") + found);
     } catch (error: any) { setStatus(error && error.message ? error.message : "Unable to scan the source tab."); }
     finally { runController = null; setBusy(false); }
 }
@@ -217,7 +230,9 @@ function renderReview(): void {
         warning.className = "warning";
         warning.textContent = "Page count does not match what the reader advertises: " + missing
             .map(chapter => chapter.label + " (found " + chapter.count + " of " + chapter.advertised + ")").join(", ") +
-            ". A top-down reader may not have loaded every page yet — open the chapter, press “Load all pages (top-down)”, then inspect again.";
+            (missing.every(chapter => chapter.source === "route-data")
+                ? ". The site's own page data disagrees with its stated total, so these archives would be incomplete — check the chapter on the site before saving."
+                : ". A top-down reader may not have loaded every page yet — open the chapter, press “Load all pages (top-down)”, then inspect again.");
         review.appendChild(warning);
     }
     const remembered = approvedHostsFor(hostMap, origin);
@@ -276,6 +291,7 @@ async function inspectSelected(): Promise<void> {
             // site's own list; say so, because no <img> element was involved.
             if (result.source === "reader-script") orderNote = "read from the reader's own embedded page list";
             if (result.source === "next-data") orderNote = "read from the page's embedded Next.js data (__NEXT_DATA__)";
+            if (result.source === "route-data") orderNote = "read from the site's own page data (React Router .data)";
             if (Number.isInteger(result.suffixChanged) && result.suffixChanged > 0) {
                 orderNote += " · full-size rule removed “" + suffix + "” from " + result.suffixChanged + " URL(s)";
             }
@@ -283,9 +299,14 @@ async function inspectSelected(): Promise<void> {
             if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
             const advertised = Number.isInteger(result.advertised) ? Number(result.advertised) : null;
             results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts,
-                orderNote: orderNote, advertised: advertised, url: chapter.url });
+                orderNote: orderNote, advertised: advertised, url: chapter.url, source: String(result.source || "") });
             if (result.source === "reader-script") {
                 log("info", "inspect", "Page list recovered from the site's embedded reader script", {
+                    label: chapter.label, pages: result.count, hosts: result.hosts
+                });
+            }
+            if (result.source === "route-data") {
+                log("info", "inspect", "Page list read from the site's React Router page data", {
                     label: chapter.label, pages: result.count, hosts: result.hosts
                 });
             }
