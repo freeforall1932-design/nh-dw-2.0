@@ -18,13 +18,15 @@ module.exports = {
     listControls: './src/content/listControls.ts',
     titleBookmark: './src/content/titleBookmark.ts',
     siteUi: './src/content/siteUi.ts',
+    universalChapterProbe: './src/content/universalChapterProbe.ts',
+    chapters: './src/chapters/chapters.ts',
     preview: './src/preview/preview.ts',
     getGalleries: './src/preview/getGalleries.ts',
     options: './src/options/options.ts',
     offscreen: './src/offscreen/offscreen.ts'
   },
   resolve: {
-    extensions: ['.ts'],
+    extensions: ['.ts', '.js', '.json'],
   },
   output: {
     filename: '[name].js',

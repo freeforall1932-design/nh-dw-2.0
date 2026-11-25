@@ -745,8 +745,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         const filterSelect = nodes.get("nhdwBmSiteFilter");
         assertEqual(filterSelect.tagName, "SELECT", "the filter is a <select>");
         const optionValues = (filterSelect.children || []).map((option) => option.value);
-        assertDeepEqual(optionValues, ["all", "nhentai", "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox"],
-            "the options are All sites plus the six known sites, in one canonical order");
+        assertDeepEqual(optionValues, ["all", "nhentai", "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox", "tailspace"],
+            "the options are All sites plus the seven known sites, in one canonical order");
         const optionLabels = (filterSelect.children || []).map((option) => option.textContent);
         assertEqual(optionLabels[0], "All sites (4)", "the All sites option carries the total count");
         assertEqual(optionLabels[1], "nhentai (2)", "a site with rows carries its own count");
@@ -873,7 +873,12 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     statusSelect.value = "done";
     statusSelect.dispatch("change");
     await wait(30);
-    assertEqual(findRows(byId("nhdwBmList")).length, 2, "the status filter shows only the done rows");
+    // 2026-11-24: "done" is the "Downloaded \u2713" view and follows HISTORY,
+    // like the green check: row 4 only SAYS done, so only row 2 shows.
+    const downloadedRows = findRows(byId("nhdwBmList"));
+    assertEqual(downloadedRows.length, 1, "the Downloaded filter shows only the rows history records");
+    assertEqual(findDeep(downloadedRows[0], "nhdwBmTitle").textContent, "Dark Room",
+        "the Downloaded filter keeps the title that is really on disk");
     statusSelect.value = "selected";
     statusSelect.dispatch("change");
     await wait(30);

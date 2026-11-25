@@ -1,6 +1,6 @@
 {
   "name": "NHentai Downloader",
-  "version": "3.14.0",
+  "version": "3.15.0",
   "description": "A chrome extension to download doujinshi from NHentai - Updated for Manifest V3",
   "icons": {
     "64": "Icon.png",
@@ -24,7 +24,8 @@
     "scripting",
     "activeTab",
     "offscreen",
-    "sidePanel"
+    "sidePanel",
+    "declarativeNetRequestWithHostAccess"
   ],
   "optional_host_permissions": [
     "https://*.nhentai.net/*"
@@ -54,7 +55,9 @@
     "https://*.hentaifox.com/*",
     "https://hitomi.la/*",
     "https://*.hitomi.la/*",
-    "https://*.gold-usergeneratedcontent.net/*"
+    "https://*.gold-usergeneratedcontent.net/*",
+    "https://tailspace.com/*",
+    "https://pics.tailspace.com/*"
   ],
   "background": {
     "service_worker": "js/background.js"

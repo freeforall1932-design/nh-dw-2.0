@@ -3,9 +3,10 @@ import ApiParsing from "../parsing/ApiParsing";
 import HtmlParsing from "../parsing/HtmlParsing";
 import Downloader from "./Downloader";
 import { errorMessage } from "../utils/utils";
-import { getSourceForUrl } from "../sources";
+import { getSourceForUrl, getConfiguredSources } from "../sources";
+import { installSiteHeaderRules } from "./siteHeaderRules";
 import { executeInTab } from "../preview/activeTabGallery";
-import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab } from "./tabImageFetch";
+import { fetchImageInPage, fetchUrlInPage, fetchUrlFromTab, tabFetchModeForUrl } from "./tabImageFetch";
 import { setImageServers } from "../sources/cdnConfig";
 import { runBatchDownload, runPagedBatchDownload, buildRetryJob, BatchHost, BatchJobOptions, cancelGallery as cancelPipelineGallery, consumeGalleryCancellation } from "../utils/batchPipeline";
 import { toGalleryKey } from "../utils/siteKeys";
@@ -59,6 +60,12 @@ installDownloadFilenameGuard();
 // registered at load so terminal events are never missed after a worker
 // restart mid-gallery. Harmless where onChanged does not exist.
 installDownloadCompletionTracker();
+
+// Site header rules (hitomi: Referer/Origin hitomi.la on this extension's own
+// requests to its image servers only). Session rules do not survive a browser
+// restart, so they are (re)installed on every worker start; idempotent, and a
+// no-op where the API is missing. See siteHeaderRules.ts for the scope.
+void installSiteHeaderRules(chrome, getConfiguredSources());
 
 // One awaitDownload relay answer is held open for at most this long; the
 // offscreen document simply asks again while the download is still running.
@@ -1204,7 +1211,15 @@ function handleOffscreenMessage(request: any, sendResponse: (response: any) => v
     if (request.action === "fetchInTab") {
         // The offscreen document cannot call chrome.scripting; the worker
         // injects the image fetch into the gallery tab (see tabImageFetch.ts).
-        executeInTab(request.tabId, fetchImageInPage, [request.url], request.world === "MAIN" ? "MAIN" : "ISOLATED")
+        // Re-check here: this injects into the user's tab, so only page
+        // images of nhentai or of an adapter that opted in are fetched, with
+        // that adapter's credentials mode (never the caller's say-so).
+        const mode = tabFetchModeForUrl(String(request.url || ""), getConfiguredSources());
+        if (mode === null || typeof request.tabId !== "number") {
+            sendResponse(null);
+            return false;
+        }
+        executeInTab(request.tabId, fetchImageInPage, [request.url, mode.credentials, mode.requiredHost], request.world === "MAIN" ? "MAIN" : "ISOLATED")
             .then((result: any) => sendResponse(result));
         return true;
     }

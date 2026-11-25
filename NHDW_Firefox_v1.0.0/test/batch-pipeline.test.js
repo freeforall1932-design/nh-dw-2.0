@@ -14,6 +14,8 @@ const {
     resetCancelledGalleries
 } = require('../build/test/utils/batchPipeline.js');
 const { extractGalleryFromHtml } = require('../build/test/parsing/GalleryEmbed.js');
+const { NhentaiRateLimitError } = require('../build/test/utils/apiAuth.js');
+const { historyRecords } = require('../build/test/utils/downloadHistory.js');
 
 function gallery(id, pretty) {
     return {
@@ -148,6 +150,19 @@ describe('resolveGalleryMetadata', () => {
         assert.ok(calls[0].url.indexOf('/api/v2/galleries/2') !== -1);
     });
 
+    it('does not bypass a keyed 429 through a tab or fallback request', async () => {
+        let calls = 0;
+        let tabCalls = 0;
+        const host = makeHost({
+            fetchImpl: async () => { calls++; return new Response('', { status: 429, headers: { 'retry-after': '120' } }); },
+            fetchUrlFromTab: async () => { tabCalls++; return null; }
+        });
+        await assert.rejects(resolveGalleryMetadata('2', { galleryMetadata: {}, apiKey: 'synthetic', sourceTabId: 7, host }),
+            error => error instanceof NhentaiRateLimitError && error.waitMs === 120000);
+        assert.strictEqual(calls, 1);
+        assert.strictEqual(tabCalls, 0);
+    });
+
     it('keyless fallback fetch has no Authorization header', async () => {
         const calls = [];
         const host = makeHost({
@@ -177,7 +192,7 @@ describe('resolveGalleryMetadata', () => {
         const host = makeHost({
             fetchImpl: async (url, init) => {
                 n++;
-                calls.push({ n: n, auth: (init && init.headers && init.headers.Authorization) || null });
+                calls.push({ n: n, auth: (init && init.headers && init.headers.Authorization) || null, redirect: init && init.redirect });
                 if (n === 1) {
                     return { ok: false, status: 500, statusText: 'nope', headers: { get: () => null }, text: async () => '' };
                 }
@@ -199,6 +214,7 @@ describe('resolveGalleryMetadata', () => {
         assert.strictEqual(result.json.title.pretty, 'Fallback');
         assert.ok(calls.length >= 2);
         assert.strictEqual(calls[calls.length - 1].auth, 'Key abc');
+        assert.strictEqual(calls[calls.length - 1].redirect, 'error');
     });
 
     it('HTML second-chance recovers a gallery when JSON parse is empty', async () => {
@@ -224,6 +240,50 @@ describe('resolveGalleryMetadata', () => {
         });
         assert.strictEqual(result.ok, true);
         assert.strictEqual(result.json.title.pretty, 'FromHtml');
+    });
+
+    it('hitomi reads galleries/{id}.js directly (the rendered page has no page list)', async () => {
+        const hash = 'a8c650cf5c18d63f50bc15c4b6c26f7f8ca9a62fed49a19896c096e7c81febc4';
+        const info = 'var galleryinfo = ' + JSON.stringify({ id: '4203493', title: 'Fixture', files: [{ hash: hash, hasavif: 1, name: '001.png' }] });
+        const urls = [];
+        let tabCalls = 0;
+        const host = makeHost({
+            fetchUrlFromTab: async () => { tabCalls++; return null; },
+            fetchImpl: async (url, init) => {
+                urls.push({ url, init });
+                return { ok: true, status: 200, statusText: 'OK', headers: { get: () => 'application/javascript' }, text: async () => info };
+            }
+        });
+        const result = await resolveGalleryMetadata('hitomi:4203493', { galleryMetadata: {}, apiKey: '', sourceTabId: 7, host });
+        assert.strictEqual(result.ok, true);
+        assert.strictEqual(result.json.id, '4203493');
+        assert.strictEqual(result.json.site, 'hitomi');
+        assert.strictEqual(result.json.images.pages.length, 1);
+        assert.deepStrictEqual(urls.map(u => u.url), ['https://ltn.gold-usergeneratedcontent.net/galleries/4203493.js']);
+        assert.strictEqual(urls[0].init.credentials, 'omit');
+        assert.strictEqual(tabCalls, 0, 'no tab round-trip needed');
+    });
+
+    it('hitomi: a blocked gallery fails at once with a clear reason, no fallback fetches', async () => {
+        const info = 'var galleryinfo = ' + JSON.stringify({ id: '4203493', title: 'Blocked', blocked: 1, files: [{ hash: 'a'.repeat(64), hasavif: 1, name: '1.png' }] });
+        const urls = [];
+        const host = makeHost({
+            fetchImpl: async (url) => { urls.push(url); return { ok: true, status: 200, statusText: 'OK', headers: { get: () => null }, text: async () => info }; }
+        });
+        const result = await resolveGalleryMetadata('hitomi:4203493', { galleryMetadata: {}, apiKey: '', host });
+        assert.strictEqual(result.ok, false);
+        assert.strictEqual(result.status, 403);
+        assert.ok(/blocked on Hitomi/.test(result.statusText));
+        assert.strictEqual(urls.length, 1, 'the gallery page is not fetched as a fallback');
+    });
+
+    it('hitomi refuses metadata for a different gallery and falls through', async () => {
+        const info = 'var galleryinfo = ' + JSON.stringify({ id: '999', title: 'Other', files: [{ hash: 'a'.repeat(64), hasavif: 1, name: '1.png' }] });
+        const host = makeHost({
+            fetchImpl: async () => ({ ok: true, status: 200, statusText: 'OK', headers: { get: () => null }, text: async () => info })
+        });
+        const result = await resolveGalleryMetadata('hitomi:4203493', { galleryMetadata: {}, apiKey: '', host });
+        assert.strictEqual(result.ok, false, 'a mismatched id is never saved under this gallery');
     });
 });
 
@@ -474,6 +534,204 @@ describe('runBatchDownload', () => {
     });
 });
 
+describe('nhentai rate limits in batches', () => {
+    afterEach(() => resetCancelledGalleries());
+    it('stops at a metadata 429 and puts unattempted titles in the retry list', async () => {
+        let requests = 0;
+        const host = makeHost({
+            fetchImpl: async () => { requests++; return new Response('', { status: 429, headers: { 'retry-after': '120' } }); }
+        });
+        const outcome = await runBatchDownload({
+            zip: {}, allDoujinshis: { '1': 'One', '2': 'Two', '3': 'Three' }, finalName: 'Batch', downloadAtEnd: true,
+            options: { apiKey: 'synthetic', site: 'nhentai', downloadSeparately: true, useZip: 'zip' }, host
+        });
+        assert.strictEqual(requests, 1);
+        assert.strictEqual(outcome.rateLimited, true);
+        assert.strictEqual(outcome.clean, false);
+        assert.strictEqual(outcome.records.length, 0);
+        assert.deepStrictEqual(outcome.failedGalleries.map(x => x.id), ['1', '2', '3']);
+        assert.match(outcome.failedGalleries[1].error, /Deferred after rate limit/);
+        const summary = host.messages.find(m => m.action === 'batchSummary');
+        assert.deepStrictEqual([summary.succeeded, summary.failed, summary.skipped, summary.total], [0, 3, 0, 3]);
+    });
+
+    it('stops after an archive 429 while retaining completed records and unattempted retries', async () => {
+        const downloads = [];
+        const host = makeHost({ downloadGallery: async job => {
+            downloads.push(job.json.id);
+            if (job.json.id === 2) throw new NhentaiRateLimitError('Server archive request', 120000);
+        } });
+        const outcome = await runBatchDownload({
+            zip: {}, allDoujinshis: { '1': 'One', '2': 'Two', '3': 'Three' }, finalName: 'Batch', downloadAtEnd: true,
+            galleryMetadata: { '1': gallery(1, 'One'), '2': gallery(2, 'Two'), '3': gallery(3, 'Three') },
+            options: { site: 'nhentai', downloadSeparately: true, useZip: 'zip', useServerArchive: true }, host
+        });
+        assert.deepStrictEqual(downloads, [1, 2]);
+        assert.strictEqual(outcome.rateLimited, true);
+        assert.deepStrictEqual(outcome.records.map(x => x.id), ['nhentai:1']);
+        assert.deepStrictEqual(outcome.failedGalleries.map(x => x.id), ['2', '3']);
+        const summary = host.messages.find(m => m.action === 'batchSummary');
+        assert.deepStrictEqual([summary.succeeded, summary.failed, summary.skipped, summary.total], [1, 2, 0, 3]);
+    });
+
+    it('respects history, forced retries and cancellations after a rate limit', async () => {
+        cancelGallery('4', 'nhentai');
+        let requests = 0;
+        const host = makeHost({ fetchImpl: async () => {
+            requests++;
+            return new Response('', { status: 429, headers: { 'retry-after': '120' } });
+        } });
+        const outcome = await runBatchDownload({
+            zip: {}, allDoujinshis: { '1': 'One', '2': 'Two', '3': 'Three', '4': 'Four' },
+            finalName: 'Batch', downloadAtEnd: true,
+            options: { site: 'nhentai', apiKey: 'synthetic', downloadSeparately: true, useZip: 'zip',
+                alreadyDownloadedIds: ['nhentai:2', 'nhentai:3'], redownloadIds: ['3'] }, host
+        });
+        assert.strictEqual(requests, 1);
+        assert.strictEqual(outcome.skipped, 1);
+        assert.deepStrictEqual(outcome.failedGalleries.map(x => x.id), ['1', '3', '4']);
+        assert.match(outcome.failedGalleries[1].error, /Deferred after rate limit/);
+        assert.match(outcome.failedGalleries[2].error, /aborted/i);
+        assert.strictEqual(isGalleryCancelled('4', 'nhentai'), false, 'the stopped batch consumes its cancellation');
+        const retry = makeHost();
+        const retried = await runBatchDownload({
+            zip: {}, allDoujinshis: { '4': 'Four' }, finalName: 'Retry', downloadAtEnd: true,
+            galleryMetadata: { '4': gallery(4, 'Four') },
+            options: { site: 'nhentai', downloadSeparately: true, useZip: 'zip' }, host: retry
+        });
+        assert.strictEqual(retry.downloads.length, 1);
+        assert.deepStrictEqual(retried.failedGalleries, []);
+    });
+
+    it('never records a partial merged batch after a metadata rate limit', async () => {
+        let requests = 0;
+        const host = makeHost({ fetchImpl: async () => {
+            requests++;
+            return new Response('', { status: 429, headers: { 'retry-after': '120' } });
+        } });
+        const outcome = await runBatchDownload({
+            zip: {}, allDoujinshis: { '1': 'One', '2': 'Two', '3': 'Three' },
+            finalName: 'Merged', downloadAtEnd: true, galleryMetadata: { '1': gallery(1, 'One') },
+            options: { site: 'nhentai', apiKey: 'synthetic', downloadSeparately: false, useZip: 'zip' }, host
+        });
+        assert.strictEqual(requests, 1);
+        assert.strictEqual(host.downloads.length, 1);
+        assert.strictEqual(host.downloads[0].zipName, null, 'partial merged contents are not saved');
+        assert.strictEqual(outcome.rateLimited, true);
+        assert.strictEqual(outcome.clean, false);
+        assert.deepStrictEqual(outcome.failedGalleries.map(x => x.id), ['2', '3']);
+        assert.deepStrictEqual(historyRecords(outcome, { effectiveSeparate: false, format: 'zip', finalName: 'Merged', archiveMasterFolder: '' }), []);
+    });
+
+    it('does not record a merged paged batch when a later listing returns 429', async () => {
+        const listings = [];
+        const host = makeHost({ fetchImpl: async url => {
+            if (String(url).includes('/search')) {
+                listings.push(String(url));
+                if (String(url).includes('page=2')) return new Response('', { status: 429, headers: { 'retry-after': '120' } });
+                return new Response('<a href="/g/11/1/"><div class="caption">One</div></a>', { status: 200 });
+            }
+            return new Response(JSON.stringify(gallery(11, 'One')), { status: 200, headers: { 'content-type': 'application/json' } });
+        } });
+        const outcome = await runPagedBatchDownload({
+            allDoujinshis: {}, pagesArr: [1, 2, 3], path: 'Merged pages', url: 'https://nhentai.net/search/?q=test',
+            options: { site: 'nhentai', downloadSeparately: false, useZip: 'zip' }, host
+        });
+        assert.strictEqual(listings.length, 2);
+        assert.strictEqual(host.downloads.length, 1);
+        assert.strictEqual(host.downloads[0].zipName, null);
+        assert.strictEqual(outcome.rateLimited, true);
+        assert.strictEqual(outcome.clean, false);
+        assert.deepStrictEqual(outcome.records, []);
+    });
+
+    it('stops a paged job cancelled while fetching instead of requesting later pages', async () => {
+        const controller = new AbortController();
+        let requests = 0;
+        const host = makeHost({
+            getAbortSignal: () => controller.signal,
+            fetchImpl: async () => {
+                requests++;
+                controller.abort();
+                host.aborted = true;
+                throw new DOMException('Cancelled', 'AbortError');
+            }
+        });
+        const outcome = await runPagedBatchDownload({
+            allDoujinshis: {}, pagesArr: [1, 2, 3], path: 'Pages', url: 'https://nhentai.net/search/?q=test',
+            options: { site: 'nhentai', downloadSeparately: false, useZip: 'zip' }, host
+        });
+        assert.strictEqual(requests, 1);
+        assert.strictEqual(outcome.clean, false);
+        assert.deepStrictEqual(outcome.records, []);
+    });
+
+    it('does not fall back or continue paged work when a tab fetch is cancelled', async () => {
+        const controller = new AbortController();
+        let tabCalls = 0;
+        let fallbackCalls = 0;
+        const host = makeHost({
+            getAbortSignal: () => controller.signal,
+            fetchUrlFromTab: async () => { tabCalls++; controller.abort(); return null; },
+            fetchImpl: async () => { fallbackCalls++; throw new Error('must not run'); }
+        });
+        const outcome = await runPagedBatchDownload({
+            allDoujinshis: {}, pagesArr: [1, 2], path: 'Pages', url: 'https://nhentai.net/search/?q=test', sourceTabId: 4,
+            options: { site: 'nhentai', downloadSeparately: true, useZip: 'zip' }, host
+        });
+        assert.strictEqual(tabCalls, 1);
+        assert.strictEqual(fallbackCalls, 0);
+        assert.strictEqual(outcome.clean, false);
+        assert.deepStrictEqual(outcome.records, []);
+    });
+
+    it('does not record a gallery or report a summary when the job aborts at completion', async () => {
+        for (const separate of [true, false]) {
+            const controller = new AbortController();
+            let downloads = 0;
+            const host = makeHost({
+                getAbortSignal: () => controller.signal,
+                downloadGallery: async () => { downloads++; controller.abort(); }
+            });
+            const outcome = await runBatchDownload({
+                zip: {}, allDoujinshis: { '1': 'One', '2': 'Two' }, finalName: 'Batch', downloadAtEnd: true,
+                galleryMetadata: { '1': gallery(1, 'One'), '2': gallery(2, 'Two') },
+                options: { site: 'nhentai', downloadSeparately: separate, useZip: 'zip' }, host
+            });
+            assert.strictEqual(downloads, 1);
+            assert.strictEqual(outcome.clean, false);
+            assert.deepStrictEqual(outcome.records, []);
+            assert.deepStrictEqual(outcome.batchKeys, []);
+            assert.strictEqual(host.messages.some(m => m.action === 'batchSummary'), false);
+        }
+    });
+
+    it('does not fetch subsequent listing pages after a listing or archive rate limit', async () => {
+        for (const stage of ['listing', 'archive']) {
+            const calls = [];
+            const host = makeHost({
+                fetchImpl: async (url) => {
+                    calls.push(String(url));
+                    if (String(url).includes('/search')) {
+                        if (stage === 'listing') return new Response('', { status: 429, headers: { 'retry-after': '120' } });
+                        return new Response('<a href="/g/11/1/"><div class="caption">One</div></a>', { status: 200 });
+                    }
+                    return new Response(JSON.stringify(gallery(11, 'One')), { status: 200, headers: { 'content-type': 'application/json' } });
+                },
+                downloadGallery: async () => { throw new NhentaiRateLimitError('Server archive request', 120000); }
+            });
+            const outcome = await runPagedBatchDownload({
+                allDoujinshis: {}, pagesArr: [1, 2], path: 'Pages', url: 'https://nhentai.net/search/?q=test',
+                options: { useZip: 'zip', downloadSeparately: true, site: 'nhentai' }, host
+            });
+            assert.strictEqual(outcome.rateLimited, true, stage);
+            assert.strictEqual(outcome.clean, false);
+            assert.strictEqual(calls.filter(url => url.includes('/search')).length, 1, stage);
+            assert.ok(host.errors.some(e => /not processed/i.test(e)), stage);
+        }
+    });
+});
+
 describe('runPagedBatchDownload', () => {
     it('parses listing HTML and downloads every card', async () => {
         const host = makeHost({
@@ -704,8 +962,9 @@ describe('job format contract (item 33)', () => {
 // ---------------------------------------------------------------------------
 
 function hitomiPage(id, title) {
-    // The real page carries a JSON blob the adapter's extractor reads
-    // (src/parsing/hitomiHtml.ts): files[] with hash + name per page.
+    // The `var galleryinfo = {...}` document the adapter's extractor reads
+    // (src/parsing/hitomiHtml.ts): files[] with hash + name per page. Live it
+    // is served as galleries/{id}.js; the extractor also finds it inside HTML.
     const info = {
         id: Number(id),
         title: title,
@@ -879,14 +1138,14 @@ describe('item 48 — a per-site job', () => {
         });
         const bare = await resolveGalleryMetadata('70007', { galleryMetadata: {}, apiKey: '', host: host, site: 'hitomi' });
         assert.strictEqual(bare.ok, true);
-        assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
+        assert.strictEqual(calls[0], 'https://ltn.gold-usergeneratedcontent.net/galleries/70007.js',
             'a bare key with a job site must use that site\'s adapter URL');
         assert.strictEqual(bare.json.site, 'hitomi');
 
         calls.length = 0;
         const composite = await resolveGalleryMetadata('hitomi:70007', { galleryMetadata: {}, apiKey: '', host: host, site: 'nhentai' });
         assert.strictEqual(composite.ok, true);
-        assert.strictEqual(calls[0], 'https://hitomi.la/galleries/70007.html',
+        assert.strictEqual(calls[0], 'https://ltn.gold-usergeneratedcontent.net/galleries/70007.js',
             'a composite key wins over a contradicting job site');
     });
 

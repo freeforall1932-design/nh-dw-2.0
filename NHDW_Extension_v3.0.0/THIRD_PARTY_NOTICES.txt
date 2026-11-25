@@ -869,3 +869,46 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+
+
+===============================================================================
+Re-implemented from published facts (nothing below is bundled or copied)
+===============================================================================
+
+The React Router page-data reader (src/utils/turboStream.ts, used by the
+chapter tool's src/utils/routeData.ts) and the built-in Tailspace site
+(src/utils/tailspaceIds.ts, src/parsing/tailspaceData.ts,
+src/sources/tailspaceSource.ts) were written for this project. No code from
+the projects below is included in the build. They are credited because the
+reader and the site adapter follow the data format and the site facts they
+document.
+
+-------------------------------------------------------------------------------
+turbo-stream 2.4.1 (data format, as bundled by react-router 7.9.0)
+License: MIT
+-------------------------------------------------------------------------------
+turbo-stream: Copyright (c) 2018-19 the devalue contributors
+(https://github.com/rich-harris/devalue/graphs/contributors).
+react-router: Copyright (c) React Training LLC 2015-2019, Remix Software Inc.
+2020-2021, Shopify Inc. 2022-2023.
+The decoder re-implements the published wire format. The test fixtures were
+produced with the turbo-stream 2.4.1 encoder (and one HTML fixture follows
+react-router 7.9.0's documented stream-into-HTML script format); the fixtures
+are synthetic data and do not include the encoder. Both are under the MIT License; see LICENSE for
+its text.
+
+-------------------------------------------------------------------------------
+Keiyoushi extensions-source, src/en/tailspace (site facts)
+License: Apache-2.0
+-------------------------------------------------------------------------------
+https://github.com/keiyoushi/extensions-source (PR #19941, merged 2026-11-01).
+Used for: Tailspace's comic data route, the page token and file type layout,
+the image host, the cover thumbnail address, and the previous/next series
+links. Facts re-implemented in TypeScript; no source code copied.
+
+-------------------------------------------------------------------------------
+cofob/memesave-bot, scraper/src_tailspace.go (site facts, second witness)
+License: none stated
+-------------------------------------------------------------------------------
+https://github.com/cofob/memesave-bot. Used only to confirm the facts above,
+plus comic.numberOfPages and the image referrer. No code used.

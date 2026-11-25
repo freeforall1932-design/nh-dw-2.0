@@ -430,8 +430,17 @@ function run(options) {
                 pageRoot.scrollTop = (pageRoot.scrollTop || 0) + step;
                 const next = scrollQueue.shift();
                 if (next) {
-                    dom.addCard(next.id, next.title || ("Title " + next.id));
-                    pageRoot.scrollHeight = (pageRoot.scrollHeight || 0) + 200;
+                    const deliver = () => {
+                        dom.addCard(next.id, next.title || ("Title " + next.id));
+                        pageRoot.scrollHeight = (pageRoot.scrollHeight || 0) + 200;
+                    };
+                    // scrollCardDelayMs models a real site: the next batch is
+                    // still loading when the bottom is reached (2026-11-24).
+                    if (options.scrollCardDelayMs > 0) {
+                        setTimeout(deliver, options.scrollCardDelayMs);
+                    } else {
+                        deliver();
+                    }
                 }
             }
         }
@@ -1287,7 +1296,9 @@ function wait(ms) {
         assert.ok(scrollBox, "the bar must offer the optional auto-scroll (item 70)");
         assert.equal(scrollBox.checked, true, "the remembered auto-scroll preference is restored");
         bar(ctx).dispatch("click");
-        await wait(3400);
+        // 2 growth rounds + HARVEST_END_IDLE_ROUNDS quiet rounds at the bottom
+        // (2026-11-24: one bottom hit is no longer the end), 700 ms apart.
+        await wait(5600);
         assert.deepEqual(selectedIds(ctx), ["111111", "222222", "333333", "444444", "555555"],
             "auto-scroll harvests the cards the page loads while it scrolls, got " + JSON.stringify(selectedIds(ctx)));
         assert.ok(ctx.scrollSteps.length >= 2, "auto-scroll really moved the page, got " + JSON.stringify(ctx.scrollSteps));
@@ -1295,6 +1306,28 @@ function wait(ms) {
             "the run stops at the end of the listing and says so, got " + JSON.stringify(statusLine(ctx).textContent));
         assert.equal(bar(ctx).textContent, "Harvest", "the control is idle again once the run stops itself");
         console.log("PASS: optional auto-scroll harvests as it scrolls and stops at the end of the page (item 70)");
+    }
+    {
+        // 2026-11-24: the next batch is still LOADING when the page bottom is
+        // reached. The old rule ended the run on that first bottom hit and lost
+        // the batch; now the run waits until the page stops growing.
+        const ctx = run({
+            ids: ["111111", "222222", "333333"],
+            settings: { bookmarkHarvestAutoScroll: true },
+            scrollCardDelayMs: 1000,
+            scrollCards: [{ id: "444444", title: "Title 4" }, { id: "555555", title: "Title 5" }]
+        });
+        await wait(80);
+        bar(ctx).dispatch("click");
+        await wait(2500);
+        assert.equal(bar(ctx).textContent, "Stop harvest",
+            "a run at the bottom whose next batch is still loading must keep going, got " + JSON.stringify(statusLine(ctx).textContent));
+        await wait(4000);
+        assert.deepEqual(selectedIds(ctx), ["111111", "222222", "333333", "444444", "555555"],
+            "the late batch is collected, not cut off at the first bottom hit, got " + JSON.stringify(selectedIds(ctx)));
+        assert.ok(/5 collected . reached the end of the page$/.test(statusLine(ctx).textContent),
+            "the run still ends by itself once the page stops growing, got " + JSON.stringify(statusLine(ctx).textContent));
+        console.log("PASS: auto-scroll waits for a slow next batch at the bottom before calling it the end (2026-11-24)");
     }
     {
         // Reload survival: the collected cards come back with the page, are

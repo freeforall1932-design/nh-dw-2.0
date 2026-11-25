@@ -92,11 +92,18 @@ the rendered reader; no static whole-title inspection.** If a capture shows the
 reader is canvas/background-image based, the answer is "not supported", not a
 workaround.
 
-### `tailspace.com` — no extension found
+### `tailspace.com` — extension found (updated 2026-11-25)
 
-Code search over the same repo (and GitHub-wide) found no Tailspace source. This is
-the site that needs a real capture: scroll mode vs gallery mode, whether page URLs
-are in the HTML, and whether anything numbers the pages.
+On 2026-10-31 code search found no Tailspace source. Keiyoushi merged one the
+next day (`src/en/tailspace`, Apache-2.0, PR #19941). An independent Go scraper,
+cofob/memesave-bot (no licence stated, so facts only), agrees with it. Each
+comic's full page list is in React Router loader data at
+`/c/<name>.data?_routes=routes/pages/comic/ComicPage`. Pages are
+`pics.tailspace.com/comics/<id>/<token>.<fileType|jpg>`, and parts link through
+`previousComic`/`nextComic`. Implemented as a page-data recipe; see
+[TAILSPACE_PLAN.md](TAILSPACE_PLAN.md). Lesson: re-run the search
+(`node tools/find-site-references.js <domain>`) before asking for a capture,
+because these catalogs move weekly.
 
 ### `mirrored.to` — nothing to learn
 
@@ -158,7 +165,7 @@ of them still assume a real-browser run.
 | --- | --- | --- | --- |
 | **sasangeyou** | **~75 %** for ordinary chapters on generic defaults | MangaThemesia base is well understood: `div#readerarea img` is inside the panel's default selector, and the `ts_reader.run` base64 fallback is now implemented. Chapter lists are plain `<a href>` rows. | A 2-minute confirmation run (does the review show images or "read from the reader's own embedded page list"). Premium chapters stay out; if a server switcher exists, that is a separate feature. |
 | **doujin.desu** | **~35–45 %** for a whole-title static read, **~70 %** for one chapter at a time via the open page | The reader API is encrypted with an hour-derived key, which we deliberately do not reproduce, so the served HTML has no page URLs. The rendered DOM path works but requires *Use open chapter* per chapter and depends on CORS for the CDN. | A capture of the rendered reader, then confirm lazy-loading behaviour. Whole-title pseudo-batch is unlikely without the decryption we refuse to do. |
-| **tailspace** | **~60–70 %** | Nothing conflicts: top-down scroll reader, hashed names, no numbering — the top-down path plus the new suffix rule is built for exactly this. | One live run (`TAILSPACE_PLAN.md`). Real blockers if it is canvas/iframe-based or the CDN has no CORS. |
+| **tailspace** | **~80 %** (was 60–70 %, 2026-11-25) | The page list now comes from the site's own React Router data, confirmed by two independent projects. The reader DOM no longer matters, and the reader path stays as a fallback. | One live run (`TAILSPACE_PLAN.md`). The remaining real blocker is CORS on `pics.tailspace.com`, which neither reference project can reveal. |
 
 **Decision taken (owner's instruction, 2026-10-31):** Desu and Sasa go on **hold**;
 Tailspace is the focus. Nothing was removed — the MangaThemesia fallback stays in

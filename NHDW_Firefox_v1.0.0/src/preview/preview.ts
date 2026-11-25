@@ -49,6 +49,18 @@ function initPopupTabs() {
         }
     };
     tabDownload.addEventListener("click", () => show("download"));
+    const chaptersButton = document.getElementById("buttonChapters");
+    if (chaptersButton) chaptersButton.addEventListener("click", () => {
+        // Firefox delta: the Full panel (index.html?sourceTabId=N in its own
+        // tab) is itself the active tab, so bind through getPreviewTab, which
+        // resolves the validated source tab there and the active tab in the
+        // ordinary popup. An extension page is never a chapter source.
+        void getPreviewTab().then((tab) => {
+            if (!tab || typeof tab.id !== "number") return;
+            if (typeof tab.url === "string" && /^(?:moz|chrome)-extension:/i.test(tab.url)) return;
+            chrome.tabs.create({ url: chrome.runtime.getURL("chapters.html") + "?tab=" + tab.id });
+        });
+    });
     tabQueue.addEventListener("click", () => show("queue"));
     tabSettings.addEventListener("click", () => show("settings"));
     // Live row updates (a card bookmarked on the page, a download settling)
@@ -207,13 +219,38 @@ const BASE_HOST_ORIGINS: string[] = [
     "https://i4.nhentai.net/*"
 ];
 
+// Tailspace (built-in site, 2026-11-25): its page data and image hosts are
+// requested together with the base hosts, but only while the open tab is on
+// Tailspace, so nhentai-only users never see a wider prompt.
+const TAILSPACE_HOST_ORIGINS: string[] = [
+    "https://tailspace.com/*",
+    "https://pics.tailspace.com/*"
+];
+
+function hostOriginsForTab(url: string): string[] {
+    return /^https:\/\/(?:www\.)?tailspace\.com(?:[/?#]|$)/i.test(url)
+        ? BASE_HOST_ORIGINS.concat(TAILSPACE_HOST_ORIGINS)
+        : BASE_HOST_ORIGINS;
+}
+
 function refreshHostNotice() {
+    try {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs: any[]) => {
+            const url = tabs && tabs[0] && typeof tabs[0].url === "string" ? tabs[0].url : "";
+            refreshHostNoticeFor(hostOriginsForTab(url));
+        });
+    } catch (_) {
+        refreshHostNoticeFor(BASE_HOST_ORIGINS);
+    }
+}
+
+function refreshHostNoticeFor(origins: string[]) {
     try {
         const permissions: any = (chrome as any).permissions;
         if (!permissions || typeof permissions.contains !== "function") {
             return;
         }
-        permissions.contains({ origins: BASE_HOST_ORIGINS }, (hasHosts: boolean) => {
+        permissions.contains({ origins: origins }, (hasHosts: boolean) => {
             if (chrome.runtime.lastError || hasHosts === true) {
                 return;
             }
@@ -221,7 +258,7 @@ function refreshHostNotice() {
             if (!notice) {
                 return;
             }
-            notice.innerHTML = message.hostGrantNotice(BASE_HOST_ORIGINS);
+            notice.innerHTML = message.hostGrantNotice(origins);
             notice.hidden = false;
             const grantButton = document.getElementById("buttonGrantHosts");
             if (!grantButton) {
@@ -236,7 +273,7 @@ function refreshHostNotice() {
                     }
                 };
                 try {
-                    const result: any = permissions.request({ origins: BASE_HOST_ORIGINS }, (ok: boolean) => {
+                    const result: any = permissions.request({ origins: origins }, (ok: boolean) => {
                         granted(!!ok && !chrome.runtime.lastError);
                     });
                     if (result && typeof result.then === "function") {

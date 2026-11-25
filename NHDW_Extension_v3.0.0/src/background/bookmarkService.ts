@@ -29,7 +29,9 @@ import {
     pagesFromGallery
 } from "../utils/bookmarkQueue";
 import { mergeImportedBookmarks } from "../utils/queueTransfer";
-import { toGalleryKey } from "../utils/siteKeys";
+import { toGalleryKey, splitGalleryKey } from "../utils/siteKeys";
+import { TAILSPACE_SITE, isTailspaceId } from "../utils/tailspaceIds";
+import { extractTailspaceGallery, tailspaceMetadataUrl } from "../parsing/tailspaceData";
 import { historyIds, readHistory, writeHistory } from "../utils/downloadHistory";
 import { fetchGalleryViaTab, getActiveNhentaiTabId } from "../preview/activeTabGallery";
 
@@ -143,10 +145,50 @@ export function markBookmarksDownloading(ids: Array<string | number>): Promise<v
 // resolver uses (src/preview/selectedGalleryResolver.ts). A failure leaves the
 // row alone: an unresolved row is still downloadable, it just shows its id.
 
+// Tailspace rows ("tailspace:<encoded slug>") need no tab: the extension holds
+// host permission for tailspace.com, and the comic's page data is one plain,
+// cookie-free request (the same one a download makes). Paced like the series
+// panel so a long paste stays well under the site's documented rate limit.
+const TAILSPACE_ENRICH_PACE_MS = 300;
+
+async function enrichTailspaceRows(keys: string[]): Promise<number> {
+    let resolved = 0;
+    for (let i = 0; i < keys.length; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, TAILSPACE_ENRICH_PACE_MS));
+        const id = splitGalleryKey(keys[i]).id;
+        let gallery: any = null;
+        try {
+            const resp = await fetch(tailspaceMetadataUrl(id), { credentials: "omit", redirect: "error", cache: "no-store" });
+            gallery = resp.ok ? extractTailspaceGallery(await resp.text()) : null;
+        } catch (_) {
+            gallery = null;
+        }
+        // The answer must be the comic that was asked for.
+        if (!gallery || gallery.id !== id) {
+            continue;
+        }
+        const patch = {
+            title: titleFromGallery(gallery, id),
+            thumbnail: thumbnailUrlFromGallery(gallery),
+            pages: pagesFromGallery(gallery)
+        };
+        await mutateBookmarks((state) => patchBookmark(state, keys[i], patch));
+        resolved++;
+    }
+    return resolved;
+}
+
 export async function enrichBookmarks(ids: Array<string | number>): Promise<{ state: BookmarkState; resolved: number; skipped: boolean }> {
+    const tailspaceKeys = (ids || []).map((id) => String(id)).filter((id) => {
+        const parts = splitGalleryKey(id);
+        return parts.site === TAILSPACE_SITE && isTailspaceId(parts.id);
+    });
+    const tailspaceResolved = tailspaceKeys.length ? await enrichTailspaceRows(tailspaceKeys) : 0;
     const wanted = (ids || []).map((id) => String(id)).filter((id) => /^[0-9]+$/.test(id));
     if (wanted.length === 0) {
-        return { state: await getBookmarkState(), resolved: 0, skipped: false };
+        const done = await getBookmarkState();
+        if (tailspaceResolved > 0) broadcastBookmarkChanged(done);
+        return { state: done, resolved: tailspaceResolved, skipped: false };
     }
     // Guarded on purpose: the Queue tab can be opened on any website, and
     // fetchGalleryViaTab injects into whatever tab it is given. With no
@@ -154,9 +196,9 @@ export async function enrichBookmarks(ids: Array<string | number>): Promise<{ st
     // better than injecting into the user's banking tab and failing there.
     const tabId = await getActiveNhentaiTabId();
     if (typeof tabId !== "number") {
-        return { state: await getBookmarkState(), resolved: 0, skipped: true };
+        return { state: await getBookmarkState(), resolved: tailspaceResolved, skipped: true };
     }
-    let resolved = 0;
+    let resolved = tailspaceResolved;
     for (const id of wanted) {
         let gallery: any = null;
         try {

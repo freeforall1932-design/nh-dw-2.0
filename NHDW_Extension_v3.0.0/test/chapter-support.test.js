@@ -389,7 +389,7 @@ describe('remembered reader settings per site', () => {
         const stored = JSON.parse(JSON.stringify(saveProfile({}, 'https://reader.example', good, 5)));
         assert.strictEqual(stored[PROFILE_STORAGE_KEY], undefined, 'the map is stored under its own key, not nested');
         assert.deepStrictEqual(profileFor(stored, 'https://reader.example'), {
-            selector: '#readerarea img', attribute: 'auto', order: 'reader', fullSizeSuffix: '', savedAt: 5
+            selector: '#readerarea img', attribute: 'auto', order: 'reader', fullSizeSuffix: '', sendReferrer: false, savedAt: 5
         });
         const tampered = JSON.parse(JSON.stringify(stored));
         tampered['https://reader.example'].selector = '';

@@ -1,0 +1,952 @@
+{
+  "fixtureType": "sanitized semantic observation; not raw HTML",
+  "sourceSite": "sasangeyou.net",
+  "captureMethod": "public title and three chapter-reader pages converted to Markdown by the page-retrieval tool",
+  "sanitization": "Titles, chapter names and all page URLs are fictional; no image bytes or original media URLs are included.",
+  "limits": {
+    "rawDomOrSelectorsVerified": false,
+    "imageBytesDownloaded": false,
+    "browserSessionTested": false,
+    "batchAvailabilityVerified": false
+  },
+  "series": {
+    "url": "https://example.test/manga/fictional-series/",
+    "title": "Fictional series",
+    "siteLabel": "Premium",
+    "advertisedTotalPages": 156,
+    "advertisedChapterCount": 3,
+    "chaptersInDisplayedOrder": [
+      {
+        "label": "Chapter 3",
+        "url": "https://example.test/fictional-chapter-3/",
+        "advertisedPages": 57
+      },
+      {
+        "label": "Chapter 2",
+        "url": "https://example.test/fictional-chapter-2/",
+        "advertisedPages": 69
+      },
+      {
+        "label": "Chapter 1",
+        "url": "https://example.test/fictional-chapter-1/",
+        "advertisedPages": 30
+      }
+    ],
+    "relatedSeries": [
+      {
+        "label": "Related series - Chapter Batch",
+        "url": "https://example.test/manga/unrelated-series/"
+      }
+    ],
+    "ownBatchLink": "not observed in converted title page"
+  },
+  "chapterOneReader": {
+    "url": "https://example.test/fictional-chapter-1/",
+    "advertisedPages": 30,
+    "displayedReaderCount": 33,
+    "imageReferences": 33,
+    "contentCdnReferences": 30,
+    "siteHostedInsertReferences": 3,
+    "referenceOrderSummary": [
+      "content page 1",
+      "two site-hosted inserts",
+      "content pages 2-30",
+      "one site-hosted insert"
+    ],
+    "serverOptions": [
+      "Server 1",
+      "Server 2"
+    ],
+    "displayModes": [
+      "Full Page",
+      "Single Page"
+    ],
+    "observedSuffixShapes": [
+      ".jpg.webp",
+      ".jpg",
+      ".png"
+    ],
+    "nextChapterUrl": "https://example.test/fictional-chapter-2/",
+    "orderedReferences": [
+      {
+        "observedIndex": 0,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-01.jpg.webp"
+      },
+      {
+        "observedIndex": 1,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/site-reference-01.jpg"
+      },
+      {
+        "observedIndex": 2,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/site-reference-02.jpg"
+      },
+      {
+        "observedIndex": 3,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-02.jpg.webp"
+      },
+      {
+        "observedIndex": 4,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-03.jpg.webp"
+      },
+      {
+        "observedIndex": 5,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-04.jpg.webp"
+      },
+      {
+        "observedIndex": 6,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-05.jpg.webp"
+      },
+      {
+        "observedIndex": 7,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-06.jpg.webp"
+      },
+      {
+        "observedIndex": 8,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-07.jpg.webp"
+      },
+      {
+        "observedIndex": 9,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-08.jpg.webp"
+      },
+      {
+        "observedIndex": 10,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-09.jpg.webp"
+      },
+      {
+        "observedIndex": 11,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-10.jpg.webp"
+      },
+      {
+        "observedIndex": 12,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-11.jpg.webp"
+      },
+      {
+        "observedIndex": 13,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-12.jpg.webp"
+      },
+      {
+        "observedIndex": 14,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-13.jpg.webp"
+      },
+      {
+        "observedIndex": 15,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-14.jpg.webp"
+      },
+      {
+        "observedIndex": 16,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-15.jpg.webp"
+      },
+      {
+        "observedIndex": 17,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-16.jpg.webp"
+      },
+      {
+        "observedIndex": 18,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-17.jpg.webp"
+      },
+      {
+        "observedIndex": 19,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-18.jpg.webp"
+      },
+      {
+        "observedIndex": 20,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-19.jpg.webp"
+      },
+      {
+        "observedIndex": 21,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-20.jpg.webp"
+      },
+      {
+        "observedIndex": 22,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-21.jpg.webp"
+      },
+      {
+        "observedIndex": 23,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-22.jpg.webp"
+      },
+      {
+        "observedIndex": 24,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-23.jpg.webp"
+      },
+      {
+        "observedIndex": 25,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-24.jpg.webp"
+      },
+      {
+        "observedIndex": 26,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-25.jpg.webp"
+      },
+      {
+        "observedIndex": 27,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-26.jpg.webp"
+      },
+      {
+        "observedIndex": 28,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-27.jpg.webp"
+      },
+      {
+        "observedIndex": 29,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-28.jpg.webp"
+      },
+      {
+        "observedIndex": 30,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-29.jpg.webp"
+      },
+      {
+        "observedIndex": 31,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-reference-30.jpg.webp"
+      },
+      {
+        "observedIndex": 32,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/site-reference-03.png"
+      }
+    ],
+    "nextLinkMatchesListedChapter": true,
+    "previousLinkIsFragmentPlaceholder": true
+  },
+  "chapterTwoReader": {
+    "url": "https://example.test/fictional-chapter-2/",
+    "advertisedPages": 69,
+    "displayedReaderCount": 72,
+    "imageReferences": 72,
+    "contentCdnReferences": 69,
+    "siteHostedInsertReferences": 3,
+    "serverOptions": [
+      "Server 1",
+      "Server 2"
+    ],
+    "displayModes": [
+      "Full Page",
+      "Single Page"
+    ],
+    "contentHostSuffixShapes": [
+      ".jpg.webp"
+    ],
+    "previousLinkMatchesListedChapter": true,
+    "nextLinkMatchesListedChapter": false,
+    "orderedReferences": [
+      {
+        "observedIndex": 0,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-01.jpg.webp"
+      },
+      {
+        "observedIndex": 1,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/chapter-2/site-reference-01.jpg"
+      },
+      {
+        "observedIndex": 2,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/chapter-2/site-reference-02.jpg"
+      },
+      {
+        "observedIndex": 3,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-02.jpg.webp"
+      },
+      {
+        "observedIndex": 4,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-03.jpg.webp"
+      },
+      {
+        "observedIndex": 5,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-04.jpg.webp"
+      },
+      {
+        "observedIndex": 6,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-05.jpg.webp"
+      },
+      {
+        "observedIndex": 7,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-06.jpg.webp"
+      },
+      {
+        "observedIndex": 8,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-07.jpg.webp"
+      },
+      {
+        "observedIndex": 9,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-08.jpg.webp"
+      },
+      {
+        "observedIndex": 10,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-09.jpg.webp"
+      },
+      {
+        "observedIndex": 11,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-10.jpg.webp"
+      },
+      {
+        "observedIndex": 12,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-11.jpg.webp"
+      },
+      {
+        "observedIndex": 13,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-12.jpg.webp"
+      },
+      {
+        "observedIndex": 14,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-13.jpg.webp"
+      },
+      {
+        "observedIndex": 15,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-14.jpg.webp"
+      },
+      {
+        "observedIndex": 16,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-15.jpg.webp"
+      },
+      {
+        "observedIndex": 17,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-16.jpg.webp"
+      },
+      {
+        "observedIndex": 18,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-17.jpg.webp"
+      },
+      {
+        "observedIndex": 19,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-18.jpg.webp"
+      },
+      {
+        "observedIndex": 20,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-19.jpg.webp"
+      },
+      {
+        "observedIndex": 21,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-20.jpg.webp"
+      },
+      {
+        "observedIndex": 22,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-21.jpg.webp"
+      },
+      {
+        "observedIndex": 23,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-22.jpg.webp"
+      },
+      {
+        "observedIndex": 24,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-23.jpg.webp"
+      },
+      {
+        "observedIndex": 25,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-24.jpg.webp"
+      },
+      {
+        "observedIndex": 26,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-25.jpg.webp"
+      },
+      {
+        "observedIndex": 27,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-26.jpg.webp"
+      },
+      {
+        "observedIndex": 28,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-27.jpg.webp"
+      },
+      {
+        "observedIndex": 29,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-28.jpg.webp"
+      },
+      {
+        "observedIndex": 30,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-29.jpg.webp"
+      },
+      {
+        "observedIndex": 31,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-30.jpg.webp"
+      },
+      {
+        "observedIndex": 32,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-31.jpg.webp"
+      },
+      {
+        "observedIndex": 33,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-32.jpg.webp"
+      },
+      {
+        "observedIndex": 34,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-33.jpg.webp"
+      },
+      {
+        "observedIndex": 35,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-34.jpg.webp"
+      },
+      {
+        "observedIndex": 36,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-35.jpg.webp"
+      },
+      {
+        "observedIndex": 37,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-36.jpg.webp"
+      },
+      {
+        "observedIndex": 38,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-37.jpg.webp"
+      },
+      {
+        "observedIndex": 39,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-38.jpg.webp"
+      },
+      {
+        "observedIndex": 40,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-39.jpg.webp"
+      },
+      {
+        "observedIndex": 41,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-40.jpg.webp"
+      },
+      {
+        "observedIndex": 42,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-41.jpg.webp"
+      },
+      {
+        "observedIndex": 43,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-42.jpg.webp"
+      },
+      {
+        "observedIndex": 44,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-43.jpg.webp"
+      },
+      {
+        "observedIndex": 45,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-44.jpg.webp"
+      },
+      {
+        "observedIndex": 46,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-45.jpg.webp"
+      },
+      {
+        "observedIndex": 47,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-46.jpg.webp"
+      },
+      {
+        "observedIndex": 48,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-47.jpg.webp"
+      },
+      {
+        "observedIndex": 49,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-48.jpg.webp"
+      },
+      {
+        "observedIndex": 50,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-49.jpg.webp"
+      },
+      {
+        "observedIndex": 51,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-50.jpg.webp"
+      },
+      {
+        "observedIndex": 52,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-51.jpg.webp"
+      },
+      {
+        "observedIndex": 53,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-52.jpg.webp"
+      },
+      {
+        "observedIndex": 54,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-53.jpg.webp"
+      },
+      {
+        "observedIndex": 55,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-54.jpg.webp"
+      },
+      {
+        "observedIndex": 56,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-55.jpg.webp"
+      },
+      {
+        "observedIndex": 57,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-56.jpg.webp"
+      },
+      {
+        "observedIndex": 58,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-57.jpg.webp"
+      },
+      {
+        "observedIndex": 59,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-58.jpg.webp"
+      },
+      {
+        "observedIndex": 60,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-59.jpg.webp"
+      },
+      {
+        "observedIndex": 61,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-60.jpg.webp"
+      },
+      {
+        "observedIndex": 62,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-61.jpg.webp"
+      },
+      {
+        "observedIndex": 63,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-62.jpg.webp"
+      },
+      {
+        "observedIndex": 64,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-63.jpg.webp"
+      },
+      {
+        "observedIndex": 65,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-64.jpg.webp"
+      },
+      {
+        "observedIndex": 66,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-65.jpg.webp"
+      },
+      {
+        "observedIndex": 67,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-66.jpg.webp"
+      },
+      {
+        "observedIndex": 68,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-67.jpg.webp"
+      },
+      {
+        "observedIndex": 69,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-68.jpg.webp"
+      },
+      {
+        "observedIndex": 70,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-2/chapter-reference-69.jpg.webp"
+      },
+      {
+        "observedIndex": 71,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/chapter-2/site-reference-03.png"
+      }
+    ]
+  },
+  "chapterThreeReader": {
+    "url": "https://example.test/fictional-chapter-3/",
+    "advertisedPages": 57,
+    "displayedReaderCount": 61,
+    "imageReferences": 61,
+    "contentCdnReferences": 58,
+    "siteHostedInsertReferences": 3,
+    "serverOptions": [
+      "Server 1",
+      "Server 2"
+    ],
+    "displayModes": [
+      "Full Page",
+      "Single Page"
+    ],
+    "contentHostSuffixShapes": [
+      ".jpg.webp",
+      ".jpg"
+    ],
+    "previousLinkMatchesListedChapter": false,
+    "nextLinkMatchesListedChapter": false,
+    "orderedReferences": [
+      {
+        "observedIndex": 0,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-01.jpg.webp"
+      },
+      {
+        "observedIndex": 1,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/chapter-3/site-reference-01.jpg"
+      },
+      {
+        "observedIndex": 2,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/chapter-3/site-reference-02.jpg"
+      },
+      {
+        "observedIndex": 3,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-02.jpg.webp"
+      },
+      {
+        "observedIndex": 4,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-03.jpg"
+      },
+      {
+        "observedIndex": 5,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-04.jpg.webp"
+      },
+      {
+        "observedIndex": 6,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-05.jpg"
+      },
+      {
+        "observedIndex": 7,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-06.jpg.webp"
+      },
+      {
+        "observedIndex": 8,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-07.jpg.webp"
+      },
+      {
+        "observedIndex": 9,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-08.jpg"
+      },
+      {
+        "observedIndex": 10,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-09.jpg"
+      },
+      {
+        "observedIndex": 11,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-10.jpg"
+      },
+      {
+        "observedIndex": 12,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-11.jpg"
+      },
+      {
+        "observedIndex": 13,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-12.jpg.webp"
+      },
+      {
+        "observedIndex": 14,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-13.jpg.webp"
+      },
+      {
+        "observedIndex": 15,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-14.jpg.webp"
+      },
+      {
+        "observedIndex": 16,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-15.jpg.webp"
+      },
+      {
+        "observedIndex": 17,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-16.jpg"
+      },
+      {
+        "observedIndex": 18,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-17.jpg"
+      },
+      {
+        "observedIndex": 19,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-18.jpg"
+      },
+      {
+        "observedIndex": 20,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-19.jpg.webp"
+      },
+      {
+        "observedIndex": 21,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-20.jpg.webp"
+      },
+      {
+        "observedIndex": 22,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-21.jpg.webp"
+      },
+      {
+        "observedIndex": 23,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-22.jpg"
+      },
+      {
+        "observedIndex": 24,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-23.jpg"
+      },
+      {
+        "observedIndex": 25,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-24.jpg"
+      },
+      {
+        "observedIndex": 26,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-25.jpg"
+      },
+      {
+        "observedIndex": 27,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-26.jpg.webp"
+      },
+      {
+        "observedIndex": 28,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-27.jpg.webp"
+      },
+      {
+        "observedIndex": 29,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-28.jpg"
+      },
+      {
+        "observedIndex": 30,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-29.jpg.webp"
+      },
+      {
+        "observedIndex": 31,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-30.jpg.webp"
+      },
+      {
+        "observedIndex": 32,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-31.jpg"
+      },
+      {
+        "observedIndex": 33,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-32.jpg.webp"
+      },
+      {
+        "observedIndex": 34,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-33.jpg"
+      },
+      {
+        "observedIndex": 35,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-34.jpg.webp"
+      },
+      {
+        "observedIndex": 36,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-35.jpg.webp"
+      },
+      {
+        "observedIndex": 37,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-36.jpg"
+      },
+      {
+        "observedIndex": 38,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-37.jpg"
+      },
+      {
+        "observedIndex": 39,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-38.jpg.webp"
+      },
+      {
+        "observedIndex": 40,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-39.jpg.webp"
+      },
+      {
+        "observedIndex": 41,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-40.jpg"
+      },
+      {
+        "observedIndex": 42,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-41.jpg.webp"
+      },
+      {
+        "observedIndex": 43,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-42.jpg.webp"
+      },
+      {
+        "observedIndex": 44,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-43.jpg.webp"
+      },
+      {
+        "observedIndex": 45,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-44.jpg.webp"
+      },
+      {
+        "observedIndex": 46,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-45.jpg"
+      },
+      {
+        "observedIndex": 47,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-46.jpg.webp"
+      },
+      {
+        "observedIndex": 48,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-47.jpg.webp"
+      },
+      {
+        "observedIndex": 49,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-48.jpg.webp"
+      },
+      {
+        "observedIndex": 50,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-49.jpg.webp"
+      },
+      {
+        "observedIndex": 51,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-50.jpg"
+      },
+      {
+        "observedIndex": 52,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-51.jpg.webp"
+      },
+      {
+        "observedIndex": 53,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-52.jpg.webp"
+      },
+      {
+        "observedIndex": 54,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-53.jpg.webp"
+      },
+      {
+        "observedIndex": 55,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-54.jpg.webp"
+      },
+      {
+        "observedIndex": 56,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-55.jpg.webp"
+      },
+      {
+        "observedIndex": 57,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-56.jpg.webp"
+      },
+      {
+        "observedIndex": 58,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-57.jpg"
+      },
+      {
+        "observedIndex": 59,
+        "originClass": "content-host-reference",
+        "url": "https://example.test/reader/chapter-3/chapter-reference-58.jpg"
+      },
+      {
+        "observedIndex": 60,
+        "originClass": "site-hosted-reference",
+        "url": "https://example.test/reader/chapter-3/site-reference-03.png"
+      }
+    ]
+  }
+}

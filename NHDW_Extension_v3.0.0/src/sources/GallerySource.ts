@@ -11,6 +11,12 @@ export interface SiteAdapter {
     getApiUrl?(id: string): string;
     extractGallery?(htmlOrJson: string, url?: string): any | null;
     extractReaderImage?(html: string): string | null;
+    /**
+     * Why extractGallery returned null for this text, in words the user can
+     * act on ("the site says this comic does not exist"), or "" when unknown.
+     * Shown in the panel instead of a generic error (tailspace).
+     */
+    explainExtractFailure?(text: string): string;
     getImageUrls(mediaId: string, filename: string, extra?: any): string[];
     getImageHosts?(): string[];
     getAllowedPathRegex?(): RegExp;
@@ -22,6 +28,30 @@ export interface SiteAdapter {
     // never a URL list.
     getFallbackImageUrls?(mediaId: string, filename: string): string[];
     needsTabFetch?(): boolean;
+    // Optional, used by hitomi only (the other sites leave these undefined and
+    // behave exactly as before):
+    // * getMetadataUrl — a direct metadata document parsed by extractGallery,
+    //   tried before the open tab's HTML (hitomi's rendered page has no page list).
+    getMetadataUrl?(id: string): string;
+    // * prepareDownload — async setup before page URLs are built (hitomi: gg.js).
+    prepareDownload?(fetchImpl: (url: string, init?: any) => Promise<any>, signal?: AbortSignal | null): Promise<void>;
+    // * fetchImagesThroughTab — try the open tab for page images, validated
+    //   against this adapter's getImageHosts()/getAllowedPathRegex().
+    fetchImagesThroughTab?(): boolean;
+    /**
+     * Site host the open tab must be on for the in-tab image fetch to help
+     * (its Referer/Origin are what the image servers check). In another site's
+     * tab the in-tab fetch is skipped and the extension's own fetch is used.
+     */
+    getTabSiteHost?(): string;
+    /**
+     * Referer/Origin the site's image servers require (origin "" = send no
+     * Origin header, only the Referer). The service worker
+     * installs a session header rule that adds them to THIS extension's own
+     * requests to `domains` only (never the user's browsing), so downloads work
+     * from any tab or with none open. See background/siteHeaderRules.ts.
+     */
+    getImageRequestContext?(): { domains: string[]; referer: string; origin: string };
 }
 
 export type GallerySource = SiteAdapter;

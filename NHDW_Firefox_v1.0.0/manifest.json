@@ -1,6 +1,6 @@
 {
   "name": "NHentai Downloader",
-  "version": "1.6.0",
+  "version": "1.8.0",
   "description": "A Firefox extension to download doujinshi from NHentai - Firefox port of the Chrome Manifest V3 extension, with a website-embedded UI on nhentai and a portrait/mobile-ready layout for Firefox for Android",
   "icons": {
     "48": "Icon-48.png",
@@ -22,7 +22,9 @@
     "tabs",
     "storage",
     "alarms",
-    "scripting"
+    "scripting",
+    "activeTab",
+    "declarativeNetRequestWithHostAccess"
   ],
   "optional_host_permissions": [
     "https://*.nhentai.net/*"
@@ -52,7 +54,9 @@
     "https://*.hentaifox.com/*",
     "https://hitomi.la/*",
     "https://*.hitomi.la/*",
-    "https://*.gold-usergeneratedcontent.net/*"
+    "https://*.gold-usergeneratedcontent.net/*",
+    "https://tailspace.com/*",
+    "https://pics.tailspace.com/*"
   ],
   "background": {
     "scripts": ["js/background.js"]

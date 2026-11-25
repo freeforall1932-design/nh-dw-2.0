@@ -18,15 +18,18 @@ const assert = require("node:assert/strict");
 const {
     HARVEST_INTERVAL_MS,
     HARVEST_MAX_ITEMS,
+    HARVEST_END_IDLE_ROUNDS,
     HARVEST_MAX_ROUNDS,
     HARVEST_STORAGE_KEY,
     emptyHarvestState,
     harvestAddCards,
+    harvestReachedEnd,
     harvestShouldContinue,
     harvestSummary,
     isHarvestRun,
     mergeHarvestIntoSelection,
     nextHarvestRound,
+    noteHarvestProgress,
     selectionKeyMatchesSite,
     normalizeHarvestState,
     startHarvest,
@@ -124,11 +127,18 @@ describe("live-session harvest (item 70)", () => {
         assert.strictEqual(restored.active, false);
         assert.deepStrictEqual(normalizeHarvestState(null), emptyHarvestState());
         assert.deepStrictEqual(normalizeHarvestState({ cards: "nope" }).cards, []);
-        // Merging keeps the harvest's order in front and never duplicates.
+        // Merging keeps what was already ticked in front (2026-11-24), then the
+        // harvest in collection order, and never duplicates.
         const merged = mergeHarvestIntoSelection(restored, ["nhentai:5", "nhentai:9"]);
         assert.deepStrictEqual(merged, ["nhentai:5", "nhentai:9"]);
-        const fresh = mergeHarvestIntoSelection(harvestAddCards(emptyHarvestState(), cards(["7", "8"])).state, ["nhentai:9"]);
-        assert.deepStrictEqual(fresh, ["nhentai:7", "nhentai:8", "nhentai:9"]);
+        const harvested = harvestAddCards(emptyHarvestState(), cards(["7", "8"])).state;
+        const fresh = mergeHarvestIntoSelection(harvested, ["nhentai:9"]);
+        assert.deepStrictEqual(fresh, ["nhentai:9", "nhentai:7", "nhentai:8"]);
+        // A ticked title the harvest also found keeps its ticked position.
+        assert.deepStrictEqual(mergeHarvestIntoSelection(harvested, ["nhentai:8", "nhentai:9"]),
+            ["nhentai:8", "nhentai:9", "nhentai:7"]);
+        // Merging twice (a resume) changes nothing.
+        assert.deepStrictEqual(mergeHarvestIntoSelection(harvested, fresh), fresh);
         // The page's selection is stamped with ONE site, so the adapter keeps
         // only the keys this page owns: the same number elsewhere is a
         // different title, and a bare key reads as the default site.
@@ -136,5 +146,37 @@ describe("live-session harvest (item 70)", () => {
         assert.strictEqual(selectionKeyMatchesSite("hitomi:7", "nhentai"), false);
         assert.strictEqual(selectionKeyMatchesSite("7", "nhentai"), true);
         assert.strictEqual(selectionKeyMatchesSite("7", "hitomi"), false);
+    });
+    it("ends at the page bottom only after the page stops growing (2026-11-24)", () => {
+        assert.ok(HARVEST_END_IDLE_ROUNDS >= 2, "one bottom hit must never be the end");
+        assert.ok(HARVEST_MAX_ROUNDS >= 120, "the round cap must not end a big listing early");
+        let state = startHarvest(harvestAddCards(emptyHarvestState(), cards(["1", "2"])).state, true);
+        assert.strictEqual(state.idleRounds, 0);
+        // Not at the bottom: never idle, whatever the count does.
+        state = noteHarvestProgress(state, false);
+        assert.strictEqual(state.idleRounds, 0);
+        // At the bottom with nothing new: idle climbs, but one hit is not the end.
+        state = noteHarvestProgress(state, true);
+        assert.strictEqual(state.idleRounds, 1);
+        assert.strictEqual(harvestReachedEnd(state), false);
+        assert.match(harvestSummary(state), /waiting for the page to load more/);
+        // The site delivers its next batch while we wait: the count resets.
+        state = harvestAddCards(state, cards(["3", "4"])).state;
+        state = noteHarvestProgress(state, true);
+        assert.strictEqual(state.idleRounds, 0);
+        assert.strictEqual(harvestReachedEnd(state), false);
+        // Then nothing more arrives: the run ends after exactly N idle rounds.
+        for (let i = 1; i < HARVEST_END_IDLE_ROUNDS; i++) {
+            state = noteHarvestProgress(state, true);
+            assert.strictEqual(harvestReachedEnd(state), false, "ended early at idle round " + i);
+        }
+        state = noteHarvestProgress(state, true);
+        assert.strictEqual(harvestReachedEnd(state), true);
+        // A fresh start forgets the old idle count; an old stored state reads 0.
+        const restarted = startHarvest(state, true);
+        assert.strictEqual(restarted.idleRounds, 0);
+        assert.strictEqual(restarted.lastCount, 4);
+        assert.strictEqual(normalizeHarvestState({ cards: [] }).idleRounds, 0);
+        assert.strictEqual(normalizeHarvestState({ cards: [], idleRounds: "x" }).idleRounds, 0);
     });
 });

@@ -4,6 +4,7 @@ import { imhentaiSource } from "./imhentaiSource";
 import { hentaienvySource } from "./hentaienvySource";
 import { hentaifoxSource } from "./hentaifoxSource";
 import { hitomiSource } from "./hitomiSource";
+import { tailspaceSource } from "./tailspaceSource";
 
 const sources: SiteAdapter[] = [
     clearnetSource,
@@ -11,7 +12,8 @@ const sources: SiteAdapter[] = [
     imhentaiSource,
     hentaienvySource,
     hentaifoxSource,
-    hitomiSource
+    hitomiSource,
+    tailspaceSource
 ];
 
 export function registerSource(source: SiteAdapter): void {
@@ -66,5 +68,6 @@ export {
     imhentaiSource,
     hentaienvySource,
     hentaifoxSource,
-    hitomiSource
+    hitomiSource,
+    tailspaceSource
 };

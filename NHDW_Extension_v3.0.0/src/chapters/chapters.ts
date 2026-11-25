@@ -30,7 +30,7 @@ let origin = "";
 let sourcePath = "";
 let mode: "title" | "current" | "" = "";
 let candidates: Candidate[] = [];
-type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null; url: string; skipped?: boolean };
+type ReviewedChapter = InspectedUniversalChapter & { orderNote?: string; advertised?: number | null; url: string; skipped?: boolean; source?: string };
 let inspected: ReviewedChapter[] = [];
 let approvedHosts: string[] = [];
 let isBusy = false;
@@ -184,8 +184,21 @@ async function scan(which: "title" | "current"): Promise<void> {
         }
         invalidateReview(); renderList();
         sourceStatus.textContent = "Source: " + origin + ". Keep its tab open.";
-        setStatus((result.truncated || candidates.length >= 200 ? "List limit reached; results may be incomplete. " : "") +
-            "Collected " + candidates.length + " candidate(s). Select chapters and confirm their order.");
+        let found = "Collected " + candidates.length + " candidate(s). Select chapters and confirm their order.";
+        if (result.source === "route-data") {
+            // The site's own series chain, read part by part, oldest first: the
+            // order is known, so it is preset (still visible and changeable).
+            if (result.ordered === "oldest" && order.value === "") order.value = "oldest";
+            found = "Read " + (result.chapters || []).length + " linked part(s) of this series from the site's own page data (oldest first)." +
+                (result.seriesBroken ? " One linked part could not be read, so the series may be incomplete." : "") +
+                " Select the chapters to save." +
+                (result.referrerHint && !el<HTMLInputElement>("sendReferrer").checked
+                    ? " Other downloaders for this site send its address as the referrer for images; if pages fail, tick that option in step 02." : "");
+            log("info", "scan", "Series read from the site's page data", {
+                parts: (result.chapters || []).length, truncated: !!result.truncated, broken: !!result.seriesBroken
+            });
+        }
+        setStatus((result.truncated || candidates.length >= 200 ? "List limit reached; results may be incomplete. " : "") + found);
     } catch (error: any) { setStatus(error && error.message ? error.message : "Unable to scan the source tab."); }
     finally { runController = null; setBusy(false); }
 }
@@ -217,7 +230,9 @@ function renderReview(): void {
         warning.className = "warning";
         warning.textContent = "Page count does not match what the reader advertises: " + missing
             .map(chapter => chapter.label + " (found " + chapter.count + " of " + chapter.advertised + ")").join(", ") +
-            ". A top-down reader may not have loaded every page yet — open the chapter, press “Load all pages (top-down)”, then inspect again.";
+            (missing.every(chapter => chapter.source === "route-data")
+                ? ". The site's own page data disagrees with its stated total, so these archives would be incomplete — check the chapter on the site before saving."
+                : ". A top-down reader may not have loaded every page yet — open the chapter, press “Load all pages (top-down)”, then inspect again.");
         review.appendChild(warning);
     }
     const remembered = approvedHostsFor(hostMap, origin);
@@ -275,6 +290,8 @@ async function inspectSelected(): Promise<void> {
             // A page list recovered from the reader's embedded script is the
             // site's own list; say so, because no <img> element was involved.
             if (result.source === "reader-script") orderNote = "read from the reader's own embedded page list";
+            if (result.source === "next-data") orderNote = "read from the page's embedded Next.js data (__NEXT_DATA__)";
+            if (result.source === "route-data") orderNote = "read from the site's own page data (React Router .data)";
             if (Number.isInteger(result.suffixChanged) && result.suffixChanged > 0) {
                 orderNote += " · full-size rule removed “" + suffix + "” from " + result.suffixChanged + " URL(s)";
             }
@@ -282,9 +299,19 @@ async function inspectSelected(): Promise<void> {
             if (Array.isArray(result.preview) && result.preview.length) orderNote += ": " + result.preview.join(", ");
             const advertised = Number.isInteger(result.advertised) ? Number(result.advertised) : null;
             results.push({ id: chapter.id, label: chapter.label, count: result.count, hosts: result.hosts,
-                orderNote: orderNote, advertised: advertised, url: chapter.url });
+                orderNote: orderNote, advertised: advertised, url: chapter.url, source: String(result.source || "") });
             if (result.source === "reader-script") {
                 log("info", "inspect", "Page list recovered from the site's embedded reader script", {
+                    label: chapter.label, pages: result.count, hosts: result.hosts
+                });
+            }
+            if (result.source === "route-data") {
+                log("info", "inspect", "Page list read from the site's React Router page data", {
+                    label: chapter.label, pages: result.count, hosts: result.hosts
+                });
+            }
+            if (result.source === "next-data") {
+                log("info", "inspect", "Page list recovered from the page's embedded Next.js data", {
                     label: chapter.label, pages: result.count, hosts: result.hosts
                 });
             }
@@ -369,6 +396,7 @@ async function download(): Promise<void> {
     const retry = el<HTMLInputElement>("retry").checked;
     const remember = el<HTMLInputElement>("rememberHosts").checked;
     const hostCopy = approvedHosts.slice();
+    const sendReferrer = el<HTMLInputElement>("sendReferrer").checked;
     const title = titleInput.value || "Title";
     const titleKey = progressTitleKey(origin, title);
     const chapters = inspected.filter(chapter => !chapter.skipped);
@@ -380,14 +408,14 @@ async function download(): Promise<void> {
     }
     log("info", "download", "Batch started", {
         origin: origin, title: title, chapters: chapters.length, format: format,
-        salvage: salvagePartial, retry: retry, hosts: hostCopy, remembered: remember
+        salvage: salvagePartial, retry: retry, hosts: hostCopy, remembered: remember, sendReferrer: sendReferrer
     });
     const controller = new AbortController();
     runController = controller; savedCount = 0; setBusy(true);
     try {
         const result: UniversalBatchResult = await runUniversalChapterBatch(chapters, title, format, {
             getPage: async (id, index): Promise<UniversalPagePayload> => {
-                const answer = await send("page", { origin: origin, id: id, index: index, approvedHosts: hostCopy });
+                const answer = await send("page", { origin: origin, id: id, index: index, approvedHosts: hostCopy, sendReferrer: sendReferrer });
                 return { base64: answer.base64, extension: answer.extension, size: answer.size };
             },
             save: saveBlob,
@@ -530,7 +558,8 @@ function refreshProfileHint(): void {
     hint.textContent = !origin ? "No source site selected yet."
         : saved
             ? "Reader settings saved for " + origin + ": selector “" + saved.selector + "”, attribute " + saved.attribute +
-              ", order " + saved.order + (saved.fullSizeSuffix ? ", suffix " + saved.fullSizeSuffix : "") + "."
+              ", order " + saved.order + (saved.fullSizeSuffix ? ", suffix " + saved.fullSizeSuffix : "") +
+              (saved.sendReferrer ? ", sends referrer" : "") + "."
             : "No reader settings are saved for " + origin + " yet.";
 }
 /** Prefill the panel from this site's profile, without touching anything else. */
@@ -541,10 +570,11 @@ function applyProfile(): void {
     el<HTMLSelectElement>("imageAttribute").value = saved.attribute;
     el<HTMLSelectElement>("pageOrder").value = saved.order;
     el<HTMLInputElement>("fullSizeSuffix").value = saved.fullSizeSuffix;
+    el<HTMLInputElement>("sendReferrer").checked = saved.sendReferrer;
     refreshProfileHint();
     log("info", "profile", "Reader settings loaded for this site", {
         origin: origin, selector: saved.selector, attribute: saved.attribute, order: saved.order,
-        suffix: saved.fullSizeSuffix || null
+        suffix: saved.fullSizeSuffix || null, sendReferrer: saved.sendReferrer
     });
 }
 function rememberSettingsHere(): void {
@@ -553,7 +583,8 @@ function rememberSettingsHere(): void {
         selector: el<HTMLInputElement>("imageSelector").value,
         attribute: el<HTMLSelectElement>("imageAttribute").value,
         order: el<HTMLSelectElement>("pageOrder").value,
-        fullSizeSuffix: el<HTMLInputElement>("fullSizeSuffix").value
+        fullSizeSuffix: el<HTMLInputElement>("fullSizeSuffix").value,
+        sendReferrer: el<HTMLInputElement>("sendReferrer").checked
     };
     const check = checkProfile(candidate);
     if (!check.ok) { setStatus(String(check.reason)); return; }
@@ -562,7 +593,8 @@ function rememberSettingsHere(): void {
     refreshProfileHint();
     log("info", "profile", "Reader settings saved for this site", {
         origin: origin, selector: candidate.selector, attribute: candidate.attribute,
-        order: candidate.order, suffix: candidate.fullSizeSuffix || null, profiles: Object.keys(profileMap).length
+        order: candidate.order, suffix: candidate.fullSizeSuffix || null, sendReferrer: candidate.sendReferrer,
+        profiles: Object.keys(profileMap).length
     });
     setStatus("Saved these reader settings for " + origin + ". They will be filled in automatically next time.");
 }
@@ -766,10 +798,11 @@ async function runBenchmark(): Promise<void> {
             }), 20000, "Reading page images");
             const hosts = Array.isArray(reader.hosts) ? reader.hosts : [];
             const advertised = Number.isInteger(reader.advertised) ? " of " + reader.advertised + " advertised" : "";
-            note("Reader: " + reader.count + " page image(s)" + advertised + " on " + hosts.length + " host(s) in " + elapsed() + " ms.");
+            const sourceNote = reader.source === "next-data" ? " (from embedded Next.js data)" : reader.source === "reader-script" ? " (from embedded reader script)" : "";
+            note("Reader: " + reader.count + " page image(s)" + advertised + sourceNote + " on " + hosts.length + " host(s) in " + elapsed() + " ms.");
             log("info", "benchmark", "Reader inspected", {
                 ms: elapsed(), pages: reader.count, advertised: reader.advertised, hosts: hosts,
-                order: reader.order, differs: !!reader.readerOrderDiffers, preview: reader.preview
+                order: reader.order, differs: !!reader.readerOrderDiffers, preview: reader.preview, source: reader.source
             });
         } catch (error: any) {
             note("Reader: no usable page images on this page (" + (error && error.message ? error.message : "unknown reason") + ").");
@@ -790,12 +823,13 @@ async function runBenchmark(): Promise<void> {
         } else {
             const fetchBegan = timed();
             try {
-                const page: any = await within(send("page", { origin: pageOrigin, id: "benchmark", index: index, approvedHosts: approved }),
+                const page: any = await within(send("page", { origin: pageOrigin, id: "benchmark", index: index, approvedHosts: approved,
+                    sendReferrer: el<HTMLInputElement>("sendReferrer").checked }),
                     45000, "Fetching one page image");
                 note("Page image: " + Math.round(Number(page.size || 0) / 1024) + " KB, " + page.width + "×" + page.height + ", " +
                     page.extension + " from " + page.pageHost + " in " + fetchBegan() + " ms.");
                 log("info", "benchmark", "Page image fetched", {
-                    ms: fetchBegan(), bytes: page.size, width: page.width, height: page.height,
+                    ms: fetchBegan(), sendReferrer: el<HTMLInputElement>("sendReferrer").checked, bytes: page.size, width: page.width, height: page.height,
                     extension: page.extension, host: page.pageHost
                 });
             } catch (error: any) {

@@ -1,24 +1,52 @@
-// Unit tests for the one-shot server archive client (ArchiveDownload.ts).
-// Contract source: nhentai API v2 OpenAPI spec — POST
-// /api/v2/galleries/{id}/download requires an API key, takes format=zip|cbz,
-// and returns DownloadResponse { url: string, expires_at: number }.
-// The endpoint is opportunistic: every failure mode must yield null so the
-// caller falls back to page-by-page downloading.
-
+// Offline-only tests for the experimental, authenticated API archive route.
+// Synthetic payloads do not establish the real delivery hosts, full image
+// decodability, completeness, native button behavior, or live completion.
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const JSZip = require('jszip');
+const { URL: NodeURL } = require('node:url');
 const archive = require('../build/test/background/ArchiveDownload.js');
 
+describe('Chromium experimental archive', () => {
+// Other suites deliberately remove global URL. Supply the parser without
+// supplying object-URL methods, independent of test order.
+let previousGlobalUrl;
+beforeEach(() => {
+    previousGlobalUrl = globalThis.URL;
+    globalThis.URL = function ParseOnlyURL(input, base) { return new NodeURL(input, base); };
+});
+afterEach(() => {
+    if (previousGlobalUrl === undefined) delete globalThis.URL;
+    else globalThis.URL = previousGlobalUrl;
+});
+
+const signedUrl = 'https://cdn.nhentai.net/synthetic/archive.zip?signature=fixture-secret';
+const future = () => Math.floor(Date.now() / 1000) + 600;
+const jpg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4, 0xff, 0xd9]);
+async function makeZip(entries = [['001.jpg', jpg]]) {
+    const zip = new JSZip();
+    for (const [name, bytes, options] of entries) zip.file(name, bytes, options || {});
+    return zip.generateAsync({ type: 'nodebuffer', compression: 'STORE', platform: 'UNIX' });
+}
+function jsonResponse(status, body, headers) {
+    const map = Object.assign({}, headers || {});
+    return {
+        status, ok: status >= 200 && status < 300,
+        headers: { get: (name) => map[String(name).toLowerCase()] || null },
+        json: () => body === '__invalid__' ? Promise.reject(new Error('bad json')) : Promise.resolve(body)
+    };
+}
+
 describe('server archive user-facing safety notes', () => {
-    it('warns that the experimental archive can be invalid and silently falls back', () => {
+    it('warns to leave the unverified API route off and reports eligible-job failures', () => {
         const html = fs.readFileSync(path.join(__dirname, '../options.html'), 'utf8');
         assert.match(html, /Experimental — leave this off/);
-        assert.match(html, /may save an invalid file/);
-        assert.match(html, /falls back to pages without notifying you/);
+        assert.match(html, /not live-verified/);
+        assert.match(html, /failures are reported rather than silently falling back/);
+        assert.match(html, /website's\s+own Download button is separate/);
         assert.doesNotMatch(html, /usually\s+faster|so nothing breaks/i);
     });
-
     it('does not claim every site button is a lower-quality copy', () => {
         const settings = fs.readFileSync(path.join(__dirname, '../src/preview/popupSettings.ts'), 'utf8');
         assert.match(settings, /Page-by-page downloads use the images supplied to the reader/);
@@ -27,116 +55,154 @@ describe('server archive user-facing safety notes', () => {
     });
 });
 
-function jsonResponse(status, body, headers) {
-    const map = Object.assign({}, headers || {});
-    return {
-        status,
-        ok: status >= 200 && status < 300,
-        headers: { get: (name) => map[String(name).toLowerCase()] || null },
-        json: () => {
-            if (body === '__invalid__') return Promise.reject(new Error('bad json'));
-            return Promise.resolve(body);
-        },
-        blob: () => Promise.resolve(new Blob([new Uint8Array([1, 2, 3])]))
-    };
-}
-
 describe('server archive endpoint client', () => {
     it('builds the documented request URL with the format query parameter', () => {
-        assert.strictEqual(
-            archive.getArchiveRequestUrl(674496, 'zip'),
-            'https://nhentai.net/api/v2/galleries/674496/download?format=zip'
-        );
-        assert.strictEqual(
-            archive.getArchiveRequestUrl('674496', 'cbz'),
-            'https://nhentai.net/api/v2/galleries/674496/download?format=cbz'
-        );
+        assert.strictEqual(archive.getArchiveRequestUrl(674496, 'zip'), 'https://nhentai.net/api/v2/galleries/674496/download?format=zip');
+        assert.strictEqual(archive.getArchiveRequestUrl('674496', 'cbz'), 'https://nhentai.net/api/v2/galleries/674496/download?format=cbz');
     });
-
     it('requires an API key and never calls the endpoint keyless', async () => {
-        const calls = [];
+        let calls = 0;
         const result = await archive.requestArchiveDownloadUrl(674496, 'zip', null, {
-            fetchImpl: (url, init) => { calls.push({ url, init }); return Promise.resolve(jsonResponse(200, {})); }
+            fetchImpl: () => { calls++; return Promise.resolve(jsonResponse(200, {})); }
         });
         assert.strictEqual(result, null);
-        assert.strictEqual(calls.length, 0, 'keyless mode must not touch the authenticated endpoint');
+        assert.strictEqual(calls, 0);
     });
-
-    it('POSTs with the keyed Authorization header and parses DownloadResponse', async () => {
+    it('POSTs with the key, does not follow redirects, and parses the documented response', async () => {
         const calls = [];
+        const expiry = future();
         const result = await archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
-            fetchImpl: (url, init) => {
-                calls.push({ url, init });
-                return Promise.resolve(jsonResponse(200, {
-                    url: 'https://cdn.nhentai.net/dl/xyz.zip?sig=1',
-                    expires_at: 1787300000
-                }));
-            }
+            fetchImpl: (url, init) => { calls.push({ url, init }); return Promise.resolve(jsonResponse(200, { url: signedUrl, expires_at: expiry })); }
         });
-        assert.deepStrictEqual(result, { url: 'https://cdn.nhentai.net/dl/xyz.zip?sig=1', expiresAt: 1787300000 });
-        assert.strictEqual(calls.length, 1);
+        assert.deepStrictEqual(result, { url: signedUrl, expiresAt: expiry });
         assert.strictEqual(calls[0].init.method, 'POST');
-        assert.strictEqual(calls[0].init.headers['Authorization'], 'Key abc');
+        assert.strictEqual(calls[0].init.redirect, 'error');
+        assert.strictEqual(calls[0].init.headers.Authorization, 'Key abc');
     });
-
-    it('returns null for auth failures, disabled feature flags and exhausted 429s', async () => {
+    it('reports auth, disabled feature and rate limit errors instead of returning a fallback', async () => {
         for (const status of [401, 403, 503, 429]) {
-            const result = await archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
-                fetchImpl: () => Promise.resolve(jsonResponse(status, {})),
-                sleepImpl: () => Promise.resolve(),
-                maxRetries: 0
-            });
-            assert.strictEqual(result, null, 'status ' + status + ' must fall back to page-by-page');
+            await assert.rejects(archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
+                fetchImpl: () => Promise.resolve(jsonResponse(status, {}, { 'retry-after': '120' })), maxRetries: 0
+            }), status === 429 ? /rate limited.*120 seconds/ : /rejected or unavailable/);
         }
     });
-
-    it('returns null for malformed or unusable bodies', async () => {
-        const cases = [
-            '__invalid__',                                   // not JSON
-            {},                                               // missing url
-            { url: 'not-a-url', expires_at: 1 },              // relative url
-            { url: 'javascript:alert(1)', expires_at: 1 }     // non-http scheme
-        ];
-        for (const body of cases) {
-            const result = await archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
-                fetchImpl: () => Promise.resolve(jsonResponse(200, body)),
-                sleepImpl: () => Promise.resolve(),
-                maxRetries: 0
-            });
-            assert.strictEqual(result, null, 'body ' + JSON.stringify(body) + ' must not be usable');
+    it('rejects malformed JSON and unsafe or unrecognized delivery URLs', async () => {
+        const values = ['', 'http://nhentai.net/a', 'https://nhentai.net.evil.test/a',
+            'https://nhentai.net@evil.test/a', 'https://user@nhentai.net/a', 'https://nhentai.net:8443/a',
+            'https://127.0.0.1/a', 'https://cdn.nhentai.net/a#secret', 'https://unknown.example/a', 'javascript:alert(1)'];
+        for (const value of values) {
+            assert.strictEqual(archive.isAllowedArchiveDeliveryUrl(value), false, value);
+            await assert.rejects(archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
+                fetchImpl: () => Promise.resolve(jsonResponse(200, { url: value, expires_at: future() }))
+            }), /delivery URL/);
+        }
+        assert.strictEqual(archive.isAllowedArchiveDeliveryUrl(signedUrl), true);
+        assert.strictEqual(archive.isAllowedArchiveDeliveryUrl('https://nhentai.net/a'), true);
+        await assert.rejects(archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
+            fetchImpl: () => Promise.resolve(jsonResponse(200, '__invalid__'))
+        }), /not valid JSON/);
+    });
+    it('requires a present, future, plausible Unix-seconds expiry', async () => {
+        for (const expires_at of [undefined, null, '123', 0, future() - 10000, Date.now(), Number.MAX_SAFE_INTEGER]) {
+            await assert.rejects(archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
+                fetchImpl: () => Promise.resolve(jsonResponse(200, { url: signedUrl, expires_at }))
+            }), /expiry/);
         }
     });
-
-    it('defaults expires_at when the server omits it', async () => {
-        const result = await archive.requestArchiveDownloadUrl(674496, 'zip', 'abc', {
-            fetchImpl: () => Promise.resolve(jsonResponse(200, { url: 'https://example.org/a.zip' }))
-        });
-        assert.strictEqual(result.url, 'https://example.org/a.zip');
-        assert.strictEqual(result.expiresAt, Number.MAX_SAFE_INTEGER);
+    it('sanitizes request errors rather than exposing credentials or signed URLs', async () => {
+        const error = await archive.requestArchiveDownloadUrl(674496, 'zip', 'fixture-key', {
+            fetchImpl: () => Promise.reject(new Error('fixture-key ' + signedUrl))
+        }).catch(err => err);
+        assert.match(error.message, /network error/);
+        assert.doesNotMatch(error.message, /fixture-key|fixture-secret|signature=/);
     });
+});
 
-    it('fetches archive bytes WITHOUT the API key (signed URL is the credential)', async () => {
+describe('server archive delivery validation', () => {
+    it('preserves valid ZIP bytes without credentials, redirects, cookies or referrers', async () => {
+        const input = await makeZip([['001.jpg', jpg], ['ComicInfo.xml', '<ComicInfo/>']]);
         const calls = [];
-        const blob = await archive.fetchArchiveBytes('https://cdn.nhentai.net/dl/xyz.zip?sig=1', {
-            fetchImpl: (url, init) => {
-                calls.push({ url, init });
-                return Promise.resolve(jsonResponse(200, {}));
-            }
+        const blob = await archive.fetchArchiveBytes(signedUrl, {
+            fetchImpl: (url, init) => { calls.push({ url, init }); return Promise.resolve(new Response(input, { status: 200, headers: { 'content-type': 'application/zip' } })); }
         });
-        assert.ok(blob instanceof Blob);
+        assert.deepStrictEqual(Buffer.from(await blob.arrayBuffer()), input);
         assert.strictEqual(calls.length, 1);
-        const headers = calls[0].init.headers || {};
-        assert.strictEqual(headers['Authorization'], undefined,
-            'the API key must never be sent to the archive delivery URL');
+        assert.strictEqual(calls[0].init.headers.Authorization, undefined);
+        assert.strictEqual(calls[0].init.credentials, 'omit');
+        assert.strictEqual(calls[0].init.redirect, 'error');
+        assert.strictEqual(calls[0].init.referrerPolicy, 'no-referrer');
     });
-
-    it('throws on a failing archive delivery so the caller falls back', async () => {
-        await assert.rejects(
-            archive.fetchArchiveBytes('https://cdn.nhentai.net/dl/expired.zip', {
-                fetchImpl: () => Promise.resolve(jsonResponse(403, {}))
-            }),
-            /Failed to fetch server archive/
-        );
+    it('rejects unsafe URL before any fetch, and sanitizes transfer errors', async () => {
+        let calls = 0;
+        await assert.rejects(archive.fetchArchiveBytes('https://evil.test/a?signature=fixture-secret', {
+            fetchImpl: () => { calls++; }
+        }), /allowed HTTPS hosts/);
+        assert.strictEqual(calls, 0);
+        const error = await archive.fetchArchiveBytes(signedUrl, {
+            fetchImpl: () => Promise.reject(new Error('redirect ' + signedUrl))
+        }).catch(err => err);
+        assert.match(error.message, /blocked redirect/);
+        assert.doesNotMatch(error.message, /fixture-secret|signature=/);
+    });
+    it('propagates a delivery 429 as a rate limit without retrying or leaking the URL', async () => {
+        let calls = 0;
+        const error = await archive.fetchArchiveBytes(signedUrl, { fetchImpl: () => {
+            calls++;
+            return Promise.resolve(new Response('', { status: 429, headers: { 'retry-after': '120' } }));
+        } }).catch(err => err);
+        assert.strictEqual(error.name, 'NhentaiRateLimitError');
+        assert.strictEqual(error.waitMs, 120000);
+        assert.doesNotMatch(error.message, /fixture-secret|signature=/);
+        assert.strictEqual(calls, 1);
+    });
+    it('rejects HTTP errors, redirects, HTML, fake PK bytes, truncation and mislabeled image contents', async () => {
+        const input = await makeZip();
+        const cases = [
+            new Response('denied', { status: 403 }),
+            Object.assign(jsonResponse(200, {}), { redirected: true }),
+            new Response('<html>challenge</html>', { status: 200, headers: { 'content-type': 'text/html' } }),
+            new Response('<html>challenge</html>', { status: 200, headers: { 'content-type': 'application/zip' } }),
+            new Response(new Uint8Array([0x50, 0x4b, 3, 4]), { status: 200 }),
+            new Response(input.subarray(0, input.length - 10), { status: 200 }),
+            new Response(await makeZip([['001.jpg', '<html>not an image</html>']]), { status: 200 })
+        ];
+        for (const response of cases) {
+            await assert.rejects(archive.fetchArchiveBytes(signedUrl, { fetchImpl: () => Promise.resolve(response) }), /archive/i);
+        }
+    });
+    it('rejects corrupt CRCs, missing images, traversal, duplicate names and unsupported entries', async () => {
+        const bytes = await makeZip();
+        const corrupt = Buffer.from(bytes);
+        const imageOffset = corrupt.indexOf(Buffer.from(jpg));
+        assert.ok(imageOffset >= 0);
+        corrupt[imageOffset + 4] ^= 1;
+        const duplicate = await makeZip([['001.jpg', jpg], ['002.jpg', jpg]]);
+        for (let i = duplicate.indexOf('002.jpg'); i >= 0; i = duplicate.indexOf('002.jpg', i + 7)) duplicate.write('001.jpg', i);
+        const cases = [corrupt, await makeZip([['info.xml', '<Info/>']]),
+            await makeZip([['../001.jpg', jpg]]), duplicate,
+            await makeZip([['001.jpg', jpg], ['payload.exe', 'bad']]),
+            await makeZip([['001.jpg', jpg, { unixPermissions: 0o120777 }]])];
+        for (const input of cases) {
+            await assert.rejects(archive.fetchArchiveBytes(signedUrl, { fetchImpl: () => Promise.resolve(new Response(input, { status: 200 })) }), /invalid|corrupt|unsupported/);
+        }
+    });
+    it('requires the expected image count when gallery metadata provides one', async () => {
+        const input = await makeZip([['001.jpg', jpg], ['ComicInfo.xml', '<ComicInfo/>']]);
+        const fetchImpl = () => Promise.resolve(new Response(input, { status: 200 }));
+        assert.ok(await archive.fetchArchiveBytes(signedUrl, { fetchImpl, expectedImageCount: 1 }));
+        await assert.rejects(archive.fetchArchiveBytes(signedUrl, { fetchImpl, expectedImageCount: 2 }), /invalid|corrupt/);
+        await assert.rejects(archive.fetchArchiveBytes(signedUrl, { fetchImpl, expectedImageCount: 0 }), /page count/);
+    });
+    it('enforces transfer, expansion, entry and entry-count bounds', async () => {
+        const input = await makeZip([['001.jpg', jpg], ['metadata.txt', 'x'.repeat(200)]]);
+        for (const limits of [{ maxBytes: input.length - 1 }, { maxExpandedBytes: 50 }, { maxEntryBytes: 50 }, { maxEntries: 1 }]) {
+            await assert.rejects(archive.fetchArchiveBytes(signedUrl, {
+                fetchImpl: () => Promise.resolve(new Response(input, { status: 200 })), limits
+            }), /archive/i);
+        }
+        await assert.rejects(archive.fetchArchiveBytes(signedUrl, {
+            fetchImpl: () => Promise.resolve(new Response(input, { status: 200, headers: { 'content-length': '999999' } })), limits: { maxBytes: 1000 }
+        }), /transfer size limit/);
     });
 });
 
@@ -154,10 +220,11 @@ describe('server archive source isolation', () => {
     let calls;
     let saved;
 
-    beforeEach(() => {
+    beforeEach(async () => {
         oldFetch = globalThis.fetch;
         oldChrome = globalThis.chrome;
         oldFileReader = globalThis.FileReader;
+        const validZip = await makeZip();
         globalThis.FileReader = class {
             readAsArrayBuffer(blob) {
                 blob.arrayBuffer().then(
@@ -173,12 +240,12 @@ describe('server archive source isolation', () => {
             calls.push({ url: String(url), init: init || {} });
             if (String(url).includes('/api/v2/galleries/42/download')) {
                 return new Response(JSON.stringify({
-                    url: 'https://delivery.example/archive.zip',
+                    url: 'https://cdn.nhentai.net/archive.zip?signature=synthetic',
                     expires_at: Math.floor(Date.now() / 1000) + 600
                 }), { status: 200, headers: { 'content-type': 'application/json' } });
             }
-            if (String(url).startsWith('https://delivery.example/')) {
-                return new Response(new Uint8Array([0x50, 0x4b, 3, 4]), { status: 200 });
+            if (String(url).startsWith('https://cdn.nhentai.net/archive.zip')) {
+                return new Response(validZip, { status: 200 });
             }
             const page = new Uint8Array(2048);
             page.set([0xff, 0xd8, 0xff, 0xe0]);
@@ -213,7 +280,7 @@ describe('server archive source isolation', () => {
         const d = new Downloader(galleryJson, 'Fixture', () => {}, () => {}, 'Fixture', zip, 'Fixture', null, source, settings);
         d.retryBackoffMs = 0;
         d.revokeObjectUrlDelayMs = 0;
-        d.saveUrl = async (url, filename) => { saved.push({ url, filename }); };
+        d.saveUrl = async (url, filename, requireCompletion) => { saved.push({ url, filename, requireCompletion }); };
         await d.startAsync();
     }
 
@@ -222,6 +289,46 @@ describe('server archive source isolation', () => {
         assert.strictEqual(apiCalls().length, 1);
         assert.strictEqual(apiCalls()[0].init.headers.Authorization, 'Key synthetic-test-key');
         assert.strictEqual(saved[0].filename, 'Fixture.zip');
+        assert.strictEqual(saved[0].requireCompletion, true);
+    });
+
+    it('surfaces rate limits and invalid archives without a silent page fallback', async () => {
+        for (const failure of ['rate-limit', 'invalid-archive', 'missing-key']) {
+            calls.length = 0;
+            saved.length = 0;
+            globalThis.fetch = async (url, init) => {
+                calls.push({ url: String(url), init: init || {} });
+                if (String(url).includes('/api/v2/galleries/42/download')) {
+                    if (failure === 'rate-limit') return new Response('', { status: 429, headers: { 'retry-after': '120' } });
+                    return new Response(JSON.stringify({ url: signedUrl, expires_at: future() }), { status: 200 });
+                }
+                if (String(url) === signedUrl) return new Response('<html>challenge</html>', { status: 200 });
+                throw new Error('unexpected page fetch');
+            };
+            await assert.rejects(run(gallery('nhentai'), clearnetSource, failure === 'missing-key' ? { apiKey: null } : {}),
+                failure === 'rate-limit' ? /rate limited.*120 seconds/ : (failure === 'missing-key' ? /needs an API key/ : /invalid|corrupt|unexpected content type/));
+            assert.strictEqual(apiCalls().length, failure === 'missing-key' ? 0 : 1);
+            assert.ok(!calls.some(call => call.url.includes('/galleries/987/')), 'no page fallback');
+            assert.strictEqual(saved.length, 0, 'invalid archive must not be saved');
+        }
+    });
+
+    it('requires valid page metadata before requesting a server archive', async () => {
+        for (const pages of [[], [{ t: '0' }]]) {
+            calls.length = 0;
+            await assert.rejects(run({ ...gallery('nhentai'), images: { pages } }, clearnetSource), /page (count|metadata)/);
+            assert.strictEqual(apiCalls().length, 0);
+        }
+    });
+
+    it('does not retry an immediately-expiring archive URL', async () => {
+        calls.length = 0;
+        globalThis.fetch = async (url, init) => {
+            calls.push({ url: String(url), init: init || {} });
+            return new Response(JSON.stringify({ url: signedUrl, expires_at: Math.floor(Date.now() / 1000) + 5 }), { status: 200 });
+        };
+        await assert.rejects(run(gallery('nhentai'), clearnetSource), /expires too soon/);
+        assert.strictEqual(calls.length, 1);
     });
 
     it('never sends another supported site with a colliding numeric id to nhentai', async () => {
@@ -325,3 +432,5 @@ describe('server archive job provenance', () => {
         assert.strictEqual(calls, 0);
     });
 });
+
+}); // Chromium experimental archive

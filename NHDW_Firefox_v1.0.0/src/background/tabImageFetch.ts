@@ -41,8 +41,25 @@ export function decodeTabImageBytes(b64: string): Uint8Array {
 // Self-contained Promise chain: Chrome serializes this function into the tab.
 // Do not use async/await (tsconfig target es6 rewrites that to helpers that
 // do not exist in the page) and do not close over module state.
-export function fetchImageInPage(imageUrl: string): Promise<TabImageResult> {
-    return fetch(imageUrl, { credentials: "include", cache: "no-store" }).then(function(resp): Promise<TabImageResult> | TabImageResult {
+// `credentials` is "omit" for hosts that answer `Access-Control-Allow-Origin: *`
+// (hitomi's image servers): the browser rejects a wildcard for a credentialed
+// cross-origin read, so "include" would always fail there.
+// `requiredHost` (hitomi: "hitomi.la"): the tab only helps when it IS that site
+// — its Referer/Origin are the point — so in any other tab nothing is fetched
+// and status 0 sends the caller to the extension's own fetch. Self-contained
+// (it is injected), hence the inline checks rather than shared helpers.
+export function fetchImageInPage(imageUrl: string, credentials?: string, requiredHost?: string): Promise<TabImageResult> {
+    if (typeof requiredHost === "string" && requiredHost !== "") {
+        const here = String((typeof location !== "undefined" && location && location.hostname) || "").toLowerCase();
+        const want = requiredHost.toLowerCase();
+        if (here !== want && here.slice(-(want.length + 1)) !== "." + want) {
+            return Promise.resolve({
+                ok: false, status: 0, statusText: "", contentType: null, b64: null,
+                error: "tab is not on " + requiredHost
+            });
+        }
+    }
+    return fetch(imageUrl, { credentials: credentials === "omit" ? "omit" : "include", cache: "no-store" }).then(function(resp): Promise<TabImageResult> | TabImageResult {
         const contentType = resp.headers.get("content-type");
         if (!resp.ok) {
             return {
@@ -179,19 +196,60 @@ function relayToServiceWorker<T>(message: any): Promise<T | null> {
     });
 }
 
-export async function fetchImageFromTab(tabId: number, url: string): Promise<TabImageResult | null> {
-    if (!isAllowedImageUrl(url)) {
+// `rules` (an adapter's getImageHosts/getAllowedPathRegex) widens the check
+// to that one site's exact page-image shape; without it only nhentai URLs pass.
+// The tab is on another site (fetchImageInPage refused): retrying in the MAIN
+// world cannot change that, so skip straight to the extension's own fetch.
+function isWrongSiteTab(result: TabImageResult | null): boolean {
+    return !!(result && result.status === 0 && typeof result.error === "string" && result.error.indexOf("tab is not on ") === 0);
+}
+
+type TabFetchRules = { getImageHosts?(): string[]; getAllowedPathRegex?(): RegExp; getTabSiteHost?(): string };
+export type TabFetchMode = { credentials: "omit" | "include"; requiredHost: string };
+
+// How an in-tab image read runs: adapters that opt into the tab fetch (hitomi)
+// are read without credentials and only from their own site's tab (see
+// fetchImageInPage); nhentai keeps credentials and any tab, as before.
+function tabFetchModeFor(rules?: TabFetchRules): TabFetchMode {
+    if (!rules) return { credentials: "include", requiredHost: "" };
+    let host = "";
+    try { host = typeof rules.getTabSiteHost === "function" ? String(rules.getTabSiteHost() || "") : ""; } catch (_) { host = ""; }
+    return { credentials: "omit", requiredHost: /^[a-z0-9.-]+$/i.test(host) ? host : "" };
+}
+
+/**
+ * Worker-side gate for the offscreen relay: the URL must be an nhentai page
+ * image, or the exact page-image shape of an adapter that opted into the tab
+ * fetch. Returns that adapter's fetch mode (never the caller's), or null.
+ */
+export function tabFetchModeForUrl(url: string, adapters: any[]): TabFetchMode | null {
+    if (isAllowedImageUrl(url)) return tabFetchModeFor(undefined);
+    for (const adapter of adapters || []) {
+        if (adapter && typeof adapter.fetchImagesThroughTab === "function" && adapter.fetchImagesThroughTab() === true
+            && isAllowedCdnImageUrl(url, adapter)) {
+            return tabFetchModeFor(adapter);
+        }
+    }
+    return null;
+}
+
+export async function fetchImageFromTab(
+    tabId: number, url: string,
+    rules?: TabFetchRules
+): Promise<TabImageResult | null> {
+    if (!(rules ? isAllowedCdnImageUrl(url, rules) : isAllowedImageUrl(url))) {
         return null;
     }
+    const mode = tabFetchModeFor(rules);
     if (scriptingAvailable()) {
         // Service worker / popup context: inject directly. Isolated world
         // first: MV3 host_permissions let content-script fetches skip page
         // CORS. MAIN world is the fallback when isolation cannot run.
-        const isolated = await executeInTab(tabId, fetchImageInPage, [url], "ISOLATED");
-        if (usableTabResult(isolated)) {
+        const isolated = await executeInTab(tabId, fetchImageInPage, [url, mode.credentials, mode.requiredHost], "ISOLATED");
+        if (usableTabResult(isolated) || isWrongSiteTab(isolated)) {
             return isolated;
         }
-        const main = await executeInTab(tabId, fetchImageInPage, [url], "MAIN");
+        const main = await executeInTab(tabId, fetchImageInPage, [url, mode.credentials, mode.requiredHost], "MAIN");
         if (usableTabResult(main)) {
             return main;
         }
@@ -203,9 +261,11 @@ export async function fetchImageFromTab(tabId: number, url: string): Promise<Tab
         action: "fetchInTab",
         tabId: tabId,
         url: url,
+        credentials: mode.credentials,
+        requiredHost: mode.requiredHost,
         world: "ISOLATED"
     });
-    if (usableTabResult(isolated)) {
+    if (usableTabResult(isolated) || isWrongSiteTab(isolated)) {
         return isolated;
     }
     const main = await relayToServiceWorker<TabImageResult>({
@@ -213,6 +273,8 @@ export async function fetchImageFromTab(tabId: number, url: string): Promise<Tab
         action: "fetchInTab",
         tabId: tabId,
         url: url,
+        credentials: mode.credentials,
+        requiredHost: mode.requiredHost,
         world: "MAIN"
     });
     if (usableTabResult(main)) {

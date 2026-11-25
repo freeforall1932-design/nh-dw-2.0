@@ -129,6 +129,123 @@ A site that encrypts its reader API (DoujinDesu does, with an hour-derived key) 
 countermeasure. Use *Use open chapter* there: the site's own JavaScript has already
 rendered the images in your tab.
 
+## Next.js sites: page list in `__NEXT_DATA__` (mangak.io)
+
+Sites built on the Next.js "pages" router render each chapter with its full,
+ordered page list inside a JSON block, then build the visible reader from it in
+the browser:
+
+```html
+<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"initialChapter":{"images":["https://…/1.webp", …]}}}, "page":"/[slug]/[chapter]", …}</script>
+```
+
+mangak.io (title `https://mangak.io/{slug}`, chapters `https://mangak.io/{slug}/chapter-N`)
+is the motivating site; the layout was confirmed from the open-source
+Keiyoushi (Apache-2.0) and Aidoku (MIT) parsers, used as factual reference only,
+no code copied. Behaviour:
+
+- **Fallback only, same rule as the reader script.** Consulted only when the
+  selector matched no images *and* there is no MangaThemesia script. Known
+  places are checked first (`initialChapter.images`, `chapter.images`,
+  `…imageUrls`). Otherwise exactly one distinct `images`/`imageUrls`/`pageImages`
+  list must exist, or nothing is used. Lists of cards (related titles) are
+  never searched.
+- **Parsed, never executed; all or nothing.** The block is `JSON.parse`d as text.
+  Every entry must be a public HTTPS URL (relative entries resolve against the
+  chapter). One bad entry rejects the whole list instead of leaving a gap.
+- **Batch-friendly.** Fetched chapter HTML for the exact chapter URL carries
+  the data, so a whole selection can be inspected without opening each chapter.
+  The review says `read from the page's embedded Next.js data (__NEXT_DATA__)`.
+- **Stale data in an open tab is refused.** Next.js switches pages without
+  reloading and does **not** refresh `__NEXT_DATA__`. A tab opened on chapter 1,
+  then clicked through to chapter 2, still carries chapter 1's list. *Use open
+  chapter* therefore checks the data's route pattern and query against the tab
+  URL segment by segment. On a mismatch it stops with *"Reload the chapter tab,
+  then try again"* instead of saving the wrong pages.
+
+mangak.io workflow: open the title page and wait for its chapter list to show.
+Run **Scan / add title page** (the default filter accepts `/{slug}/chapter-N` links,
+which sit inside the title path), pick chapters and **Inspect**. If the image
+server refuses the page fetches, tick the referrer option below and run the
+benchmark again.
+
+## React Router sites: page data at `<path>.data` (Tailspace)
+
+Sites built on React Router 7 "framework mode" (and Remix) serve every page's
+loader data at the same path plus `.data` (`/` uses `/_root.data`), as
+turbo-stream v2 text (`Content-Type: text/x-script`). The visible reader is
+rendered from that data, so it is the site's own complete, ordered page list.
+Code: `src/utils/routeData.ts` (shared, byte-identical in both trees).
+
+- **Decoder.** `decodeTurboStream` follows the format react-router 7 bundles
+  (turbo-stream v2, MIT; checked against the npm source, re-implemented):
+  flat value array, `_<key>` objects, negative special values, D/U/B/R/Y/S/M/N/P/Z/E
+  tags, later `P<id>:`/`E<id>:` lines, and react-router's plugin types. It is
+  bounded (5 MiB, 250,000 values, depth 256), cycle-safe, and builds objects
+  with no prototype, so page data cannot pollute `Object.prototype`. Text is
+  parsed, never executed.
+- **Generic fallback (any React Router site).** When the selector, the reader
+  script and `__NEXT_DATA__` all find nothing *and* the page shows
+  `window.__reactRouterContext`/`__remixContext`, the probe fetches the
+  chapter's `.data` (same origin, query kept) and accepts exactly one distinct
+  URL list under `images`/`imageUrls`/`pageImages`/`pages`. Card lists are not
+  searched; anything ambiguous gives nothing.
+- **Known-site recipes.** Some sites store page *tokens*, not URLs. A recipe is
+  a few lines of reviewed code, not storage: which route holds a chapter, how to
+  build the page URL, and how parts of a series link. It never grants or
+  approves a host and never injects anything. The only recipe is Tailspace:
+  - loader `routes/pages/comic/ComicPage` at `/c/<slug>.data?_routes=…` (the
+    reader position `?page=N` is dropped);
+  - `comic.pages[]` `{token, pageNumber, fileType}` → full size
+    `https://pics.tailspace.com/comics/<id>/<token>.<fileType or jpg>`, sorted by
+    `pageNumber`; one unexpected entry rejects the whole list;
+  - `comic.numberOfPages` is the site's stated total, cross-checked in the
+    review ("site's own page data disagrees with its stated total");
+  - a series is a chain of comics (`previousComic`/`nextComic`).
+  Sources: keiyoushi/extensions-source `src/en/tailspace` (Apache-2.0, added
+  2026-11-01) and, independently, cofob/memesave-bot `scraper/src_tailspace.go`
+  (no licence stated, facts only). No code copied.
+- **Recipe first, reader second.** On a recipe site the page data is tried
+  before the selector. If it fails (site changed, HTML instead of data), the
+  normal reader paths run as before.
+- **Whole series from any part.** *Scan / add title page* on any Tailspace
+  comic walks the series links in both directions, one `.data` request per part
+  with the usual pause (cap 200, loop-safe), and lists the parts oldest first.
+  The order select is preset to *Oldest to newest*. Inspection reuses the
+  decoded data, so it makes no second request per chapter.
+- **Referrer.** Both reference projects send `Referer: https://tailspace.com/`
+  for images. The tool still sends none unless you tick the opt-in below; after a
+  Tailspace scan the status points at that box (it never ticks it).
+
+Tailspace workflow: open any comic in a series (`https://tailspace.com/c/<name>`),
+open the tool, **Scan / add title page**, select parts, **Inspect**, approve
+`pics.tailspace.com`, save. If the pages fail, tick the referrer option and try
+again. If they still fail, the image server probably sends no CORS headers for
+extension-initiated reads, and the run log will say so.
+
+**Find what others already know first.** `node tools/find-site-references.js
+<domain>` searches GitHub for the domain and searches the known scraper
+catalogs for the site name (two searches through the signed-in `gh` CLI).
+Each hit is labelled reusable-with-attribution (Apache/MIT/Unlicense) or
+facts-only (GPL). Tailspace had a Keiyoushi source the day after it was
+recorded as "none".
+
+## Opt-in referrer for page images
+
+Some image servers only answer requests that carry the site as referrer. By
+default the probe still fetches with `referrerPolicy: "no-referrer"`. The
+checkbox **Send this site's address (origin only) as the referrer…** switches
+**page-image** fetches (never the chapter HTML) to the browser's own
+`"strict-origin"` policy. Chrome then sends the source tab's origin, e.g.
+`https://mangak.io/`, which is the truthful value for a request made from that
+tab. No header is written by this code, there is no `declarativeNetRequest`
+rule, and HTTPS→HTTP downgrades send nothing. It is off by default, stored per
+site in the reader profile (`sendReferrer`), and recorded in the batch and
+benchmark log.
+
+It does **not** relax CORS. A CDN that sends no CORS headers still fails, and
+that is still by design.
+
 ## Top-down / scroll readers (random file names are fine)
 
 A vertical reader lists every page as an image, so **page 1 is simply the first
@@ -185,7 +302,8 @@ page failure does:
   complete.
 - **No silent page loss.** Every matched element must be an `<img>` with exactly
   one usable URL; a missing or ambiguous one fails the whole chapter.
-- **Data parsing, not page execution.** Fetched chapter HTML is parsed by
+- **Data parsing, not page execution.** React Router `.data` text is decoded by
+  a bounded, prototype-free parser, never evaluated. Fetched chapter HTML is parsed by
   `htmlparser2`/`css-select` (no `DOMParser`, no detached `<img>`, no script
   execution), so no subresource is requested before the host approval step.
 - **Bounded and fail-closed.** Redirects (`redirect: "error"`), 429 and
@@ -284,8 +402,9 @@ Still open, in order of what unblocks most:
   gallery path but is not reused here.
 - **Click-to-select picker** — the last usability item; still requires a
   hand-written CSS selector.
-- **Release hygiene** — version bump; the Firefox tree has none of this and must
-  not be described as having it.
+- **Release hygiene** — version bump. The Firefox tree has carried the tool
+  since the 2026-11-24 catch-up (1.7.0); there, Chapters ↗ opens
+  `chapters.html?tab=<source tab>` because Firefox has no side panel.
 
 The dropped "use the site's own Download control" idea is archived in
 [SITE_DOWNLOAD_CONTROL_EFFORT.md](SITE_DOWNLOAD_CONTROL_EFFORT.md); do not
@@ -301,8 +420,10 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
   JavaScript after load cannot be read from static HTML; "Use open chapter"
   inspects the rendered page instead, one chapter at a time.
 - **Cross-origin images need CORS.** The probe fetches images with
-  `credentials: "same-origin"` and no referrer. A CDN that does not send CORS
-  headers will fail — by design there is no cookie or header forgery.
+  `credentials: "same-origin"`. By default no referrer is sent. With the
+  per-site opt-in, the browser's own `strict-origin` referrer is sent (see
+  above). A CDN that does not send CORS headers will fail, by design: there is
+  no cookie or header forgery.
 - **No site-provided batch.** This route deliberately ignores batch links,
   mirror/file hosts and shorteners. The existing offline
   [`chapterPlan.ts`](NHDW_Extension_v3.0.0/src/utils/chapterPlan.ts) still says a
@@ -318,7 +439,9 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
 - **No live-browser validation yet.** The benchmark and log have only run in the
   bundled VM harness; the first real run is the next step and its log is the
   artifact to send back.
-- **Firefox is not ported.** `NHDW_Firefox_v1.0.0` has none of this.
+- **Firefox: ported offline only (2026-11-24, 1.7.0).** Same code plus the
+  source-tab binding above; its e2e (`e2e-universal`, `e2e-chapter-relay`,
+  popup phase 18) is green, but it has never run in a real Firefox.
 - **Content responsibility stays with the user.** The tool has no age or
   entitlement check and cannot grant access. Only save material you can
   normally access and may lawfully download. It does not bypass logins, paywalls,
@@ -337,6 +460,30 @@ re-propose it without a sanitized anchor capture *and* a new owner decision.
   only selected chapter HTML; the save gate blocks unapproved hosts; ZIPs contain
   the exact ordered bytes; an interrupted browser download is reported as
   `Stopped after 0 completed archive(s)`.
+- `test/next-data-reader.test.js` — `__NEXT_DATA__` extraction: known and
+  unknown layouts, ambiguity refusal, all-or-nothing URL policy, no execution,
+  stale-data detection (route pattern, dynamic and catch-all segments), and the
+  `sendReferrer` profile field (default off, legacy profiles read as off).
+- `scripts/e2e-universal.js` also covers a mangak-style chapter with no `<img>`
+  in its HTML: the page list comes from `__NEXT_DATA__`, the archive holds the
+  exact ordered bytes, image fetches use `strict-origin` only when opted in
+  while HTML stays `no-referrer`, and the log records both.
+- `test/route-data.test.js` — the turbo-stream decoder against official encoder
+  output (`test/fixtures/tailspace/`, synthetic data, reproducible with
+  `generate.js`): shared references, deferred lines, maps, dates, holes,
+  cycles, plugin types, no prototype pollution, refusal of non-stream input and
+  the value cap. Also `.data` URL building, the generic finder's ambiguity
+  rules, and the Tailspace recipe (exact origin, slugs with spaces, page order,
+  default jpg, whole-list refusal, stated total, series walk with loop,
+  break and cap).
+- `scripts/e2e-route-data.js` — built page + probe against a synthetic
+  `tailspace.com` tab. Scanning part 2 lists all 3 parts oldest first from 3
+  `.data` requests, without the reader's `?page=1`. Inspection makes no further
+  request. The 2-of-3 mismatch is flagged without scrolling advice, and only
+  `pics.tailspace.com` is offered for approval. It saves 3 ordered CBZ files
+  (jpg/png/webp) and never fetches the gallery `-mini` thumbnails. When the site
+  answers HTML instead of data, it falls back to the ordinary link scan.
+  `e2e-universal.js` adds the generic fallback on an unknown React Router reader.
 - `scripts/e2e-chapter-relay.js` — the worker relay trust boundary.
 - `test/chapter-support.test.js` — the supporting pieces on their own, including
   the self-test plan (never drives a button, skips review-wiping controls when a

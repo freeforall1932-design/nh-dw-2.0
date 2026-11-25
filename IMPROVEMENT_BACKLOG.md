@@ -3474,3 +3474,126 @@ only. Chrome **3.13.0**; Firefox **1.5.0**.
 | 75 | Embedded-UI "Download lite" / "Download source" buttons (like nh's in-page UI) | **decided against 2026-10-17 (owner pick)** — Strategy A stays the only pipeline: lite is inferior per the owner's same-title sampling and zip endpoints are deliberately not hammered |
 
 Do not allocate these numbers to anything else.
+
+## Session log — 2026-11-24: mangak.io via `Chapters ↗`, doujin.io dropped, Hitomi downloads repaired
+
+Branch `arena/2943994c-nh-dw-2-0`, commits `09b0136`, `8052921`, `ac1b16e`.
+Offline only; no live site or real browser.
+
+- **Owner question:** can doujin.io and mangak.io be supported, including auto
+  batch download while reading? doujin.io: no — DRM (WASM-decrypted pages
+  painted to canvas); logging in or "it is already decrypted on screen" does
+  not change that capturing it is circumvention. Owner then dropped it
+  entirely. mangak.io: yes, through the generic chapter tool.
+- **mangak.io (`09b0136`):** `universalChapter.ts` reads Next.js
+  `__NEXT_DATA__` page lists, refuses stale data after client-side
+  navigation, and the probe gained an opt-in `strict-origin` referrer per site
+  (`sendReferrer` in the reader profile). New `test/next-data-reader.test.js`,
+  a Next.js scenario in `scripts/e2e-universal.js`.
+- **Hitomi (`8052921`):** the 09-22 adapter could not download anything —
+  `gg.js` was never fetched, URLs used a retired layout, the allow-list
+  rejected the real URLs, and the rendered page carries no page list. Rewrote
+  `hitomiResolver.ts` (regex-only `gg.js` parser, 10-min cache, keep-last-good,
+  refusal on shape change) and `hitomiSource.ts`; metadata from
+  `galleries/{id}.js` (id-checked) in `batchPipeline` and the popup; the
+  Downloader calls `prepareDownload`; raw mode fetches + validates then saves
+  bytes. Found on the way: the in-tab fetch used `credentials: "include"`,
+  which a server answering `ACAO: *` can never satisfy — hitomi tab reads now
+  omit credentials. Real `gg.js` fixture (`test/fixtures/hitomi/`).
+- **Research → follow-up (`ac1b16e`):** Cyberdrop-DL (updated 2026-11-21),
+  HiPaGo and comic-looms agree the `gg.js` rules are unchanged and that image
+  requests need `Referer`/`Origin: https://hitomi.la`. Chromium source checked
+  (ruleset_manager.cc, web_request_permissions.cc,
+  chrome_permission_message_rules.cc): DNR rules apply to the extension's own
+  requests, the extension origin counts as permitted, and
+  `declarativeNetRequestWithHostAccess` carries no warning. Added
+  `siteHeaderRules.ts` (session rule, own-initiator + content domain only),
+  in-tab fetch only on hitomi.la tabs, `blocked: 1` → clear error. The worker
+  relay `fetchInTab` now re-checks URLs (it previously injected any URL).
+- **Counts:** `npm test` 824 passing / 4 pending; e2e 197 PASS; build + smoke
+  green. **Not done:** Firefox keeps the old hitomi resolver; live checks are on
+  the WORKLIST Owner/live list (Hitomi, mangak.io).
+
+### Follow-up — items 68/70/71 review changes (owner-approved)
+
+- **Bug, item 70:** `harvestTick` stopped "bottom" the first time
+  `atPageBottom()` was true — on a real infinite-scroll site that is exactly
+  when the next batch starts loading, so runs could end early. New pure helpers in `listHarvest.ts`:
+  `noteHarvestProgress(state, atBottom)` (idle count resets on new cards or
+  when not at the bottom) and `harvestReachedEnd` (`idleRounds >=
+  HARVEST_END_IDLE_ROUNDS`, 3). `HARVEST_MAX_ROUNDS` 40 → 120. State gained
+  `idleRounds`/`lastCount` (optional on read). Red evidence: the new e2e
+  fixture option `scrollCardDelayMs` delivers each batch 1 s after the scroll;
+  the old rule ended at "4 collected", the new one collects all 5.
+- **Merge order:** `mergeHarvestIntoSelection` now keeps the existing
+  selection first (the download order), then the harvest.
+- **Item 68 search:** digits-only terms match the exact id or a whole number in
+  title/tags (`containsWholeNumber`); other terms keep substring AND.
+- **Item 68 "done" filter:** history-based when `historyKeys` is passed
+  (the panel always passes it); label "Downloaded ✓". Without the argument
+  the old status reading stays (back-compat for any other caller).
+- **Item 71:** the pointer tail names the range block on numbered listings
+  and Harvest on endless ones.
+- Applied to Chrome and Firefox (shared files identical; `popup.ts`,
+  `e2e-popup.js`, `e2e-list-controls.js` edited per copy). Chrome 827/4,
+  e2e 198 PASS; Firefox 706/4, e2e green; builds + smoke green.
+
+### Follow-up — Firefox catch-up to Chrome (owner request)
+
+- **Scope:** every Chrome change since the last Firefox sync (`5834582`,
+  Chrome 3.14.0 / Firefox 1.6.0) — Hitomi resolver, universal chapter tool +
+  Chapters page (mangak, MangaThemesia, Tailspace profiles), benchmark/log,
+  archive/retry hardening, theme tokens, items 68/70/71. Firefox → **1.7.0**.
+- **Method:** `git merge-file` per changed file (base = Chrome at `5834582`),
+  new files copied, conflicts resolved to Chrome logic + the audited delta.
+  Source now differs from Chrome only in the §2 allowlist (nine files + two
+  Firefox-only); `listControls.ts` is byte-identical again.
+- **Real defect found by the port:** the Hitomi DNR rule used
+  `initiatorDomains: [runtime.id]`; Firefox matches an extension's own request
+  by its `moz-extension://<uuid>` host (Firefox `ExtensionDNR.sys.mjs`), so the
+  header rule would never have applied. Shared fix `extensionInitiatorHost()`
+  in both trees + unit test; Firefox e2e-worker asserts the UUID host.
+- **Firefox deltas added:** Chapters ↗ binds the source tab
+  (`chapters.html?tab=<id>`); `#nhdwSiteUi` token mirror in
+  `panelRenderers.css` (the 27 old `#htmlDark`/hover/disabled pairs dropped,
+  tokens replace them); `content.css` = Chrome + marked drawer block; options
+  `applyDarkMode()` (+ e2e-options test); theme-budget test ported with the
+  two exemptions plus a drawer-mirror check.
+- **Counts:** Firefox 861 / 4 (was 706), smoke 7, `test:e2e` 241 PASS, options
+  35/0, toolbar 11/0, lint 0 errors / 33 warnings (+1 = webpack's global shim in
+  the new `js/chapters.js`). Chrome 828 / 4, e2e 198, smoke 7.
+- **Not done:** no real Firefox/Android run, no signing, no visual check.
+
+### Follow-up — Tailspace page-data reader + research helper (owner "Yes", 2026-11-25)
+
+- **Trigger:** the owner asked whether undocumented sites need manual sampling.
+  A GitHub search found a Keiyoushi Tailspace source merged 2026-11-01, one day
+  after `TAILSPACE_PLAN.md` recorded "none". A second, independent scraper
+  (cofob/memesave-bot) agreed on every fact.
+- **Landed (both trees, shared files byte-identical):** `src/utils/routeData.ts`
+  (turbo-stream v2 decoder, generic React Router finder, Tailspace recipe, series
+  walk), probe integration (`source: "route-data"`, cached inspect, stated-total
+  cross-check, referrer hint) and Chapters page wording. Fixtures come from the
+  real encoder and are reproducible.
+- **Design choices:**
+  - Recipes are reviewed code, not storage.
+  - Ambiguity gives nothing.
+  - One malformed page rejects the chapter.
+  - The site's own `pageNumber` and series links are the only ordering.
+  - No automatic referrer and no header rules.
+  - On a stated-total mismatch the tool does not give "scroll the reader" advice,
+    because scrolling cannot fix page data.
+- **Red evidence:** the first e2e fallback case timed out with "Collected 0
+  candidate(s)". This was correct behaviour: sibling Tailspace parts sit outside
+  the title path, so the ordinary link scan needs *outside links* ticked.
+- **Counts:**
+
+  | Tree | `npm test` | e2e | smoke |
+  | --- | --- | --- | --- |
+  | Chrome | 845 / 4 (was 828) | 203 (was 198) | 7 |
+  | Firefox | 878 / 4 (was 861) | 246 (was 241) | 7 |
+
+  Firefox lint: 0 errors / 33 warnings.
+- **Helper:** `tools/find-site-references.js` (+ offline test).
+- **Not done:** live Tailspace run. CORS on `pics.tailspace.com` is the one
+  fact no reference project can reveal.

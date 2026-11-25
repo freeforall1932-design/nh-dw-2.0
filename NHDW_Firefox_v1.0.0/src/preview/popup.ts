@@ -5,7 +5,7 @@ import { message } from "./message"
 import { resolveSelectedGalleries } from "./selectedGalleryResolver"
 import { getSourceForUrl, SiteAdapter, clearnetSource } from "../sources"
 import { getActiveTabId, getActiveNhentaiTabId, readGalleryFromTab, executeInTab } from "./activeTabGallery"
-import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi } from "../utils/apiAuth"
+import { getApiModeState, decideGate, saveApiKey, skipApiKeyGate, fetchNhentaiApi, parseRetryAfterMs, NhentaiRateLimitError } from "../utils/apiAuth"
 import {
     DownloadFormat,
     effectiveOutputMode,
@@ -23,6 +23,16 @@ import { PendingFailure, groupRetryMessages } from "../utils/failedGalleries"
 import { confirmPdfMerge } from "./pdfMergeWarning"
 import { parsePageRange, listingUrlForPage } from "../utils/pageRange"
 import { parseGalleryCardsFromHtml } from "../parsing/CardParsing"
+import { walkTailspaceSeries, tailspacePageCountNote } from "../parsing/tailspaceData"
+
+// Display name for a site in panel messages.
+function siteDisplayName(site: string): string {
+    return site === "tailspace" ? "Tailspace" : site;
+}
+
+function pause(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // Manifest V3 removed chrome.tabs.executeScript. Keep all active-tab injection in
 // one place so it works from the popup and uses the current tab explicitly.
@@ -487,6 +497,11 @@ export default class Popup
         const galleryId = source ? source.getGalleryId(self.url) : null;
         if (galleryId !== null && source !== null) {
             await self.#doujinshiPreviewAsync(galleryId, source, newUrl);
+        } else if (source !== null && source.site === "tailspace") {
+            // Tailspace has no listing mode here (no card markup sampled yet):
+            // say what to open instead of injecting the nhentai list script.
+            const actionEl = document.getElementById('action');
+            if (actionEl) actionEl.innerHTML = message.siteOpenComic("Tailspace", "tailspace.com/c/...");
         } else if (source !== null) {
             executeActiveTabScript("js/getGalleries.js");
         } else {
@@ -518,6 +533,7 @@ export default class Popup
         // any keyed failure keep the original order below.
         const modeState = await getApiModeState();
         let keyedRejected = false;
+        let rateLimitMessage = "";
         if (source.site === "nhentai" && modeState.mode === "keyed") {
             try {
                 const keyedParsing = new ApiParsing();
@@ -528,6 +544,9 @@ export default class Popup
                     json = await keyedParsing.GetJsonAsync(keyedResp);
                 } else if (keyedResp.status === 401) {
                     keyedRejected = true;
+                } else if (keyedResp.status === 429) {
+                    const retryAfter = keyedResp.headers && keyedResp.headers.get ? keyedResp.headers.get("Retry-After") : null;
+                    rateLimitMessage = new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter)).message;
                 }
             } catch (error) {
                 statusText = errorMessage(error);
@@ -537,7 +556,43 @@ export default class Popup
         // Read the open gallery tab. Extension-origin fetches to the gallery
         // API are what Cloudflare 403s; the rendered page already carries its
         // metadata once any challenge is done.
-        if (json === null) {
+        // Sites whose metadata is a separate document (hitomi: galleries/{id}.js)
+        // read it directly; the result must be this gallery and have pages.
+        let blockedMessage: string | null = null;
+        // Why the site's data could not be used, for adapters that can say so
+        // (tailspace); shown instead of the generic Cloudflare notice.
+        let extractReason = "";
+        const explains = typeof source.explainExtractFailure === "function";
+        if (json === null && !rateLimitMessage && source.site !== "nhentai" && typeof source.getMetadataUrl === "function" && source.extractGallery) {
+            try {
+                const metaResp = await fetch(source.getMetadataUrl(id), { credentials: "omit", cache: "no-store", redirect: "error" });
+                status = metaResp ? metaResp.status : 0;
+                statusText = metaResp ? String(metaResp.statusText || "") : "";
+                if (metaResp && metaResp.ok) {
+                    const metaText = await metaResp.text();
+                    const meta = source.extractGallery(metaText);
+                    // Tailspace slugs are case-insensitive in practice; adopt
+                    // the site's own spelling so history keys stay canonical.
+                    if (meta && source.site === "tailspace" && String(meta.id) !== String(id)
+                        && String(meta.id).toLowerCase() === String(id).toLowerCase()) {
+                        id = String(meta.id);
+                    }
+                    if (meta && meta.blocked === true && String(meta.id) === String(id)) {
+                        blockedMessage = "This gallery is blocked on Hitomi: the site does not serve its pages.";
+                    } else if (meta && String(meta.id) === String(id) && meta.images && Array.isArray(meta.images.pages) && meta.images.pages.length > 0) {
+                        json = meta;
+                    } else if (meta && String(meta.id) !== String(id)) {
+                        extractReason = "the site answered with a different comic";
+                    } else if (!meta && explains) {
+                        extractReason = source.explainExtractFailure!(metaText);
+                    }
+                }
+            } catch (error) {
+                statusText = errorMessage(error);
+            }
+        }
+
+        if (json === null && !rateLimitMessage) {
             if (source.site === "nhentai") {
                 json = await getGalleryFromActiveTab(id);
             } else {
@@ -545,22 +600,32 @@ export default class Popup
                 if (tabId !== undefined) {
                     const pageHtml = await executeInTab(tabId, () => document.documentElement ? document.documentElement.outerHTML : "");
                     if (pageHtml && source.extractGallery) {
-                        json = source.extractGallery(pageHtml);
+                        const fromPage = source.extractGallery(pageHtml);
+                        // Same rule as the batch pipeline: a page that names a
+                        // different gallery (a client-side navigation leaves the
+                        // previous comic's data in the page) is never used.
+                        if (fromPage && (fromPage.id === undefined || fromPage.id === null || String(fromPage.id) === String(id))) {
+                            json = fromPage;
+                        }
                     }
                 }
             }
         }
 
-        if (json === null && source.site === "nhentai") {
+        if (json === null && source.site === "nhentai" && !rateLimitMessage) {
             try {
                 const resp = await fetch(this.parsing!.GetUrl(id), {
                     credentials: "include",
                     cache: "no-store",
+                    redirect: "error",
                     headers: await getOptionalApiHeaders()
                 });
                 status = resp.status;
                 statusText = resp.statusText;
-                if (resp.ok) {
+                if (resp.status === 429) {
+                    const retryAfter = resp.headers && resp.headers.get ? resp.headers.get("Retry-After") : null;
+                    rateLimitMessage = new NhentaiRateLimitError("Gallery metadata request", parseRetryAfterMs(retryAfter)).message;
+                } else if (resp.ok) {
                     json = await this.parsing!.GetJsonAsync(resp);
                 }
             } catch (error) {
@@ -577,7 +642,12 @@ export default class Popup
                 statusText = resp ? String(resp.statusText || "") : "";
                 if (resp && resp.ok && source.extractGallery) {
                     const html = typeof resp.text === "function" ? await resp.text() : "";
-                    json = source.extractGallery(html);
+                    const fromHtml = source.extractGallery(html);
+                    if (fromHtml && (fromHtml.id === undefined || fromHtml.id === null || String(fromHtml.id) === String(id))) {
+                        json = fromHtml;
+                    } else if (!fromHtml && explains && !extractReason) {
+                        extractReason = source.explainExtractFailure!(html);
+                    }
                 }
             } catch (error) {
                 statusText = errorMessage(error);
@@ -589,9 +659,13 @@ export default class Popup
         }
 
         if (json === null) {
-            let html = status === 404
-                ? message.errorOther(status, statusText)
-                : message.cloudflareMetadata();
+            let html = blockedMessage
+                ? message.errorOther(403, blockedMessage)
+                : rateLimitMessage
+                ? message.errorOther(429, rateLimitMessage)
+                : explains
+                ? message.siteReadError(siteDisplayName(source.site), status, statusText, extractReason)
+                : (status === 404 ? message.errorOther(status, statusText) : message.cloudflareMetadata());
             if (keyedRejected) {
                 html += '<br/><small>Your API key was rejected (HTTP 401). Check it in the extension options, or clear it there to use open-tab mode only.</small>';
             }
@@ -647,7 +721,17 @@ export default class Popup
                     sourceUrl: source.getGalleryUrl(id)
                 });
 
-                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip, alreadyNote, isBookmarked());
+                // Tailspace: a page-count warning and the Series column in
+                // place of nhentai's similar-galleries panel.
+                const isTailspace = source.site === "tailspace" && json.tailspace;
+                const infoExtras = isTailspace
+                    ? {
+                        notice: tailspacePageCountNote(json),
+                        sideTitle: "Series",
+                        sideHtml: '<div id="seriesPanel">' + message.seriesIntro(!!(json.tailspace.previous || json.tailspace.next)) + '</div>'
+                    }
+                    : {};
+                document.getElementById('action')!.innerHTML = message.apiModeBadge(modeState.mode === "keyed") + message.downloadInfo(escapeHtml(title), json.images.pages.length, extension, elems.useZip, alreadyNote, isBookmarked(), infoExtras);
                 (document.getElementById('path') as HTMLInputElement).value = utils.cleanName(title, elems.replaceSpaces, id);
 
                 // Add event listeners after updating the HTML content.
@@ -763,6 +847,118 @@ export default class Popup
                                 }
                                 self.updateProgress(0, title, false);
                             });
+                        });
+                    }
+
+                    // Right column (tailspace): the linked parts of this comic's
+                    // series. Each part is read from the site's page data (one
+                    // request per part, paced), listed oldest first, and the
+                    // ticked parts download through the normal batch path with
+                    // their metadata already resolved - one file per part.
+                    const seriesPanel = document.getElementById('seriesPanel');
+                    const loadSeries = document.getElementById('buttonLoadSeries') as HTMLInputElement | null;
+                    if (isTailspace && seriesPanel && loadSeries) {
+                        loadSeries.addEventListener('click', async () => {
+                            loadSeries.disabled = true;
+                            seriesPanel.innerHTML = message.seriesLoading(1);
+                            const readPart = async (partId: string): Promise<any> => {
+                                await pause(300);
+                                const resp = await fetch(source.getMetadataUrl!(partId), { credentials: "omit", cache: "no-store", redirect: "error" });
+                                if (!resp.ok) {
+                                    return new Error("HTTP " + resp.status + (resp.statusText ? " " + resp.statusText : ""));
+                                }
+                                const text = await resp.text();
+                                const part = source.extractGallery!(text);
+                                if (!part) {
+                                    return new Error((source.explainExtractFailure && source.explainExtractFailure(text)) || "no comic data");
+                                }
+                                return part;
+                            };
+                            let series;
+                            try {
+                                series = await walkTailspaceSeries(json, readPart, (found: number) => {
+                                    seriesPanel.innerHTML = message.seriesLoading(found);
+                                });
+                            } catch (error) {
+                                seriesPanel.innerHTML = '<small class="nhdwSeriesWarning">&#9888; The series could not be read: ' + escapeHtml(errorMessage(error)) + '</small><br/>' + message.seriesIntro(true);
+                                return;
+                            }
+                            let history: DownloadHistory = {};
+                            try { history = await readHistory(); } catch (_) { /* cosmetic */ }
+                            const parts: any[] = series.parts;
+                            const warnings: string[] = [];
+                            if (series.broken) warnings.push(series.brokenReason + " The list below may be incomplete.");
+                            if (series.truncated) warnings.push("The series is longer than " + parts.length + " parts; only the first " + parts.length + " are listed.");
+                            const partTitle = (part: any) => String(part.title && part.title.pretty ? part.title.pretty : part.id);
+                            seriesPanel.innerHTML = message.seriesList(parts.map((part) => ({
+                                id: String(part.id),
+                                title: escapeHtml(partTitle(part)),
+                                pages: part.images.pages.length,
+                                done: !!history[toGalleryKey(String(part.id), source.site)],
+                                current: String(part.id) === String(id),
+                                note: tailspacePageCountNote(part)
+                            })), warnings);
+                            const boxes = () => Array.from(seriesPanel.querySelectorAll<HTMLInputElement>('input.seriesItem'));
+                            const downloadSeries = document.getElementById('buttonSeries') as HTMLInputElement | null;
+                            const refreshCount = () => {
+                                if (!downloadSeries) return;
+                                const count = boxes().filter((box) => box.checked).length;
+                                downloadSeries.value = "Download selected (" + count + ")";
+                                downloadSeries.disabled = count === 0;
+                            };
+                            boxes().forEach((box) => box.addEventListener('change', refreshCount));
+                            const all = document.getElementById('buttonSeriesAll');
+                            const none = document.getElementById('buttonSeriesNone');
+                            if (all) all.addEventListener('click', () => { boxes().forEach((box) => { box.checked = true; }); refreshCount(); });
+                            if (none) none.addEventListener('click', () => { boxes().forEach((box) => { box.checked = false; }); refreshCount(); });
+                            refreshCount();
+                            if (downloadSeries) {
+                                downloadSeries.addEventListener('click', async () => {
+                                    const ticked = new Set(boxes().filter((box) => box.checked).map((box) => box.dataset.id || ""));
+                                    const selected: Record<string, string> = {};
+                                    const metadata: Record<string, any> = {};
+                                    const redownloadIds: string[] = [];
+                                    for (const part of parts) {
+                                        const partId = String(part.id);
+                                        if (!ticked.has(partId)) continue;
+                                        selected[partId] = partTitle(part);
+                                        metadata[partId] = part;
+                                        if (history[toGalleryKey(partId, source.site)]) redownloadIds.push(partId);
+                                    }
+                                    if (Object.keys(selected).length === 0) {
+                                        refreshCount();
+                                        return;
+                                    }
+                                    downloadSeries.disabled = true;
+                                    const tabId = await getActiveTabId();
+                                    const finalName = utils.cleanName(partTitle(parts[0]) + " - series", elems.replaceSpaces, id);
+                                    chrome.runtime.sendMessage({
+                                        action: "downloadAllDoujinshis",
+                                        allDoujinshis: selected,
+                                        galleryMetadata: metadata,
+                                        finalName: finalName,
+                                        tabId: tabId,
+                                        site: source.site,
+                                        formatOverride: selectedFormat(),
+                                        separate: true,
+                                        redownloadIds: redownloadIds
+                                    }, (response: any) => {
+                                        try { void chrome.runtime.lastError; } catch (_) { /* worker restarting */ }
+                                        if (response && response.result === "queued") {
+                                            document.getElementById('action')!.innerHTML =
+                                                "Series download queued at position " + response.position + ".";
+                                            return;
+                                        }
+                                        if (!response || response.result === "error") {
+                                            downloadSeries.disabled = false;
+                                            seriesPanel.insertAdjacentHTML('afterbegin', '<div class="nhdwSeriesWarning"><small>&#9888; The download could not start' +
+                                                (response && response.error ? ': ' + escapeHtml(String(response.error)) : ' (the extension worker did not answer)') + '.</small></div>');
+                                            return;
+                                        }
+                                        self.updateProgress(0, finalName, false);
+                                    });
+                                });
+                            }
                         });
                     }
 
@@ -984,7 +1180,12 @@ export default class Popup
         // block. Rendered only when the page really has cards.
         const sharedSelectionPointer = allIds.length > 0
             ? '<div id="selectionPointer" class="selectionPointer">Ticking rows here and ticking cards on the page are the same selection'
-                + (maxPage > 0 && currPage > 0 ? "; for the listing's other pages use the range block below" : '')
+                // Item 71 (2026-11-24): name the right tool for each kind of
+                // listing - the range block for numbered pages, Harvest (the
+                // page's floating bar) for endless scrolling.
+                + (maxPage > 0 && currPage > 0
+                    ? "; for more pages use the range block below (numbered pages)"
+                    : "; for more from an endless-scrolling page use Harvest on the page")
                 + '.</div>'
             : '';
         let html = '<span id="modeBadgeSlot"></span><h3>' + allIds.length + ' doujinshi' + (allIds.length > 1 ? 's' : '') + ' found</h3>'

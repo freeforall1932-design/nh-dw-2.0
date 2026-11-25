@@ -136,12 +136,31 @@ other archive-integrity and delivery-safety issues are open.
   come back: they are slug-addressed (no numeric ids), so the `siteKeys`
   contract (ids must not contain `:`) needs a slug-based composite-key and
   paste-box-shape decision before any adapter work.
+  **Update (2026-11-24, owner request):** mangak.io is now supported through the
+  generic Chromium `Chapters ↗` tool, not as a built-in adapter. The tool reads
+  its chapter page list from Next.js `__NEXT_DATA__` and offers an opt-in
+  origin-only referrer for page images. See
+  [`UNIVERSAL_CHAPTER_TOOL.md`](UNIVERSAL_CHAPTER_TOOL.md). It has not been tested
+  against the live site yet; whether its image CDN allows CORS is the open
+  question.
+  **Update (2026-11-25, owner "Yes"):** tailspace.com is handled by the same
+  `Chapters ↗` tool through a page-data recipe. Each comic's pages come from the
+  site's React Router `.data`, and a series is walked through its previous/next
+  links. This is still not a built-in adapter, so the slug-key question above
+  does not arise. Facts come from Keiyoushi's Tailspace source (Apache-2.0,
+  credited) and cofob/memesave-bot (facts only). The live check is in
+  [`TAILSPACE_PLAN.md`](TAILSPACE_PLAN.md).
 - **Video-only / general streaming platforms stay out of scope** — they belong
   in dedicated tools such as `yt-dlp` or `multi-site-video-downloader`. This
   extension remains focused on comic, doujinshi, and image gallery archives
   (`ZIP`, `CBZ`, `PDF`, `raw`).
 
 ## 5. Candidate Onboarding Checklist
+
+**Step 0 (2026-11-25): look for existing work first.** Run
+`node tools/find-site-references.js <domain>`. It labels each open-source hit
+reusable-with-credit (Apache-2.0/MIT/Unlicense) or facts-only (GPL, no licence),
+and flags DRM sites as out of scope. Only then go to a manual capture.
 
 For authorized candidate work, use appropriate, non-sensitive examples and the privacy checklist in
 [`NEW_DOMAIN_PLANNING.md`](NEW_DOMAIN_PLANNING.md#evidence-needed-for-a-future-authorized-comic-reader-implementation).

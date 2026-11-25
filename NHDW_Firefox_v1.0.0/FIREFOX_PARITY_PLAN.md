@@ -5,8 +5,12 @@
 first (done) → **elevate Firefox to Chrome feature parity** → re-plan the
 Android part on top of the synced codebase.
 
-**Latest checkpoint, 2026-09-21:** approved item 59 is complete (§12). Current
-source allowlist: ten changed existing files + two Firefox-only files.
+**Latest checkpoint, 2026-11-24:** owner-requested catch-up (§13) brought
+Firefox to Chrome 3.14.0 + everything after the 2026-10-20 sync (`5834582`):
+Hitomi resolver, universal chapter tool / Chapters page / mangak, benchmark
+log, archive/retry hardening, Tailspace site profiles, MangaThemesia fallback,
+theme tokens. Firefox **1.7.0**. Source allowlist: nine changed existing files
++ two Firefox-only files (`listControls.ts` is byte-identical again).
 Device verification/signing (58) remains pending; no automatic Chrome backport.
 
 ## 1. Why elevation, not patching
@@ -25,22 +29,23 @@ two trees diff-tracked so future syncs are cheap.
 |---|---|---|
 | `manifest.json` | gecko.id, `background.scripts` (no service_worker), no `offscreen`/`sidePanel` perms, min 142.0 + data_collection_permissions, icons 48/96/128, content_scripts gains `js/listControls.js` after rebase | Firefox platform |
 | `src/background/background.ts` | + job keep-alive alarm (Android event-page suspension); sidePanel/offscreen code stays (feature-detected, unreachable/optional on Firefox) | Android robustness |
-| `src/preview/preview.ts` | + `refreshHostNotice` (MV3 opt-in host grants), + runtime mobile action bar relocator | Firefox MV3 + Android UI |
+| `src/preview/preview.ts` | + `refreshHostNotice` (MV3 opt-in host grants), + runtime mobile action bar relocator, + `Chapters ↗` opens `chapters.html?tab=<source tab>` (no side panel to borrow the active tab from) | Firefox MV3 + Android UI + §13 |
 | `src/preview/message.ts` | + `hostGrantNotice` | additive |
-| `css/style.css` | + phone media block (coarse-pointer gated) incl. `#nhdwMobileBar`; shared renderer rules extracted to `panelRenderers.css` | Android UI + PR #44 review |
-| `css/panelRenderers.css` (new) | same Settings/Queue declarations, scoped to their popup/drawer containers; imported by style.css and injected by manifest | PR #44 review |
+| `css/style.css` | Chrome's 3-way merge minus the renderer rules (extracted to `panelRenderers.css`) + phone media block (coarse-pointer gated, tokenised) incl. `#nhdwMobileBar` | Android UI + PR #44 review |
+| `css/panelRenderers.css` (new) | Chrome's Settings/Queue/Bookmark declarations, scoped to their popup/drawer containers; imported by style.css and injected by manifest. Opens with a `#nhdwSiteUi` mirror of every `theme.css` token at its dark value (theme.css is never injected into websites), then drawer primitives; no per-theme `#htmlDark` pairs. Guarded by `test/theme-budget.test.js` | PR #44 review + §13 |
+| `css/content.css` | byte-identical Chrome prefix, then a `FIREFOX-ONLY DELTA` marker and the embedded-UI / invoker / drawer block (item 56); the theme budget only checks the Chrome prefix | item 56 + §13 |
 | `index.html` / `options.html` | + viewport metas | Android UI |
 | webpack | + `listControls` + `siteUi` entries | parity + item 56 |
 | `test/manifest.test.js` | Firefox-manifest describe block | guards |
 | `package.json` / lockfile | Firefox-only web-ext 10.6.0 and scoped addons-linter 10.13.0 override; Mocha 12.0.2 / Node range shared with Chrome | owner-requested tooling maintenance |
 | `src/utils/embeddedUi.ts` (new) | website-embedded UI contract | item 56/57, Firefox-first |
 | `src/content/siteUi.ts` (new) | header invoker + drawer | item 56 |
-| `css/content.css` | + embedded-UI / invoker / drawer block | item 56 |
-| `src/background/background.ts` | + keep-alive **and** toolbar `onClicked` / per-tab `setPopup` / `siteUiOpenPanel` | Android + item 57 |
-| `src/preview/popupSettings.ts` | sidePanel filter, In-page panel preferences (gated on `shipsSiteUi()`), explicit optional list-format read | Firefox + items 57/59 |
+| `src/background/background.ts` | + keep-alive **and** toolbar `onClicked` / per-tab `setPopup` / `siteUiOpenPanel`; no `ICON_THEMES` tryout map | Android + item 57 |
+| e2e harness (`scripts/e2e-worker.js`, `e2e-popup.js`, `e2e-options.js`, `e2e-offscreen.js`, `e2e-relay.js`) | Firefox stubs: `moz-extension://<uuid>/` `getURL`, gecko `runtime.id`, single `localStore`, `tabs.create` capture; never copy the Chrome scripts over them | §13 |
+| `src/preview/popupSettings.ts` | sidePanel filter, In-page panel preferences (gated on `shipsSiteUi()`), explicit optional list-format read; no logo-lab toolbar-icon tryout (Chrome-only owner experiment, its `assets/icons/` are not shipped) | Firefox + items 57/59 |
 | `src/utils/listSettings.ts` | explicitly request optional `listFormat`, then merge only other defaults; no migration/write on read | approved item 59, Firefox-only |
 | `src/content/listControls.ts` | same explicit optional-key read for card/bar settings | approved item 59, Firefox-only |
-| `src/options/options.ts` | explicit optional list-format read, display-only normalization/capability gate, live and empty-template previews | item 38 offline regressions; Firefox-only |
+| `src/options/options.ts` | explicit optional list-format read, display-only normalization/capability gate, live and empty-template previews; + `applyDarkMode()` (Chrome themes options through the panel) | item 38 offline regressions; §13 |
 | `src/preview/activeTabGallery.ts` | validated Full panel source-tab context; ordinary popup keeps active-tab behavior | PR #44 review |
 | `src/preview/popup.ts` | script injection uses source context; retries use nhentai-guarded source | PR #44 review |
 | `src/background/bookmarkService.ts` | optional source context for Full panel bookmark enrichment, validated before injection | PR #44 review |
@@ -86,7 +91,8 @@ Everything else must be **byte-identical to Chrome** after the rebase.
 
 1.0.0 = Android-ready snapshot (shipped). 1.1.0 = parity elevation (+ its
 Android re-plan). 1.2.0 = website-embedded UI (items 56/57); 1.3.0 =
-bookmark icon + gallery-page Bookmark button + Queue-tab extras (Chrome 3.9.0). Independent
+bookmark icon + gallery-page Bookmark button + Queue-tab extras (Chrome 3.9.0);
+1.6.0 = items 72-74 (Chrome 3.14.0); 1.7.0 = the 2026-11-24 catch-up (§13). Independent
 sequence, never synced to Chrome's numbers.
 
 ## 6. P1 review (2026-09-19, same session) — results
@@ -269,3 +275,47 @@ all offline e2e (options33, toolbar11, both popup variants) green; lint **0
 errors / 0 notices / 30 unchanged advisories**; unsigned **1.2.0 ZIP25**.
 The four pending tests remain intentionally opt-in live checks. No live-site,
 real-device or signing evidence; 58 remains the release gate.
+
+## 13. Catch-up to Chrome (owner request, 2026-11-24, `arena/2943994c-nh-dw-2-0`)
+
+Owner: "Do a catch up on Firefox all update that's been postponed on Firefox
+part." This lifts, for this sync, the 2026-10-27 "Chromium-only for now"
+deferral. Method: three-way `git merge-file` of every Chrome file changed
+since `5834582` (base = Chrome at that commit, ours = Firefox, theirs = Chrome
+HEAD); new Chrome files copied; conflicts resolved by keeping Chrome's logic
+plus the §2 delta. No logic was rewritten for Firefox beyond the rows below.
+
+Ported: Hitomi resolver (gg.js text parse, `galleries/{id}.js` metadata,
+blocked-gallery 403 handling, DNR `Referer`/`Origin` session rules), the
+universal chapter tool (`universalChapterProbe`, `chapters.html`, mangak
+`__NEXT_DATA__`, MangaThemesia fallback, Tailspace `siteProfiles`), the
+benchmark/extension log, archive/retry hardening, theme tokens, item 68/70/71.
+
+Firefox-specific decisions:
+
+- **DNR initiator.** Firefox matches an extension request by its
+  `moz-extension://<uuid>` host, not the gecko id (`ExtensionDNR.sys.mjs`).
+  Shared `siteHeaderRules.ts` now uses `extensionInitiatorHost()` (the
+  `runtime.getURL` host) in both trees; Chrome still gets its extension id.
+  Manifest gains `activeTab` + `declarativeNetRequestWithHostAccess`; host
+  permissions equal Chrome's.
+- **Chapters ↗.** Firefox has no side panel, so `preview.ts` passes the
+  source tab id: `chapters.html?tab=<id>` (refuses an extension-page source).
+- **Theme.** `theme.css` is linked by `index.html` and `options.html`;
+  options applies dark mode itself; the website drawer gets the token mirror
+  in `panelRenderers.css` (see §2).
+- **Not ported:** the logo-lab toolbar-icon tryout (Chrome-only owner
+  experiment).
+
+Verification (offline only): `tsc` clean; **861 unit pass / 4 pending**
+(+8 theme budget); build OK; smoke 7; `test:e2e` exit 0 (241 PASS:
+worker 46, offscreen 29, relay 22, content 7, list-controls 36,
+title-bookmark 14, bookmark-panel 22, popup 27 / Full panel 27, site-ui 9,
+universal + chapter-relay); options 35/0, embedded toolbar 11/0; web-ext lint
+**0 errors / 33 warnings** (32 before, the new one is webpack's
+`new Function("return this")` global shim in `js/chapters.js`, identical to the
+existing `js/background.js` one); unsigned ZIP `nhentai_downloader-1.7.0.zip`.
+Chrome after the shared DNR change: 828 / 4, e2e 198, smoke 7.
+
+No live-site, real Firefox desktop, Android or signing evidence; there was also
+no visual check of the token theme. 58 remains the release gate.

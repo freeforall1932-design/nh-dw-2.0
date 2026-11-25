@@ -101,6 +101,12 @@ export function bookmarkMatchesDate(item: BookmarkItem, bucket: BookmarkDateBuck
  * Text search over title, id, site and stored tags. Every term must match
  * (AND), because "artist tag plus language" is the actual way people search a
  * library, and an OR would answer with everything either term hits.
+ *
+ * A term made only of digits is treated as a number, not a fragment
+ * (2026-11-24): it matches the gallery id EXACTLY, or a whole number in the
+ * title or tags ("250" finds "Vol. 250" and id 250, never id 12503 or
+ * "2501"). Substring matching made numeric searches far broader than they
+ * looked. Word terms keep substring matching.
  */
 export function bookmarkMatchesText(item: BookmarkItem, text: string): boolean {
     const terms = String(text === undefined || text === null ? "" : text).trim().toLowerCase().split(/\s+/).filter((term) => term !== "");
@@ -108,22 +114,51 @@ export function bookmarkMatchesText(item: BookmarkItem, text: string): boolean {
         return true;
     }
     const tags = item && Array.isArray(item.tags) ? item.tags.join(" ") : "";
-    const haystack = [
+    const id = item && item.id !== undefined && item.id !== null ? String(item.id).toLowerCase() : "";
+    const words = [
         item && item.title ? item.title : "",
-        item && item.id ? item.id : "",
         normalizeSite(item && item.site),
         tags
     ].join(" ").toLowerCase();
     for (const term of terms) {
-        if (haystack.indexOf(term) === -1) {
+        if (/^[0-9]+$/.test(term)) {
+            if (id !== term && !containsWholeNumber(words, term)) {
+                return false;
+            }
+        } else if (words.indexOf(term) === -1 && id.indexOf(term) === -1) {
             return false;
         }
     }
     return true;
 }
 
-/** One predicate for the whole query; the panel and the tests share it. */
-export function bookmarkMatchesQuery(item: BookmarkItem, rawQuery: any, now: number): boolean {
+/** `digits` appears in `text` with no digit directly before or after it. */
+function containsWholeNumber(text: string, digits: string): boolean {
+    let from = 0;
+    while (true) {
+        const at = text.indexOf(digits, from);
+        if (at === -1) {
+            return false;
+        }
+        const before = at > 0 ? text.charAt(at - 1) : "";
+        const after = text.charAt(at + digits.length);
+        if (!/[0-9]/.test(before) && !/[0-9]/.test(after)) {
+            return true;
+        }
+        from = at + 1;
+    }
+}
+
+/**
+ * One predicate for the whole query; the panel and the tests share it.
+ *
+ * The "done" state means DOWNLOADED (2026-11-24): it follows the download
+ * history - the same record as the green check and the batch skip - not the
+ * row's own status, which can say "done" after the file is gone. The panel
+ * labels it "Downloaded ✓". `historyKeys` must be passed for that; without it
+ * (old callers) the row status is used, as before.
+ */
+export function bookmarkMatchesQuery(item: BookmarkItem, rawQuery: any, now: number, historyKeys?: string[]): boolean {
     if (!item) {
         return false;
     }
@@ -135,6 +170,10 @@ export function bookmarkMatchesQuery(item: BookmarkItem, rawQuery: any, now: num
         if (item.selected !== true) {
             return false;
         }
+    } else if (query.status === "done" && Array.isArray(historyKeys)) {
+        if (!bookmarkIsDownloaded(item, historyKeys)) {
+            return false;
+        }
     } else if (query.status !== "all" && item.status !== query.status) {
         return false;
     }
@@ -142,9 +181,9 @@ export function bookmarkMatchesQuery(item: BookmarkItem, rawQuery: any, now: num
 }
 
 /** The rows a query shows - same order as stored (the download order). */
-export function queryBookmarks(state: BookmarkState, rawQuery: any, now: number = Date.now()): BookmarkItem[] {
+export function queryBookmarks(state: BookmarkState, rawQuery: any, now: number = Date.now(), historyKeys?: string[]): BookmarkItem[] {
     const items = state && Array.isArray(state.items) ? state.items : [];
-    return items.filter((item) => bookmarkMatchesQuery(item, rawQuery, now));
+    return items.filter((item) => bookmarkMatchesQuery(item, rawQuery, now, historyKeys));
 }
 
 /**

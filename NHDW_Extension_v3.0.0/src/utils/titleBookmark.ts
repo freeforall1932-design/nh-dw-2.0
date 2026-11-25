@@ -216,6 +216,15 @@ const TITLE_BOOKMARK_TARGETS: Record<string, TitleBookmarkTarget> = {
     }
 };
 
+/**
+ * Registered sites that deliberately have NO in-page bookmark button yet,
+ * because no sample of their page markup exists to anchor one on (guessing
+ * selectors would inject into the wrong place). They are bookmarked from the
+ * panel's own Bookmark button on the comic preview instead.
+ *   tailspace - React-rendered comic page, markup never captured (2026-11-25).
+ */
+export const TITLE_BOOKMARK_PANEL_ONLY: string[] = ["tailspace"];
+
 export interface ResolvedTitleBookmarkPage {
     site: string;
     id: string;

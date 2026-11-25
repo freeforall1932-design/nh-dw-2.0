@@ -61,7 +61,11 @@ const CDN_CONFIG_FIXTURE = JSON.stringify({
 });
 let cdnConfigFetches = 0;
 
+const sessionRuleUpdates = [];
 const chromeStub = {
+    declarativeNetRequest: {
+        updateSessionRules(arg) { sessionRuleUpdates.push(arg); return Promise.resolve(); }
+    },
     tabs: {
         onUpdated: { addListener() {} },
         onActivated: { addListener() {} },
@@ -97,6 +101,7 @@ const chromeStub = {
             }
             sentMessages.push(msg);
         },
+        id: "abcdefghijklmnopabcdefghijklmnop",
         lastError: null
     },
     downloads: {
@@ -177,6 +182,15 @@ const galleryById = {
 const HITOMI_ID = 765432;
 const HITOMI_HASH = "0e".repeat(32);
 const hitomiUrls = [];
+const hitomiGgText = fs.readFileSync(path.join(__dirname, "../test/fixtures/hitomi/gg-2026-09-22.js"), "utf8");
+let hitomiGgFetches = 0;
+let hitomiMetaFetches = 0;
+const hitomiGalleryJs = 'var galleryinfo = ' + JSON.stringify({
+    id: String(HITOMI_ID),
+    title: "Hitomi Test",
+    files: [{ hash: HITOMI_HASH, name: "01.png", hasavif: 1, width: 1280, height: 1800 }]
+});
+// Stale-style page with an inline blob: the adapter must not need it.
 const hitomiPageHtml = '<html><body><script>var galleryinfo = ' + JSON.stringify({
     id: Number(HITOMI_ID),
     title: "Hitomi Test",
@@ -248,6 +262,16 @@ function fetchStub(url, init) {
     }
     if (u.indexOf("hitomi.la/galleries/" + HITOMI_ID) !== -1) {
         return Promise.resolve(new Response(hitomiPageHtml, { status: 200 }));
+    }
+    // Hitomi's real flow: gg.js (server map) and galleries/{id}.js (metadata)
+    // on ltn., page images on a1-a3 / w1-w3.
+    if (u === "https://ltn.gold-usergeneratedcontent.net/gg.js") {
+        hitomiGgFetches++;
+        return Promise.resolve(new Response(hitomiGgText, { status: 200 }));
+    }
+    if (u === "https://ltn.gold-usergeneratedcontent.net/galleries/" + HITOMI_ID + ".js") {
+        hitomiMetaFetches++;
+        return Promise.resolve(new Response(hitomiGalleryJs, { status: 200 }));
     }
     if (u.indexOf("gold-usergeneratedcontent.net") !== -1) {
         hitomiUrls.push(u);
@@ -361,6 +385,32 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         fail("bundle threw while loading: " + err.name + ": " + err.message);
     }
     if (!onMessageHandler) fail("onMessage listener was never registered");
+
+    // ---- Phase 0: hitomi header rule installed at worker start ------------
+    // The built worker must add the hitomi.la Referer/Origin rule for its OWN
+    // requests to the image servers (siteHeaderRules.ts), on every start.
+    await waitFor(() => sessionRuleUpdates.length >= 1, "the worker must install its site header rules at startup");
+    const headerRules = sessionRuleUpdates[0].addRules || [];
+    const hitomiRule = headerRules.find((r) => r.condition && (r.condition.requestDomains || []).includes("gold-usergeneratedcontent.net"));
+    if (!hitomiRule
+        || JSON.stringify(hitomiRule.condition.initiatorDomains) !== JSON.stringify(["abcdefghijklmnopabcdefghijklmnop"])
+        || !hitomiRule.action.requestHeaders.some((h) => h.header === "referer" && h.value === "https://hitomi.la/")
+        || !hitomiRule.action.requestHeaders.some((h) => h.header === "origin" && h.value === "https://hitomi.la")) {
+        fail("the hitomi header rule must be scoped to this extension and set hitomi.la context, got " + JSON.stringify(headerRules));
+    }
+    // Tailspace: Referer https://tailspace.com/ only (no Origin), on its image
+    // host only, for this extension's own requests.
+    const tailspaceRule = headerRules.find((r) => r.condition && (r.condition.requestDomains || []).includes("pics.tailspace.com"));
+    if (!tailspaceRule
+        || JSON.stringify(tailspaceRule.condition.requestDomains) !== JSON.stringify(["pics.tailspace.com"])
+        || JSON.stringify(tailspaceRule.condition.initiatorDomains) !== JSON.stringify(["abcdefghijklmnopabcdefghijklmnop"])
+        || JSON.stringify(tailspaceRule.action.requestHeaders) !== JSON.stringify([{ header: "referer", operation: "set", value: "https://tailspace.com/" }])) {
+        fail("the tailspace header rule must set only its Referer, scoped to this extension and pics.tailspace.com, got " + JSON.stringify(headerRules));
+    }
+    if (headerRules.length !== 2) {
+        fail("only the hitomi and tailspace header rules are expected, got " + headerRules.length);
+    }
+    console.log("PASS phase 0: hitomi + tailspace header rules installed at worker start, scoped to the extension's own requests");
 
     // ---- Phase 1: ZIP mode ------------------------------------------------
     syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };
@@ -1235,10 +1285,17 @@ const historyKeyFor = (id) => "nhentai:" + String(id);
     if (hitomiUrls.length === 0) {
         fail("the hitomi job must fetch its pages from the hitomi image hosts");
     }
+    // HITOMI_HASH ends ...e0e: gg.s() = 0xee0 = 3808, prefix from gg.js.
     for (const url of hitomiUrls) {
-        if (url.indexOf("/webp/") === -1) {
-            fail("hitomi pages must keep their own format path, got " + url);
+        if (!/^https:\/\/a[123]\.gold-usergeneratedcontent\.net\/1790046002\/3808\/(?:0e){32}\.avif$/.test(url)) {
+            fail("hitomi pages must use the gg.js server/path layout, got " + url);
         }
+    }
+    if (hitomiMetaFetches < 1) {
+        fail("the hitomi job must read galleries/{id}.js for its metadata");
+    }
+    if (hitomiGgFetches !== 1) {
+        fail("gg.js must be read once and cached, got " + hitomiGgFetches + " reads");
     }
     if (apiRequestLog.length !== 0) {
         fail("a hitomi job must not call the nhentai API, got " + JSON.stringify(apiRequestLog));

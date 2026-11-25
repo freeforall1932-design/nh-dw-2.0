@@ -429,6 +429,17 @@ function sendToBackground(message, sender) {
     }
     console.log("PASS: saveDownload relays the object URL to chrome.downloads.download");
 
+    const savedOnChanged = chromeStub.downloads.onChanged;
+    delete chromeStub.downloads.onChanged;
+    const strictWithoutTracker = await new Promise((resolve) => {
+        onMessageHandler({ from: "offscreen", action: "saveDownload", url: "blob:chrome-extension://x/strict", filename: "Strict.zip", requireCompletion: true }, {}, resolve);
+    });
+    chromeStub.downloads.onChanged = savedOnChanged;
+    if (!strictWithoutTracker || strictWithoutTracker.result !== false || downloadCalls.length !== 1) {
+        fail("strict archive save must not start if completion tracking is unavailable");
+    }
+    console.log("PASS: strict archive relay refuses an untrackable browser handoff");
+
     // 9. fetchInTab: the worker injects the image fetch into the tab
     //    (chrome.scripting is not available in the offscreen document).
     //    executeScriptCalls[0] is the CDN config fetch the worker made when

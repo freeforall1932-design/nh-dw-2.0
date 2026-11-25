@@ -53,10 +53,37 @@ comparison. The native button's click flow remains unobserved.
   the site checks and writes the log file to hand over. The owner's manual task is
   the website capture walkthrough in
   [DATA_COLLECTION_GUIDE.md](DATA_COLLECTION_GUIDE.md).
-- **Firefox: Chromium-only for now**, revisit only if installing an unsigned
-  build stops requiring a signed/licensed add-on. The Firefox tree stays.
+- **Firefox: Chromium-first.** On 2026-11-24 the owner asked for a one-off
+  catch-up of everything postponed; done offline (Firefox 1.7.0, see
+  `NHDW_Firefox_v1.0.0/FIREFOX_PARITY_PLAN.md` §13). New work stays
+  Chromium-first unless the owner asks again. The Firefox tree stays.
 - **Tailspace (answered):** scroll mode serves full-size files; only gallery mode
   serves `-mini` thumbnails.
+- **Tailspace page-data reader (2026-11-25, owner "Yes").** Built from the facts
+  in Keiyoushi's Tailspace plugin (Apache-2.0, credited) and cofob/memesave-bot
+  (facts only). Each comic's page list is read from React Router `.data`, and a
+  series is walked through previous/next links. The decoder is general, so any
+  React Router/Remix reader with exactly one URL list also works. It went into
+  both trees because it is shared code. It is offline-verified only. The owner's
+  live check is in [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#chapters--live-check-only-if-the-built-in-route-fails).
+- **Tailspace as a built-in site (2026-11-25, owner: "like other mature
+  completed website"; Chromium 3.15.0 / Firefox 1.8.0).** Panel Download on any
+  comic page, a Series column (find all parts, download selected), paste box,
+  bookmarks and history, all on slug ids (`tailspace:Scale%20Train`). Errors
+  explain themselves in the panel and the batch summary. Images get
+  `Referer: https://tailspace.com/` through a session rule scoped to the
+  extension's own requests to `pics.tailspace.com` (same mechanism as Hitomi).
+  Host permissions are exactly `tailspace.com` + `pics.tailspace.com`. The
+  Chapters ↗ route stays as the fallback. Offline-verified only; live check in
+  [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#live-check-owner-5-minutes). Side fix
+  for every site: pasted `site:id` keys were dropped by **Add**, and **Download
+  now** sent them as nhentai jobs.
+- **Research order for an undocumented site (2026-11-25):** existing open-source
+  scrapers (`node tools/find-site-references.js <domain>`), then a site-family or
+  framework fingerprint (MangaThemesia, Next.js `__NEXT_DATA__`, React Router
+  `.data`), then the network log, then a manual capture as the last resort.
+  Licences decide reuse. Apache/MIT/Unlicense may be re-implemented with credit.
+  GPL or no licence means facts only, never code.
 - **nhentai's own Download (owner's live observation, not independently
   verified):** the control is an embedded link; the resulting file is a ZIP whose
   name carries the id, title and artist (similar to what this extension builds),
@@ -169,9 +196,9 @@ site unless stated.
   a test that every bundled library is named and the file ships. Still open: the
   bundle growth (≈200 KB `chapters.js`, ≈160 KB `universalChapterProbe.js`) and
   whether shipping `jsdom` in devDependencies is acceptable for CI size.
-- [ ] **Firefox:** that tree has no Chapters button and no chapter bundles. Add a
-  one-line note to its README so it does not read as broken, and decide on porting
-  (`activeTab`/`scripting` exist in Firefox; the `chrome.*` shim differs).
+- [x] **Firefox:** ported in the 2026-11-24 catch-up (1.7.0): Chapters button,
+  `chapters.html`, both bundles, `activeTab`. Chapters ↗ passes the source tab id
+  (no side panel). Offline e2e only; real Firefox run still open (item 58).
 
 *Next session: evidence still needed (owner asked to defer items 1, 2, 3 and 5)*
 
@@ -182,6 +209,27 @@ site unless stated.
 - [ ] DoujinDesu: `<img>` count after scrolling vs pages actually visible, and
   whether the batch link only appears past a chapter count.
 - [ ] Real-browser run of the unpacked build (Chrome version, checklist output).
+- [ ] **mangak.io live check (2026-11-24).** `Chapters ↗` now reads Next.js
+  `__NEXT_DATA__` page lists and has an opt-in origin-only referrer for page
+  images (`UNIVERSAL_CHAPTER_TOOL.md`). Still needs a run on the real site:
+  1. Scan `/{slug}` after its chapter list renders.
+  2. Inspect 2 or more chapters (the review should say "Next.js data").
+  3. Run the benchmark with and without the referrer box.
+  4. Record whether the image CDN allows CORS. If it does not, the route does
+     not work without new policy.
+- [ ] **Hitomi live check (2026-11-24, resolver rewrite + header rule).** Unit
+  + e2e green; needs one real-browser run (reload the unpacked extension first
+  — it adds `declarativeNetRequestWithHostAccess`, which has no warning):
+  1. Popup on `hitomi.la/galleries/{id}.html`: title and page count must match
+     the site (metadata now comes from `ltn…/galleries/{id}.js`).
+  2. Download as ZIP: every page saved as `.avif`, none tiny/HTML.
+  3. Repeat in raw mode (pages are fetched and checked, then saved).
+  4. Queue/batch 2–3 hitomi galleries; all finish.
+  5. Start a hitomi download from a NON-hitomi tab (bookmark panel on nhentai,
+     or close the hitomi tab mid-queue): it must still finish. This is the
+     header-rule path. If it 403s while step 2 works, the rule is not applying
+     (check `chrome://extensions` errors; DevTools on the offscreen document →
+     Network → a page request's Referer should read `https://hitomi.la/`).
 
 *Dropped / replaced: use the site's own Download control*
 
@@ -240,7 +288,12 @@ site unless stated.
   Does the page state a page total (`3 / 57`, `57 pages`)?
 - [ ] Desu: `<img>` count after scrolling versus pages you actually see, and
   whether the batch link only appears beyond a chapter count.
-- [ ] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
+- [x] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
+  (Yes per the owner. It is moot now that pages come from page data.)
+- [ ] Tailspace live check (built-in site, 3.15.0 / FF 1.8.0): open a
+  multi-part comic, press Download, then Series → Find all parts → Download
+  selected. If anything fails, send the panel's message text. Steps in
+  [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#live-check-owner-5-minutes).
 - [ ] Real-browser run: your Chrome version, and confirmation you can load the
   unpacked build — I can supply a checklist whose output you paste back.
 - [ ] nhentai's own Download button: still unobserved. A screenshot plus the
@@ -296,10 +349,11 @@ force lazy images into the DOM before inspection. Nothing below is live-tested.
 - [ ] **Yurilab (`yurilab.top`)** — WordPress series pages; the observed listing is
   paginated (`?t=2`), so a title scan needs every list page added. Chapter reader
   markup and page ordering are unknown.
-- [ ] **Tailspace (`tailspace.com`)** — gallery mode shows `?page=N` links whose
+- [x] **Tailspace (`tailspace.com`)** — gallery mode shows `?page=N` links whose
   images are `-mini` thumbnails; scroll mode lists the full-size pages in DOM
-  order. Plan: prefer scroll mode + reader order, or link order in gallery mode,
-  and never mix thumbnail and full-size files.
+  order. *Superseded 2026-11-25:* pages come from the site's React Router data
+  (full size by construction). `?page=N` is only the reader position. The DOM
+  path is the fallback. Live check still open (above).
 - [ ] **DoujinDesu (`doujin.desu.xxx`)** — top-down reader; page images come from
   an obfuscated API, so *static* HTML inspection will probably find nothing.
   Plan: *Use open chapter* + reader order per chapter (the browser has already
@@ -347,8 +401,8 @@ force lazy images into the DOM before inspection. Nothing below is live-tested.
   required and capped conservatively at seven days. Real host, redirect, CORS,
   expiry, format, save and quality behavior still need an authorized, sanitized
   real-browser test. Old installed/queued builds may retain previous behavior.
-  Firefox was not ported in this pass and retains the earlier silent fallback,
-  HTML acceptance and 15-second retry cap; its option must also remain off.
+  Firefox got the same hardening in the 2026-11-24 catch-up (1.7.0); its
+  option must also remain off.
 - Normal page downloading still has the reproduced image-integrity defect:
   sufficiently large HTML falsely labelled `image/jpeg` can be saved as a JPEG;
   raw browser URL handoff cannot inspect bytes. Metadata conflicts and
@@ -622,7 +676,7 @@ full title, or searched by tags instead. **All three landed 2026-10-17
   per the owner's own sampling, and zip endpoints are deliberately
   not hammered. (nhentai itself has no such buttons either — the
   "like nh" reference was the embedded-UI drawer pattern.)
-- **Hitomi — needs nothing more (closed by inspection).** The
+- **Hitomi — downloads were broken; fixed 2026-11-24 (see below).** The
   owner's own call treats hitomi like hentaifox (unique, sometimes-
   exists, no guaranteed mirror copy), so item 72 gives it an empty
   chain — correct. Strategy A already serves hitomi's reading-mode
@@ -1151,6 +1205,25 @@ piece of work".
   (union, local wins, never deletes) · `isCanonicalTemplate()` odd-separator gate.
 - **Bookmark icon + gallery-page Bookmark button (2026-09-23, 3.9.0/FF 1.3.0):**
   SVG bookmark on cards; blue Bookmark button on all six sites' gallery pages.
+- **Hitomi resolver rewrite (2026-11-24):** the 09-22 resolver never fetched
+  `gg.js` and built an old URL layout, and the rendered gallery page carries no
+  page list, so hitomi downloads could not work. Now: metadata from
+  `ltn…/galleries/{id}.js` (id-checked); `gg.js` read as text (never executed),
+  cached 10 min, last good copy kept on a failed refresh, refused if its shape
+  changes; page URL `{a|w}{1+m(g)}.gold-usergeneratedcontent.net/{b}{g}/{hash}.{avif|webp}`
+  (reproduces 4/4 captured requests) with the sibling server as fallback;
+  pages fetched from the open hitomi tab without credentials (the servers send
+  `ACAO: *`), worker relay re-checks the URL; raw mode fetches + validates then
+  saves the bytes; ZIP is the default like the other sites. Follow-up the same
+  day: a declarativeNetRequest session rule (`background/siteHeaderRules.ts`,
+  permission `declarativeNetRequestWithHostAccess`, no install warning) adds
+  `Referer: https://hitomi.la/` + `Origin: https://hitomi.la` to the
+  extension's OWN requests to `gold-usergeneratedcontent.net` only (initiator =
+  extension id; user browsing untouched; Chromium applies a rule to its own
+  extension's requests and treats the extension origin as permitted), so
+  hitomi works from any tab or none; the in-tab fetch now only runs in a
+  hitomi.la tab; galleries with `blocked: 1` stop with "This gallery is blocked
+  on Hitomi". Live check pending (Owner/live list).
 - **49/50/53 (2026-09-22/23, 3.9.0/FF 1.3.0):** hitomi adapter (`gg.js`
   dynamic resolver, default raw) + mirror-network adapters (hentaiera,
   imhentai, hentaienvy) + hentaifox — all six sites shipping.

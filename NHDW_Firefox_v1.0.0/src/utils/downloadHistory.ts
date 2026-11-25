@@ -137,8 +137,10 @@ export interface BatchOutcome {
      */
     records: Array<{ id: string; filename: string }>;
     /**
-     * Separate mode: always true. Batch mode: true only when every gallery
-     * succeeded AND the merged artifact was actually saved.
+     * Separate mode: false if a rate limit or job cancellation stopped the batch
+     * (other individual failures are represented separately). Batch mode: true
+     * only when every gallery succeeded and the merged artifact was saved, or
+     * is awaiting its final save in a multi-page batch.
      */
     clean: boolean;
     /** Batch mode: keys that belong to this invocation's merged artifact. */
@@ -151,6 +153,8 @@ export interface BatchOutcome {
      * Optional: older callers/tests build outcomes without it.
      */
     failedGalleries?: FailedGallery[];
+    /** Remaining work was deferred after an nhentai rate-limit response. */
+    rateLimited?: boolean;
 }
 
 // One failed gallery of a batch: what the UI needs to name it and re-add it.
