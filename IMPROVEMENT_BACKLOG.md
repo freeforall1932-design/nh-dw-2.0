@@ -3564,3 +3564,36 @@ Offline only; no live site or real browser.
   the new `js/chapters.js`). Chrome 828 / 4, e2e 198, smoke 7.
 - **Not done:** no real Firefox/Android run, no signing, no visual check.
 
+### Follow-up — Tailspace page-data reader + research helper (owner "Yes", 2026-11-25)
+
+- **Trigger:** the owner asked whether undocumented sites need manual sampling.
+  A GitHub search found a Keiyoushi Tailspace source merged 2026-11-01, one day
+  after `TAILSPACE_PLAN.md` recorded "none". A second, independent scraper
+  (cofob/memesave-bot) agreed on every fact.
+- **Landed (both trees, shared files byte-identical):** `src/utils/routeData.ts`
+  (turbo-stream v2 decoder, generic React Router finder, Tailspace recipe, series
+  walk), probe integration (`source: "route-data"`, cached inspect, stated-total
+  cross-check, referrer hint) and Chapters page wording. Fixtures come from the
+  real encoder and are reproducible.
+- **Design choices:**
+  - Recipes are reviewed code, not storage.
+  - Ambiguity gives nothing.
+  - One malformed page rejects the chapter.
+  - The site's own `pageNumber` and series links are the only ordering.
+  - No automatic referrer and no header rules.
+  - On a stated-total mismatch the tool does not give "scroll the reader" advice,
+    because scrolling cannot fix page data.
+- **Red evidence:** the first e2e fallback case timed out with "Collected 0
+  candidate(s)". This was correct behaviour: sibling Tailspace parts sit outside
+  the title path, so the ordinary link scan needs *outside links* ticked.
+- **Counts:**
+
+  | Tree | `npm test` | e2e | smoke |
+  | --- | --- | --- | --- |
+  | Chrome | 845 / 4 (was 828) | 203 (was 198) | 7 |
+  | Firefox | 878 / 4 (was 861) | 246 (was 241) | 7 |
+
+  Firefox lint: 0 errors / 33 warnings.
+- **Helper:** `tools/find-site-references.js` (+ offline test).
+- **Not done:** live Tailspace run. CORS on `pics.tailspace.com` is the one
+  fact no reference project can reveal.

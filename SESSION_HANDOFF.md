@@ -1,11 +1,37 @@
 # Current Session Handoff — nh-dw-2.0
 
-**Latest state (2026-11-24, branch `arena/2943994c-nh-dw-2-0`, not yet a PR):**
-six commits on top of `main` (`41b1e68`), all green offline: Chrome `npm test`
-**828 passing / 4 pending**, `npm run build`, smoke 7, e2e **198 PASS**;
-Firefox **1.7.0** `npm test` **861 / 4**, build, smoke 7, `test:e2e` exit 0
-(241 PASS), options 35/0, embedded toolbar 11/0, web-ext lint 0 errors.
-Still no live site or real browser was used.
+**Latest state (2026-11-25, branch `arena/2943994c-nh-dw-2-0`, not yet a PR):**
+commits on top of `main` (`41b1e68`), all green offline: Chrome `npm test`
+**845 passing / 4 pending**, `npm run build`, smoke 7, e2e **203 PASS**;
+Firefox **1.7.0** `npm test` **878 / 4**, build, smoke 7, `test:e2e` exit 0
+(246 PASS), options 35/0, embedded toolbar 11/0, web-ext lint 0 errors / 33
+warnings. Still no live site or real browser was used.
+
+- **Tailspace page-data reader (owner "Yes", 2026-11-25), both trees.**
+  `src/utils/routeData.ts` (shared, byte-identical) contains a bounded,
+  prototype-free turbo-stream v2 decoder for React Router 7/Remix `.data`, a
+  generic finder (exactly one URL list, or nothing), and the Tailspace recipe:
+  `/c/<slug>.data?_routes=routes/pages/comic/ComicPage` → `comic.pages[]`
+  tokens → `pics.tailspace.com/comics/<id>/<token>.<fileType|jpg>`. Its stated
+  total (`numberOfPages`) is cross-checked, and the series is walked through
+  `previousComic`/`nextComic` (oldest first, cap 200). The probe tries the
+  recipe before the selector and falls back to the old reader paths. After a
+  scan, the Chapters page *suggests* the referrer opt-in and never ticks it.
+  - Facts come from Keiyoushi `src/en/tailspace` (Apache-2.0, merged
+    2026-11-01) and cofob/memesave-bot (no licence stated, facts only).
+    Credited in both `THIRD_PARTY_NOTICES.txt` and the file header. No code
+    copied.
+  - The Keiyoushi plugin cannot run here: it is Kotlin for the Mihon Android app.
+  - Fixtures are synthetic and come from the real turbo-stream 2.4.1 encoder.
+    `test/fixtures/tailspace/generate.js` reproduces them byte for byte.
+  - Tests: `test/route-data.test.js` (17), `scripts/e2e-route-data.js` (5,
+    in `test:e2e`), plus a generic React Router case in `e2e-universal.js`.
+  - Open: the live check in `TAILSPACE_PLAN.md`, covering `.data` reachability
+    and `pics.tailspace.com` CORS/referrer.
+- **`tools/find-site-references.js <domain>`** (root, plain Node + `gh`): two
+  GitHub code searches, results grouped by repo, with each hit labelled reuse
+  or facts-only by licence. Offline test: `node tools/test-find-site-references.js`.
+  Run it before asking the owner for a capture.
 
 - **Firefox catch-up (owner: "Do a catch up on Firefox all update that's been
   postponed on Firefox part").** Everything Chrome gained after the 2026-10-20
