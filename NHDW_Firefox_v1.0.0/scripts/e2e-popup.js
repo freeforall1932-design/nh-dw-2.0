@@ -1102,5 +1102,136 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     }
     console.log("PASS phase 18: Chapters opens bound to the source tab, never the panel tab (" + (fullPanel ? "full panel" : "popup") + ")");
 
+    // ---- Phase 19: Tailspace as a built-in site ----------------------------
+    // Popup only: the Firefox Full panel opens from the in-page drawer, which
+    // exists on nhentai pages only, and getPreviewTab revalidates its source
+    // as an nhentai tab on every read (activeTabGallery.ts) - the same for
+    // hitomi. A Tailspace tab is always previewed through the toolbar popup.
+    if (fullPanel) {
+        console.log("SKIP phase 19: the Full panel is bound to nhentai tabs only; Tailspace is covered by the popup run");
+        process.exit(0);
+    }
+    // Open a comic -> the normal Download panel, from the site's own page data;
+    // Series column -> every linked part, ticked parts download as one batch;
+    // every failure shows the site's answer in the panel. Synthetic fixtures
+    // from the official turbo-stream encoder (test/fixtures/tailspace).
+    await settleStaleTabRead(tabGalleryJson);
+    delete localStore.apiKey; // Firefox harness: one local store (Chrome: localExtra)
+    tabGalleryJson = null;
+    const tsFixture = (name) => fs.readFileSync(path.join(__dirname, "..", "test", "fixtures", "tailspace", name), "utf8");
+    const tsFiles = {
+        "Scale%20Train": "comic-101.data",
+        "Scale%20Train%202": "comic-102.data",
+        "Scale%20Train%203": "comic-103.data",
+        "Gone": "comic-missing.data"
+    };
+    const tsCalls = [];
+    sandbox.fetch = (url, init) => {
+        const u = String(url);
+        tsCalls.push({ url: u, init: init || {} });
+        const data = /^https:\/\/tailspace\.com\/c\/([^/?.]+)\.data\?_routes=routes%2Fpages%2Fcomic%2FComicPage$/.exec(u);
+        const answer = (status, text) => Promise.resolve({
+            ok: status === 200, status: status, statusText: status === 200 ? "OK" : (status === 404 ? "Not Found" : "Error"),
+            headers: { get: () => "text/x-script" }, text: () => Promise.resolve(text)
+        });
+        if (data && data[1] === "Odd") return answer(200, '{"error":"maintenance"}');
+        if (data && tsFiles[data[1]]) return answer(200, tsFixture(tsFiles[data[1]]));
+        if (/^https:\/\/tailspace\.com\/c\/Odd$/.test(u)) return answer(200, "<!DOCTYPE html><html><body>Down for maintenance</body></html>");
+        return answer(404, "");
+    };
+    const openTab = async (url, ms) => {
+        setPreviewTabUrl(url);
+        for (const listener of activatedListeners) listener({ tabId: 7 });
+        await wait(ms || 300);
+        return byId("action").innerHTML;
+    };
+
+    let tsHtml = await openTab("https://tailspace.com/c/Scale%20Train?page=2");
+    if (tsHtml.indexOf("Scale Train - Chapter 1") === -1 || tsHtml.indexOf("(3 pages)") === -1 || tsHtml.indexOf('id="button"') === -1) {
+        fail("a Tailspace comic tab must show the normal Download panel with its title and page count, got " + tsHtml.slice(0, 500));
+    }
+    if (tsCalls.length < 1 || tsCalls[0].url !== "https://tailspace.com/c/Scale%20Train.data?_routes=routes%2Fpages%2Fcomic%2FComicPage"
+        || tsCalls[0].init.credentials !== "omit" || tsCalls[0].init.redirect !== "error") {
+        fail("the panel must read exactly the comic's page data, cookie-free, got " + JSON.stringify(tsCalls.slice(0, 2)));
+    }
+    if (tsHtml.indexOf('id="seriesPanel"') === -1 || tsHtml.indexOf('id="buttonLoadSeries"') === -1 || tsHtml.indexOf("Series") === -1) {
+        fail("a Tailspace comic with linked parts must offer the Series column, got " + tsHtml.slice(0, 600));
+    }
+    if (byId("path").value.indexOf("Scale") === -1) {
+        fail("the file name must come from the comic's title, got " + JSON.stringify(byId("path").value));
+    }
+    const beforeSingle = sentMessages.length;
+    byId("button").dispatchLast("click");
+    await wait(50);
+    const single = sentMessages.slice(beforeSingle).find((m) => m && m.action === "downloadDoujinshi");
+    if (!single || single.site !== "tailspace" || !single.json || single.json.media_id !== "101" || single.json.images.pages.length !== 3
+        || String(single.galleryUrl).indexOf("https://tailspace.com/c/Scale%20Train") !== 0) {
+        fail("Download must send this comic as a tailspace job with its resolved pages, got " + JSON.stringify(single && { site: single.site, galleryUrl: single.galleryUrl }));
+    }
+    console.log("PASS phase 19a: a Tailspace comic tab opens the normal Download panel from its page data and downloads as a tailspace job");
+
+    // Series: read every linked part (paced), list them oldest first, download the ticked ones.
+    const seriesNode = byId("seriesPanel");
+    const boxCache = { html: null, boxes: [] };
+    seriesNode.querySelectorAll = () => {
+        if (boxCache.html !== seriesNode.innerHTML) {
+            boxCache.html = seriesNode.innerHTML;
+            boxCache.boxes = [];
+            const re = /<input type="checkbox" class="seriesItem" data-id="([^"]*)"( checked)?>/g;
+            let m;
+            while ((m = re.exec(seriesNode.innerHTML)) !== null) {
+                const box = makeNode("input");
+                box.dataset = { id: m[1].replace(/&amp;/g, "&") };
+                box.checked = !!m[2];
+                boxCache.boxes.push(box);
+            }
+        }
+        return boxCache.boxes;
+    };
+    const callsBeforeSeries = tsCalls.length;
+    byId("buttonLoadSeries").dispatchLast("click");
+    await wait(1200);
+    const seriesHtml = seriesNode.innerHTML;
+    const order = ["Scale Train - Chapter 1", "Scale Train - Chapter 2", "Scale Train - Chapter 3"].map((t) => seriesHtml.indexOf(t));
+    if (order.some((i) => i === -1) || !(order[0] < order[1] && order[1] < order[2])) {
+        fail("the Series column must list all three linked parts oldest first, got " + seriesHtml.slice(0, 800));
+    }
+    if (tsCalls.length - callsBeforeSeries !== 2) {
+        fail("the series walk must read each other part exactly once, got " + (tsCalls.length - callsBeforeSeries) + " reads");
+    }
+    if (seriesHtml.indexOf("(open now)") === -1 || seriesHtml.indexOf("says this comic has 3 pages but its page data lists 2") === -1) {
+        fail("the list must mark the open comic and warn about part 3's short page list, got " + seriesHtml.slice(0, 900));
+    }
+    if (byId("buttonSeries").value !== "Download selected (3)") {
+        fail("all unrecorded parts start ticked, got " + JSON.stringify(byId("buttonSeries").value));
+    }
+    boxCache.boxes[1].checked = false;
+    boxCache.boxes[1].dispatch("change");
+    const beforeSeriesSend = sentMessages.length;
+    byId("buttonSeries").dispatchLast("click");
+    await wait(50);
+    const seriesJob = sentMessages.slice(beforeSeriesSend).find((m) => m && m.action === "downloadAllDoujinshis");
+    if (!seriesJob || seriesJob.site !== "tailspace" || seriesJob.separate !== true
+        || JSON.stringify(Object.keys(seriesJob.allDoujinshis)) !== JSON.stringify(["Scale%20Train", "Scale%20Train%203"])
+        || seriesJob.galleryMetadata["Scale%20Train%203"].media_id !== "103") {
+        fail("Download selected must send the ticked parts, in order, with their metadata, as one tailspace job, got " + JSON.stringify(seriesJob && { site: seriesJob.site, ids: Object.keys(seriesJob.allDoujinshis) }));
+    }
+    console.log("PASS phase 19b: the Series column finds every linked part and downloads the ticked ones as one tailspace batch");
+
+    // Errors show themselves, in words, with the site's answer.
+    tsHtml = await openTab("https://tailspace.com/c/Gone", 400);
+    if (tsHtml.indexOf("Could not read this comic from Tailspace") === -1 || tsHtml.indexOf("HTTP 404") === -1) {
+        fail("a comic the site does not have must say so in the panel, got " + tsHtml.slice(0, 500));
+    }
+    tsHtml = await openTab("https://tailspace.com/c/Odd", 400);
+    if (tsHtml.indexOf("Could not read this comic from Tailspace") === -1 || tsHtml.indexOf("The answer was not Tailspace page data") === -1) {
+        fail("unreadable page data must be explained in the panel, got " + tsHtml.slice(0, 500));
+    }
+    tsHtml = await openTab("https://tailspace.com/browse?sort=trending", 200);
+    if (tsHtml.indexOf("Open a comic on Tailspace") === -1) {
+        fail("a Tailspace page that is not a comic must say what to open, got " + tsHtml.slice(0, 300));
+    }
+    console.log("PASS phase 19c: Tailspace failures and non-comic pages explain themselves in the panel");
+
     process.exit(0);
 })();

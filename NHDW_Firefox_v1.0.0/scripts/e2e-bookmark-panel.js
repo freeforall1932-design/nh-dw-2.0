@@ -745,8 +745,8 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         const filterSelect = nodes.get("nhdwBmSiteFilter");
         assertEqual(filterSelect.tagName, "SELECT", "the filter is a <select>");
         const optionValues = (filterSelect.children || []).map((option) => option.value);
-        assertDeepEqual(optionValues, ["all", "nhentai", "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox"],
-            "the options are All sites plus the six known sites, in one canonical order");
+        assertDeepEqual(optionValues, ["all", "nhentai", "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox", "tailspace"],
+            "the options are All sites plus the seven known sites, in one canonical order");
         const optionLabels = (filterSelect.children || []).map((option) => option.textContent);
         assertEqual(optionLabels[0], "All sites (4)", "the All sites option carries the total count");
         assertEqual(optionLabels[1], "nhentai (2)", "a site with rows carries its own count");

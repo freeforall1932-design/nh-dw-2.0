@@ -1082,6 +1082,16 @@ export default class Downloader
     #imageFetchFailureMessage(lastStatus: string): string {
         const blocked = /403|503|unexpected content-type|text\/html/i.test(lastStatus);
         let message = "Failed to fetch original image from all image servers (" + lastStatus + ").";
+        if (this.#source && this.#source.site === "tailspace") {
+            // Tailspace: one image server, no mirrors and no challenge page,
+            // so say what actually helps instead of the nhentai advice.
+            if (blocked) {
+                message += " Tailspace refused the page images. Open the comic on tailspace.com in a tab (log in if the comic needs it), then press Download again from that tab.";
+            } else if (/404/.test(lastStatus)) {
+                message += " Tailspace has no image at the address its page data names; the comic may have been edited. Reload the comic page and try again.";
+            }
+            return message;
+        }
         if (blocked) {
             message += " Gallery metadata was read; keep the gallery tab open after any browser challenge and try again.";
         }

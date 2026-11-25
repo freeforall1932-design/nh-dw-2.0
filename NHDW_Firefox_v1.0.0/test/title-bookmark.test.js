@@ -83,8 +83,12 @@ describe('title-page bookmark targets', () => {
     it('has a row for every registered adapter site', () => {
         // Guard rail: registering a seventh adapter without a target row would
         // silently ship a site with no way to bookmark it.
+        // Exception, explicit and short: a site with no captured page markup
+        // is bookmarked from the panel's Bookmark button instead (tailspace).
+        const { TITLE_BOOKMARK_PANEL_ONLY } = require('../build/test/utils/titleBookmark');
+        assert.deepStrictEqual(TITLE_BOOKMARK_PANEL_ONLY, ['tailspace']);
         for (const source of getConfiguredSources()) {
-            assert.ok(targetForSite(source.site) !== null,
+            assert.ok(targetForSite(source.site) !== null || TITLE_BOOKMARK_PANEL_ONLY.includes(source.site),
                 'no title-page bookmark target for adapter site "' + source.site + '"');
         }
         assert.deepStrictEqual(titleBookmarkSites().sort(), [

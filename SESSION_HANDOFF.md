@@ -1,11 +1,63 @@
 # Current Session Handoff — nh-dw-2.0
 
 **Latest state (2026-11-25, branch `arena/2943994c-nh-dw-2-0`, not yet a PR):**
-commits on top of `main` (`41b1e68`), all green offline: Chrome `npm test`
-**845 passing / 4 pending**, `npm run build`, smoke 7, e2e **203 PASS**;
-Firefox **1.7.0** `npm test` **878 / 4**, build, smoke 7, `test:e2e` exit 0
-(246 PASS), options 35/0, embedded toolbar 11/0, web-ext lint 0 errors / 33
-warnings. Still no live site or real browser was used.
+commits on top of `main` (`41b1e68`), all green offline: Chrome **3.15.0**
+`npm test` **875 passing / 4 pending**, `npm run build`, smoke 7, e2e **206
+PASS**; Firefox **1.8.0** `npm test` **908 / 4**, build, smoke 7, `test:e2e`
+exit 0 (**249 PASS**, + 1 documented full-panel SKIP), options 35/0, embedded
+toolbar 11/0, web-ext lint 0 errors / 40 warnings (the 7 new ones are the
+popup's usual escaped-innerHTML rendering in the Tailspace panel). Still no live
+site or real browser was used.
+
+- **Tailspace as a built-in site (owner: "like other mature completed
+  website", 2026-11-25), both trees.** A `SiteAdapter` like hitomi's:
+  - `src/utils/tailspaceIds.ts`: the id is the slug as ONE
+    `encodeURIComponent` segment (canonical, no `:`/whitespace, so composite
+    keys and the paste split hold); `isGalleryIdForSite` in `siteKeys.ts` accepts
+    it for `tailspace` only.
+  - `src/utils/turboStream.ts`: the decoder moved out of `routeData.ts`
+    (re-exported there) plus `routerStreamFromHtml` for the SSR
+    `streamController.enqueue("...")` chunks.
+  - `src/parsing/tailspaceData.ts`: comic → legacy gallery record
+    (`media_id` = numeric comic id, page `hash` = token, `+ ".jpeg"` when the
+    server's extension is jpeg), whole-list validation, `explainTailspaceFailure`
+    (every null has a sentence), `tailspacePageCountNote`, `walkTailspaceSeries`
+    (injected loader, both directions, cap 200, loop-safe, reports the first
+    unreadable part).
+  - `src/sources/tailspaceSource.ts`: metadata URL
+    `/c/<id>.data?_routes=routes%2Fpages%2Fcomic%2FComicPage`, HTML fallback,
+    image URL builder with strict path regex, `fetchImagesThroughTab` +
+    `getTabSiteHost "tailspace.com"`, `defaultFormat "cbz"`, image request
+    context Referer-only.
+  - `GallerySource.explainExtractFailure` (optional) is used by the popup
+    (`message.siteReadError`) and the batch pipeline.
+  - `siteHeaderRules.ts`: an empty `origin` sets Referer only. Rule 2 =
+    `pics.tailspace.com`.
+  - Popup: comic pages → normal Download view + page-count notice + **Series**
+    column replacing Similar (`seriesIntro/Loading/List`, 300 ms pace, Download
+    selected → `downloadAllDoujinshis` with resolved metadata, `separate`,
+    `redownloadIds` for re-ticked recorded parts); other Tailspace pages →
+    `siteOpenComic`; any failure → `siteReadError` in words.
+  - Bookmarks: paste parsing for links and `tailspace:` keys, cover
+    `thumbnail-2x.webp`, per-site filter entry, `TITLE_BOOKMARK_PANEL_ONLY`
+    (no on-page button), tab-free enrichment in `bookmarkService.enrichBookmarks`
+    (300 ms pace, the answer must be the asked comic).
+  - Manifest: exactly `https://tailspace.com/*` + `https://pics.tailspace.com/*`.
+    Firefox `preview.ts` asks for them in the host-grant notice only on a
+    tailspace.com tab. The Firefox Full panel stays nhentai-only by design.
+  - Fixed for every site: `addBookmarks` now splits pasted composite keys (they
+    were silently dropped), and the paste box's **Download now** sends one job
+    per site.
+  - `Downloader.#imageFetchFailureMessage` has Tailspace-specific advice
+    (403/503 → open the comic tab and press Download there; 404 → reload).
+  - Tests: `test/tailspace.test.js` (30, both trees; fixtures
+    `comic-101.html`, `comic-104.data`, `comic-missing.data` added to
+    `generate.js`), `e2e-popup.js` phase 14 (Chrome) / 19 (Firefox popup),
+    `e2e-worker.js` phase 0 checks both header rules,
+    `e2e-bookmark-panel.js` filter list. `tsconfig.test.json` now also compiles
+    `src/background/bookmarkService.ts`.
+  - Open: the live check in `TAILSPACE_PLAN.md` (`.data` reachability,
+    `pics.tailspace.com` CORS/referrer, logged-in comics).
 
 - **Tailspace page-data reader (owner "Yes", 2026-11-25), both trees.**
   `src/utils/routeData.ts` (shared, byte-identical) contains a bounded,

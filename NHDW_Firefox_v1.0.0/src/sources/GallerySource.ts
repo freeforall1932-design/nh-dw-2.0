@@ -11,6 +11,12 @@ export interface SiteAdapter {
     getApiUrl?(id: string): string;
     extractGallery?(htmlOrJson: string, url?: string): any | null;
     extractReaderImage?(html: string): string | null;
+    /**
+     * Why extractGallery returned null for this text, in words the user can
+     * act on ("the site says this comic does not exist"), or "" when unknown.
+     * Shown in the panel instead of a generic error (tailspace).
+     */
+    explainExtractFailure?(text: string): string;
     getImageUrls(mediaId: string, filename: string, extra?: any): string[];
     getImageHosts?(): string[];
     getAllowedPathRegex?(): RegExp;
@@ -39,7 +45,8 @@ export interface SiteAdapter {
      */
     getTabSiteHost?(): string;
     /**
-     * Referer/Origin the site's image servers require. The service worker
+     * Referer/Origin the site's image servers require (origin "" = send no
+     * Origin header, only the Referer). The service worker
      * installs a session header rule that adds them to THIS extension's own
      * requests to `domains` only (never the user's browsing), so downloads work
      * from any tab or with none open. See background/siteHeaderRules.ts.

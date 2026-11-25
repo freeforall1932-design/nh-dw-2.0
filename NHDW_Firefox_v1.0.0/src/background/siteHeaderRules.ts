@@ -47,7 +47,10 @@ export function buildSiteHeaderRules(adapters: any[], extensionId: string): any[
         try { context = adapter.getImageRequestContext(); } catch (_) { context = null; }
         if (!context || !Array.isArray(context.domains)) continue;
         const domains = context.domains.filter((d) => typeof d === "string" && isPlainDomain(d));
-        if (domains.length === 0 || !isHttpsPageUrl(context.referer) || !isHttpsOrigin(context.origin)) continue;
+        // origin "" means "Referer only" (tailspace); any other value must be
+        // an https origin, or the adapter's context is ignored entirely.
+        const sendOrigin = context.origin !== "";
+        if (domains.length === 0 || !isHttpsPageUrl(context.referer) || (sendOrigin && !isHttpsOrigin(context.origin))) continue;
         const id = SITE_HEADER_RULE_ID_BASE + rules.length;
         if (id > SITE_HEADER_RULE_ID_MAX) break;
         rules.push({
@@ -55,10 +58,12 @@ export function buildSiteHeaderRules(adapters: any[], extensionId: string): any[
             priority: 1,
             action: {
                 type: "modifyHeaders",
-                requestHeaders: [
-                    { header: "referer", operation: "set", value: context.referer },
-                    { header: "origin", operation: "set", value: context.origin }
-                ]
+                requestHeaders: sendOrigin
+                    ? [
+                        { header: "referer", operation: "set", value: context.referer },
+                        { header: "origin", operation: "set", value: context.origin }
+                    ]
+                    : [{ header: "referer", operation: "set", value: context.referer }]
             },
             condition: {
                 requestDomains: domains,

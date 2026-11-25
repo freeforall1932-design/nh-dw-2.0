@@ -38,6 +38,31 @@ const out = process.argv[3];
     });
     fs.writeFileSync(out + '/comic-' + c.id + '.data', body);
   }
+  // The same comic as a server-rendered page (built-in site, HTML fallback):
+  // react-router 7.9 streams the data into <script> tags exactly like this
+  // (StreamTransfer: escapeHtml(JSON.stringify(chunk)) per chunk). The stream
+  // is split mid-value on purpose, so the reader must join the chunks.
+  const ESCAPE = { '&': '\\u0026', '>': '\\u003e', '<': '\\u003c', '\u2028': '\\u2028', '\u2029': '\\u2029' };
+  const rrEscape = (html) => html.replace(/[&><\u2028\u2029]/g, (m) => ESCAPE[m]);
+  const pageStream = fs.readFileSync(out + '/comic-101.data', 'utf8');
+  const cut = Math.floor(pageStream.length / 2);
+  const script = (chunk) => '<script>window.__reactRouterContext.streamController.enqueue(' + rrEscape(JSON.stringify(chunk)) + ');</script>';
+  fs.writeFileSync(out + '/comic-101.html', '<!DOCTYPE html><html lang="en"><head><title>Scale Train - Chapter 1 | Tailspace</title></head><body>' +
+    '<div id="root"><h1>Scale Train - Chapter 1</h1><img src="https://pics.tailspace.com/comics/101/a1-mini.jpg"></div>' +
+    '<script>window.__reactRouterContext = {"basename":"/","future":{},"isSpaMode":false};window.__reactRouterContext.stream = new ReadableStream({start(controller){window.__reactRouterContext.streamController = controller;}}).pipeThrough(new TextEncoderStream());</script>' +
+    script(pageStream.slice(0, cut)) + script(pageStream.slice(cut)) +
+    '<script>window.__reactRouterContext.streamController.close();</script></body></html>');
+  // A comic the site does not have: the loader answers comic: null.
+  fs.writeFileSync(out + '/comic-missing.data', await text({
+    'root': { data: { user: null } },
+    'routes/pages/comic/ComicPage': { data: { comic: null } }
+  }));
+  // A comic whose server extension is "jpeg" (kept exactly in the image URL)
+  // and whose title carries characters HTML must escape.
+  fs.writeFileSync(out + '/comic-104.data', await text({
+    'routes/pages/comic/ComicPage': { data: { comic: comic(104, 'Tom & Jerry: <Part 1>', 'Tom & Jerry: <Part 1>', null, null,
+      [{ token: 'g7', pageNumber: 1, fileType: 'jpeg' }, { token: 'h8', pageNumber: 2, fileType: 'gif' }]) } }
+  }));
   // Generic React Router reader (no recipe): one unambiguous URL list.
   fs.writeFileSync(out + '/generic-reader.data', await text({
     'root': { data: {} },

@@ -6,8 +6,8 @@
 
 `ZIP` · `CBZ` · `PDF` · `Raw pages` · persistent queue · download memory
 
-![Version](https://img.shields.io/badge/version-3.14.0-blue)
-![Firefox](https://img.shields.io/badge/Firefox-1.7.0-orange)
+![Version](https://img.shields.io/badge/version-3.15.0-blue)
+![Firefox](https://img.shields.io/badge/Firefox-1.8.0-orange)
 ![Manifest](https://img.shields.io/badge/Manifest-V3-brightgreen)
 ![Browser](https://img.shields.io/badge/Chromium-109%2B-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -29,6 +29,7 @@
 | **hentaienvy.com** | ✅ Shipped | Full support: Tailwind BEM parsing, `#readerPagesJson` reader metadata, shared `/033/<token>/` content store. |
 | **hentaifox.com** | ✅ Shipped | Full support: gallery page metadata, `g_th` type code mapping, `/004/` and `/005/` numeric media directories. |
 | **hitomi.la** | ✅ Shipped | Full support: `galleries/<id>.js` galleryinfo metadata, dynamic hash path & subdomain math (`gg.js`), direct CDN image fetching (`gold-usergeneratedcontent.net`), default format `raw` to prevent tab RAM exhaustion. |
+| **tailspace.com** | 🧪 Built in, not live-checked | Panel **Download** on any comic page (`/c/<name>`), a **Series** column that finds every linked part and downloads the ticked ones (one file per part), paste box, bookmarks, history. Reads the site's own React Router page data (`.data`, turbo-stream); images from `pics.tailspace.com` with the site's own Referer on the extension's requests only. No listing mode and no on-page buttons. Errors are shown in the panel in words. See [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md). |
 
 The multi-site plan — decision record, cooldown analysis, per-site facts — lives in [`MULTISITE_V4_PLAN.md`](MULTISITE_V4_PLAN.md).
 
@@ -47,12 +48,12 @@ The multi-site plan — decision record, cooldown analysis, per-site facts — l
 - 🔀 **Per-site job dispatching (Item 48)** — mixed queues containing titles from different websites automatically split into discrete jobs per site. Each job fetches from its own site's CDN with clean bare-ID naming (`001.jpg`, `Title [123456].zip`) and composite keys (`site:id`) in history and retry queues.
 - ↕️ **Drag-and-drop queue reordering (Item 44)** — grab handles let you manually reorder the bookmark queue to set your exact download order.
 - 💾 **Export / Import backups (Item 52)** — export queue and download history into a single clean JSON backup (`nh-downloader-transfer`). Import merges with union policy (local wins, never deletes).
-- 📋 **Paste anything** — bare IDs, `site:id` composite keys, `nhentai.net/g/…` links, any `cin.*` mirror link (e.g. `cin.lat`, `cin.red`), mirror network links (`hentaiera`, `imhentai`, `hentaienvy`, `hentaifox`, `hitomi`), `?id=…` bulk strings, ranges like `366220-366224`, mixed freely. Bookmark them or download straight away.
+- 📋 **Paste anything** — bare IDs, `site:id` composite keys, Tailspace comic links and `tailspace:<name>` keys, `nhentai.net/g/…` links, any `cin.*` mirror link (e.g. `cin.lat`, `cin.red`), mirror network links (`hentaiera`, `imhentai`, `hentaienvy`, `hentaifox`, `hitomi`), `?id=…` bulk strings, ranges like `366220-366224`, mixed freely. Bookmark them or download straight away.
 - 🧠 **Remembers what you downloaded** — re-running the same search skips finished galleries, shows a ✓ badge with the saved file name, and offers per-gallery *Download anyway*. *Verify-then-redownload*: a deleted file is fetched again; a cancelled or partial download is never recorded.
 - 🪟 **Dockable side panel** — the toolbar button opens a resizable side panel (popup still available in Settings).
 - 🛡️ **Cloudflare-aware** — metadata and pages are fetched through your open gallery tab's session first. Not a bypass: a challenge page has no images, so complete it and retry.
 - 🔁 **Retry that knows what failed** — every failure names the gallery and reason; **Retry failed** re-downloads exactly those titles with the same settings.
-- 🦊 **Firefox tree** — a separate existing build with an in-page drawer ([Firefox README](NHDW_Firefox_v1.0.0/README.md)). New development is Chromium-first. On 2026-11-24 the owner asked for a catch-up, so Firefox **1.7.0** carries everything Chromium had then (Hitomi fix, **Chapters ↗** tool, theme, archive hardening). Future parity is still not guaranteed.
+- 🦊 **Firefox tree** — a separate existing build with an in-page drawer ([Firefox README](NHDW_Firefox_v1.0.0/README.md)). New development is Chromium-first. On 2026-11-24 the owner asked for a catch-up, so Firefox **1.7.0** carries everything Chromium had then (Hitomi fix, **Chapters ↗** tool, theme, archive hardening), and Firefox **1.8.0** adds the built-in Tailspace site together with Chromium 3.15.0.
 
 ## 📦 Installation
 
@@ -66,7 +67,7 @@ On desktop Chrome, Brave or Edge:
 Chromium is the primary development target. Firefox can load an unpacked add-on
 **temporarily** through `about:debugging`, but it is removed on restart; a
 persistent installation in standard Firefox requires a Mozilla-signed package.
-The Firefox build is Chromium-first; it was last caught up to Chromium on 2026-11-24 (1.7.0).
+The Firefox build is Chromium-first; it is at parity with Chromium 3.15.0 as of 2026-11-25 (1.8.0).
 [Mozilla's temporary-install guide](https://extensionworkshop.com/documentation/develop/temporary-installation-in-firefox/)
 explains the distinction.
 
@@ -212,6 +213,7 @@ Internal documents: [`WORKLIST.md`](WORKLIST.md) (what's next) · [`SESSION_HAND
 
 | Version | Highlights |
 | :--- | :--- |
+| **3.15.0** (Firefox **1.8.0**) | **Tailspace as a built-in site** (owner request, 2026-11-25): open a comic, press Download. Slug-based ids (`tailspace:Scale%20Train`), page data from the site's own `.data` route or the comic page's streamed HTML, a **Series** column (find all parts, download selected, one file per part), paste/bookmark/history support with tab-free title and cover fill-in, a Referer-only header rule for `pics.tailspace.com`, and plain-language errors in the panel and the batch summary. Host permissions: exactly `tailspace.com` and `pics.tailspace.com`. Also fixed for every site: pasted `site:id` keys (e.g. `hitomi:123`) were silently dropped by **Add**, and **Download now** sent every pasted key as an nhentai job. Offline suites only; not checked against the live site. |
 | Firefox **1.7.0** (Chrome tree unchanged at 3.14.0) | Firefox catch-up (owner request, 2026-11-24): everything Chromium gained after the 2026-10-20 sync — Hitomi resolver fix, universal **Chapters ↗** tool (mangak `__NEXT_DATA__`, MangaThemesia fallback, Tailspace profiles), benchmark log, archive/retry hardening, the theme tokens, items 68/70/71. Firefox-specific: DNR rules match the `moz-extension://` host (shared `extensionInitiatorHost`), Chapters ↗ opens a tab bound to the source tab, the website drawer gets a token mirror. Offline suites only; no real Firefox/Android check or signing. |
 | **3.14.0** (Firefox **1.6.0**) | Items 73–74: the mirror-fallback title search now climbs a wording ladder — raw title → normalized title → strongest tag term (the adapters extract typed gallery tags for this; the owner's live note: imhentai/hentaiera search often answer nothing unless the wording is the full title or a tag), each rung tried only when the previous search comes back empty. Settings and the panel now carry a "Download quality" reminder: downloads fetch the reading-mode source images (original resolution, original format); the sites' own download button (lite/lower-resolution) is deliberately not used. Item 75 (in-page lite/source buttons) was decided against. |
 | **3.13.0** (Firefox **1.5.0**) | Item 72 — cross-mirror fallback: a mirror-site gallery whose own image mirrors all fail validation continues from a sibling site. hentaienvy serves imhentai's images by token host-swap (the twins share the `/033/<token>/` store, so only the hosts change); hentaiera copies are found by title (search, ≥ 0.9 title containment, page-count check, then a sticky switch). Chains follow the site graph: imhentai→(envy, era), envy→(era, imh), era→(envy, imh). Reactive only — no sibling requests while the gallery's own mirrors work — and off by opt-out in Settings and the panel (`Mirror fallback`). Fetch-side only: queue, jobs, bookmarks and history behave exactly as before, and history still records only full success. 23 new unit tests per tree; live-chain verification on a real throttled gallery is a device-pass item. |

@@ -1,12 +1,20 @@
-# NHentai Downloader — Firefox + Firefox-for-Android build (v1.7.0)
+# NHentai Downloader — Firefox + Firefox-for-Android build (v1.8.0)
 
-**Updated:** 2026-11-24 (v1.7.0 catch-up to Chrome; the 2026-10-17 and 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
+**Updated:** 2026-11-25 (v1.8.0 = Chrome 3.15.0 parity: built-in Tailspace site; v1.7.0 catch-up to Chrome; the 2026-10-17 and 2026-09-26 status follows) · status: **website-embedded UI + PR #44 review fixes
 (items 56/57), options harness/fixes (38), shared list-format fix (59) and the
 Chrome-3.9.0 backport — bookmark icon, gallery-page Bookmark button, Queue-tab
 markup (43), drag-reorder (44), backup import/export (52), canonical-separator
 gate (41) — complete, plus the **Chrome-3.10.0 listing backport (v1.4.0), the
 v1.4.1 review fixes and the v1.4.2 Bookmark-tab rename** — merged to main in
 PR #50; real-device verification + signing remain pending (58)**
+
+v1.8.0 = Chrome 3.15.0 parity (2026-11-25): Tailspace as a built-in site
+(panel Download on comic pages, Series column, paste/bookmark/history,
+Referer-only header rule for `pics.tailspace.com`, plain-language errors), and
+the pasted `site:id` bookmark fix. Firefox-specific: the popup's host-grant
+notice asks for `tailspace.com` + `pics.tailspace.com` only when the active tab
+is on tailspace.com; the Full panel stays nhentai-only (Tailspace uses the
+toolbar popup). Details: root `TAILSPACE_PLAN.md`.
 
 v1.7.0 = the owner-requested catch-up (2026-11-24): everything Chrome
 gained after the 2026-10-20 sync, ported by three-way merge with the audited

@@ -48,7 +48,7 @@ import {
     queryBookmarks
 } from "../utils/bookmarkFilters";
 import { DOWNLOAD_HISTORY_KEY, historyIds, readHistory } from "../utils/downloadHistory";
-import { DEFAULT_SITE, normalizeSite, toGalleryKey } from "../utils/siteKeys";
+import { DEFAULT_SITE, normalizeSite, toGalleryKey, splitGalleryKey } from "../utils/siteKeys";
 import {
     buildTransferPayload,
     mergeImportedHistory,
@@ -432,14 +432,23 @@ async function addPasted(downloadNow: boolean): Promise<void> {
     if (downloadNow) {
         // Download straight away without bookmarking: the paste box doubles as
         // a "just get these" entry point.
-        const titles: Record<string, string> = {};
-        for (const id of parsed.ids) {
-            titles[id] = id;
+        // One job per site (item 48): a bare id is the default site's, a
+        // composite key ("hitomi:123", "tailspace:Scale%20Train") names its own
+        // site, and the job carries the bare id so file names, history keys
+        // and failure rows all land on the right site.
+        const groups: Array<{ site: string; titles: Record<string, string> }> = [];
+        for (const key of parsed.ids) {
+            const parts = splitGalleryKey(key);
+            const site = normalizeSite(parts.site);
+            let group = groups.find((g) => g.site === site);
+            if (!group) {
+                group = { site: site, titles: {} };
+                groups.push(group);
+            }
+            group.titles[parts.id] = parts.id;
         }
         box.value = "";
-        // The paste box parses ids and nhentai URLs only (parseGalleryInput),
-        // so this is a default-site job: one group, no site field on the wire.
-        await startDownload([{ site: DEFAULT_SITE, titles: titles }], false);
+        await startDownload(groups, false);
         return;
     }
 
@@ -466,7 +475,8 @@ async function addPasted(downloadNow: boolean): Promise<void> {
     if (!enriched || enriched.result !== "success") {
         showNotice(bookmarkedNote + " Titles could not be resolved - the rows are still downloadable by id.", true);
     } else if (enriched.skipped) {
-        showNotice(bookmarkedNote + " Open an nhentai.net tab to fill in the titles and covers.", true);
+        showNotice(bookmarkedNote + (enriched.resolved > 0 ? " Resolved " + enriched.resolved + (enriched.resolved === 1 ? " title." : " titles.") : "")
+            + " Open an nhentai.net tab to fill in the nhentai titles and covers.", true);
     } else if (enriched.resolved === 0) {
         showNotice(bookmarkedNote + " No metadata came back - nhentai may be challenging this session. The rows are still downloadable by id.", true);
     } else {

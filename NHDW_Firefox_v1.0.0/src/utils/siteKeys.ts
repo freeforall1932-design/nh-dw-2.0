@@ -15,9 +15,11 @@
 // Contract (documented so adapters cannot break it later):
 //  * Site slugs are lowercase, dot-free, colon-free identifiers owned by the
 //    adapter registry ("nhentai" today; "hitomi" etc. later).
-//  * Gallery ids must not contain ":". Every planned site uses numeric ids,
-//    and an id carrying the separator could not be told apart from a
-//    composite key.
+//  * Gallery ids must not contain ":". Every site uses numeric ids except
+//    Tailspace, whose id is its comic slug as one encoded URL segment
+//    ("Scale%20Train", see tailspaceIds.ts) - the encoding turns ":" into %3A,
+//    so the rule holds. isGalleryIdForSite() is the one place that says which
+//    id shape a site accepts.
 //  * toGalleryKey() passes through anything that already contains ":" so the
 //    same helper is safe on both sides of every comparison (candidate side
 //    and stored side) without callers tracking which space they are in.
@@ -25,6 +27,8 @@
 // IMPORTANT CONTEXT RULE (same as bookmarkQueue.ts): this module is pure —
 // no chrome.* at module scope — so the offscreen document and the VM test
 // sandboxes can import it freely.
+
+import { TAILSPACE_SITE, isTailspaceId } from "./tailspaceIds";
 
 export const GALLERY_KEY_SEPARATOR = ":";
 
@@ -43,6 +47,18 @@ export function normalizeSite(site: string | null | undefined): string {
         return DEFAULT_SITE;
     }
     return value;
+}
+
+/**
+ * Is `id` a valid bare gallery id for `site`? Numeric for every site; Tailspace
+ * also accepts its canonical encoded slug. Never true for a composite key.
+ */
+export function isGalleryIdForSite(site: string | null | undefined, id: string | number | null | undefined): boolean {
+    const value = String(id === undefined || id === null ? "" : id).trim();
+    if (/^[0-9]+$/.test(value)) {
+        return true;
+    }
+    return normalizeSite(site) === TAILSPACE_SITE && isTailspaceId(value);
 }
 
 /** Build "<site>:<id>". An empty id yields "" so callers can skip it. */

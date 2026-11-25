@@ -65,7 +65,19 @@ comparison. The native button's click flow remains unobserved.
   series is walked through previous/next links. The decoder is general, so any
   React Router/Remix reader with exactly one URL list also works. It went into
   both trees because it is shared code. It is offline-verified only. The owner's
-  live check is in [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#one-live-check-owner-5-minutes).
+  live check is in [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#chapters--live-check-only-if-the-built-in-route-fails).
+- **Tailspace as a built-in site (2026-11-25, owner: "like other mature
+  completed website"; Chromium 3.15.0 / Firefox 1.8.0).** Panel Download on any
+  comic page, a Series column (find all parts, download selected), paste box,
+  bookmarks and history, all on slug ids (`tailspace:Scale%20Train`). Errors
+  explain themselves in the panel and the batch summary. Images get
+  `Referer: https://tailspace.com/` through a session rule scoped to the
+  extension's own requests to `pics.tailspace.com` (same mechanism as Hitomi).
+  Host permissions are exactly `tailspace.com` + `pics.tailspace.com`. The
+  Chapters ↗ route stays as the fallback. Offline-verified only; live check in
+  [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#live-check-owner-5-minutes). Side fix
+  for every site: pasted `site:id` keys were dropped by **Add**, and **Download
+  now** sent them as nhentai jobs.
 - **Research order for an undocumented site (2026-11-25):** existing open-source
   scrapers (`node tools/find-site-references.js <domain>`), then a site-family or
   framework fingerprint (MangaThemesia, Next.js `__NEXT_DATA__`, React Router
@@ -278,8 +290,10 @@ site unless stated.
   whether the batch link only appears beyond a chapter count.
 - [x] Tailspace: does scroll mode serve full-size files (no `-mini` suffix)?
   (Yes per the owner. It is moot now that pages come from page data.)
-- [ ] Tailspace live check: scan, inspect and save one multi-part comic.
-  Report whether `pics.tailspace.com` needed the referrer option or refused CORS.
+- [ ] Tailspace live check (built-in site, 3.15.0 / FF 1.8.0): open a
+  multi-part comic, press Download, then Series → Find all parts → Download
+  selected. If anything fails, send the panel's message text. Steps in
+  [TAILSPACE_PLAN.md](TAILSPACE_PLAN.md#live-check-owner-5-minutes).
 - [ ] Real-browser run: your Chrome version, and confirmation you can load the
   unpacked build — I can supply a checklist whose output you paste back.
 - [ ] nhentai's own Download button: still unobserved. A screenshot plus the
