@@ -664,7 +664,7 @@ describe('bookmark site filter (item 66)', () => {
 
     it('lists the canonical option order with All sites first', () => {
         assert.deepStrictEqual(bookmarkFilterSites(), [
-            'nhentai', 'hitomi', 'hentaiera', 'imhentai', 'hentaienvy', 'hentaifox'
+            'nhentai', 'hitomi', 'hentaiera', 'imhentai', 'hentaienvy', 'hentaifox', 'tailspace'
         ]);
         assert.strictEqual(SITE_FILTER_ALL, 'all');
     });

@@ -53,7 +53,9 @@ describe('MV3 manifest', () => {
 
             // Static hosts: unchanged known mirrors and supported sites, no broadening.
             for (const pattern of manifest.host_permissions) {
-                assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?(?:nhentai\.net|hentaiera\.(?:com|to|site)|imhentai\.(?:xxx|org|net)|hentaienvy\.com|hentaifox\.com|hitomi\.la|gold-usergeneratedcontent\.net)\/\*$/.test(pattern),
+                assert.ok(/^https:\/\/(?:[a-z0-9*-]+\.)?(?:nhentai\.net|hentaiera\.(?:com|to|site)|imhentai\.(?:xxx|org|net)|hentaienvy\.com|hentaifox\.com|hitomi\.la|gold-usergeneratedcontent\.net)\/\*$/.test(pattern)
+                    // Tailspace: exactly its page host and its image host (no wildcard).
+                    || pattern === 'https://tailspace.com/*' || pattern === 'https://pics.tailspace.com/*',
                     'host_permissions must stay https scoped to supported sites: ' + pattern);
                 assert.ok(!pattern.includes('<all_urls>'), 'host_permissions must not contain <all_urls>');
             }

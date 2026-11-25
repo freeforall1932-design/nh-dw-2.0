@@ -80,6 +80,76 @@ export module message
         return "This tab does not contain gallery metadata yet. Finish any Cloudflare challenge, wait until the gallery page itself has loaded, then open the popup again.";
     }
 
+    // A site adapter read the page data but could not use it, or the request
+    // failed (tailspace). Says what went wrong in plain words, plus the HTTP
+    // status when there was one, so a failure during normal use explains
+    // itself instead of pointing at a Cloudflare challenge that is not there.
+    export function siteReadError(siteName: string, status: number, statusText: string, reason: string): string {
+        let what: string;
+        if (status === 404) {
+            what = siteName + " has no comic at this address";
+        } else if (status === 429) {
+            what = siteName + " is limiting requests right now; wait a minute, then open the panel again";
+        } else if (status === 401 || status === 403) {
+            what = siteName + " refused the request";
+        } else if (reason) {
+            what = reason;
+        } else if (status >= 500) {
+            what = siteName + " had a server error";
+        } else if (status === 0 && statusText) {
+            what = "the request failed: " + statusText;
+        } else {
+            what = "the comic's data could not be read";
+        }
+        const code = status > 0 ? " (HTTP " + status + (statusText ? " " + statusText : "") + ")" : "";
+        return '<div class="nhdwSiteError"><b>Could not read this comic from ' + escapeHtml(siteName) + '.</b><br/>' +
+            escapeHtml(what.charAt(0).toUpperCase() + what.slice(1)) + escapeHtml(code) + '.<br/>' +
+            '<small>If the comic opens normally in this tab, reload it and open the panel again. If this keeps happening, the site may have changed - this message is what to report.</small></div>';
+    }
+
+    // Tailspace page that is not a comic (browse, search, home).
+    export function siteOpenComic(siteName: string, example: string): string {
+        return 'Open a comic on ' + escapeHtml(siteName) + ' (' + escapeHtml(example) + ') to download it, or the whole series it belongs to.';
+    }
+
+    // Right column for sites whose titles come in linked parts (tailspace).
+    export function seriesIntro(hasParts: boolean): string {
+        if (!hasParts) {
+            return '<small>This comic has no linked parts.</small>';
+        }
+        return '<small>This comic is one part of a series. Find every linked part, then download them all - each part becomes its own file, oldest first.</small><br/>' +
+            '<input type="button" id="buttonLoadSeries" value="Find all parts"/>';
+    }
+
+    export function seriesLoading(found: number): string {
+        return '<small>Reading the series... ' + found + ' part' + (found === 1 ? '' : 's') + ' found so far.</small>';
+    }
+
+    // Entries carry pre-escaped titles. `done` rows are already in the
+    // download history and start unticked; `current` is the open comic.
+    export function seriesList(entries: Array<{ id: string; title: string; pages: number; done: boolean; current: boolean; note: string }>, warnings: string[]): string {
+        let html = '';
+        for (const warning of warnings) {
+            html += '<div class="nhdwSeriesWarning"><small>&#9888; ' + escapeHtml(warning) + '</small></div>';
+        }
+        html += '<div class="similarList">';
+        entries.forEach((entry, index) => {
+            html += '<div class="similarRow">' +
+                '<label><input type="checkbox" class="seriesItem" data-id="' + escapeHtml(entry.id) + '"' + (entry.done ? '' : ' checked') + '> ' +
+                (index + 1) + '. ' + entry.title +
+                (entry.pages > 0 ? ' <small>(' + entry.pages + 'p)</small>' : '') +
+                (entry.current ? ' <small>(open now)</small>' : '') +
+                (entry.done ? ' <small class="nhdwAlready">&#10003; downloaded</small>' : '') +
+                (entry.note ? '<br/><small class="nhdwSeriesWarning">&#9888; ' + escapeHtml(entry.note) + '</small>' : '') +
+                '</label></div>';
+        });
+        html += '</div>';
+        html += '<input type="button" id="buttonSeriesAll" value="All"/> ';
+        html += '<input type="button" id="buttonSeriesNone" value="None"/><br/>';
+        html += '<input type="button" id="buttonSeries" value="Download selected"/>';
+        return html;
+    }
+
     // nhentai's CDN config reported image hosts this extension has no host
     // permission for. Downloads keep using the permitted hosts; the button
     // requests the optional https://*.nhentai.net grant (user gesture required,
@@ -94,7 +164,7 @@ export module message
             '<input type="button" id="buttonGrantCdn" value="Grant image host access"/>';
     }
     
-    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string, alreadyNote?: string, bookmarked: boolean = false): string {
+    export function downloadInfo(title: string, nbOfPages: number, extension: string, selectedFormat: string, alreadyNote?: string, bookmarked: boolean = false, extras: { notice?: string; sideTitle?: string; sideHtml?: string } = {}): string {
         const selected = (value: string) => value === selectedFormat ? ' selected' : '';
         const historyNote = alreadyNote
             ? '<small id="singleHistoryInfo" class="nhdwAlready">&#10003; Already downloaded: ' + alreadyNote + '</small><br/>'
@@ -105,7 +175,9 @@ export module message
         return '<div class="popupColumns">' +
             '<div class="popupColumn">' +
             '<h3>' + title + '</h3>' +
-            '<div>(' + nbOfPages + ' pages)</div><br/>' +
+            '<div>(' + nbOfPages + ' pages)</div>' +
+            (extras.notice ? '<div class="nhdwSeriesWarning"><small>&#9888; ' + escapeHtml(extras.notice) + '</small></div>' : '') +
+            '<br/>' +
             'Format: <select id="downloadFormat">' +
             '<option value="zip"' + selected('zip') + '>ZIP</option>' +
             '<option value="cbz"' + selected('cbz') + '>CBZ</option>' +
@@ -119,8 +191,10 @@ export module message
             '<input type="button" id="buttonSaveOffline" value="Save offline" title="Save this title with list-mode settings. Hold Alt to open the existing download form."/>' +
             '</div>' +
             '<div class="popupColumn">' +
-            '<b>Similar galleries</b>' +
-            '<div id="similarPanel">' + similarIntro() + '</div>' +
+            (extras.sideHtml !== undefined
+                ? '<b>' + escapeHtml(extras.sideTitle || '') + '</b>' + extras.sideHtml
+                : '<b>Similar galleries</b>' +
+                  '<div id="similarPanel">' + similarIntro() + '</div>') +
             '</div>' +
             '</div>';
     }

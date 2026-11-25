@@ -28,7 +28,8 @@
 //   * Tolerant parsing everywhere: a corrupt or legacy record degrades to an
 //     empty list rather than throwing inside the panel.
 
-import { DEFAULT_SITE, toGalleryKey, normalizeSite } from "./siteKeys";
+import { DEFAULT_SITE, toGalleryKey, normalizeSite, isGalleryIdForSite } from "./siteKeys";
+import { TAILSPACE_SITE, TAILSPACE_PICS_HOST, isTailspaceId, tailspaceIdFromSlug } from "./tailspaceIds";
 
 export const BOOKMARK_QUEUE_KEY = "bookmarkQueue";
 export const BOOKMARK_QUEUE_VERSION = 1;
@@ -109,10 +110,11 @@ function normalizeItem(raw: any): BookmarkItem | null {
     if (raw === null || typeof raw !== "object") {
         return null;
     }
-    // An entry without a numeric id is not a bookmark; drop it rather than
-    // rendering an un-downloadable row.
+    // An entry without a valid id for its site (numeric; Tailspace: its encoded
+    // slug) is not a bookmark; drop it rather than rendering an
+    // un-downloadable row.
     const id = String(raw.id === undefined || raw.id === null ? "" : raw.id).trim();
-    if (!/^[0-9]+$/.test(id)) {
+    if (!isGalleryIdForSite(raw.site, id)) {
         return null;
     }
     return {
@@ -212,6 +214,10 @@ const HENTAIERA_RE = /(?:^|\/|\.)hentaiera\.(?:com|to|site)\/(?:gallery|view|g)\
 const IMHENTAI_RE = /(?:^|\/|\.)imhentai\.(?:xxx|org|net)\/(?:gallery|view)\/([0-9]+)/i;
 const HENTAIENVY_RE = /(?:^|\/|\.)hentaienvy\.com\/(?:gallery|g)\/([0-9]+)/i;
 const HENTAIFOX_RE = /(?:^|\/|\.)hentaifox\.com\/(?:gallery|g)\/([0-9]+)/i;
+// Tailspace comics are addressed by slug (tailspaceIds.ts): the URL's /c/<slug>
+// segment and the composite "tailspace:<encoded slug>" key.
+const TAILSPACE_RE = /(?:^|\/|\.)tailspace\.com\/c\/([^\/?#]+)/i;
+const TAILSPACE_KEY_RE = /^tailspace:(\S+)$/i;
 const HITOMI_RE = /(?:^|\/|\.)hitomi\.la\/(?:galleries|doujinshi|manga|gamecg|cg|anime|reader)\/(?:.*-)?([0-9]+)(?:\.html)?/i;
 const GENERIC_GALLERY_PATH_RE = /\/(?:g|v|gallery|view)\/([0-9]+)/i;
 const ID_QUERY_RE = /[?&]id=([0-9]+)/i;
@@ -236,12 +242,40 @@ export function parseGalleryInput(text: string, rangeLimit: number = MAX_PASTE_R
         ids.push(id);
     };
 
-    const tokens = String(text === undefined || text === null ? "" : text)
+    const rawTokens = String(text === undefined || text === null ? "" : text)
         .split(/[\s,;|]+/)
-        .map((token) => token.replace(/^["'[(<]+|["'\])>.]+$/g, ""))
         .filter((token) => token !== "");
 
-    for (const token of tokens) {
+    for (const rawToken of rawTokens) {
+        const token = rawToken.replace(/^["'[(<]+|["'\])>.]+$/g, "");
+        if (token === "") {
+            continue;
+        }
+        // Tailspace slugs may legitimately end in ")" or "." ("Foo (Part 2)"),
+        // so its tokens are trimmed gently: wrapping quotes/brackets only, and a
+        // ")" only while it is unbalanced.
+        let tailspaceToken = rawToken.replace(/^["'[(<]+|["'\]>]+$/g, "");
+        while (/\)$/.test(tailspaceToken)
+            && (tailspaceToken.match(/\)/g) || []).length > (tailspaceToken.match(/\(/g) || []).length) {
+            tailspaceToken = tailspaceToken.slice(0, -1);
+        }
+        const tailspaceKey = TAILSPACE_KEY_RE.exec(tailspaceToken);
+        if (tailspaceKey !== null && isTailspaceId(tailspaceKey[1])) {
+            push(TAILSPACE_SITE + ":" + tailspaceKey[1]);
+            continue;
+        }
+        const tailspace = TAILSPACE_RE.exec(tailspaceToken);
+        if (tailspace !== null) {
+            let slug: string | null = null;
+            try { slug = decodeURIComponent(tailspace[1]); } catch (_) { slug = null; }
+            const tailspaceId = slug === null ? null : tailspaceIdFromSlug(slug);
+            if (tailspaceId !== null) {
+                push(TAILSPACE_SITE + ":" + tailspaceId);
+            } else {
+                rejected.push(token);
+            }
+            continue;
+        }
         const composite = COMPOSITE_KEY_RE.exec(token);
         if (composite !== null) {
             push(composite[1].toLowerCase() + ":" + composite[2]);
@@ -337,6 +371,10 @@ export function thumbnailUrlFromGallery(gallery: any): string {
     if (mediaId === "" || !/^[0-9]+$/.test(mediaId)) {
         return "";
     }
+    if (gallery.site === TAILSPACE_SITE) {
+        // Tailspace's own cover (documented by the Keiyoushi source); display only.
+        return "https://" + TAILSPACE_PICS_HOST + "/comics/" + mediaId + "/thumbnail-2x.webp";
+    }
     const images = gallery.images;
     const cover = images && typeof images === "object" ? images.thumbnail || images.cover : null;
     const extension = typeCodeToExtension(cover && cover.t);
@@ -416,7 +454,7 @@ export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate
 
     for (const candidate of candidates || []) {
         const id = String(candidate === null || candidate === undefined ? "" : candidate.id).trim();
-        if (!/^[0-9]+$/.test(id)) {
+        if (!isGalleryIdForSite(candidate === null || candidate === undefined ? null : candidate.site, id)) {
             continue;
         }
         const key = toGalleryKey(id, candidate.site);
@@ -531,7 +569,7 @@ export const SITE_FILTER_ALL = "all";
  * and a zero-row site can still be selected - and then explains itself.
  */
 export function bookmarkFilterSites(): string[] {
-    return [DEFAULT_SITE, "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox"];
+    return [DEFAULT_SITE, "hitomi", "hentaiera", "imhentai", "hentaienvy", "hentaifox", TAILSPACE_SITE];
 }
 
 /**

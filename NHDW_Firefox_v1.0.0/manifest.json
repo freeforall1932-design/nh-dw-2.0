@@ -54,7 +54,9 @@
     "https://*.hentaifox.com/*",
     "https://hitomi.la/*",
     "https://*.hitomi.la/*",
-    "https://*.gold-usergeneratedcontent.net/*"
+    "https://*.gold-usergeneratedcontent.net/*",
+    "https://tailspace.com/*",
+    "https://pics.tailspace.com/*"
   ],
   "background": {
     "scripts": ["js/background.js"]

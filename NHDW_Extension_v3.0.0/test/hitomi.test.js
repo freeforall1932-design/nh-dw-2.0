@@ -207,9 +207,23 @@ describe("Hitomi Adapter & Resolver", () => {
         const { getConfiguredSources } = require("../build/test/sources/index");
         const EXT_ID = "abcdefghijklmnopabcdefghijklmnop";
 
-        it("builds exactly one rule, for hitomi, scoped to this extension and the content domain", () => {
+        it("builds one rule per site context (hitomi, then tailspace), scoped to this extension and the content domain", () => {
             const rules = buildSiteHeaderRules(getConfiguredSources(), EXT_ID);
-            assert.strictEqual(rules.length, 1);
+            assert.strictEqual(rules.length, 2);
+            // Tailspace: Referer only (no Origin), its image host only.
+            assert.deepStrictEqual(rules[1], {
+                id: SITE_HEADER_RULE_ID_BASE + 1,
+                priority: 1,
+                action: {
+                    type: "modifyHeaders",
+                    requestHeaders: [{ header: "referer", operation: "set", value: "https://tailspace.com/" }]
+                },
+                condition: {
+                    requestDomains: ["pics.tailspace.com"],
+                    initiatorDomains: [EXT_ID],
+                    resourceTypes: ["xmlhttprequest", "other"]
+                }
+            });
             assert.deepStrictEqual(rules[0], {
                 id: SITE_HEADER_RULE_ID_BASE,
                 priority: 1,
@@ -248,7 +262,7 @@ describe("Hitomi Adapter & Resolver", () => {
             assert.strictEqual(calls.length, 2);
             assert.strictEqual(calls[0].removeRuleIds.length, SITE_HEADER_RULE_ID_MAX - SITE_HEADER_RULE_ID_BASE + 1);
             assert.ok(calls[0].removeRuleIds.includes(SITE_HEADER_RULE_ID_BASE));
-            assert.strictEqual(calls[0].addRules.length, 1);
+            assert.strictEqual(calls[0].addRules.length, 2);
         });
 
         it("scopes to the extension's ORIGIN host: the id on Chrome, the moz-extension UUID on Firefox", async () => {
