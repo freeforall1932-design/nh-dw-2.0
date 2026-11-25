@@ -398,10 +398,19 @@ async function waitFor(predicate, what, timeoutMs = 15000) {
         || !hitomiRule.action.requestHeaders.some((h) => h.header === "origin" && h.value === "https://hitomi.la")) {
         fail("the hitomi header rule must be scoped to this extension and set hitomi.la context, got " + JSON.stringify(headerRules));
     }
-    if (headerRules.length !== 1) {
-        fail("only the hitomi header rule is expected, got " + headerRules.length);
+    // Tailspace: Referer https://tailspace.com/ only (no Origin), on its image
+    // host only, for this extension's own requests.
+    const tailspaceRule = headerRules.find((r) => r.condition && (r.condition.requestDomains || []).includes("pics.tailspace.com"));
+    if (!tailspaceRule
+        || JSON.stringify(tailspaceRule.condition.requestDomains) !== JSON.stringify(["pics.tailspace.com"])
+        || JSON.stringify(tailspaceRule.condition.initiatorDomains) !== JSON.stringify(["abcdefghijklmnopabcdefghijklmnop"])
+        || JSON.stringify(tailspaceRule.action.requestHeaders) !== JSON.stringify([{ header: "referer", operation: "set", value: "https://tailspace.com/" }])) {
+        fail("the tailspace header rule must set only its Referer, scoped to this extension and pics.tailspace.com, got " + JSON.stringify(headerRules));
     }
-    console.log("PASS phase 0: hitomi header rule installed at worker start, scoped to the extension's own requests");
+    if (headerRules.length !== 2) {
+        fail("only the hitomi and tailspace header rules are expected, got " + headerRules.length);
+    }
+    console.log("PASS phase 0: hitomi + tailspace header rules installed at worker start, scoped to the extension's own requests");
 
     // ---- Phase 1: ZIP mode ------------------------------------------------
     syncSettings = { useZip: "zip", maxConcurrentDownloads: "3" };

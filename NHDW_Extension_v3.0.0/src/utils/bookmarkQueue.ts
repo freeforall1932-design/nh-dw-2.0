@@ -28,7 +28,7 @@
 //   * Tolerant parsing everywhere: a corrupt or legacy record degrades to an
 //     empty list rather than throwing inside the panel.
 
-import { DEFAULT_SITE, toGalleryKey, normalizeSite, isGalleryIdForSite } from "./siteKeys";
+import { DEFAULT_SITE, toGalleryKey, normalizeSite, isGalleryIdForSite, splitGalleryKey } from "./siteKeys";
 import { TAILSPACE_SITE, TAILSPACE_PICS_HOST, isTailspaceId, tailspaceIdFromSlug } from "./tailspaceIds";
 
 export const BOOKMARK_QUEUE_KEY = "bookmarkQueue";
@@ -452,9 +452,28 @@ export function addBookmarks(state: BookmarkState, candidates: BookmarkCandidate
     const added: string[] = [];
     const duplicates: string[] = [];
 
-    for (const candidate of candidates || []) {
-        const id = String(candidate === null || candidate === undefined ? "" : candidate.id).trim();
-        if (!isGalleryIdForSite(candidate === null || candidate === undefined ? null : candidate.site, id)) {
+    for (const rawCandidate of candidates || []) {
+        if (rawCandidate === null || rawCandidate === undefined) {
+            continue;
+        }
+        // The paste box hands over composite keys ("hitomi:123",
+        // "tailspace:Scale%20Train") with no site field: the key itself names
+        // the site. Split it here, or the whole key fails the id check and the
+        // row is silently dropped. A key that contradicts an explicit site is
+        // refused rather than guessed.
+        let candidate: BookmarkCandidate = rawCandidate;
+        const rawId = String(rawCandidate.id === undefined || rawCandidate.id === null ? "" : rawCandidate.id).trim();
+        if (rawId.indexOf(":") > 0) {
+            const parts = splitGalleryKey(rawId);
+            const keySite = normalizeSite(parts.site);
+            if (bookmarkFilterSites().indexOf(keySite) === -1
+                || (rawCandidate.site !== undefined && rawCandidate.site !== null && rawCandidate.site !== "" && normalizeSite(rawCandidate.site) !== keySite)) {
+                continue;
+            }
+            candidate = Object.assign({}, rawCandidate, { id: parts.id, site: keySite });
+        }
+        const id = String(candidate.id === undefined || candidate.id === null ? "" : candidate.id).trim();
+        if (!isGalleryIdForSite(candidate.site, id)) {
             continue;
         }
         const key = toGalleryKey(id, candidate.site);
