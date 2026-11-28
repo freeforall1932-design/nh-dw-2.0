@@ -1,10 +1,12 @@
 # Offline index + library tab plan
 
 **Recorded:** 2026-11-26 (session `arena/1af576b7-nh-dw-2-0`, branched from `f5be2ec`).
-**Status:** **Phase 1 landed** (same session): `library.html` + rail + importer
-+ dummy-data mode, 23 new unit tests, 898 Chrome suite green. Phases 2–6 not
-started. This doc captures the design agreed in discussion so a future session
-does not re-derive it.
+**Status:** **Phase 1 and Phase 2 landed** (same session): Phase 1 —
+`library.html` rail + importer + dummy-data mode (23 tests); Phase 2 —
+`tools/indexer/` API v2 walker (Route A, resumable, offline-checked, 11
+checks incl. a round-trip through the real importer), `.gitignore` for index
+outputs. 898 Chrome suite green. Phases 3–6 not started. This doc captures
+the design agreed in discussion so a future session does not re-derive it.
 
 The idea in one line: **an offline, tag-first index of titles that filters
 instantly with no site round-trips, browsed in a full extension tab
@@ -75,24 +77,30 @@ never touches other sources or the OPFS thumb cache.
 
 ## 3. Where the index comes from
 
-Two candidate routes for the crawl — **decision not locked yet**:
+**Decision (Phase 2): Route A, over the documented API v2.** The repo already
+carries the project's own API reference
+(`old deprecated source code/NHENTAI_API_V2.md`): `GET /api/v2/galleries`
+(newest-first, `per_page` ≤ 100), `GET /api/v2/galleries/tagged`
+(`sort=date` — the §6 watch shape), `GET /api/v2/search`,
+`GET /api/v2/tags/{type}` for the tier-1 dictionary, and
+`Authorization: Key <key>` as the only third-party auth. Keyed listings are
+30/min, anon 15/min — the client derives its spacing from those numbers and
+a 429 stops the run for a clean resume (house rule: throttling is never
+retried or bypassed). A Cloudflare challenge body also stops with words.
+Shipped as `tools/indexer/` (see its README); offline-checked by
+`tools/indexer/test-crawl.js`, which round-trips the produced file through
+the real importer when the extension test build exists.
 
-- **Route A — `tools/indexer/` Node crawler.** Matches the existing `tools/`
-  convention. Walks listing/tag pages (nhentai's paginated listings are the
-  first target: ~24k requests ≈ an overnight at polite ~3 req/s), reuses the
-  per-site parsing logic, supports resume, emits the §2 file. Fast and
-  headless, but must handle Cloudflare the way any bot must: politely, with
-  retries, and it can lose a session mid-run.
-- **Route B — extension-driven harvest walk.** The extension already harvests
-  listing cards through the user's own tab session (Cloudflare-aware by
-  construction, Item in README). A "deep harvest" mode auto-pages through a
-  tag listing while the user keeps the tab open, accumulating rows into the
-  same export format. Slower, needs the browser open, but zero anti-bot risk
-  because it *is* the user browsing.
-
-If the user already possesses index dumps (per earlier discussion: "I have the
-index"), the **importer is Phase 1 priority** and either route is deferred
-until a gap needs filling.
+- **Route A — `tools/indexer/` Node crawler — CHOSEN.** Matches the existing
+  `tools/` convention; resumable state per page; emits the §2 file; testable
+  fully offline with a fake fetch.
+- **Route B — extension-driven harvest walk — deferred.** Still the fallback
+  if the API rots or a future source has no API: harvest listing cards
+  through the user's own tab session into the same §2 format. Decide per
+  source when needed.
+- Existing index dumps: the Phase 1 importer already accepts the §2 format;
+  a converter for a foreign dump is a standalone `tools/indexer/` script if
+  one is ever needed.
 
 ## 4. Panel slim-down: what moves, what stays
 
@@ -217,9 +225,12 @@ into the phase where it belongs.
    alphabetical listing would stop on the first known id and find nothing
    new.
 5. **Pagination depth caps can break both watches and the initial crawl.**
-   Community scrapers report nhentai refusing tag/search pages beyond ~25
-   (verify live at Phase 2). Big tags then need date/uploaded-range sliced
-   queries instead of one long walk. Route A and Route B hit this equally.
+   Community scrapers report nhentai refusing tag/search pages beyond ~25 on
+   the HTML site (still unverified live from this sandbox). Phase 2's answer
+   is runtime, not folklore: the API walker treats a 404 past page 1 as the
+   cap — it keeps what it has, marks the job capped, and points at `--query`
+   date-range slicing for deeper fills. Watches are unaffected: they
+   early-stop on the first known id long before any cap.
 6. **`chrome.alarms` auto-refresh is not Cloudflare-safe.** A background
    fetch with no open tab has no session; expect challenge pages. Watches
    therefore refresh **opportunistically**: through the user's open tab of
@@ -253,9 +264,16 @@ into the phase where it belongs.
   sample data. Bookmarks/History/Queue as moved or stubbed views. Index
   stored in OPFS/IndexedDB, never `chrome.storage.local` (§8.1). No
   crawling.
-- **Phase 2 — real index.** Either Route A or B (§3) for nhentai first, plus
-  `.gitignore` for index exports and `host_permissions` for thumb hosts.
-  Verify the pagination cap and pick a slicing strategy (§8.5).
+- **Phase 2 — real index. LANDED.** Route A over the documented API v2 (§3
+  decision record): `tools/indexer/crawl.js` (--all / --tag-id sort=date /
+  --query / --tags / --finish, resumable, keyless or keyed), §2 emitter with
+  recomputed tag counts, cap handling per §8.5, `.gitignore` for
+  `tools/indexer/indexes/`. **No manifest change was needed and none was
+  made on purpose:** Browse renders thumbs with plain `<img>` (no permission
+  required), and Phase 3's background OPFS thumb cache must ride the
+  existing dynamic CDN-host grant flow (`cdnConfigService` +
+  `optional_host_permissions`) — the API docs explicitly forbid hardcoding
+  thumb subdomains, so static `t*.nhentai.net` grants would be wrong.
 - **Phase 3 — queue integration + visited log.** Send-to-queue with size
   preview and chunked writes (§8.9); lazy OPFS thumb cache through the
   background with an LRU cap (§8.8); content-script visit tracking feeding
@@ -275,9 +293,9 @@ into the phase where it belongs.
 
 ## 10. Open questions
 
-1. **Crawl route A vs B** (§3) — watches (§6) cover freshness once an index
-   exists; the *initial* bulk fill still needs one of the routes. Decide at
-   Phase 2; hinges on whether existing index dumps fill the gap first.
+1. **Crawl route A vs B** (§3) — decided for nhentai: Route A on the API v2.
+   Route B stays the fallback for API-less sources. Open: whether existing
+   foreign index dumps justify a converter script.
 2. **Scale reality check for bulk runs:** `vanilla + english` is tens of
    thousands of galleries ≈ multi-TB of full-size pages. Bulk downloads stay
    per-tag slices with the size preview; the index filter is instant but the

@@ -84,3 +84,9 @@ Thumbs.db
 captures/
 *.har
 *.har.json
+
+# Offline indexer outputs (INDEXER_PLAN.md phase 2): crawled cards, resume
+# state, tag dictionaries and the built index files are local data, not
+# source. `tools/indexer/indexes/` is the agreed drop folder; force-add a
+# small index only if it is worth keeping in history.
+tools/indexer/indexes/
