@@ -15,6 +15,7 @@ const CORE = ['Icon-crow-mist-arrow-grey.png', 'Icon-crow-mist-arrow.png',
     'Icon-crow-mist-grey.png', 'Icon-crow-mist-redeye-grey.png',
     'Icon-crow-mist-redeye.png', 'Icon-crow-mist.png',
     'Icon-grey.png', 'Icon.png', 'LICENSE', 'THIRD_PARTY_NOTICES.txt', 'index.html', 'chapters.html',
+    'library.html',
     'manifest.json', 'offscreen.html', 'options.html'];
 const RUNTIME_EXT = {
     css: /\.(?:css|png|svg|webp|jpe?g|woff2?)$/i,

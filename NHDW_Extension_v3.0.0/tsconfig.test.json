@@ -19,6 +19,11 @@
         "src/preview/activeTabGallery.ts",
         "src/preview/message.ts",
         "src/options/apiKey.ts",
-        "src/sources/**/*.ts"
+        "src/sources/**/*.ts",
+        "src/library/indexFormat.ts",
+        "src/library/invertedIndex.ts",
+        "src/library/sampleIndex.ts",
+        "src/utils/siteKeys.ts",
+        "src/utils/tailspaceIds.ts"
     ]
 }

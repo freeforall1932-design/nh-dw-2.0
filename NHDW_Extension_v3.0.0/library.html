@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en" id="htmlLight">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Library — NHDW</title>
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/library.css">
+  <script src="js/library.js" defer></script>
+</head>
+<body>
+<!-- Library dashboard (INDEXER_PLAN.md §5): a Mihon-style navigation rail on
+     the left, one full-width section per entry. The same extension-page
+     origin as the panel, so chrome.storage / OPFS / the background worker
+     are shared — this tab is another view over the same data. -->
+<main class="libraryShell">
+  <nav id="rail" aria-label="Library sections">
+    <p class="eyebrow">NHDW · LIBRARY</p>
+    <button type="button" data-section="browse" class="railButton active" aria-current="page">Browse</button>
+    <button type="button" data-section="bookmarks" class="railButton" aria-current="false">Bookmarks</button>
+    <button type="button" data-section="history" class="railButton" aria-current="false">History</button>
+    <button type="button" data-section="queue" class="railButton" aria-current="false">Queue</button>
+    <button type="button" data-section="settings" class="railButton" aria-current="false">Settings</button>
+  </nav>
+
+  <div id="libraryContent">
+    <p id="libraryNotice" class="notice" role="status">Loading the library…</p>
+
+    <section data-name="browse" aria-labelledby="browseHeading">
+      <h1 id="browseHeading">Browse the offline index</h1>
+      <p class="hint">Tag filters are AND filters within a source: tick chips, add more, results shrink to titles carrying every ticked tag. Everything here runs on the imported index — no site requests, so no lag and no round-trips. Thumbnails load live from the source's own servers; titles you browse are cached locally as you go.</p>
+      <div id="browseLayout">
+        <aside id="chipSidebar" aria-label="Tag filters"></aside>
+        <div id="browseMain">
+          <div id="browseToolbar">
+            <label>Title search <input id="titleSearch" type="search" placeholder="all words must match" spellcheck="false"></label>
+            <label>Source <select id="sourceFilter"></select></label>
+            <label>Sort <select id="sortMode">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="pages">Most pages</option>
+              <option value="title">Title A→Z</option>
+            </select></label>
+            <div class="viewToggle" role="group" aria-label="View mode">
+              <button id="viewGrid" type="button" aria-pressed="true">Grid</button>
+              <button id="viewList" type="button" aria-pressed="false">List</button>
+            </div>
+            <button id="clearFilters" type="button" class="secondary">Clear filters</button>
+          </div>
+          <p id="resultsMeta" class="hint" role="status"></p>
+          <div id="results"></div>
+          <div class="buttons"><button id="showMore" type="button" class="secondary" hidden>Show more</button></div>
+          <div class="buttons">
+            <button id="selectDisplayed" type="button" class="secondary">Select displayed</button>
+            <button id="clearSelection" type="button" class="secondary">Clear selection</button>
+          </div>
+        </div>
+      </div>
+      <div id="selectionBar">
+        <span id="selectionInfo">Nothing selected.</span>
+        <button id="sendQueue" type="button" disabled>Send to queue</button>
+      </div>
+    </section>
+
+    <section data-name="bookmarks" hidden aria-labelledby="bookmarksHeading">
+      <h1 id="bookmarksHeading">Bookmarks</h1>
+      <p id="bookmarkStubCount" class="hint">Live count: …</p>
+      <p>The bookmark manager — search, state and date filters, re-download marks, the 200-row window — moves here from the panel in the panel slim-down phase (INDEXER_PLAN.md §4). Until then the panel's Bookmark tab stays the full list; nothing is duplicated or lost.</p>
+    </section>
+
+    <section data-name="history" hidden aria-labelledby="historyHeading">
+      <h1 id="historyHeading">History</h1>
+      <p id="historyStubCount" class="hint">Live count: …</p>
+      <p>Visited titles (a content script records the gallery pages you open) merge with the download history into one list — last-visited date, downloaded ✓ badge. That lands with the visited-log phase; today this shows only the recorded downloads' live count.</p>
+    </section>
+
+    <section data-name="queue" hidden aria-labelledby="queueHeading">
+      <h1 id="queueHeading">Queue</h1>
+      <p>Live progress stays in the panel (it is the "right now" surface); the full draggable list, retry-failed and bulk operations move here in the panel slim-down phase. Send-to-queue from Browse connects when queue integration lands.</p>
+    </section>
+
+    <section data-name="settings" hidden aria-labelledby="settingsHeading">
+      <h1 id="settingsHeading">Settings</h1>
+      <h2>Index import</h2>
+      <p class="hint">Accepts the library index format (INDEXER_PLAN.md §2): one <code>_meta</code> header line, tag dictionary rows, then compact gallery rows — plain or gzipped <code>.jsonl</code>. The index is stored in the extension's OPFS, never in chrome.storage.local (that store is small and capped). Re-importing a source replaces that source only.</p>
+      <label>Index file <input id="indexFile" type="file" accept=".jsonl,.gz,.json"></label>
+      <p id="importStatus" class="hint" role="status" aria-live="polite"></p>
+      <div id="sourceList"></div>
+      <div class="buttons"><button id="loadSample" type="button" class="secondary">Show bundled sample data</button></div>
+      <h2>Size estimate</h2>
+      <label>Average MB per page <input id="avgMbPerPage" type="number" min="1" max="1000" step="1"></label>
+      <p class="hint">Used for the rough size estimate in the selection bar — not a promise about any one title. The panel's download history is a better source for what your mirrors actually average.</p>
+      <p id="storageUsage" class="hint"></p>
+    </section>
+  </div>
+</main>
+</body>
+</html>

@@ -19,6 +19,7 @@ module.exports = {
     titleBookmark: './src/content/titleBookmark.ts',
     universalChapterProbe: './src/content/universalChapterProbe.ts',
     chapters: './src/chapters/chapters.ts',
+    library: './src/library/library.ts',
     preview: './src/preview/preview.ts',
     getGalleries: './src/preview/getGalleries.ts',
     options: './src/options/options.ts',

@@ -54,6 +54,12 @@ function initPopupTabs() {
             chrome.tabs.create({ url: chrome.runtime.getURL("chapters.html") + "?tab=" + tabs[0].id });
         });
     });
+    // The library dashboard needs no source tab: it is a view over the
+    // extension's own stores (INDEXER_PLAN.md §5).
+    const libraryButton = document.getElementById("buttonLibrary");
+    if (libraryButton) libraryButton.addEventListener("click", () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL("library.html") });
+    });
     tabQueue.addEventListener("click", () => show("queue"));
     tabSettings.addEventListener("click", () => show("settings"));
     // Live row updates (a card bookmarked on the page, a download settling)
