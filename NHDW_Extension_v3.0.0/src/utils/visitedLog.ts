@@ -13,10 +13,12 @@
 // — so the node test build can import the pure halves freely.
 
 import { composeGalleryKey, normalizeSite } from "./siteKeys";
+import { LIBRARY_DB_NAME, openLibraryDb, idbRequestToPromise, VISITED_STORE_NAME } from "./libraryDb";
 
-export const VISITED_DB_NAME = "nhdw-library";
-export const VISITED_STORE = "visited";
-export const VISITED_SCHEMA_VERSION = 1;
+// Store names ride the shared library database (libraryDb.ts): same origin,
+// same DB, one version line for the whole library feature set.
+export const VISITED_DB_NAME = LIBRARY_DB_NAME;
+export const VISITED_STORE = VISITED_STORE_NAME;
 
 /** What the content script reports about one gallery visit. */
 export interface VisitedInput {
@@ -86,27 +88,7 @@ export function upsertVisitRecord(existing: VisitedEntry | null, input: VisitedI
 // ------------------------------------------------------------- IndexedDB glue
 
 function openVisitedDb(): Promise<IDBDatabase> {
-    if (typeof indexedDB === "undefined") {
-        return Promise.reject(new Error("This context has no IndexedDB; the visited log cannot be stored here."));
-    }
-    return new Promise((resolve, reject) => {
-        const open = indexedDB.open(VISITED_DB_NAME, VISITED_SCHEMA_VERSION);
-        open.onupgradeneeded = () => {
-            const db = open.result;
-            if (!db.objectStoreNames.contains(VISITED_STORE)) {
-                db.createObjectStore(VISITED_STORE, { keyPath: "key" });
-            }
-        };
-        open.onsuccess = () => resolve(open.result);
-        open.onerror = () => reject(open.error || new Error("could not open the visited-log database"));
-    });
-}
-
-function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
-    return new Promise((resolve, reject) => {
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error || new Error("IndexedDB request failed"));
-    });
+    return openLibraryDb();
 }
 
 /** Record one visit (upsert). The worker calls this with the validated input. */
@@ -115,9 +97,9 @@ export async function recordVisit(input: VisitedInput, now: number = Date.now())
     try {
         const tx = db.transaction(VISITED_STORE, "readwrite");
         const store = tx.objectStore(VISITED_STORE);
-        const existing = await requestToPromise(store.get(input.key) as IDBRequest<VisitedEntry | undefined>);
+        const existing = await idbRequestToPromise(store.get(input.key) as IDBRequest<VisitedEntry | undefined>);
         const entry = upsertVisitRecord(existing || null, input, now);
-        await requestToPromise(store.put(entry));
+        await idbRequestToPromise(store.put(entry));
         return entry;
     } finally {
         db.close();
@@ -129,7 +111,7 @@ export async function listVisits(limit: number, offset: number = 0): Promise<Vis
     const db = await openVisitedDb();
     try {
         const tx = db.transaction(VISITED_STORE, "readonly");
-        const all = await requestToPromise(tx.objectStore(VISITED_STORE).getAll() as IDBRequest<VisitedEntry[]>);
+        const all = await idbRequestToPromise(tx.objectStore(VISITED_STORE).getAll() as IDBRequest<VisitedEntry[]>);
         all.sort((a, b) => b.lastVisited - a.lastVisited || a.key.localeCompare(b.key));
         return all.slice(offset, offset + Math.max(0, limit));
     } finally {
@@ -141,7 +123,7 @@ export async function countVisits(): Promise<number> {
     const db = await openVisitedDb();
     try {
         const tx = db.transaction(VISITED_STORE, "readonly");
-        return await requestToPromise(tx.objectStore(VISITED_STORE).count());
+        return await idbRequestToPromise(tx.objectStore(VISITED_STORE).count());
     } finally {
         db.close();
     }
@@ -151,7 +133,7 @@ export async function clearVisits(): Promise<void> {
     const db = await openVisitedDb();
     try {
         const tx = db.transaction(VISITED_STORE, "readwrite");
-        await requestToPromise(tx.objectStore(VISITED_STORE).clear());
+        await idbRequestToPromise(tx.objectStore(VISITED_STORE).clear());
     } finally {
         db.close();
     }

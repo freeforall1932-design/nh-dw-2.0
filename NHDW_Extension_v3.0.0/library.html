@@ -96,6 +96,11 @@
       <label>Average MB per page <input id="avgMbPerPage" type="number" min="1" max="1000" step="1"></label>
       <p class="hint">Used for the rough size estimate in the selection bar — not a promise about any one title. The panel's download history is a better source for what your mirrors actually average.</p>
       <p id="storageUsage" class="hint"></p>
+      <h2>Thumbnail cache</h2>
+      <label>Cache cap (MB, 0 disables) <input id="thumbCacheMb" type="number" min="0" max="512000" step="64"></label>
+      <p id="thumbCacheStatus" class="hint"></p>
+      <div class="buttons"><button id="thumbCacheClear" type="button" class="secondary">Clear thumbnail cache</button></div>
+      <p class="hint">Covers you have browsed are kept in the extension's OPFS under this cap (least-recently-used is evicted first), so they return instantly and survive offline. Keeping them needs the CDN host grant (the panel's CDN notice); without it covers still display live from the site — nothing is bypassed, nothing breaks.</p>
     </section>
   </div>
 </main>

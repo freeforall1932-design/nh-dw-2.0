@@ -1,17 +1,15 @@
 # Offline index + library tab plan
 
 **Recorded:** 2026-11-26 (session `arena/1af576b7-nh-dw-2-0`, branched from `f5be2ec`).
-**Status:** **Phase 1, Phase 2 and Phase 3 landed** (same session): Phase 1 —
+**Status:** **Phases 1–3 plus 3b landed** (same session): Phase 1 —
 `library.html` rail + importer + dummy-data mode (23 tests); Phase 2 —
 `tools/indexer/` API v2 walker (Route A, resumable, offline-checked, 11
 checks incl. a round-trip through the real importer), `.gitignore` for index
 outputs; Phase 3 — send-to-queue (chunked, §8.9), visited log (IndexedDB),
-`unlimitedStorage` (§8.1), 911 Chrome suite green. **Phase 3b (deferred):
-the OPFS thumb cache** — the LRU-capped background cache of §8.8; Browse
-today renders thumbs live via plain `<img>` with the offline placeholder
-fallback, which needs no permissions. Phases 4–6 not started. This doc
-captures the design agreed in discussion so a future session does not
-re-derive it.
+`unlimitedStorage` (§8.1); Phase 3b — the §8.8 OPFS thumb cache with an LRU
+cap, riding the dynamic CDN-host grant flow. 922 Chrome suite green. Phases
+4–6 not started. This doc captures the design agreed in discussion so a
+future session does not re-derive it.
 
 The idea in one line: **an offline, tag-first index of titles that filters
 instantly with no site round-trips, browsed in a full extension tab
@@ -291,10 +289,22 @@ into the phase where it belongs.
   History renders the newest-first list with ✓ download marks and a
   confirmed Clear. Panel-only Tailspace pages are not visit-tracked yet
   (its content script does not resolve a gallery identity). Storage cap:
-  `unlimitedStorage` added (§8.1). **Deferred to Phase 3b:** the LRU-capped
-  OPFS thumb cache (§8.8) — Browse renders thumbs live via plain `<img>`
-  with the offline placeholder fallback, which needs no permissions; the
-  cache must ride the dynamic CDN-host grant flow when it lands.
+  `unlimitedStorage` added (§8.1). The thumb cache was deferred out of this
+  phase and landed next (see Phase 3b).
+- **Phase 3b — OPFS thumb cache. LANDED.** `src/library/thumbLru.ts` (pure,
+  tested: sha256-hex keys, deterministic oldest-first `evictionPlan` with
+  key-order tie-break, cap 0 = disabled, an incoming item bigger than the
+  whole cap is named by the plan so the caller refuses it) +
+  `src/library/thumbCache.ts` (browser glue: OPFS `thumbs/<hex>` files, LRU
+  ledger in the shared library IndexedDB — `libraryDb.ts` version 2 joins
+  the thumbs store to the visited log's DB — single-flight per URL,
+  ledger-row-without-file cleanup, `pruneToCap()` on cap shrink). Fetches
+  happen from the library page itself, so the cache rides the existing
+  dynamic CDN-host grant flow with zero new background plumbing: no grant →
+  fetch fails harmless and covers keep rendering live from their remote URLs
+  (never bypassed, never load-bearing). Settings: cap input (default 2 GB,
+  0 disables), entries/bytes readout, grant hint, confirmed Clear. Covers
+  swap to their cached object URL after the first successful fetch.
 - **Phase 4 — watches + storage settings.** Saved tag combinations,
   sequential multi-source refresh with newest-first URLs (§8.4),
   opportunistic/Cloudflare-aware refresh (§8.6), "new since" badges (§6);

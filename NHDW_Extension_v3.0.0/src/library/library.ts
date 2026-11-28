@@ -38,6 +38,17 @@ import { clearVisits, countVisits, listVisits, VisitedEntry } from "../utils/vis
 import { DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 import type { BookmarkCandidate } from "../utils/bookmarkQueue";
 import { candidateFromGalleryRow, chunkArray, SEND_CHUNK } from "./sendQueue";
+import { CACHE_CAP_STORAGE, DEFAULT_CACHE_MB } from "./thumbLru";
+import {
+    cacheStats,
+    clearThumbCache,
+    ensureCachedThumb,
+    getThumbCapBytes,
+    hostGrantHint,
+    pruneToCap,
+    resolveCachedThumb,
+    setThumbCapMb,
+} from "./thumbCache";
 
 // ---------------------------------------------------------------- state
 
@@ -116,6 +127,20 @@ function placeholderInitials(title: string): string {
     if (words.length === 0) return "·";
     if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
     return (words[0][0] + words[1][0]).toUpperCase();
+}
+
+/** §8.8 thumb cache: best-effort fetch+store, then swap the live img to the
+    cached object URL so the next render is instant and offline-safe. A
+    failed fetch (host not granted, offline) leaves the live img as-is. */
+function queueThumbCache(url: string, img: HTMLImageElement): void {
+    void (async () => {
+        try {
+            const status = await ensureCachedThumb(url);
+            if (status !== "cached") return;
+            const objectUrl = await resolveCachedThumb(url);
+            if (objectUrl && img.isConnected) img.src = objectUrl;
+        } catch (_) { /* cache is best-effort, never load-bearing */ }
+    })();
 }
 
 // ------------------------------------------------------------- view model
@@ -220,6 +245,7 @@ function coverElement(site: string, mediaId: string, thumbExt: string | undefine
         });
         img.src = url;
         wrap.appendChild(img);
+        queueThumbCache(url, img);
         const initials = document.createElement("span");
         initials.textContent = placeholderInitials(title);
         initials.setAttribute("aria-hidden", "true");
@@ -476,6 +502,7 @@ async function renderVisited(): Promise<void> {
             img.addEventListener("error", () => img.remove());
             img.src = entry.cover;
             cover.appendChild(img);
+            queueThumbCache(entry.cover, img);
             const initials = document.createElement("span");
             initials.setAttribute("aria-hidden", "true");
             initials.textContent = placeholderInitials(entry.title || entry.key);
@@ -605,6 +632,26 @@ async function refreshUsage(): Promise<void> {
     line.textContent = "Extension storage: " + (usage.usage / (1024 * 1024)).toFixed(1) + " MB used of " + (usage.quota / (1024 * 1024)).toFixed(0) + " MB reported.";
 }
 
+async function refreshThumbCacheStatus(): Promise<void> {
+    const line = $("thumbCacheStatus");
+    try {
+        const stats = await cacheStats();
+        const capBytes = await getThumbCapBytes();
+        const capMb = capBytes / (1024 * 1024);
+        let text = stats.entries === 0
+            ? "No thumbnails cached yet — browse Browse and covers are kept as you go."
+            : stats.entries.toLocaleString() + " thumbnails cached (" + (stats.bytes / (1024 * 1024)).toFixed(1) + " MB)";
+        text += " · cap " + (capMb >= 1024 ? (capMb / 1024).toFixed(1) + " GB" : capMb + " MB") + (capMb === 0 ? " (cache disabled)" : "");
+        if (capMb > 0) {
+            const hint = await hostGrantHint("https://t.nhentai.net/galleries/m1/thumb.jpg");
+            if (hint) text += " · " + hint;
+        }
+        line.textContent = text;
+    } catch (error: any) {
+        line.textContent = "The thumbnail cache is unavailable here: " + (error && error.message ? error.message : String(error));
+    }
+}
+
 // ------------------------------------------------------------- filters
 
 function resetFilters(): void {
@@ -675,6 +722,7 @@ function wireRail(): void {
         if (name === "settings") {
             renderSourceList();
             refreshUsage();
+            refreshThumbCacheStatus();
         }
     };
     for (const button of buttons) button.addEventListener("click", () => show(button.dataset.section!));
@@ -738,6 +786,25 @@ function wireBrowse(): void {
 }
 
 function wireSettings(): void {
+    // Thumbnail cache (§8.8): cap, readout, clear.
+    const capInput = $("thumbCacheMb") as HTMLInputElement;
+    try {
+        chrome.storage.local.get({ [CACHE_CAP_STORAGE]: DEFAULT_CACHE_MB }, (elems: any) => {
+            capInput.value = String(typeof elems[CACHE_CAP_STORAGE] === "number" ? elems[CACHE_CAP_STORAGE] : DEFAULT_CACHE_MB);
+        });
+    } catch (_) {
+        capInput.value = String(DEFAULT_CACHE_MB);
+    }
+    capInput.addEventListener("change", () => {
+        const value = Number(capInput.value);
+        if (!Number.isFinite(value) || value < 0) return;
+        setThumbCapMb(value);
+        void pruneToCap().then(() => refreshThumbCacheStatus());
+    });
+    $("thumbCacheClear").addEventListener("click", () => {
+        if (!window.confirm("Clear every cached thumbnail? Covers reload live the next time you browse.")) return;
+        clearThumbCache().then(() => refreshThumbCacheStatus());
+    });
     $("visitedMore").addEventListener("click", () => {
         visitedShown += VISITED_WINDOW;
         void renderVisited();
