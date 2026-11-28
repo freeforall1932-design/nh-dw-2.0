@@ -1,12 +1,17 @@
 # Offline index + library tab plan
 
 **Recorded:** 2026-11-26 (session `arena/1af576b7-nh-dw-2-0`, branched from `f5be2ec`).
-**Status:** **Phase 1 and Phase 2 landed** (same session): Phase 1 —
+**Status:** **Phase 1, Phase 2 and Phase 3 landed** (same session): Phase 1 —
 `library.html` rail + importer + dummy-data mode (23 tests); Phase 2 —
 `tools/indexer/` API v2 walker (Route A, resumable, offline-checked, 11
 checks incl. a round-trip through the real importer), `.gitignore` for index
-outputs. 898 Chrome suite green. Phases 3–6 not started. This doc captures
-the design agreed in discussion so a future session does not re-derive it.
+outputs; Phase 3 — send-to-queue (chunked, §8.9), visited log (IndexedDB),
+`unlimitedStorage` (§8.1), 911 Chrome suite green. **Phase 3b (deferred):
+the OPFS thumb cache** — the LRU-capped background cache of §8.8; Browse
+today renders thumbs live via plain `<img>` with the offline placeholder
+fallback, which needs no permissions. Phases 4–6 not started. This doc
+captures the design agreed in discussion so a future session does not
+re-derive it.
 
 The idea in one line: **an offline, tag-first index of titles that filters
 instantly with no site round-trips, browsed in a full extension tab
@@ -274,10 +279,22 @@ into the phase where it belongs.
   existing dynamic CDN-host grant flow (`cdnConfigService` +
   `optional_host_permissions`) — the API docs explicitly forbid hardcoding
   thumb subdomains, so static `t*.nhentai.net` grants would be wrong.
-- **Phase 3 — queue integration + visited log.** Send-to-queue with size
-  preview and chunked writes (§8.9); lazy OPFS thumb cache through the
-  background with an LRU cap (§8.8); content-script visit tracking feeding
-  History; `unlimitedStorage` permission (§8.1).
+- **Phase 3 — queue integration + visited log. LANDED (thumb cache → 3b).**
+  Send-to-queue: the selection becomes `bookmarkAdd` candidates
+  (`src/library/sendQueue.ts` — pure, tested), sent in 500-item batches so
+  no single storage write goes giant (§8.9); the worker's reply now carries
+  `added`/`duplicates` (backwards-compatible) and the bar reports the split;
+  duplicate rows are never reset. Visited log: `src/utils/visitedLog.ts` —
+  extension IndexedDB (DB `nhdw-library`, store `visited`), content scripts
+  report a gallery-page load via `visitedRecord` (validated by the pure
+  parser; the worker owns the store, exactly as for the bookmark queue);
+  History renders the newest-first list with ✓ download marks and a
+  confirmed Clear. Panel-only Tailspace pages are not visit-tracked yet
+  (its content script does not resolve a gallery identity). Storage cap:
+  `unlimitedStorage` added (§8.1). **Deferred to Phase 3b:** the LRU-capped
+  OPFS thumb cache (§8.8) — Browse renders thumbs live via plain `<img>`
+  with the offline placeholder fallback, which needs no permissions; the
+  cache must ride the dynamic CDN-host grant flow when it lands.
 - **Phase 4 — watches + storage settings.** Saved tag combinations,
   sequential multi-source refresh with newest-first URLs (§8.4),
   opportunistic/Cloudflare-aware refresh (§8.6), "new since" badges (§6);

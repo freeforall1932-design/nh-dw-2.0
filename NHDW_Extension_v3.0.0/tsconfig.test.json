@@ -23,7 +23,9 @@
         "src/library/indexFormat.ts",
         "src/library/invertedIndex.ts",
         "src/library/sampleIndex.ts",
+        "src/library/sendQueue.ts",
         "src/utils/siteKeys.ts",
-        "src/utils/tailspaceIds.ts"
+        "src/utils/tailspaceIds.ts",
+        "src/utils/visitedLog.ts"
     ]
 }

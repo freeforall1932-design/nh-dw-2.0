@@ -34,10 +34,15 @@ import {
 import { buildSampleIndex } from "./sampleIndex";
 import { deleteIndexFile, libraryUsageEstimate, loadAllIndexes, saveIndexFile } from "./libraryStore";
 import { composeGalleryKey } from "../utils/siteKeys";
+import { clearVisits, countVisits, listVisits, VisitedEntry } from "../utils/visitedLog";
+import { DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
+import type { BookmarkCandidate } from "../utils/bookmarkQueue";
+import { candidateFromGalleryRow, chunkArray, SEND_CHUNK } from "./sendQueue";
 
 // ---------------------------------------------------------------- state
 
 const WINDOW_STEP = 200; // same windowed rendering as the panel bookmark list
+const VISITED_WINDOW = 200; // History rows per window (same pattern)
 
 interface SourceState {
     meta: IndexMeta;
@@ -57,6 +62,7 @@ let titleQuery = "";
 let sourceFilter = ""; // "" = all sources, else a source slug
 let shownCount = 0;
 let avgMbPerPage = 45;
+let sendingQueue = false; // one Send-to-queue run at a time (§8.9 chunked writes)
 const selection = new Set<string>(); // composite keys, siteKeys.ts convention
 
 function $(id: string): HTMLElement {
@@ -314,29 +320,192 @@ function renderSelectionBar(): void {
         ? "Nothing selected."
         : titles.toLocaleString() + " selected — " + pages.toLocaleString() + " pages — " + formatSize(pages) + " at " + avgMbPerPage + " MB/page (rough)";
     const send = $("sendQueue") as HTMLButtonElement;
-    send.disabled = true; // Phase 3 (INDEXER_PLAN.md §8): queue integration
-    send.title = "Send-to-queue lands with the queue integration phase; the selection is kept while this tab is open";
+    send.disabled = sendingQueue || titles === 0;
+    send.textContent = sendingQueue ? "Sending…" : "Send to queue";
+    send.title = titles === 0
+        ? "Select titles first"
+        : "Bookmark the selection into the existing queue — the panel's Bookmark tab then downloads them (Item 48 splits mixed sources per site)";
+}
+
+// Send-to-queue (phase 3): the selection goes to the worker as bookmarkAdd
+// candidates, in SEND_CHUNK-sized messages (§8.9 — never one giant storage
+// write). The worker owns the store exactly as for a card's Bookmark click.
+async function sendSelectionToQueue(): Promise<void> {
+    if (sendingQueue || selection.size === 0) return;
+    const candidates: BookmarkCandidate[] = [];
+    sources.forEach((source) => {
+        const tagNameOf = (tagId: number) => {
+            const tag = source.tags.get(tagId);
+            return tag ? tag.n : undefined;
+        };
+        for (const row of source.rows) {
+            if (selection.has(rowKey(source, row))) {
+                candidates.push(candidateFromGalleryRow(source.meta.site, row, tagNameOf));
+            }
+        }
+    });
+    if (candidates.length === 0) return;
+    const info = $("selectionInfo");
+    sendingQueue = true;
+    renderSelectionBar();
+    let added = 0;
+    let duplicates = 0;
+    let failed = 0;
+    const chunks = chunkArray(candidates, SEND_CHUNK);
+    for (let i = 0; i < chunks.length; i++) {
+        info.textContent = "Sending " + candidates.length.toLocaleString() + " titles to the queue — batch " + (i + 1) + " of " + chunks.length + "…";
+        try {
+            const response = await new Promise<any>((resolve, reject) => {
+                try {
+                    chrome.runtime.sendMessage({ action: "bookmarkAdd", items: chunks[i] }, (reply: any) => {
+                        let error: string | null = null;
+                        try {
+                            const lastError = chrome.runtime.lastError;
+                            error = lastError && typeof lastError.message === "string" ? lastError.message : null;
+                        } catch (_) { /* no runtime */ }
+                        if (error) reject(new Error(error));
+                        else resolve(reply);
+                    });
+                } catch (error) {
+                    reject(error);
+                }
+            });
+            if (response && response.result === "success") {
+                added += Array.isArray(response.added) ? response.added.length : 0;
+                duplicates += Array.isArray(response.duplicates) ? response.duplicates.length : 0;
+            } else {
+                failed += 1;
+            }
+        } catch (_) {
+            failed += 1;
+        }
+    }
+    sendingQueue = false;
+    renderSelectionBar();
+    if (failed === 0) {
+        info.textContent = "Queue updated: " + added.toLocaleString() + " added" +
+            (duplicates > 0 ? ", " + duplicates.toLocaleString() + " already in the queue (kept as-is)" : "") +
+            ". Download them from the panel's Bookmark tab.";
+    } else {
+        info.textContent = "Queue updated with problems: " + added.toLocaleString() + " added, " +
+            failed.toLocaleString() + " batch(es) refused — reopen the panel and check its Bookmark tab.";
+    }
 }
 
 // ------------------------------------------------------------- stubs
 
 function renderStubCounts(): void {
     try {
-        chrome.storage.local.get(["bookmarkQueue", "downloadHistory"], (elems: any) => {
+        chrome.storage.local.get(["bookmarkQueue"], (elems: any) => {
             const queue = elems && elems.bookmarkQueue;
             const queued = Array.isArray(queue)
                 ? queue.length
                 : (queue && Array.isArray(queue.items)) ? queue.items.length : null;
-            const history = elems && elems.downloadHistory;
-            const downloaded = history && typeof history === "object" ? Object.keys(history).length : null;
             const bookmarkLine = $("bookmarkStubCount");
             if (bookmarkLine) bookmarkLine.textContent = "Live count: " + (queued === null ? "…" : queued.toLocaleString() + " bookmarked titles waiting in the queue store.");
-            const historyLine = $("historyStubCount");
-            if (historyLine) historyLine.textContent = "Live count: " + (downloaded === null ? "…" : downloaded.toLocaleString() + " recorded downloads in history.");
         });
     } catch (_) {
-        // No storage in this context; the stubs' static copy still explains.
+        // No storage in this context; the stub's static copy still explains.
     }
+}
+
+// ------------------------------------------------------------- history
+
+/** Download-history keys, for the ✓ badge. Best-effort: history is optional context. */
+function downloadedKeySet(): Promise<Set<string>> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ [DOWNLOAD_HISTORY_KEY]: {} }, (elems: any) => {
+                const history = elems && elems[DOWNLOAD_HISTORY_KEY];
+                const keys = new Set<string>();
+                if (history && typeof history === "object") {
+                    for (const key of Object.keys(history)) keys.add(key);
+                }
+                resolve(keys);
+            });
+        } catch (_) {
+            resolve(new Set());
+        }
+    });
+}
+
+let visitedShown = VISITED_WINDOW;
+
+async function renderVisited(): Promise<void> {
+    const list = $("visitedList");
+    const counts = $("historyCounts");
+    let entries: VisitedEntry[] = [];
+    let total = 0;
+    try {
+        entries = await listVisits(visitedShown);
+        total = await countVisits();
+    } catch (error: any) {
+        counts.textContent = "The visited log could not be read: " + (error && error.message ? error.message : String(error));
+        list.textContent = "";
+        return;
+    }
+    const downloaded = await downloadedKeySet();
+    let downloadCount = 0;
+    try {
+        downloadCount = await new Promise((resolve) => {
+            try {
+                chrome.storage.local.get({ [DOWNLOAD_HISTORY_KEY]: {} }, (elems: any) => {
+                    const history = elems && elems[DOWNLOAD_HISTORY_KEY];
+                    resolve(history && typeof history === "object" ? Object.keys(history).length : 0);
+                });
+            } catch (_) {
+                resolve(0);
+            }
+        });
+    } catch (_) { /* the count line just omits it */ }
+    counts.textContent = total === 0
+        ? "Nothing recorded yet — open a gallery page on a supported site and it lands here."
+        : total.toLocaleString() + " visited titles recorded (" + Math.min(total, visitedShown).toLocaleString() + " shown) · " + downloadCount.toLocaleString() + " downloads in history.";
+    list.textContent = "";
+    for (const entry of entries) {
+        const row = document.createElement("div");
+        row.className = "row";
+        const cover = coverElement(entry.site, "", undefined, entry.title || entry.key, true);
+        if (entry.cover) {
+            // The visit stored its own cover URL; render it directly.
+            const img = document.createElement("img");
+            img.loading = "lazy";
+            img.referrerPolicy = "no-referrer";
+            img.alt = "";
+            img.addEventListener("load", () => cover.classList.add("coverLoaded"));
+            img.addEventListener("error", () => img.remove());
+            img.src = entry.cover;
+            cover.appendChild(img);
+            const initials = document.createElement("span");
+            initials.setAttribute("aria-hidden", "true");
+            initials.textContent = placeholderInitials(entry.title || entry.key);
+            cover.appendChild(initials);
+        }
+        row.appendChild(cover);
+        const body = document.createElement("div");
+        body.className = "rowBody";
+        const title = document.createElement("p");
+        title.className = "rowTitle";
+        title.textContent = entry.title || entry.key;
+        body.appendChild(title);
+        const line = document.createElement("p");
+        line.className = "hint";
+        line.textContent = entry.site + " · " + entry.id + " · visited " + (entry.visitCount === 1 ? "once" : entry.visitCount + " times") +
+            " · last " + formatDate(Math.floor(entry.lastVisited / 1000));
+        body.appendChild(line);
+        row.appendChild(body);
+        if (downloaded.has(entry.key)) {
+            const mark = document.createElement("span");
+            mark.className = "downloadedMark";
+            mark.textContent = "✓ downloaded";
+            mark.title = "This title finished downloading (download history)";
+            row.appendChild(mark);
+        }
+        list.appendChild(row);
+    }
+    const more = $("visitedMore") as HTMLButtonElement;
+    more.hidden = total <= visitedShown;
+    more.textContent = "Show " + Math.min(VISITED_WINDOW, Math.max(0, total - visitedShown)) + " more";
 }
 
 // ------------------------------------------------------------- settings
@@ -498,7 +667,11 @@ function wireRail(): void {
         for (const section of Array.from(document.querySelectorAll<HTMLElement>("main > section[data-name]"))) {
             section.hidden = section.dataset.name !== name;
         }
-        if (name === "bookmarks" || name === "history") renderStubCounts();
+        if (name === "bookmarks") renderStubCounts();
+        if (name === "history") {
+            visitedShown = VISITED_WINDOW;
+            void renderVisited();
+        }
         if (name === "settings") {
             renderSourceList();
             refreshUsage();
@@ -559,9 +732,20 @@ function wireBrowse(): void {
         selection.clear();
         renderResults();
     });
+    $("sendQueue").addEventListener("click", () => {
+        void sendSelectionToQueue();
+    });
 }
 
 function wireSettings(): void {
+    $("visitedMore").addEventListener("click", () => {
+        visitedShown += VISITED_WINDOW;
+        void renderVisited();
+    });
+    $("visitedClear").addEventListener("click", () => {
+        if (!window.confirm("Clear the whole visited log? Download history is kept — only the visited list is forgotten.")) return;
+        clearVisits().then(() => renderVisited()).catch(() => { /* the next open re-renders */ });
+    });
     $("indexFile").addEventListener("change", (event) => {
         const input = event.target as HTMLInputElement;
         const file = input.files && input.files[0];

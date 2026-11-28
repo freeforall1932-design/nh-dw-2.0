@@ -613,12 +613,35 @@ function inject(page: ResolvedTitleBookmarkPage): boolean {
 }
 
 function start(page: ResolvedTitleBookmarkPage): void {
+    // Visited log (INDEXER_PLAN.md §5 History, phase 3): one fire-and-forget
+    // record per gallery-page load, independent of the in-page-controls
+    // setting — a visit is a visit even when the user hid the buttons.
+    // DOM is ready by the time start() runs, so the readers are best-effort
+    // but usually complete; the merge rule backfills anything empty later.
+    sendBookmarkMessage({
+        action: "visitedRecord",
+        site: page.site,
+        id: page.id,
+        title: tryRead(() => readTitle(page), ""),
+        cover: tryRead(() => readThumbnail(page), ""),
+        pages: tryRead(() => readPages(page), 0),
+        sourceUrl: typeof location !== "undefined" ? location.href : ""
+    });
     readInPageControls().then((enabled) => {
         if (!enabled) {
             return;
         }
         return ready(page);
     });
+}
+
+function tryRead<T>(reader: () => T, fallback: T): T {
+    try {
+        const value = reader();
+        return value === undefined || value === null ? fallback : value;
+    } catch (_) {
+        return fallback;
+    }
 }
 
 function ready(page: ResolvedTitleBookmarkPage): void {

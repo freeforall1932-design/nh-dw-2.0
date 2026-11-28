@@ -175,6 +175,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .rowSelect { flex: 0 0 auto; width: 16px; height: 16px; accent-color: var(--accent); }
 .card .rowSelect { position: absolute; }
 
+.downloadedMark { flex: 0 0 auto; color: var(--ok); font-weight: 750; font-size: 12px; }
+
 .card { position: relative; }
 .card .rowSelect { top: 10px; right: 10px; margin: 0; }
 

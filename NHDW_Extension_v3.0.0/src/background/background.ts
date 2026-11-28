@@ -42,6 +42,7 @@ import { rememberFailedGalleries, forgetFailedGalleries, readPendingFailuresSett
 // panel both mutate it. It OUTLIVES the offscreen job queue, which is
 // memory-only; bookmark rows feed the download pipeline, they never replace it.
 import { handleBookmarkMessage, markBookmarksDownloaded, markBookmarksFailed, markBookmarksDownloading } from "./bookmarkService";
+import { recordVisit, visitInputFromRequest } from "../utils/visitedLog";
 var JSZip = require("jszip");
 
 // Folder-naming guard: re-asserts the filename/folder structure we request
@@ -1345,6 +1346,22 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
                 missingOrigins: status.missingOrigins
             });
         });
+        return true;
+    }
+    if (request && request.action === "visitedRecord" &&
+        _sender && _sender.id === chrome.runtime.id && _sender.tab) {
+        // Visited log (INDEXER_PLAN.md §5 History): content scripts report a
+        // gallery-page load; the worker owns the IndexedDB store, exactly as
+        // it owns the bookmark queue store. Validated + capped by the pure
+        // parser; a malformed payload is refused in words, never stored.
+        const visitInput = visitInputFromRequest(request);
+        if (visitInput === null) {
+            sendResponse({ result: "error", error: "the visit record carried no usable gallery id" });
+            return true;
+        }
+        recordVisit(visitInput)
+            .then((entry) => sendResponse({ result: "success", visitCount: entry.visitCount }))
+            .catch(() => sendResponse({ result: "error", error: "could not store the visit" }));
         return true;
     }
     if (handleBookmarkMessage(request, sendResponse)) {

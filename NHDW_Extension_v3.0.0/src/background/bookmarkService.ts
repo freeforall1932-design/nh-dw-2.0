@@ -242,10 +242,22 @@ export function handleBookmarkMessage(request: any, sendResponse: (response: any
 
     if (action === "bookmarkAdd") {
         const candidates: BookmarkCandidate[] = Array.isArray(request.items) ? request.items : [];
-        mutateBookmarks((state) => addBookmarks(state, candidates).state)
+        // The AddResult's added/duplicates ride along in the response (the
+        // library tab's Send-to-queue reports the split; existing callers
+        // that only read state are unaffected).
+        let lastAdd: ReturnType<typeof addBookmarks> | null = null;
+        mutateBookmarks((state) => {
+            lastAdd = addBookmarks(state, candidates);
+            return lastAdd.state;
+        })
             .then((state) => {
                 broadcastBookmarkChanged(state);
-                sendResponse({ result: "success", state: state });
+                sendResponse({
+                    result: "success",
+                    state: state,
+                    added: lastAdd ? lastAdd.added : [],
+                    duplicates: lastAdd ? lastAdd.duplicates : []
+                });
             })
             .catch(() => sendResponse({ result: "error", error: "Could not save the bookmark list." }));
         return true;

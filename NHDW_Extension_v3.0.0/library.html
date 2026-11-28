@@ -70,8 +70,13 @@
 
     <section data-name="history" hidden aria-labelledby="historyHeading">
       <h1 id="historyHeading">History</h1>
-      <p id="historyStubCount" class="hint">Live count: …</p>
-      <p>Visited titles (a content script records the gallery pages you open) merge with the download history into one list — last-visited date, downloaded ✓ badge. That lands with the visited-log phase; today this shows only the recorded downloads' live count.</p>
+      <p id="historyCounts" class="hint">Reading the visited log…</p>
+      <p class="hint">A visited title is recorded once per gallery-page load on a supported site (panel-only Tailspace is not visited-tracked yet). ✓ marks titles that finished downloading; the download history itself is untouched by Clear. The log lives in the extension's IndexedDB — never the small chrome.storage.</p>
+      <div id="visitedList" class="rowsList"></div>
+      <div class="buttons">
+        <button id="visitedMore" type="button" class="secondary" hidden>Show more</button>
+        <button id="visitedClear" type="button" class="secondary">Clear visited log</button>
+      </div>
     </section>
 
     <section data-name="queue" hidden aria-labelledby="queueHeading">
