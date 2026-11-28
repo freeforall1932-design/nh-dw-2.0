@@ -21,6 +21,7 @@ import {
     namespaceLabel,
     parseIndexText,
     ROW,
+    serializeIndex,
     TagNamespace,
 } from "./indexFormat";
 import {
@@ -38,6 +39,10 @@ import { clearVisits, countVisits, listVisits, VisitedEntry } from "../utils/vis
 import { DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 import type { BookmarkCandidate } from "../utils/bookmarkQueue";
 import { candidateFromGalleryRow, chunkArray, SEND_CHUNK } from "./sendQueue";
+import { WATCHES_STORAGE, Watch, createWatch, sanitizeWatchList } from "./watches";
+import { refreshWatch } from "./watchRefresh";
+import { API_KEY_STORAGE } from "../utils/apiAuth";
+import { BYPASS_SAVE_AS_STORAGE } from "../background/downloadControl";
 import { CACHE_CAP_STORAGE, DEFAULT_CACHE_MB, normalizeThumbMode, THUMB_MODE_STORAGE, ThumbMode } from "./thumbLru";
 import {
     cacheStats,
@@ -77,6 +82,9 @@ let shownCount = 0;
 let avgMbPerPage = 45;
 let sendingQueue = false; // one Send-to-queue run at a time (§8.9 chunked writes)
 let thumbMode: ThumbMode = "cached"; // thumbnail source choice (loaded at boot)
+let watches: Watch[] = []; // §6 saved tag combinations (storage-glued below)
+let refreshBusy = false; // one watch refresh at a time — sequential by design
+const watchDraft = { site: "", tagIds: new Set<number>() }; // Settings watch builder
 const selection = new Set<string>(); // composite keys, siteKeys.ts convention
 
 function $(id: string): HTMLElement {
@@ -296,6 +304,10 @@ function rowKey(source: SourceState, row: GalleryRow): string {
 }
 
 function renderResults(): void {
+    const newKeys = new Set<string>();
+    for (const watch of watches) {
+        for (const key of watch.newKeys) newKeys.add(key);
+    }
     const refs = computeView();
     const meta = $("resultsMeta");
     meta.textContent = refs.length === 0
@@ -333,6 +345,13 @@ function renderResults(): void {
         title.className = viewMode === "grid" ? "cardTitle" : "rowTitle";
         title.textContent = row[ROW.TITLE];
         body.appendChild(title);
+        if (newKeys.has(key)) {
+            const badge = document.createElement("span");
+            badge.className = "newChip";
+            badge.textContent = "NEW";
+            badge.title = "New since the last " + (watches.find((w) => w.newKeys.indexOf(key) !== -1) || { label: "watch" }).label + " refresh";
+            body.appendChild(badge);
+        }
         if (viewMode === "list") body.appendChild(tagChipRow(source, row, 4));
         const line = document.createElement("p");
         line.className = "hint";
@@ -436,6 +455,177 @@ async function sendSelectionToQueue(): Promise<void> {
         info.textContent = "Queue updated with problems: " + added.toLocaleString() + " added, " +
             failed.toLocaleString() + " batch(es) refused — reopen the panel and check its Bookmark tab.";
     }
+}
+
+// ------------------------------------------------------------- watches
+
+function loadWatches(): Promise<void> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ [WATCHES_STORAGE]: [] }, (elems: any) => {
+                watches = sanitizeWatchList(elems && elems[WATCHES_STORAGE]);
+                resolve();
+            });
+        } catch (_) {
+            watches = [];
+            resolve();
+        }
+    });
+}
+
+function saveWatches(): void {
+    try {
+        chrome.storage.local.set({ [WATCHES_STORAGE]: watches }, () => { /* saved */ });
+    } catch (_) { /* session-only */ }
+}
+
+function findSourceForSite(site: string): SourceState | null {
+    for (const source of sources) {
+        if (source.meta.site === site && !source.isSample) return source;
+    }
+    return null;
+}
+
+/** One sequential watch refresh (§6): engine → merge → OPFS save → badges. */
+async function refreshOneWatch(watch: Watch): Promise<void> {
+    const status = $("watchStatus");
+    const source = findSourceForSite(watch.site);
+    if (!source) {
+        status.textContent = "The " + watch.site + " index is not imported — refresh needs the real index (the sample never refreshes).";
+        return;
+    }
+    const apiKey = await new Promise<string>((resolve) => {
+        try {
+            chrome.storage.local.get({ [API_KEY_STORAGE]: "" }, (elems: any) => resolve(typeof elems[API_KEY_STORAGE] === "string" ? elems[API_KEY_STORAGE] : ""));
+        } catch (_) {
+            resolve("");
+        }
+    });
+    status.textContent = "Refreshing " + watch.label + " (" + watch.site + ") — newest first, one tag at a time…";
+    const outcome = await refreshWatch(watch, { site: source.meta.site, rows: source.rows, tags: source.tags }, {
+        apiKey: apiKey || undefined,
+    });
+    // Replace the source with the merged state and persist it.
+    const meta: IndexMeta = {
+        schema: source.meta.schema,
+        site: source.meta.site,
+        exported: source.meta.exported,
+        count: outcome.rows.length,
+        tagCount: outcome.tags.size,
+    };
+    const parsed: ParsedIndex = { meta, tags: outcome.tags, rows: outcome.rows };
+    sources[sources.indexOf(source)] = buildSourceState(parsed, false);
+    try {
+        await saveIndexFile(meta.site, serializeIndex(parsed));
+    } catch (error: any) {
+        status.textContent = "Refresh merged in memory but saving failed: " + (error && error.message ? error.message : String(error));
+    }
+    watch.lastRefresh = Date.now();
+    watch.lastError = outcome.stopped ? outcome.lines.join(" ") : "";
+    watch.newKeys = outcome.newKeys;
+    saveWatches();
+    renderAll();
+    renderSourceList();
+    status.textContent = watch.label + ": " + outcome.lines.join(" · ");
+}
+
+async function refreshAllWatches(): Promise<void> {
+    if (refreshBusy) return;
+    refreshBusy = true;
+    renderWatchBar();
+    try {
+        for (const watch of watches) {
+            await refreshOneWatch(watch);
+        }
+    } finally {
+        refreshBusy = false;
+        renderWatchBar();
+    }
+}
+
+function renderWatchBar(): void {
+    const bar = $("watchBar");
+    bar.textContent = "";
+    const title = document.createElement("p");
+    title.className = "chipGroupTitle";
+    title.textContent = "Watches — saved tag combinations, refreshed newest-first";
+    bar.appendChild(title);
+    if (watches.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = "None yet — create one in Settings, e.g. vanilla + english on nhentai, then Refresh all walks each tag's newest listings and stops at what the index already knows.";
+        bar.appendChild(empty);
+    }
+    for (const watch of watches) {
+        const row = document.createElement("div");
+        row.className = "watchRow";
+        const label = document.createElement("span");
+        label.className = "watchLabel";
+        const fresh = watch.newKeys.length;
+        label.textContent = watch.label + " · " + watch.site + (fresh > 0 ? " · " + fresh.toLocaleString() + " new" : "");
+        row.appendChild(label);
+        const refresh = document.createElement("button");
+        refresh.type = "button";
+        refresh.className = "secondary";
+        refresh.textContent = "Refresh";
+        refresh.disabled = refreshBusy || !findSourceForSite(watch.site);
+        refresh.title = findSourceForSite(watch.site) ? "Walk this watch's tags newest-first and merge the new titles" : "Import the " + watch.site + " index first";
+        refresh.addEventListener("click", () => {
+            void (async () => {
+                refreshBusy = true;
+                renderWatchBar();
+                try {
+                    await refreshOneWatch(watch);
+                } finally {
+                    refreshBusy = false;
+                    renderWatchBar();
+                }
+            })();
+        });
+        row.appendChild(refresh);
+        if (fresh > 0) {
+            const clear = document.createElement("button");
+            clear.type = "button";
+            clear.className = "secondary";
+            clear.textContent = "Clear new";
+            clear.title = "The new marks were seen — forget them until the next refresh";
+            clear.addEventListener("click", () => {
+                watch.newKeys = [];
+                saveWatches();
+                renderWatchBar();
+                renderResults();
+            });
+            row.appendChild(clear);
+        }
+        if (watch.lastError) {
+            const warn = document.createElement("p");
+            warn.className = "bad";
+            warn.textContent = watch.lastError;
+            row.appendChild(warn);
+        } else if (watch.lastRefresh) {
+            const when = document.createElement("p");
+            when.className = "hint";
+            when.textContent = "Last refreshed " + new Date(watch.lastRefresh).toISOString().slice(0, 16).replace("T", " ");
+            row.appendChild(when);
+        }
+        bar.appendChild(row);
+    }
+    const actions = document.createElement("div");
+    actions.className = "buttons";
+    const refreshAll = document.createElement("button");
+    refreshAll.type = "button";
+    refreshAll.textContent = "Refresh all";
+    refreshAll.disabled = refreshBusy || watches.length === 0;
+    refreshAll.title = "Sequential by design: one tag listing at a time, never parallel (§6)";
+    refreshAll.addEventListener("click", () => {
+        void refreshAllWatches();
+    });
+    actions.appendChild(refreshAll);
+    bar.appendChild(actions);
+    const status = document.createElement("p");
+    status.id = "watchStatus";
+    status.className = "hint";
+    bar.appendChild(status);
 }
 
 // ------------------------------------------------------------- stubs
@@ -703,6 +893,7 @@ function renderSourceFilterOptions(): void {
 function renderAll(): void {
     renderNotice();
     renderSourceFilterOptions();
+    renderWatchBar();
     renderChips();
     shownCount = WINDOW_STEP;
     renderResults();
@@ -741,6 +932,7 @@ function wireRail(): void {
         }
         if (name === "settings") {
             renderSourceList();
+            renderWatchSettings();
             refreshUsage();
             refreshThumbCacheStatus();
         }
@@ -805,7 +997,145 @@ function wireBrowse(): void {
     });
 }
 
+function renderWatchSettings(): void {
+    const sourceSelect = $("watchSource") as HTMLSelectElement;
+    const imported = sources.filter((s) => !s.isSample);
+    sourceSelect.textContent = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = imported.length === 0 ? "Import an index first" : "Choose a source…";
+    sourceSelect.appendChild(none);
+    for (const source of imported) {
+        const option = document.createElement("option");
+        option.value = source.meta.site;
+        option.textContent = source.meta.site;
+        if (watchDraft.site === source.meta.site) option.selected = true;
+        sourceSelect.appendChild(option);
+    }
+
+    const chosen = $("watchChosen");
+    chosen.textContent = "";
+    for (const tagId of watchDraft.tagIds) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = "chip chipOn";
+        const source = findSourceForSite(watchDraft.site);
+        chip.textContent = source && source.tags.get(tagId) ? source.tags.get(tagId)!.n : "tag " + tagId;
+        chip.title = "Remove from the watch";
+        chip.addEventListener("click", () => {
+            watchDraft.tagIds.delete(tagId);
+            renderWatchSettings();
+        });
+        chosen.appendChild(chip);
+    }
+
+    const create = $("watchCreate") as HTMLButtonElement;
+    create.disabled = watchDraft.site === "" || watchDraft.tagIds.size === 0;
+    create.textContent = "Create watch";
+
+    const list = $("watchList");
+    list.textContent = "";
+    if (watches.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = "No watches yet.";
+        list.appendChild(empty);
+    }
+    for (const watch of watches) {
+        const line = document.createElement("div");
+        line.className = "sourceLine";
+        const label = document.createElement("span");
+        label.textContent = watch.label + " on " + watch.site + (watch.newKeys.length > 0 ? " — " + watch.newKeys.length.toLocaleString() + " new" : "");
+        line.appendChild(label);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+            watches = watches.filter((w) => w.id !== watch.id);
+            saveWatches();
+            renderWatchSettings();
+            renderWatchBar();
+            renderResults();
+        });
+        line.appendChild(remove);
+        list.appendChild(line);
+    }
+}
+
+function wireWatchSettings(): void {
+    const sourceSelect = $("watchSource") as HTMLSelectElement;
+    sourceSelect.addEventListener("change", () => {
+        watchDraft.site = sourceSelect.value;
+        watchDraft.tagIds.clear();
+        renderWatchSettings();
+    });
+    const search = $("watchTagSearch") as HTMLInputElement;
+    const results = $("watchTagResults");
+    search.addEventListener("input", () => {
+        results.textContent = "";
+        const source = findSourceForSite(watchDraft.site);
+        if (!source) return;
+        const needle = search.value.trim().toLowerCase();
+        if (needle === "") return;
+        const matches = Array.from(source.tags.values())
+            .filter((tag) => tag.n.toLowerCase().indexOf(needle) !== -1)
+            .sort((a, b) => b.c - a.c)
+            .slice(0, 40);
+        for (const tag of matches) {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "chip" + (watchDraft.tagIds.has(tag.id) ? " chipOn" : "");
+            chip.textContent = tag.n + " · " + tag.c.toLocaleString();
+            chip.addEventListener("click", () => {
+                if (watchDraft.tagIds.has(tag.id)) watchDraft.tagIds.delete(tag.id);
+                else watchDraft.tagIds.add(tag.id);
+                renderWatchSettings();
+            });
+            results.appendChild(chip);
+        }
+        if (matches.length === 0) {
+            const none = document.createElement("p");
+            none.className = "hint";
+            none.textContent = "No tag in this source's dictionary matches.";
+            results.appendChild(none);
+        }
+    });
+    $("watchCreate").addEventListener("click", () => {
+        const source = findSourceForSite(watchDraft.site);
+        if (!source || watchDraft.tagIds.size === 0) return;
+        const names = Array.from(watchDraft.tagIds).map((id) => {
+            const tag = source.tags.get(id);
+            return tag ? tag.n : "tag " + id;
+        });
+        const watch = createWatch("w" + Date.now().toString(36), source.meta.site, Array.from(watchDraft.tagIds), names.join(" + "), Date.now());
+        watches.push(watch);
+        saveWatches();
+        watchDraft.site = "";
+        watchDraft.tagIds.clear();
+        search.value = "";
+        $("watchTagResults").textContent = "";
+        renderWatchSettings();
+        renderWatchBar();
+    });
+    const bypass = $("bypassSaveAs") as HTMLInputElement;
+    try {
+        chrome.storage.local.get({ [BYPASS_SAVE_AS_STORAGE]: false }, (elems: any) => {
+            bypass.checked = !!elems && elems[BYPASS_SAVE_AS_STORAGE] === true;
+        });
+    } catch (_) {
+        bypass.checked = false;
+    }
+    bypass.addEventListener("change", () => {
+        try {
+            chrome.storage.local.set({ [BYPASS_SAVE_AS_STORAGE]: bypass.checked }, () => { /* saved */ });
+        } catch (_) { /* session-only */ }
+    });
+}
+
 function wireSettings(): void {
+    // Watches (§6): builder + list + downloads toggle.
+    wireWatchSettings();
     // Thumbnail cache (§8.8): source mode, cap, readout, clear.
     const modeSelect = $("thumbMode") as HTMLSelectElement;
     getThumbMode().then((mode) => {
@@ -894,6 +1224,7 @@ function boot(): void {
     wireBrowse();
     wireSettings();
     renderStubCounts();
+    loadWatches().then(() => renderWatchBar());
     reloadFromStore();
 }
 

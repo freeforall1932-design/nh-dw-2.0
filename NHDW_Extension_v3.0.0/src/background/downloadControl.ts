@@ -331,6 +331,26 @@ export function pendingCompletionCount(): number {
     return waiters.size;
 }
 
+// Storage key for the §7 "bypass ask where to save" toggle (INDEXER_PLAN.md
+// phase 4): on, this extension's downloads pass saveAs:false so Chrome's
+// global ask-every-time preference no longer prompts for them. Off (the
+// default) preserves the browser's own behavior byte for byte.
+export const BYPASS_SAVE_AS_STORAGE = "bypassSaveAs";
+
+/** Pure download-options builder. saveAs is only ever set to false (never
+    true): the toggle can suppress the prompt, never force it. */
+export function downloadOptionsFor(url: string, filename: string, bypassSaveAs: boolean): { url: string; filename: string; conflictAction: string; saveAs?: boolean } {
+    const options: { url: string; filename: string; conflictAction: string; saveAs?: boolean } = {
+        url: url,
+        filename: filename,
+        conflictAction: "uniquify",
+    };
+    if (bypassSaveAs === true) {
+        options.saveAs = false;
+    }
+    return options;
+}
+
 // Start one browser download: record the requested name for the
 // onDeterminingFilename guard, start it and bind the id. Rejects with an
 // Error naming the reason when the browser refuses to create the download.
@@ -340,7 +360,8 @@ export function startBrowserDownload(url: string, filename: string): Promise<num
             if (typeof filename === "string" && filename !== "") {
                 recordDownloadRequest(url, filename);
             }
-            chrome.downloads.download({ url: url, filename: filename, conflictAction: "uniquify" }, (downloadId: number) => {
+            const beginDownload = (bypassSaveAs: boolean) => {
+            chrome.downloads.download(downloadOptionsFor(url, filename, bypassSaveAs), (downloadId: number) => {
                 if (downloadId === undefined) {
                     // Nothing will ever complete for this URL: release the
                     // recorded name so it cannot pin the global listener.
@@ -351,6 +372,17 @@ export function startBrowserDownload(url: string, filename: string): Promise<num
                 bindDownloadId(url, downloadId);
                 resolve(downloadId);
             });
+            };
+            // §7 toggle: read the bypass preference per download (a live
+            // settings change applies to the next download without restarts).
+            // Missing storage contexts fall back to the default behavior.
+            try {
+                chrome.storage.local.get({ [BYPASS_SAVE_AS_STORAGE]: false }, (elems: any) => {
+                    beginDownload(!!elems && elems[BYPASS_SAVE_AS_STORAGE] === true);
+                });
+            } catch (_) {
+                beginDownload(false);
+            }
         } catch (error) {
             discardDownloadRequest(url);
             // Never new Error(String(plainObject)): a synchronous throw that is

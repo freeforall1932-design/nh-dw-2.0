@@ -25,6 +25,8 @@
         "src/library/sampleIndex.ts",
         "src/library/sendQueue.ts",
         "src/library/thumbLru.ts",
+        "src/library/watches.ts",
+        "src/library/watchRefresh.ts",
         "src/utils/siteKeys.ts",
         "src/utils/tailspaceIds.ts",
         "src/utils/visitedLog.ts",

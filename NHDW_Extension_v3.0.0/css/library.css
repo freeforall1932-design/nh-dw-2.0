@@ -177,6 +177,16 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 
 .downloadedMark { flex: 0 0 auto; color: var(--ok); font-weight: 750; font-size: 12px; }
 
+/* ---- Watches (§6): the saved-combination block above the Browse sidebar. */
+#watchBar { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px; margin: 0 0 12px; background: var(--surface-2); }
+.watchRow { border-bottom: 1px solid var(--line); padding: 7px 0; }
+.watchRow:last-of-type { border-bottom: none; }
+.watchLabel { font-weight: 650; margin-right: 8px; }
+.watchRow .buttons, .watchRow button { display: inline-flex; }
+.watchRow p { margin: 3px 0 0; }
+.newChip { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: var(--radius-sm); background: var(--accent); color: #fff; font-size: 10px; font-weight: 750; letter-spacing: .06em; vertical-align: middle; }
+#watchTagResults, #watchChosen { min-height: 20px; margin: 4px 0; }
+
 .card { position: relative; }
 .card .rowSelect { top: 10px; right: 10px; margin: 0; }
 

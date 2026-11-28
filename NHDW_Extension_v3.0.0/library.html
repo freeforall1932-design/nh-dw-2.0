@@ -29,6 +29,7 @@
     <section data-name="browse" aria-labelledby="browseHeading">
       <h1 id="browseHeading">Browse the offline index</h1>
       <p class="hint">Tag filters are AND filters within a source: tick chips, add more, results shrink to titles carrying every ticked tag. Everything here runs on the imported index — no site requests, so no lag and no round-trips. Thumbnails load live from the source's own servers; titles you browse are cached locally as you go.</p>
+      <div id="watchBar"></div>
       <div id="browseLayout">
         <aside id="chipSidebar" aria-label="Tag filters"></aside>
         <div id="browseMain">
@@ -92,6 +93,18 @@
       <p id="importStatus" class="hint" role="status" aria-live="polite"></p>
       <div id="sourceList"></div>
       <div class="buttons"><button id="loadSample" type="button" class="secondary">Show bundled sample data</button></div>
+      <h2>Watches</h2>
+      <p class="hint">A watch is a saved tag combination (e.g. vanilla + english) with a one-click refresh: it walks each tag's newest listings on the source's documented API — sequentially, one page at a time, politely rate-limited — and stops at the first title the index already knows, merging only genuinely new titles. New titles carry a NEW badge in Browse until you clear them. Refreshes never run in parallel, and a rate limit stops the refresh with words instead of retrying.</p>
+      <label>Source <select id="watchSource"></select></label>
+      <label>Find tags (searches the source's dictionary) <input id="watchTagSearch" type="search" placeholder="type to search tags" spellcheck="false"></label>
+      <div id="watchTagResults"></div>
+      <label>Chosen tags (AND)</label>
+      <div id="watchChosen"></div>
+      <div class="buttons"><button id="watchCreate" type="button" disabled>Create watch</button></div>
+      <div id="watchList"></div>
+      <h2>Downloads</h2>
+      <label class="check"><input id="bypassSaveAs" type="checkbox"> Always skip Chrome's "ask where to save" dialog for this extension's downloads</label>
+      <p class="hint">Off (default) keeps your browser's own download behavior untouched. On, every archive this extension hands to Chrome lands directly in the download folder without the prompt.</p>
       <h2>Size estimate</h2>
       <label>Average MB per page <input id="avgMbPerPage" type="number" min="1" max="1000" step="1"></label>
       <p class="hint">Used for the rough size estimate in the selection bar — not a promise about any one title. The panel's download history is a better source for what your mirrors actually average.</p>

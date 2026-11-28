@@ -1,15 +1,18 @@
 # Offline index + library tab plan
 
 **Recorded:** 2026-11-26 (session `arena/1af576b7-nh-dw-2-0`, branched from `f5be2ec`).
-**Status:** **Phases 1–3 plus 3b landed** (same session): Phase 1 —
+**Status:** **Phases 1–3, 3b and 4 landed** (same session): Phase 1 —
 `library.html` rail + importer + dummy-data mode (23 tests); Phase 2 —
 `tools/indexer/` API v2 walker (Route A, resumable, offline-checked, 11
 checks incl. a round-trip through the real importer), `.gitignore` for index
 outputs; Phase 3 — send-to-queue (chunked, §8.9), visited log (IndexedDB),
 `unlimitedStorage` (§8.1); Phase 3b — the §8.8 OPFS thumb cache with an LRU
-cap, riding the dynamic CDN-host grant flow. 922 Chrome suite green. Phases
-4–6 not started. This doc captures the design agreed in discussion so a
-future session does not re-derive it.
+cap and a choosable source mode (cached-first / live-only); Phase 4 —
+watches (§6, API-driven sequential refresh with early-stop) + the §7
+save-as bypass toggle. 950 Chrome suite green. **Phase 4b next:** the FS
+Access data root and download-destination settings (§7.1/§7.3). Phases 5–6
+not started. This doc captures the design agreed in discussion so a future
+session does not re-derive it.
 
 The idea in one line: **an offline, tag-first index of titles that filters
 instantly with no site round-trips, browsed in a full extension tab
@@ -314,13 +317,26 @@ into the phase where it belongs.
   tests; the original best-effort design (cache consulted only after a
   successful live load) was corrected by this — the cache is now consulted
   BEFORE the network, so offline browsing really serves stored covers.
-- **Phase 4 — watches + storage settings.** Saved tag combinations,
-  sequential multi-source refresh with newest-first URLs (§8.4),
-  opportunistic/Cloudflare-aware refresh (§8.6), "new since" badges (§6);
-  data-root picker and download destination settings (§7); FS Access data
-  root lands here at the latest (§8.2); extend the Item 52 backup with
-  watches and the visited log; dead-flag on 404 wired to `mirrorFallback.ts`
-  (§8.3).
+- **Phase 4 — watches + storage settings. LANDED (data root → 4b).**
+  Watches (`src/library/watches.ts` pure: model, sort=date query builder
+  pinned per §8.4, early-stop step, card→row mapping with the same
+  full-objects/bare-ids rules as the indexer, union merge with recomputed
+  counts, new-badge key set; `src/library/watchRefresh.ts` engine: walks the
+  documented `/api/v2/galleries/tagged` **per tag, in sequence, newest
+  first**, stops each tag at the first id the index knows, merges partial
+  progress even when a 429/challenge/500 stops the run with words; keyless
+  or keyed via the stored API key, documented rate spacing). UI: the
+  watch bar above the Browse sidebar (per-watch Refresh, Clear new,
+  Refresh all — sequential by design), NEW badges on rows, the Settings
+  builder (source → tag search → chosen chips → create). The engine uses
+  the API v2 directly from the extension page (`nhentai.net` is already a
+  static host permission), so no Route-B harvest plumbing was needed and
+  no new permissions either. Storage settings: the §7.2 save-as bypass
+  toggle landed (`BYPASS_SAVE_AS_STORAGE` in `downloadControl.ts`, pure
+  `downloadOptionsFor`, saveAs only ever false). **Deferred to Phase 4b:**
+  the FS Access data root + download destination (§7.1/§7.3) and the Item
+  52 backup extension for watches/visited log; the dead-flag (§8.3) moves
+  with them.
 - **Phase 5 — panel slim-down.** Move queue-full/bookmarks/history/backups
   per §4 after shared renderers are extracted.
 - **Phase 6 — later.** Second sources (hitomi `galleries/<id>.js` metadata is
