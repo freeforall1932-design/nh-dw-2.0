@@ -305,6 +305,15 @@ into the phase where it belongs.
   (never bypassed, never load-bearing). Settings: cap input (default 2 GB,
   0 disables), entries/bytes readout, grant hint, confirmed Clear. Covers
   swap to their cached object URL after the first successful fetch.
+  **Follow-up (same session): explicit thumbnail source mode** — Settings
+  chooses `cached` (default: cache-first — a cached cover is served from
+  OPFS, instant and offline-capable; a miss loads live once and is cached)
+  or `live` (every cover from the site; cache neither read nor written, but
+  stored files are kept so switching back restores them). The decision is
+  the pure `thumbPlan(mode, cachedAvailable)` in `thumbLru.ts`, pinned by
+  tests; the original best-effort design (cache consulted only after a
+  successful live load) was corrected by this — the cache is now consulted
+  BEFORE the network, so offline browsing really serves stored covers.
 - **Phase 4 — watches + storage settings.** Saved tag combinations,
   sequential multi-source refresh with newest-first URLs (§8.4),
   opportunistic/Cloudflare-aware refresh (§8.6), "new since" badges (§6);

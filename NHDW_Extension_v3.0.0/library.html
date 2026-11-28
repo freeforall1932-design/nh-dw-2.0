@@ -97,10 +97,14 @@
       <p class="hint">Used for the rough size estimate in the selection bar — not a promise about any one title. The panel's download history is a better source for what your mirrors actually average.</p>
       <p id="storageUsage" class="hint"></p>
       <h2>Thumbnail cache</h2>
+      <label>Thumbnail source <select id="thumbMode">
+        <option value="cached">Cached — instant covers, works offline (live fallback)</option>
+        <option value="live">Live only — always from the site, cache unused</option>
+      </select></label>
       <label>Cache cap (MB, 0 disables) <input id="thumbCacheMb" type="number" min="0" max="512000" step="64"></label>
       <p id="thumbCacheStatus" class="hint"></p>
       <div class="buttons"><button id="thumbCacheClear" type="button" class="secondary">Clear thumbnail cache</button></div>
-      <p class="hint">Covers you have browsed are kept in the extension's OPFS under this cap (least-recently-used is evicted first), so they return instantly and survive offline. Keeping them needs the CDN host grant (the panel's CDN notice); without it covers still display live from the site — nothing is bypassed, nothing breaks.</p>
+      <p class="hint">In the cached mode, covers you have browsed are kept in the extension's OPFS under this cap (least-recently-used is evicted first): the next view serves them from disk, instantly, even with no internet. Keeping them needs the CDN host grant (the panel's CDN notice); without it covers still display live from the site — nothing is bypassed, nothing breaks. Live-only mode never reads or writes the cache, but keeps stored covers, so switching back restores them.</p>
     </section>
   </div>
 </main>

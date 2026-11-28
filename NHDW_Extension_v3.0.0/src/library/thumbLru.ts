@@ -27,6 +27,28 @@ export interface ThumbLedgerEntry {
 export const DEFAULT_CACHE_MB = 2048;
 export const CACHE_CAP_STORAGE = "libraryThumbCacheMb";
 
+// Thumbnail source mode (user-facing choice):
+//   "cached" — cache-first: a cached cover is served from OPFS (instant,
+//              works with no internet); a miss loads live once and is cached
+//              for next time. Default.
+//   "live"   — live only: every cover comes from the site, the cache is
+//              neither read nor written (stored files are kept, so flipping
+//              back to "cached" restores them).
+export const THUMB_MODE_STORAGE = "libraryThumbMode";
+export type ThumbMode = "live" | "cached";
+
+export function normalizeThumbMode(value: unknown): ThumbMode {
+    return value === "live" ? "live" : "cached";
+}
+
+export type ThumbPlan = "object-url" | "live" | "live-and-cache";
+
+/** What a cover render should do, given the mode and whether a cached copy exists. */
+export function thumbPlan(mode: ThumbMode, cachedAvailable: boolean): ThumbPlan {
+    if (mode === "live") return "live";
+    return cachedAvailable ? "object-url" : "live-and-cache";
+}
+
 export type ThumbLedger = Map<string, ThumbLedgerEntry>;
 
 export function totalBytes(entries: Iterable<ThumbLedgerEntry>): number {

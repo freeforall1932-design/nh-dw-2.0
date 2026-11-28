@@ -38,16 +38,18 @@ import { clearVisits, countVisits, listVisits, VisitedEntry } from "../utils/vis
 import { DOWNLOAD_HISTORY_KEY } from "../utils/downloadHistory";
 import type { BookmarkCandidate } from "../utils/bookmarkQueue";
 import { candidateFromGalleryRow, chunkArray, SEND_CHUNK } from "./sendQueue";
-import { CACHE_CAP_STORAGE, DEFAULT_CACHE_MB } from "./thumbLru";
+import { CACHE_CAP_STORAGE, DEFAULT_CACHE_MB, normalizeThumbMode, THUMB_MODE_STORAGE, ThumbMode } from "./thumbLru";
 import {
     cacheStats,
     clearThumbCache,
     ensureCachedThumb,
     getThumbCapBytes,
+    getThumbMode,
     hostGrantHint,
     pruneToCap,
     resolveCachedThumb,
     setThumbCapMb,
+    setThumbMode,
 } from "./thumbCache";
 
 // ---------------------------------------------------------------- state
@@ -74,6 +76,7 @@ let sourceFilter = ""; // "" = all sources, else a source slug
 let shownCount = 0;
 let avgMbPerPage = 45;
 let sendingQueue = false; // one Send-to-queue run at a time (§8.9 chunked writes)
+let thumbMode: ThumbMode = "cached"; // thumbnail source choice (loaded at boot)
 const selection = new Set<string>(); // composite keys, siteKeys.ts convention
 
 function $(id: string): HTMLElement {
@@ -129,17 +132,35 @@ function placeholderInitials(title: string): string {
     return (words[0][0] + words[1][0]).toUpperCase();
 }
 
-/** §8.8 thumb cache: best-effort fetch+store, then swap the live img to the
-    cached object URL so the next render is instant and offline-safe. A
-    failed fetch (host not granted, offline) leaves the live img as-is. */
-function queueThumbCache(url: string, img: HTMLImageElement): void {
+/** §8.8 thumb cache: best-effort background fetch+store for next time. A
+    failed fetch (host not granted, offline) changes nothing on screen. */
+function queueThumbCache(url: string): void {
+    void ensureCachedThumb(url).catch(() => { /* best-effort, never load-bearing */ });
+}
+
+/** Thumbnail source wiring (cache-first): in "cached" mode a hit serves the
+    OPFS object URL directly — instant, and works with no internet; a miss
+    loads live once and queues the background cache. In "live" mode every
+    cover comes from the site and the cache is neither read nor written. */
+function wireThumbSource(img: HTMLImageElement, url: string): void {
+    if (thumbMode === "live") {
+        img.src = url;
+        return;
+    }
     void (async () => {
+        let objectUrl: string | null = null;
         try {
-            const status = await ensureCachedThumb(url);
-            if (status !== "cached") return;
-            const objectUrl = await resolveCachedThumb(url);
-            if (objectUrl && img.isConnected) img.src = objectUrl;
-        } catch (_) { /* cache is best-effort, never load-bearing */ }
+            objectUrl = await resolveCachedThumb(url);
+        } catch (_) {
+            objectUrl = null;
+        }
+        if (!img.isConnected) return;
+        if (objectUrl) {
+            img.src = objectUrl;
+            return;
+        }
+        img.src = url;
+        queueThumbCache(url);
     })();
 }
 
@@ -243,9 +264,8 @@ function coverElement(site: string, mediaId: string, thumbExt: string | undefine
             wrap.dataset.fallback = "1";
             wrap.textContent = placeholderInitials(title);
         });
-        img.src = url;
+        wireThumbSource(img, url);
         wrap.appendChild(img);
-        queueThumbCache(url, img);
         const initials = document.createElement("span");
         initials.textContent = placeholderInitials(title);
         initials.setAttribute("aria-hidden", "true");
@@ -500,9 +520,8 @@ async function renderVisited(): Promise<void> {
             img.alt = "";
             img.addEventListener("load", () => cover.classList.add("coverLoaded"));
             img.addEventListener("error", () => img.remove());
-            img.src = entry.cover;
+            wireThumbSource(img, entry.cover);
             cover.appendChild(img);
-            queueThumbCache(entry.cover, img);
             const initials = document.createElement("span");
             initials.setAttribute("aria-hidden", "true");
             initials.textContent = placeholderInitials(entry.title || entry.key);
@@ -642,6 +661,7 @@ async function refreshThumbCacheStatus(): Promise<void> {
             ? "No thumbnails cached yet — browse Browse and covers are kept as you go."
             : stats.entries.toLocaleString() + " thumbnails cached (" + (stats.bytes / (1024 * 1024)).toFixed(1) + " MB)";
         text += " · cap " + (capMb >= 1024 ? (capMb / 1024).toFixed(1) + " GB" : capMb + " MB") + (capMb === 0 ? " (cache disabled)" : "");
+        text += " · source: " + (thumbMode === "live" ? "live only (stored covers kept, unused)" : "cached first, live fallback");
         if (capMb > 0) {
             const hint = await hostGrantHint("https://t.nhentai.net/galleries/m1/thumb.jpg");
             if (hint) text += " · " + hint;
@@ -786,7 +806,18 @@ function wireBrowse(): void {
 }
 
 function wireSettings(): void {
-    // Thumbnail cache (§8.8): cap, readout, clear.
+    // Thumbnail cache (§8.8): source mode, cap, readout, clear.
+    const modeSelect = $("thumbMode") as HTMLSelectElement;
+    getThumbMode().then((mode) => {
+        modeSelect.value = mode;
+    });
+    modeSelect.addEventListener("change", () => {
+        const mode = normalizeThumbMode(modeSelect.value);
+        setThumbMode(mode);
+        thumbMode = mode; // the storage listener also re-renders; this is the local echo
+        renderResults();
+        refreshThumbCacheStatus();
+    });
     const capInput = $("thumbCacheMb") as HTMLInputElement;
     try {
         chrome.storage.local.get({ [CACHE_CAP_STORAGE]: DEFAULT_CACHE_MB }, (elems: any) => {
@@ -847,6 +878,17 @@ function wireSettings(): void {
 }
 
 function boot(): void {
+    try {
+        chrome.storage.local.get({ [THUMB_MODE_STORAGE]: "cached" }, (elems: any) => {
+            thumbMode = normalizeThumbMode(elems[THUMB_MODE_STORAGE]);
+        });
+        chrome.storage.onChanged.addListener((changes, area) => {
+            if (area === "local" && changes && changes[THUMB_MODE_STORAGE]) {
+                thumbMode = normalizeThumbMode(changes[THUMB_MODE_STORAGE].newValue);
+                renderResults();
+            }
+        });
+    } catch (_) { /* default mode stands without storage */ }
     wireTheme();
     wireRail();
     wireBrowse();

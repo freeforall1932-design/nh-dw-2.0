@@ -15,10 +15,39 @@
 // bookkeeping (size + lastAccess per key); a ledger row whose OPFS file has
 // vanished is treated as a miss and cleaned up.
 
-import { CACHE_CAP_STORAGE, DEFAULT_CACHE_MB, evictionPlan, ThumbLedgerEntry, ThumbLedger, thumbKeyFor } from "./thumbLru";
+import {
+    CACHE_CAP_STORAGE,
+    DEFAULT_CACHE_MB,
+    evictionPlan,
+    normalizeThumbMode,
+    ThumbLedgerEntry,
+    ThumbLedger,
+    ThumbMode,
+    THUMB_MODE_STORAGE,
+    thumbKeyFor,
+} from "./thumbLru";
 import { THUMBS_STORE_NAME, idbRequestToPromise, openLibraryDb } from "../utils/libraryDb";
 
 const THUMB_DIR = "thumbs";
+
+/** The configured thumbnail source mode; "cached" is the default. */
+export function getThumbMode(): Promise<ThumbMode> {
+    return new Promise((resolve) => {
+        try {
+            chrome.storage.local.get({ [THUMB_MODE_STORAGE]: "cached" }, (elems: any) => {
+                resolve(normalizeThumbMode(elems[THUMB_MODE_STORAGE]));
+            });
+        } catch (_) {
+            resolve("cached");
+        }
+    });
+}
+
+export function setThumbMode(mode: ThumbMode): void {
+    try {
+        chrome.storage.local.set({ [THUMB_MODE_STORAGE]: normalizeThumbMode(mode) }, () => { /* saved */ });
+    } catch (_) { /* session-only */ }
+}
 
 export type ThumbCacheStatus = "cached" | "exists" | "skipped-disabled" | "skipped-too-big" | "failed";
 

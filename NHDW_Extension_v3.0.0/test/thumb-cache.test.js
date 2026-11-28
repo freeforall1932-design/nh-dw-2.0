@@ -15,9 +15,12 @@ const crypto = require("crypto");
 const {
     CACHE_CAP_STORAGE,
     DEFAULT_CACHE_MB,
+    THUMB_MODE_STORAGE,
     evictionPlan,
-    totalBytes,
+    normalizeThumbMode,
     thumbKeyFor,
+    thumbPlan,
+    totalBytes,
 } = require("../build/test/library/thumbLru.js");
 const { LIBRARY_DB_NAME, LIBRARY_DB_VERSION, THUMBS_STORE_NAME, VISITED_STORE_NAME } = require("../build/test/utils/libraryDb.js");
 
@@ -86,6 +89,29 @@ describe("thumb cache LRU eviction plan", () => {
         const entries = [entry("a", 0, 1), entry("b", -5, 2), entry("c", 8, 3)];
         assert.strictEqual(totalBytes(entries), 8);
         assert.deepStrictEqual(evictionPlan(entries, 8), []);
+    });
+});
+
+describe("thumbnail source mode (user choice)", () => {
+    it("defaults to cached, normalizes junk to cached, honors live", () => {
+        assert.strictEqual(normalizeThumbMode(undefined), "cached");
+        assert.strictEqual(normalizeThumbMode("nonsense"), "cached");
+        assert.strictEqual(normalizeThumbMode("live"), "live");
+        assert.strictEqual(normalizeThumbMode("cached"), "cached");
+    });
+
+    it("live mode never touches the cache, even when a cached copy exists", () => {
+        assert.strictEqual(thumbPlan("live", true), "live");
+        assert.strictEqual(thumbPlan("live", false), "live");
+    });
+
+    it("cached mode: hit serves the object URL (no network), miss goes live + caches", () => {
+        assert.strictEqual(thumbPlan("cached", true), "object-url");
+        assert.strictEqual(thumbPlan("cached", false), "live-and-cache");
+    });
+
+    it("stores the mode under its own key", () => {
+        assert.strictEqual(THUMB_MODE_STORAGE, "libraryThumbMode");
     });
 });
 
